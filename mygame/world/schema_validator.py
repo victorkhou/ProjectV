@@ -1,0 +1,420 @@
+"""
+Schema Validator for RTS Combat Overworld definition files.
+
+Validates raw YAML dicts against expected schemas before they enter the
+Data Registry. Each validation method returns a list of error strings
+(empty list = valid).
+"""
+
+from __future__ import annotations
+
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    pass  # DataRegistry imported only for type hints in cross_validate
+
+
+class SchemaValidator:
+    """Validates definition file contents against expected schemas."""
+
+    # ------------------------------------------------------------------ #
+    #  Buildings
+    # ------------------------------------------------------------------ #
+    def validate_buildings(self, data: list[dict]) -> list[str]:
+        """Validate a list of building definition dicts."""
+        errors: list[str] = []
+        if not isinstance(data, list):
+            return [f"buildings: expected a list, got {type(data).__name__}"]
+
+        required = {"name", "abbreviation", "cost", "max_health", "requires_hq", "category"}
+        for idx, entry in enumerate(data):
+            prefix = f"buildings[{idx}]"
+            if not isinstance(entry, dict):
+                errors.append(f"{prefix}: expected dict, got {type(entry).__name__}")
+                continue
+
+            missing = required - entry.keys()
+            if missing:
+                errors.append(f"{prefix}: missing required fields: {sorted(missing)}")
+
+            # abbreviation must be 2 chars
+            abbr = entry.get("abbreviation")
+            if isinstance(abbr, str) and len(abbr) != 2:
+                errors.append(f"{prefix}: abbreviation must be 2 characters, got '{abbr}'")
+
+            # cost values must be positive ints
+            cost = entry.get("cost")
+            if isinstance(cost, dict):
+                for res, val in cost.items():
+                    if not isinstance(val, int) or val <= 0:
+                        errors.append(
+                            f"{prefix}: cost['{res}'] must be a positive integer, got {val!r}"
+                        )
+
+            # max_health > 0
+            mh = entry.get("max_health")
+            if isinstance(mh, int) and mh <= 0:
+                errors.append(f"{prefix}: max_health must be > 0, got {mh}")
+            elif mh is not None and not isinstance(mh, int):
+                errors.append(f"{prefix}: max_health must be an integer, got {type(mh).__name__}")
+
+            # map_symbol must be 2 chars if present
+            ms = entry.get("map_symbol")
+            if ms is not None and isinstance(ms, str) and len(ms) != 2:
+                errors.append(f"{prefix}: map_symbol must be 2 characters, got '{ms}'")
+
+        return errors
+
+
+    # ------------------------------------------------------------------ #
+    #  Items
+    # ------------------------------------------------------------------ #
+    def validate_items(self, data: dict) -> list[str]:
+        """Validate an items definition dict (items list + production_map)."""
+        errors: list[str] = []
+        if not isinstance(data, dict):
+            return [f"items: expected a dict, got {type(data).__name__}"]
+
+        items_list = data.get("items", [])
+        if not isinstance(items_list, list):
+            errors.append(f"items.items: expected a list, got {type(items_list).__name__}")
+            items_list = []
+
+        required = {"key", "name", "slot"}
+        item_keys: set[str] = set()
+
+        for idx, entry in enumerate(items_list):
+            prefix = f"items[{idx}]"
+            if not isinstance(entry, dict):
+                errors.append(f"{prefix}: expected dict, got {type(entry).__name__}")
+                continue
+
+            missing = required - entry.keys()
+            if missing:
+                errors.append(f"{prefix}: missing required fields: {sorted(missing)}")
+
+            key = entry.get("key")
+            if isinstance(key, str):
+                item_keys.add(key)
+
+            # stat_modifiers values must be numeric
+            sm = entry.get("stat_modifiers")
+            if sm is not None:
+                if not isinstance(sm, dict):
+                    errors.append(
+                        f"{prefix}: stat_modifiers must be a dict, got {type(sm).__name__}"
+                    )
+                else:
+                    for stat, val in sm.items():
+                        if not isinstance(val, (int, float)):
+                            errors.append(
+                                f"{prefix}: stat_modifiers['{stat}'] must be numeric, got {val!r}"
+                            )
+
+            # ammo_cost values must be positive ints if present
+            ac = entry.get("ammo_cost")
+            if ac is not None:
+                if not isinstance(ac, dict):
+                    errors.append(
+                        f"{prefix}: ammo_cost must be a dict, got {type(ac).__name__}"
+                    )
+                else:
+                    for res, val in ac.items():
+                        if not isinstance(val, int) or val <= 0:
+                            errors.append(
+                                f"{prefix}: ammo_cost['{res}'] must be a positive integer, got {val!r}"
+                            )
+
+        return errors
+
+    # ------------------------------------------------------------------ #
+    #  Ranks
+    # ------------------------------------------------------------------ #
+    def validate_ranks(self, data: list[dict]) -> list[str]:
+        """Validate a list of rank definition dicts."""
+        errors: list[str] = []
+        if not isinstance(data, list):
+            return [f"ranks: expected a list, got {type(data).__name__}"]
+
+        required = {"name", "level", "xp_threshold"}
+        levels_seen: set[int] = set()
+        level_xp: list[tuple[int, int]] = []
+
+        for idx, entry in enumerate(data):
+            prefix = f"ranks[{idx}]"
+            if not isinstance(entry, dict):
+                errors.append(f"{prefix}: expected dict, got {type(entry).__name__}")
+                continue
+
+            missing = required - entry.keys()
+            if missing:
+                errors.append(f"{prefix}: missing required fields: {sorted(missing)}")
+
+            level = entry.get("level")
+            if isinstance(level, int):
+                if level <= 0:
+                    errors.append(f"{prefix}: level must be a positive integer, got {level}")
+                elif level in levels_seen:
+                    errors.append(f"{prefix}: duplicate level {level}")
+                levels_seen.add(level)
+
+                xp = entry.get("xp_threshold")
+                if isinstance(xp, int):
+                    level_xp.append((level, xp))
+
+        # xp_thresholds must be strictly increasing when sorted by level
+        level_xp.sort(key=lambda t: t[0])
+        for i in range(1, len(level_xp)):
+            prev_lvl, prev_xp = level_xp[i - 1]
+            cur_lvl, cur_xp = level_xp[i]
+            if cur_xp <= prev_xp:
+                errors.append(
+                    f"ranks: xp_threshold for level {cur_lvl} ({cur_xp}) must be "
+                    f"greater than level {prev_lvl} ({prev_xp})"
+                )
+
+        return errors
+
+    # ------------------------------------------------------------------ #
+    #  Technologies
+    # ------------------------------------------------------------------ #
+    def validate_technologies(self, data: list[dict]) -> list[str]:
+        """Validate a list of technology definition dicts."""
+        errors: list[str] = []
+        if not isinstance(data, list):
+            return [f"technologies: expected a list, got {type(data).__name__}"]
+
+        required = {"name", "key", "required_rank", "resource_cost", "research_ticks"}
+        for idx, entry in enumerate(data):
+            prefix = f"technologies[{idx}]"
+            if not isinstance(entry, dict):
+                errors.append(f"{prefix}: expected dict, got {type(entry).__name__}")
+                continue
+
+            missing = required - entry.keys()
+            if missing:
+                errors.append(f"{prefix}: missing required fields: {sorted(missing)}")
+
+            rt = entry.get("research_ticks")
+            if isinstance(rt, int) and rt <= 0:
+                errors.append(f"{prefix}: research_ticks must be > 0, got {rt}")
+            elif rt is not None and not isinstance(rt, int):
+                errors.append(
+                    f"{prefix}: research_ticks must be an integer, got {type(rt).__name__}"
+                )
+
+        return errors
+
+    # ------------------------------------------------------------------ #
+    #  Powerups
+    # ------------------------------------------------------------------ #
+    def validate_powerups(self, data: list[dict]) -> list[str]:
+        """Validate a list of powerup definition dicts."""
+        errors: list[str] = []
+        if not isinstance(data, list):
+            return [f"powerups: expected a list, got {type(data).__name__}"]
+
+        required = {
+            "name", "key", "required_rank", "effect_type",
+            "effect_value", "duration_ticks", "cooldown_ticks",
+        }
+        for idx, entry in enumerate(data):
+            prefix = f"powerups[{idx}]"
+            if not isinstance(entry, dict):
+                errors.append(f"{prefix}: expected dict, got {type(entry).__name__}")
+                continue
+
+            missing = required - entry.keys()
+            if missing:
+                errors.append(f"{prefix}: missing required fields: {sorted(missing)}")
+
+            dt = entry.get("duration_ticks")
+            if isinstance(dt, int) and dt <= 0:
+                errors.append(f"{prefix}: duration_ticks must be > 0, got {dt}")
+
+            ct = entry.get("cooldown_ticks")
+            if isinstance(ct, int) and ct <= 0:
+                errors.append(f"{prefix}: cooldown_ticks must be > 0, got {ct}")
+
+        return errors
+
+    # ------------------------------------------------------------------ #
+    #  Terrain
+    # ------------------------------------------------------------------ #
+    def validate_terrain(self, data: dict) -> list[str]:
+        """Validate a terrain definition dict (terrain list + planets list)."""
+        errors: list[str] = []
+        if not isinstance(data, dict):
+            return [f"terrain: expected a dict, got {type(data).__name__}"]
+
+        terrain_list = data.get("terrain", [])
+        if not isinstance(terrain_list, list):
+            errors.append(
+                f"terrain.terrain: expected a list, got {type(terrain_list).__name__}"
+            )
+            terrain_list = []
+
+        required = {"terrain_type", "map_symbol"}
+        terrain_types: set[str] = set()
+
+        for idx, entry in enumerate(terrain_list):
+            prefix = f"terrain[{idx}]"
+            if not isinstance(entry, dict):
+                errors.append(f"{prefix}: expected dict, got {type(entry).__name__}")
+                continue
+
+            missing = required - entry.keys()
+            if missing:
+                errors.append(f"{prefix}: missing required fields: {sorted(missing)}")
+
+            ms = entry.get("map_symbol")
+            if isinstance(ms, str) and len(ms) != 2:
+                errors.append(f"{prefix}: map_symbol must be 2 characters, got '{ms}'")
+
+            tt = entry.get("terrain_type")
+            if isinstance(tt, str):
+                terrain_types.add(tt)
+
+        # Validate planet references to terrain types
+        planets_list = data.get("planets", [])
+        if isinstance(planets_list, list):
+            for idx, planet in enumerate(planets_list):
+                prefix = f"planets[{idx}]"
+                if not isinstance(planet, dict):
+                    errors.append(f"{prefix}: expected dict, got {type(planet).__name__}")
+                    continue
+                for tt in planet.get("terrain_types", []):
+                    if tt not in terrain_types:
+                        errors.append(
+                            f"{prefix}: terrain_type '{tt}' not found in terrain definitions"
+                        )
+
+        return errors
+
+    # ------------------------------------------------------------------ #
+    #  Balance
+    # ------------------------------------------------------------------ #
+    def validate_balance(self, data: dict) -> list[str]:
+        """Validate a balance configuration dict."""
+        errors: list[str] = []
+        if not isinstance(data, dict):
+            return [f"balance: expected a dict, got {type(data).__name__}"]
+
+        int_fields = [
+            "turret_damage", "turret_radius", "xp_kill", "xp_building_destroy",
+            "xp_death_loss", "gather_amount", "player_default_health",
+            "resource_respawn_ticks", "combat_lockout_ticks", "chunk_size",
+            "save_interval", "metrics_interval",
+        ]
+        float_fields = ["xp_damage", "tick_interval"]
+        bool_fields = ["metrics_enabled"]
+
+        for field in int_fields:
+            val = data.get(field)
+            if val is not None and not isinstance(val, int):
+                errors.append(
+                    f"balance.{field}: expected int, got {type(val).__name__}"
+                )
+
+        for field in float_fields:
+            val = data.get(field)
+            if val is not None and not isinstance(val, (int, float)):
+                errors.append(
+                    f"balance.{field}: expected float, got {type(val).__name__}"
+                )
+
+        for field in bool_fields:
+            val = data.get(field)
+            if val is not None and not isinstance(val, bool):
+                errors.append(
+                    f"balance.{field}: expected bool, got {type(val).__name__}"
+                )
+
+        # production_scaling keys must be 1-5
+        ps = data.get("production_scaling")
+        if ps is not None:
+            if not isinstance(ps, dict):
+                errors.append(
+                    f"balance.production_scaling: expected dict, got {type(ps).__name__}"
+                )
+            else:
+                for key, val in ps.items():
+                    k = int(key) if isinstance(key, str) and key.isdigit() else key
+                    if not isinstance(k, int) or k < 1 or k > 5:
+                        errors.append(
+                            f"balance.production_scaling: key must be 1-5, got {key!r}"
+                        )
+                    if not isinstance(val, int):
+                        errors.append(
+                            f"balance.production_scaling[{key}]: expected int, got {type(val).__name__}"
+                        )
+
+        return errors
+
+    # ------------------------------------------------------------------ #
+    #  Cross-validation
+    # ------------------------------------------------------------------ #
+    def cross_validate(self, registry) -> list[str]:
+        """Validate inter-file references after all files are loaded.
+
+        Args:
+            registry: A DataRegistry instance with all definitions loaded.
+
+        Returns:
+            List of error strings (empty = valid).
+        """
+        errors: list[str] = []
+
+        terrain_types = set(registry.terrain.keys())
+        rank_names = {r.name for r in registry.ranks}
+        building_abbrs = set(registry.buildings.keys())
+        item_keys = set(registry.items.keys())
+
+        # Building required_terrain → valid terrain types
+        for abbr, bdef in registry.buildings.items():
+            if bdef.required_terrain and bdef.required_terrain not in terrain_types:
+                errors.append(
+                    f"building '{abbr}': required_terrain '{bdef.required_terrain}' "
+                    f"not found in terrain definitions"
+                )
+
+        # Item required_rank → valid rank names
+        for key, idef in registry.items.items():
+            if idef.required_rank and idef.required_rank not in rank_names:
+                errors.append(
+                    f"item '{key}': required_rank '{idef.required_rank}' "
+                    f"not found in rank definitions"
+                )
+
+        # Technology required_rank → valid rank names
+        for key, tdef in registry.technologies.items():
+            if tdef.required_rank and tdef.required_rank not in rank_names:
+                errors.append(
+                    f"technology '{key}': required_rank '{tdef.required_rank}' "
+                    f"not found in rank definitions"
+                )
+
+        # Powerup required_rank → valid rank names
+        for key, pdef in registry.powerups.items():
+            if pdef.required_rank and pdef.required_rank not in rank_names:
+                errors.append(
+                    f"powerup '{key}': required_rank '{pdef.required_rank}' "
+                    f"not found in rank definitions"
+                )
+
+        # production_map building abbreviations → valid buildings
+        # production_map item keys → valid items
+        for babbr, ikeys in registry.item_production_map.items():
+            if babbr not in building_abbrs:
+                errors.append(
+                    f"production_map: building abbreviation '{babbr}' "
+                    f"not found in building definitions"
+                )
+            for ik in ikeys:
+                if ik not in item_keys:
+                    errors.append(
+                        f"production_map['{babbr}']: item key '{ik}' "
+                        f"not found in item definitions"
+                    )
+
+        return errors

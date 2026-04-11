@@ -1,0 +1,4 @@
+# file: /workplace/victkhou/EV/evennia-main/mygame/world/garbage_collector.py
+# hypothesis_version: 6.151.12
+
+[100, 'account', 'attributes', 'building_type', 'contents', 'db', 'delete', 'desc', 'dynamic', 'is_building', 'is_player', 'persistence_type', 'planet', 'tags', 'x', 'y']

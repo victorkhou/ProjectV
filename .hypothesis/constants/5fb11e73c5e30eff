@@ -1,0 +1,4 @@
+# file: /workplace/victkhou/EV/evennia-main/mygame/world/coordinate/procedural_map_renderer.py
+# hypothesis_version: 6.151.12
+
+['..', '?', '??', 'Circuit_Field', 'Dirt', 'Forest', 'Mountain', 'Plains', 'Power_Grid', 'Rock', 'Ruins', 'Scrapyard', 'attributes', 'building', 'building_type', 'contents', 'fog', 'get', 'get_display_symbol', 'has_account', 'owner', 'registry', 'visible', '|G', '|W', '|Y', '|Y@@|n', '|c', '|g', '|r**|n', '|w', '|x', '|y']

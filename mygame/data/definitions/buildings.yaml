@@ -1,0 +1,162 @@
+# Building definitions for RTS Combat Overworld
+# Each building has: name, abbreviation, cost, max_health, requires_hq,
+# required_terrain (or null), category, produces (or null), unlocks, map_symbol
+
+- name: Headquarters
+  abbreviation: HQ
+  cost:
+    Straw: 50
+    Wood: 50
+    Stone: 30
+  max_health: 500
+  requires_hq: false
+  required_terrain: null
+  category: headquarters
+  produces: null
+  unlocks:
+    - MM
+    - QQ
+    - II
+    - LL
+    - KK
+    - AA
+    - AR
+    - VV
+    - TL
+    - HV
+  map_symbol: HQ
+
+- name: Mill
+  abbreviation: MM
+  cost:
+    Straw: 20
+    Wood: 10
+  max_health: 150
+  requires_hq: true
+  required_terrain: Plains
+  category: resource
+  produces: Straw
+  unlocks: []
+  map_symbol: MM
+
+- name: Quarry
+  abbreviation: QQ
+  cost:
+    Wood: 20
+    Stone: 10
+  max_health: 200
+  requires_hq: true
+  required_terrain: Rock
+  category: resource
+  produces: Stone
+  unlocks: []
+  map_symbol: QQ
+
+- name: Mine
+  abbreviation: II
+  cost:
+    Wood: 30
+    Stone: 20
+  max_health: 250
+  requires_hq: true
+  required_terrain: Mountain
+  category: resource
+  produces: Iron
+  unlocks: []
+  map_symbol: II
+
+- name: Lumberyard
+  abbreviation: LL
+  cost:
+    Straw: 15
+    Wood: 15
+  max_health: 150
+  requires_hq: true
+  required_terrain: Forest
+  category: resource
+  produces: Wood
+  unlocks: []
+  map_symbol: LL
+
+- name: Kiln
+  abbreviation: KK
+  cost:
+    Wood: 20
+    Clay: 10
+  max_health: 150
+  requires_hq: true
+  required_terrain: Dirt
+  category: resource
+  produces: Clay
+  unlocks: []
+  map_symbol: KK
+
+- name: Armory
+  abbreviation: AA
+  cost:
+    Iron: 40
+    Wood: 30
+    Stone: 20
+  max_health: 200
+  requires_hq: true
+  required_terrain: null
+  category: equipment
+  produces: weapon
+  unlocks: []
+  map_symbol: AA
+
+- name: Armorer
+  abbreviation: AR
+  cost:
+    Iron: 40
+    Stone: 30
+    Wood: 20
+  max_health: 200
+  requires_hq: true
+  required_terrain: null
+  category: equipment
+  produces: armor
+  unlocks: []
+  map_symbol: AR
+
+- name: Turret
+  abbreviation: VV
+  cost:
+    Iron: 50
+    Stone: 40
+    Wood: 20
+  max_health: 300
+  requires_hq: true
+  required_terrain: null
+  category: defense
+  produces: null
+  unlocks: []
+  map_symbol: VV
+
+- name: Tech Lab
+  abbreviation: TL
+  cost:
+    Iron: 60
+    Stone: 40
+    Wood: 30
+  max_health: 200
+  requires_hq: true
+  required_terrain: null
+  category: research
+  produces: null
+  unlocks: []
+  map_symbol: TL
+
+- name: Harvester
+  abbreviation: HV
+  cost:
+    Metals: 30
+    Energy: 20
+    Circuits: 10
+  max_health: 200
+  requires_hq: true
+  required_terrain: null
+  category: resource
+  produces: null
+  unlocks: []
+  map_symbol: HV

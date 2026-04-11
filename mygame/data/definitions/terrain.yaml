@@ -1,0 +1,102 @@
+# Terrain and planet definitions for RTS Combat Overworld
+
+terrain:
+  # Earth_Planet terrain types
+  - terrain_type: Plains
+    map_symbol: ".."
+    resource_type: Straw
+    passable: true
+
+  - terrain_type: Dirt
+    map_symbol: "~~"
+    resource_type: Clay
+    passable: true
+
+  - terrain_type: Forest
+    map_symbol: "&&"
+    resource_type: Wood
+    passable: true
+
+  - terrain_type: Rock
+    map_symbol: "##"
+    resource_type: Stone
+    passable: true
+
+  - terrain_type: Mountain
+    map_symbol: "/\\"
+    resource_type: Iron
+    passable: true
+
+  # Industrial_Planet terrain types
+  - terrain_type: Power_Grid
+    map_symbol: "++"
+    resource_type: Energy
+    passable: true
+
+  - terrain_type: Scrapyard
+    map_symbol: "%%"
+    resource_type: Metals
+    passable: true
+
+  - terrain_type: Circuit_Field
+    map_symbol: "::"
+    resource_type: Circuits
+    passable: true
+
+  - terrain_type: Ruins
+    map_symbol: ";;"
+    resource_type: null
+    passable: true
+
+  # Space terrain types
+  - terrain_type: Void
+    map_symbol: "  "
+    resource_type: null
+    passable: true
+
+  - terrain_type: Nebula
+    map_symbol: "**"
+    resource_type: Energy
+    passable: true
+
+  - terrain_type: Asteroid
+    map_symbol: "<>"
+    resource_type: Iron
+    passable: true
+
+  - terrain_type: Debris
+    map_symbol: "%%"
+    resource_type: Metals
+    passable: true
+
+  - terrain_type: Ice_Field
+    map_symbol: "><"
+    resource_type: null
+    passable: true
+
+planets:
+  - name: Earth_Planet
+    planet_type: Earth_Planet
+    terrain_types:
+      - Plains
+      - Dirt
+      - Forest
+      - Rock
+      - Mountain
+
+  - name: Industrial_Planet
+    planet_type: Industrial_Planet
+    terrain_types:
+      - Power_Grid
+      - Scrapyard
+      - Circuit_Field
+      - Ruins
+
+  - name: Space
+    planet_type: Space
+    terrain_types:
+      - Void
+      - Nebula
+      - Asteroid
+      - Debris
+      - Ice_Field

@@ -1,0 +1,57 @@
+# Technology definitions for RTS Combat Overworld
+
+- name: Reinforced Walls
+  key: reinforced_walls
+  required_rank: Sergeant
+  resource_cost:
+    Stone: 100
+    Iron: 50
+  research_ticks: 30
+  effect_type: stat_bonus
+  effect_value:
+    building_hp: 50
+
+- name: Advanced Weapons
+  key: advanced_weapons
+  required_rank: Captain
+  resource_cost:
+    Iron: 150
+    Energy: 50
+  research_ticks: 60
+  effect_type: stat_bonus
+  effect_value:
+    damage: 10
+
+- name: Improved Armor
+  key: improved_armor
+  required_rank: Staff Sergeant
+  resource_cost:
+    Iron: 80
+    Stone: 60
+  research_ticks: 40
+  effect_type: stat_bonus
+  effect_value:
+    damage_reduction: 5
+
+- name: Extended Range
+  key: extended_range
+  required_rank: 1st Lieutenant
+  resource_cost:
+    Iron: 100
+    Circuits: 30
+  research_ticks: 50
+  effect_type: stat_bonus
+  effect_value:
+    sight_range: 2
+
+- name: Rapid Production
+  key: rapid_production
+  required_rank: Major
+  resource_cost:
+    Iron: 200
+    Energy: 100
+    Circuits: 50
+  research_ticks: 90
+  effect_type: production_bonus
+  effect_value:
+    production_multiplier: 1.5

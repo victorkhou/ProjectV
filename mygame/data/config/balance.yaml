@@ -1,0 +1,36 @@
+# Game balance configuration for RTS Combat Overworld
+
+production_scaling:
+  1: 10
+  2: 50
+  3: 150
+  4: 400
+  5: 1000
+
+turret_damage: 15
+turret_radius: 10
+
+xp_kill: 100
+xp_building_destroy: 50
+xp_damage: 0.1
+xp_death_loss: 50
+
+gather_amount: 1
+player_default_health: 100
+
+resource_respawn_ticks: 30
+combat_lockout_ticks: 5
+
+tick_interval: 1.0
+chunk_size: 10
+save_interval: 30
+
+metrics_enabled: false
+metrics_interval: 60
+
+# --- New: Coordinate World config ---
+player_vision_radius: 10         # tiles visible around the player character
+building_vision_radius: 7        # tiles visible around each owned building
+room_cache_max_size: 1000        # max rooms held in the LRU cache
+gc_interval_ticks: 100           # how often garbage collection runs
+gc_min_age_ticks: 50             # minimum age before a dynamic room is eligible for GC

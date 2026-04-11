@@ -1,0 +1,33 @@
+# Powerup definitions for RTS Combat Overworld
+
+- name: Adrenaline Rush
+  key: adrenaline_rush
+  required_rank: Corporal
+  effect_type: damage_bonus
+  effect_value: 1.5
+  duration_ticks: 30
+  cooldown_ticks: 120
+
+- name: Shield Boost
+  key: shield_boost
+  required_rank: Sergeant
+  effect_type: damage_reduction
+  effect_value: 10
+  duration_ticks: 20
+  cooldown_ticks: 90
+
+- name: Speed Surge
+  key: speed_surge
+  required_rank: Specialist
+  effect_type: move_speed
+  effect_value: 2.0
+  duration_ticks: 15
+  cooldown_ticks: 60
+
+- name: Berserker Rage
+  key: berserker_rage
+  required_rank: Captain
+  effect_type: damage_bonus
+  effect_value: 2.0
+  duration_ticks: 10
+  cooldown_ticks: 180

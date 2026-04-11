@@ -1,0 +1,4 @@
+# file: /workplace/victkhou/EV/evennia-main/mygame/world/procedural_map_renderer.py
+# hypothesis_version: 6.151.12
+
+['..', '?', 'fog', 'get_display_symbol', 'visible']

@@ -1,0 +1,4 @@
+# file: /workplace/victkhou/EV/evennia-main/mygame/world/rank_system.py
+# hypothesis_version: 6.151.12
+
+['?', 'combat_xp', 'key', 'mygame.rank_system', 'next_rank_name', 'rank_level', 'rank_name', 'xp_to_next_rank']

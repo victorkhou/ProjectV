@@ -1,0 +1,4 @@
+# file: /workplace/victkhou/EV/evennia-main/mygame/world/powerup_system.py
+# hypothesis_version: 6.151.12
+
+[0.0, '?', 'active_powerups', 'db', 'effect', 'effect_type', 'effect_value', 'expires_tick', 'key', 'powerup_cooldowns', 'rank_level']

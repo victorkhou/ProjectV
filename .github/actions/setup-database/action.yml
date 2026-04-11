@@ -1,0 +1,80 @@
+# evennia/setup-database
+
+# Use this action in a workflow for when you need to do initialization of database services
+# (such as with PostgreSQL and MySQL) before you initiate unit tests that will employ that
+# database service.
+
+# NOTE: This action was intended for use with the core Evennia workflows ONLY.
+
+name: Set up Evennia database service
+author: dvoraen
+description: "Activates the database server for the passed in service and ensures it's ready for use."
+
+inputs:
+  database:
+    description: "Database service being initialized."
+    required: true
+
+runs:
+  using: "composite"
+
+  steps:
+    - name: Wait for PostgreSQL to be ready
+      if: ${{ inputs.database == 'postgresql' }}
+      run: |
+        # Wait for PostgreSQL service container to be healthy
+        until pg_isready -h localhost -U evennia -d evennia; do
+          sleep 1
+          echo -n .
+        done
+        echo "PostgreSQL is ready"
+      shell: bash
+      env:
+        PGPASSWORD: password
+
+    - name: Wait for MySQL to be ready
+      if: ${{ inputs.database == 'mysql' }}
+      run: |
+        # Wait for MySQL server to be ready
+        until mysqladmin ping -u root -proot_password --silent; do
+          sleep 1
+          echo -n .
+        done
+        echo "MySQL is ready"
+      shell: bash
+
+    - name: Set up MySQL Database and Privileges
+      if: ${{ inputs.database == 'mysql' }}
+      run: |
+        # Note: MySQL server configuration (character set, collation, row format) is set
+        # via my-cnf in the shogo82148/actions-setup-mysql action.
+        # The user 'evennia' is already created by the action for hosts: localhost, 127.0.0.1, and ::1
+        # We just need to create the database and grant additional privileges.
+        mysql -u root -proot_password mysql <<EOF
+        CREATE DATABASE IF NOT EXISTS evennia CHARACTER SET utf8mb3 COLLATE utf8mb3_unicode_ci;
+        -- Grant privileges to existing user hosts (action creates: localhost, 127.0.0.1, ::1)
+        GRANT ALL PRIVILEGES ON \`evennia%\`.* TO 'evennia'@'localhost';
+        GRANT ALL PRIVILEGES ON \`evennia%\`.* TO 'evennia'@'127.0.0.1';
+        GRANT ALL PRIVILEGES ON \`evennia%\`.* TO 'evennia'@'::1';
+        GRANT PROCESS ON *.* TO 'evennia'@'localhost';
+        GRANT PROCESS ON *.* TO 'evennia'@'127.0.0.1';
+        GRANT PROCESS ON *.* TO 'evennia'@'::1';
+        GRANT SESSION_VARIABLES_ADMIN ON *.* TO 'evennia'@'localhost';
+        GRANT SESSION_VARIABLES_ADMIN ON *.* TO 'evennia'@'127.0.0.1';
+        GRANT SESSION_VARIABLES_ADMIN ON *.* TO 'evennia'@'::1';
+        FLUSH PRIVILEGES;
+        EOF
+        # Verify MySQL settings are applied correctly
+        echo "Verifying MySQL configuration:"
+        mysql -u root -proot_password -e "SELECT @@innodb_default_row_format as row_format, @@character_set_server as charset, @@collation_server as collation;" || true
+      shell: bash
+
+    # get logs from db start
+    - name: Database container logs
+      if: ${{ inputs.database == 'postgresql'}}
+      uses: jwalton/gh-docker-logs@v2
+
+    - name: Check running containers
+      if: ${{ inputs.database == 'postgresql'}}
+      run: docker ps -a
+      shell: bash

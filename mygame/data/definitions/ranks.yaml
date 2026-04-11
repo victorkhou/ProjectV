@@ -1,0 +1,121 @@
+# Rank definitions for RTS Combat Overworld
+# 22 military ranks with strictly increasing XP thresholds
+
+- name: Recruit
+  level: 1
+  xp_threshold: 0
+  unlocks: []
+
+- name: Private
+  level: 2
+  xp_threshold: 100
+  unlocks: []
+
+- name: Private First Class
+  level: 3
+  xp_threshold: 250
+  unlocks: []
+
+- name: Specialist
+  level: 4
+  xp_threshold: 500
+  unlocks:
+    - speed_surge
+
+- name: Corporal
+  level: 5
+  xp_threshold: 800
+  unlocks:
+    - adrenaline_rush
+
+- name: Sergeant
+  level: 6
+  xp_threshold: 1200
+  unlocks:
+    - reinforced_walls
+    - shield_boost
+
+- name: Staff Sergeant
+  level: 7
+  xp_threshold: 1700
+  unlocks:
+    - improved_armor
+
+- name: Sergeant First Class
+  level: 8
+  xp_threshold: 2300
+  unlocks: []
+
+- name: First Sergeant
+  level: 9
+  xp_threshold: 3000
+  unlocks: []
+
+- name: Master Sergeant
+  level: 10
+  xp_threshold: 3800
+  unlocks: []
+
+- name: Command Sergeant Major
+  level: 11
+  xp_threshold: 4700
+  unlocks: []
+
+- name: Sergeant Major
+  level: 12
+  xp_threshold: 5700
+  unlocks: []
+
+- name: 2nd Lieutenant
+  level: 13
+  xp_threshold: 7000
+  unlocks: []
+
+- name: 1st Lieutenant
+  level: 14
+  xp_threshold: 8500
+  unlocks:
+    - extended_range
+
+- name: Captain
+  level: 15
+  xp_threshold: 10000
+  unlocks:
+    - advanced_weapons
+    - berserker_rage
+
+- name: Major
+  level: 16
+  xp_threshold: 12000
+  unlocks:
+    - rapid_production
+
+- name: Lieutenant Colonel
+  level: 17
+  xp_threshold: 14500
+  unlocks: []
+
+- name: Colonel
+  level: 18
+  xp_threshold: 17500
+  unlocks: []
+
+- name: Brigadier General
+  level: 19
+  xp_threshold: 21000
+  unlocks: []
+
+- name: Major General
+  level: 20
+  xp_threshold: 25000
+  unlocks: []
+
+- name: Lieutenant General
+  level: 21
+  xp_threshold: 30000
+  unlocks: []
+
+- name: General
+  level: 22
+  xp_threshold: 36000
+  unlocks: []

@@ -1,0 +1,57 @@
+# Planet coordinate space definitions for the Procedural Coordinate World system.
+# Each entry defines a separate coordinate space with its own dimensions,
+# terrain seed, terrain weights, and room persistence type.
+# z_level provides a numeric shorthand for teleport (e.g. teleport 50,50,0)
+
+planets:
+  - planet_key: "earth_planet"
+    planet_type: "earth"
+    z_level: 0
+    width: 100
+    height: 100
+    terrain_seed: 42
+    terrain_noise_cell_size: 8
+    terrain_weights:
+      Plains: 0.35
+      Forest: 0.25
+      Dirt: 0.15
+      Rock: 0.15
+      Mountain: 0.10
+    persistence_type: "static"
+    spawn_x: 50
+    spawn_y: 50
+    default_planet: true
+
+  - planet_key: "industrial_planet"
+    planet_type: "industrial"
+    z_level: 1
+    width: 50
+    height: 50
+    terrain_seed: 7
+    terrain_noise_cell_size: 8
+    terrain_weights:
+      Power_Grid: 0.30
+      Scrapyard: 0.30
+      Circuit_Field: 0.25
+      Ruins: 0.15
+    persistence_type: "static"
+    spawn_x: 25
+    spawn_y: 25
+
+  - planet_key: "space"
+    planet_type: "space"
+    z_level: 2
+    width: 200
+    height: 200
+    terrain_seed: 99
+    terrain_noise_cell_size: 12
+    seed_rotation_ticks: 500
+    terrain_weights:
+      Void: 0.40
+      Nebula: 0.20
+      Asteroid: 0.15
+      Debris: 0.15
+      Ice_Field: 0.10
+    persistence_type: "dynamic"
+    spawn_x: 100
+    spawn_y: 100

@@ -1,0 +1,58 @@
+# Evadventure (Twitch) combat demo - using a batchcommand file.
+#
+# Sets up a combat area for testing twitch combat. Requires developer or superuser perm.
+#
+# To use, first add the batchscripts/ folder to your settings file:
+#
+#    BASE_BATCH_PROCESS_PATHS += ["evadventure.batchscripts"]
+#
+# Run from in-game as `batchcmd twitch_combat_demo`
+#
+
+# start from limbo
+
+tel #2
+
+# turn ourselves into a evadventure-character
+
+type self = evennia.contrib.tutorials.evadventure.characters.EvAdventureCharacter
+
+# assign us the twitch combat cmdset (requires superuser/developer perms)
+
+py self.cmdset.add("evennia.contrib.tutorials.evadventure.combat_twitch.TwitchCombatCmdSet", persistent=True)
+
+# Create and give us a weapons (this will use defaults on the class)
+
+create sword:evennia.contrib.tutorials.evadventure.objects.EvAdventureWeapon
+
+# create a consumable to use
+
+create potion:evennia.contrib.tutorials.evadventure.objects.EvAdventureConsumable
+
+# dig a combat arena
+
+dig arena:evennia.contrib.tutorials.evadventure.rooms.EvAdventureRoom = arena,back
+
+# go to arena
+
+arena
+
+# allow combat in this room
+
+set here/allow_combat = True
+
+# create a dummy enemy to hit on
+
+create/drop dummy puppet;dummy:evennia.contrib.tutorials.evadventure.npcs.EvAdventureMob
+
+# describe the dummy
+
+desc dummy = This is is an ugly training dummy made out of hay and wood.
+
+# make the dummy crazy tough
+
+set dummy/hp_max = 1000
+
+#
+
+set dummy/hp = 1000

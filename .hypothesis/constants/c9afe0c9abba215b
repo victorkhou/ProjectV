@@ -1,0 +1,4 @@
+# file: /workplace/victkhou/EV/evennia-main/mygame/conftest.py
+# hypothesis_version: 6.151.12
+
+['Command', 'DefaultCharacter', 'DefaultObject', 'DefaultRoom', 'DefaultScript', 'General', 'MAP_X_TAG_CATEGORY', 'MAP_Y_TAG_CATEGORY', 'MAP_Z_TAG_CATEGORY', 'XYZManager', 'XYZRoom', '__file__', '_store', 'evennia', 'evennia.commands', 'evennia.contrib', 'evennia.contrib.grid', 'evennia.objects', 'evennia.scripts', 'evennia.utils', 'evennia.utils.logger', 'evennia.utils.utils', 'key', 'room_x_coordinate', 'room_y_coordinate', 'room_z_coordinate', 'stub']

@@ -1,0 +1,4 @@
+# file: /workplace/victkhou/EV/evennia-main/mygame/typeclasses/rooms.py
+# hypothesis_version: 6.151.12
+
+[' | ', '**', '?', '@@', 'Building', 'building', 'building_level', 'building_type', 'db', 'depleted', 'has_account', 'key', 'level', 'name', 'owner', 'planet', 'players', 'resource_node', 'resource_node_data', 'resource_type', 'respawn_counter', 'terrain', 'terrain_type', 'type', 'unknown', 'x', 'y']

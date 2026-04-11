@@ -1,0 +1,272 @@
+"""
+Server startup initialization for the RTS Combat Overworld.
+
+Called from Evennia's at_server_start hook. Initializes all game
+systems, wires event subscribers, and starts persistent scripts.
+
+Requirements: 25.2, 25.3, 28.4
+"""
+
+from __future__ import annotations
+
+import logging
+
+logger = logging.getLogger("evennia.server.game_init")
+
+# Module-level dict so commands can look up systems
+game_systems: dict = {}
+
+
+def initialize_game() -> dict:
+    """Initialize all game systems and wire them together.
+
+    This is the main entry point called from at_server_start().
+
+    Returns:
+        dict of system_name -> system instance.
+    """
+    global game_systems
+
+    logger.info("Initializing RTS Combat Overworld game systems...")
+
+    # ---------------------------------------------------------- #
+    #  1. Data Registry — load all definitions
+    # ---------------------------------------------------------- #
+    from world.data_registry import DataRegistry
+
+    registry = DataRegistry()
+    try:
+        registry.load_all()
+        logger.info("DataRegistry loaded successfully.")
+    except Exception:
+        logger.exception("DataRegistry load failed — using empty registry.")
+
+    # ---------------------------------------------------------- #
+    #  2. Event Bus singleton
+    # ---------------------------------------------------------- #
+    from world.event_bus import event_bus
+
+    logger.info("EventBus initialized.")
+
+    # ---------------------------------------------------------- #
+    #  3. Initialize all game systems
+    # ---------------------------------------------------------- #
+    from world.systems.building_system import BuildingSystem
+    from world.systems.combat_engine import CombatEngine
+    from world.systems.rank_system import RankSystem
+    from world.systems.resource_system import ResourceSystem
+    from world.systems.powerup_system import PowerupSystem
+    from world.systems.tech_system import TechLabSystem
+    from world.systems.equipment_system import EquipmentSystem
+    from world.chunking import WorldChunkManager
+    from world.notification_system import NotificationSystem
+    from world.chat_system import ChatSystem
+
+    building_system = BuildingSystem(registry, event_bus)
+    combat_engine = CombatEngine(registry, event_bus)
+    rank_system = RankSystem(registry, event_bus)
+    resource_system = ResourceSystem(registry, event_bus)
+    powerup_system = PowerupSystem(registry, event_bus)
+    tech_system = TechLabSystem(registry, event_bus)
+    equipment_system = EquipmentSystem(registry, event_bus)
+    chunking = WorldChunkManager(
+        chunk_size=getattr(registry.balance, "chunk_size", 10)
+        if hasattr(registry, "balance") and registry.balance
+        else 10
+    )
+    chat_system = ChatSystem()
+
+    logger.info("All game systems initialized.")
+
+    # ---------------------------------------------------------- #
+    #  3b. Initialize Procedural Coordinate World systems
+    # ---------------------------------------------------------- #
+    planet_registry = None
+    tile_resolver = None
+    fog_system = None
+    procedural_map_renderer = None
+    garbage_collector = None
+    terrain_generators = None
+
+    try:
+        import os
+
+        from world.coordinate.planet_registry import PlanetRegistry
+        from world.coordinate.terrain_generator import TerrainGenerator
+        from world.coordinate.room_cache import RoomCache
+        from world.coordinate.tile_resolver import TileResolver
+        from world.coordinate.fog_of_war import FogOfWarSystem
+        from world.coordinate.procedural_map_renderer import ProceduralMapRenderer
+        from world.coordinate.garbage_collector import RoomGarbageCollector
+
+        # 1. PlanetRegistry — load planets.yaml
+        planet_registry = PlanetRegistry()
+        planets_path = os.path.join(
+            os.path.dirname(__file__), "..", "..", "data", "definitions", "planets.yaml"
+        )
+        planets_path = os.path.normpath(planets_path)
+        planet_registry.load_from_yaml(planets_path)
+        logger.info("PlanetRegistry loaded.")
+
+        # 2. TerrainGenerator per planet
+        terrain_generators: dict[str, TerrainGenerator] = {}
+        for planet_key in planet_registry.list_planets():
+            space_def = planet_registry.get_space(planet_key)
+            terrain_generators[planet_key] = TerrainGenerator(space_def)
+        logger.info(
+            "TerrainGenerators created for %d planet(s).", len(terrain_generators)
+        )
+
+        # 3. RoomCache
+        balance = getattr(registry, "balance", None)
+        cache_max = getattr(balance, "room_cache_max_size", 1000) if balance else 1000
+        room_cache = RoomCache(max_size=cache_max)
+        logger.info("RoomCache initialized (max_size=%d).", cache_max)
+
+        # 4. TileResolver
+        tile_resolver = TileResolver(
+            planet_registry=planet_registry,
+            terrain_generators=terrain_generators,
+            room_cache=room_cache,
+        )
+        logger.info("TileResolver initialized.")
+
+        # 5. FogOfWarSystem
+        if balance:
+            fog_system = FogOfWarSystem(balance)
+        else:
+            from world.definitions import BalanceConfig
+            fog_system = FogOfWarSystem(BalanceConfig())
+        logger.info("FogOfWarSystem initialized.")
+
+        # 6. ProceduralMapRenderer
+        procedural_map_renderer = ProceduralMapRenderer(
+            tile_resolver=tile_resolver,
+            fog_system=fog_system,
+            terrain_generators=terrain_generators,
+            data_registry=registry,
+        )
+        logger.info("ProceduralMapRenderer initialized.")
+
+        # 7. RoomGarbageCollector
+        gc_interval = getattr(balance, "gc_interval_ticks", 100) if balance else 100
+        gc_min_age = getattr(balance, "gc_min_age_ticks", 50) if balance else 50
+        garbage_collector = RoomGarbageCollector(
+            room_cache=room_cache,
+            interval_ticks=gc_interval,
+            min_age_ticks=gc_min_age,
+        )
+        logger.info("RoomGarbageCollector initialized.")
+
+    except Exception:
+        logger.exception(
+            "Procedural Coordinate World initialization failed — "
+            "coordinate systems will be unavailable."
+        )
+
+    # ---------------------------------------------------------- #
+    #  4. Wire event subscribers
+    # ---------------------------------------------------------- #
+    # NotificationSystem auto-subscribes in __init__
+    notification_system = NotificationSystem(event_bus)
+
+    logger.info("Event subscribers wired.")
+
+    # ---------------------------------------------------------- #
+    #  5. Initialize ChatSystem — ensure Global channel
+    # ---------------------------------------------------------- #
+    try:
+        chat_system.ensure_global_channel()
+        logger.info("ChatSystem: Global channel ensured.")
+    except Exception:
+        logger.exception("ChatSystem: Could not ensure Global channel.")
+
+    # ---------------------------------------------------------- #
+    #  6. Metrics (optional)
+    # ---------------------------------------------------------- #
+    metrics = None
+    try:
+        from world.metrics import MetricsCollector
+        metrics = MetricsCollector()
+        logger.info("MetricsCollector initialized.")
+    except Exception:
+        logger.info("MetricsCollector not available — skipping.")
+
+    # ---------------------------------------------------------- #
+    #  7. Populate game_systems dict
+    # ---------------------------------------------------------- #
+    game_systems.update({
+        "registry": registry,
+        "event_bus": event_bus,
+        "building_system": building_system,
+        "combat_engine": combat_engine,
+        "rank_system": rank_system,
+        "resource_system": resource_system,
+        "powerup_system": powerup_system,
+        "tech_system": tech_system,
+        "equipment_system": equipment_system,
+        "chunking": chunking,
+        "chat_system": chat_system,
+        "notification_system": notification_system,
+        "metrics": metrics,
+        "planet_registry": planet_registry,
+        "tile_resolver": tile_resolver,
+        "fog_system": fog_system,
+        "procedural_map_renderer": procedural_map_renderer,
+        "garbage_collector": garbage_collector,
+        "_terrain_generators": terrain_generators,
+    })
+
+    # ---------------------------------------------------------- #
+    #  8. Start GameTickScript and AutoSaveScript
+    # ---------------------------------------------------------- #
+    _start_scripts(game_systems)
+
+    logger.info("RTS Combat Overworld initialization complete.")
+    return game_systems
+
+
+def _start_scripts(systems: dict) -> None:
+    """Start or retrieve the GameTickScript and AutoSaveScript.
+
+    Uses Evennia's create_script / search to find existing persistent
+    scripts or create new ones.
+    """
+    try:
+        from evennia import create_script
+        from evennia.utils.search import search_script
+
+        # GameTickScript
+        existing = search_script("game_tick")
+        if existing:
+            tick_script = existing[0]
+            logger.info("Found existing GameTickScript.")
+        else:
+            tick_script = create_script(
+                "typeclasses.scripts.GameTickScript",
+                key="game_tick",
+                persistent=True,
+            )
+            logger.info("Created new GameTickScript.")
+
+        # Wire systems into the tick script
+        if tick_script:
+            tick_script.ndb.systems = systems
+
+        # AutoSaveScript
+        existing = search_script("auto_save")
+        if existing:
+            save_script = existing[0]
+            logger.info("Found existing AutoSaveScript.")
+        else:
+            save_script = create_script(
+                "typeclasses.scripts.AutoSaveScript",
+                key="auto_save",
+                persistent=True,
+            )
+            logger.info("Created new AutoSaveScript.")
+
+    except ImportError:
+        logger.info("Evennia script API not available — skipping script start.")
+    except Exception:
+        logger.exception("Error starting game scripts.")

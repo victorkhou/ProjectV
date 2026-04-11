@@ -1,0 +1,92 @@
+# Item definitions for RTS Combat Overworld
+# Top-level keys: items (list) and production_map (dict)
+
+items:
+  - key: combat_knife
+    name: Combat Knife
+    slot: weapon
+    stat_modifiers:
+      damage: 10
+      range: 1
+    ammo_cost: null
+    classification: modern
+    required_rank: null
+
+  - key: assault_rifle
+    name: Assault Rifle
+    slot: weapon
+    stat_modifiers:
+      damage: 25
+      range: 5
+    ammo_cost:
+      Iron: 1
+    classification: modern
+    required_rank: null
+
+  - key: plasma_rifle
+    name: Plasma Rifle
+    slot: weapon
+    stat_modifiers:
+      damage: 40
+      range: 6
+    ammo_cost:
+      Energy: 2
+    classification: futuristic
+    required_rank: Sergeant
+
+  - key: sniper_rifle
+    name: Sniper Rifle
+    slot: weapon
+    stat_modifiers:
+      damage: 50
+      range: 12
+    ammo_cost:
+      Iron: 2
+    classification: modern
+    required_rank: Corporal
+
+  - key: kevlar_vest
+    name: Kevlar Vest
+    slot: armor
+    stat_modifiers:
+      damage_reduction: 5
+    ammo_cost: null
+    classification: modern
+    required_rank: null
+
+  - key: power_armor
+    name: Power Armor
+    slot: armor
+    stat_modifiers:
+      damage_reduction: 15
+    ammo_cost: null
+    classification: futuristic
+    required_rank: Captain
+
+  - key: scope
+    name: Tactical Scope
+    slot: gadget
+    stat_modifiers:
+      sight_range: 3
+    ammo_cost: null
+    classification: modern
+    required_rank: null
+
+  - key: jetpack
+    name: Jetpack
+    slot: gadget
+    stat_modifiers:
+      move_speed: 2.0
+    ammo_cost: null
+    classification: futuristic
+    required_rank: Specialist
+
+production_map:
+  AA:
+    - combat_knife
+    - assault_rifle
+    - sniper_rifle
+    - plasma_rifle
+  AR:
+    - kevlar_vest
+    - power_armor

@@ -1,0 +1,4 @@
+# file: /workplace/victkhou/EV/evennia-main/mygame/typeclasses/characters.py
+# hypothesis_version: 6.151.12
+
+[100, '_equipment_handler', 'active_powerups', 'circuits', 'clay', 'combat_lockout_tick', 'combat_xp', 'energy', 'hp', 'hp_max', 'iron', 'key', 'metals', 'name', 'rank_level', 'researched_techs', 'resources', 'stone', 'straw', 'wood']

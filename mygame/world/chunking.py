@@ -1,0 +1,182 @@
+"""
+World Chunk Manager for the RTS Combat Overworld game.
+
+Divides the overworld into rectangular chunks for performance-optimized
+tick processing. Only active chunks (near online players) are processed
+each game tick.
+
+Requirements: 31.1, 31.2, 31.3, 31.4, 31.5
+"""
+
+from __future__ import annotations
+
+from typing import Any
+
+
+class WorldChunkManager:
+    """Manages world chunks for tick processing optimization.
+
+    A chunk is a rectangular region of chunk_size x chunk_size tiles.
+    Chunk coordinates are calculated as (x // chunk_size, y // chunk_size).
+
+    A chunk is active if any online player is within it or within one
+    chunk radius of it.
+
+    Args:
+        chunk_size: The side length of each chunk in tiles (default 10).
+    """
+
+    def __init__(self, chunk_size: int = 10) -> None:
+        self.chunk_size = chunk_size
+
+    def get_chunk_coord(self, x: int, y: int) -> tuple[int, int]:
+        """Return the chunk coordinate for a tile at (x, y).
+
+        Uses floor division so negative coordinates work correctly.
+
+        Args:
+            x: Tile x-coordinate.
+            y: Tile y-coordinate.
+
+        Returns:
+            (chunk_x, chunk_y) tuple.
+        """
+        return (x // self.chunk_size, y // self.chunk_size)
+
+    def get_active_chunks(
+        self, planet: str, online_players: list[Any]
+    ) -> set[tuple[int, int]]:
+        """Determine which chunks are active based on online player positions.
+
+        A chunk is active if a player is in it or within 1 chunk radius.
+        This means for each player chunk (cx, cy), all chunks in the range
+        (cx-1..cx+1, cy-1..cy+1) are activated.
+
+        Args:
+            planet: The planet name (used to filter players by planet).
+            online_players: List of player objects with position info.
+
+        Returns:
+            Set of active (chunk_x, chunk_y) tuples.
+        """
+        active = set()
+        for player in online_players:
+            pos = self._get_player_position(player, planet)
+            if pos is None:
+                continue
+            x, y = pos
+            cx, cy = self.get_chunk_coord(x, y)
+            # Activate the player's chunk and all neighbors (1 radius)
+            for dx in range(-1, 2):
+                for dy in range(-1, 2):
+                    active.add((cx + dx, cy + dy))
+        return active
+
+    def get_tiles_in_chunks(
+        self, planet: str, chunks: set[tuple[int, int]], all_tiles: list[Any]
+    ) -> list[Any]:
+        """Filter tiles to only those within the given active chunks.
+
+        Args:
+            planet: The planet name.
+            chunks: Set of active chunk coordinates.
+            all_tiles: List of tile objects to filter.
+
+        Returns:
+            List of tiles that fall within active chunks.
+        """
+        result = []
+        for tile in all_tiles:
+            pos = self._get_tile_position(tile)
+            if pos is None:
+                continue
+            x, y = pos
+            chunk = self.get_chunk_coord(x, y)
+            if chunk in chunks:
+                result.append(tile)
+        return result
+
+    def get_buildings_in_chunks(
+        self, planet: str, chunks: set[tuple[int, int]], all_buildings: list[Any]
+    ) -> list[Any]:
+        """Filter buildings to only those within the given active chunks.
+
+        Args:
+            planet: The planet name.
+            chunks: Set of active chunk coordinates.
+            all_buildings: List of building objects to filter.
+
+        Returns:
+            List of buildings that fall within active chunks.
+        """
+        result = []
+        for building in all_buildings:
+            pos = self._get_building_position(building)
+            if pos is None:
+                continue
+            x, y = pos
+            chunk = self.get_chunk_coord(x, y)
+            if chunk in chunks:
+                result.append(building)
+        return result
+
+    # ------------------------------------------------------------------ #
+    #  Internal helpers
+    # ------------------------------------------------------------------ #
+
+    @staticmethod
+    def _get_player_position(player: Any, planet: str) -> tuple[int, int] | None:
+        """Extract (x, y) position from a player object.
+
+        Supports multiple attribute patterns for flexibility in testing
+        and production.
+        """
+        # Direct position attribute (used in tests / lightweight fakes)
+        if hasattr(player, "position"):
+            pos = player.position
+            if pos is not None:
+                return (pos[0], pos[1])
+
+        # Evennia room-based location
+        loc = getattr(player, "location", None)
+        if loc is not None:
+            x = getattr(loc, "x", None)
+            y = getattr(loc, "y", None)
+            if x is not None and y is not None:
+                return (int(x), int(y))
+
+        return None
+
+    @staticmethod
+    def _get_tile_position(tile: Any) -> tuple[int, int] | None:
+        """Extract (x, y) position from a tile object."""
+        if hasattr(tile, "x") and hasattr(tile, "y"):
+            x = tile.x
+            y = tile.y
+            if x is not None and y is not None:
+                return (int(x), int(y))
+
+        if hasattr(tile, "position"):
+            pos = tile.position
+            if pos is not None:
+                return (pos[0], pos[1])
+
+        return None
+
+    @staticmethod
+    def _get_building_position(building: Any) -> tuple[int, int] | None:
+        """Extract (x, y) position from a building object."""
+        # Building is placed in a room (tile)
+        loc = getattr(building, "location", None)
+        if loc is not None:
+            x = getattr(loc, "x", None)
+            y = getattr(loc, "y", None)
+            if x is not None and y is not None:
+                return (int(x), int(y))
+
+        if hasattr(building, "position"):
+            pos = building.position
+            if pos is not None:
+                return (pos[0], pos[1])
+
+        return None
