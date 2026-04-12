@@ -373,23 +373,9 @@ class BuildingSystem:
         return []
 
     def _get_coords(self, obj: Any) -> tuple[int, int] | None:
-        """Extract (x, y) coordinates from an object.
-
-        Checks coord_x/coord_y first (player in PlanetRoom),
-        then x/y (OverworldRoom or building location).
-        """
-        # Player coordinates (for characters in PlanetRoom)
-        if hasattr(obj, "db"):
-            cx = getattr(obj.db, "coord_x", None)
-            cy = getattr(obj.db, "coord_y", None)
-            if cx is not None and cy is not None:
-                return (int(cx), int(cy))
-        # Room/building coordinates
-        x = getattr(obj, "x", None)
-        y = getattr(obj, "y", None)
-        if x is not None and y is not None:
-            return (int(x), int(y))
-        return None
+        """Extract (x, y) coordinates from an object."""
+        from world.utils import get_coords
+        return get_coords(obj)
 
     @staticmethod
     def _default_create_building(

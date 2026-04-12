@@ -12,6 +12,7 @@ from __future__ import annotations
 import logging
 
 from evennia.commands.command import Command as BaseCommand
+from world.utils import get_system as _get_system
 
 logger = logging.getLogger("mygame.admin")
 
@@ -383,18 +384,6 @@ class CmdTeleport(BaseCommand):
 
         logger.info("Admin %s teleported to (%d, %d, %s)", caller.key, tx, ty, planet)
         caller.msg(f"Teleported to ({tx}, {ty}) on {planet}.")
-
-
-def _get_system(caller, system_name):
-    """Look up a game system by name."""
-    systems = getattr(getattr(caller, "ndb", None), "systems", None)
-    if systems and isinstance(systems, dict):
-        return systems.get(system_name)
-    try:
-        from server.conf.game_init import game_systems
-        return game_systems.get(system_name)
-    except (ImportError, AttributeError):
-        return None
 
 
 class CmdClearFog(BaseCommand):

@@ -41,14 +41,26 @@ class DiscoveryBitfield:
         bit = ((x & 0xF) << 4) | (y & 0xF)
         return bool(self._chunks.get((cx, cy), 0) & (1 << bit))
 
-    def add_many(self, coords: set[tuple[int, int]] | list[tuple[int, int]]) -> None:
-        """Mark multiple tiles as discovered (batch operation)."""
+    def add_many(self, coords: set[tuple[int, int]] | list[tuple[int, int]]) -> bool:
+        """Mark multiple tiles as discovered (batch operation).
+
+        Returns True if any new tiles were added (bitfield changed).
+        """
         chunks = self._chunks
+        changed = False
         for x, y in coords:
             cx, cy = x >> 4, y >> 4
             bit = ((x & 0xF) << 4) | (y & 0xF)
             key = (cx, cy)
-            chunks[key] = chunks.get(key, 0) | (1 << bit)
+            old = chunks.get(key, 0)
+            new = old | (1 << bit)
+            if new != old:
+                chunks[key] = new
+                changed = True
+            elif key not in chunks:
+                chunks[key] = new
+                changed = True
+        return changed
 
     def __len__(self) -> int:
         """Return the total number of discovered tiles."""

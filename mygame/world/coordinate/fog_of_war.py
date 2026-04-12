@@ -104,9 +104,10 @@ class FogOfWarSystem:
         planet = _get_planet(player)
 
         # Batch-add all visible tiles to the bitfield
-        bitfield.add_many(visible_tiles)
+        tiles_changed = bitfield.add_many(visible_tiles)
 
         # Check for buildings on cached tiles
+        buildings_changed = False
         for coord in visible_tiles:
             x, y = coord
             room = tile_resolver.get_cached(x, y, planet)
@@ -118,18 +119,24 @@ class FogOfWarSystem:
 
                 if owner is not player and owner_name != player_key:
                     btype = _get_building_type(building)
-                    buildings_mem[(x, y)] = {
+                    new_snap = {
                         "building_type": btype,
                         "owner_name": owner_name,
-                        "x": x,
-                        "y": y,
+                        "x": x, "y": y,
                     }
-                else:
-                    buildings_mem.pop((x, y), None)
-            else:
-                buildings_mem.pop((x, y), None)
+                    if buildings_mem.get((x, y)) != new_snap:
+                        buildings_mem[(x, y)] = new_snap
+                        buildings_changed = True
+                elif (x, y) in buildings_mem:
+                    del buildings_mem[(x, y)]
+                    buildings_changed = True
+            elif (x, y) in buildings_mem:
+                del buildings_mem[(x, y)]
+                buildings_changed = True
 
-        self._save_discovery_data(player, bitfield, buildings_mem)
+        # Only persist if something actually changed
+        if tiles_changed or buildings_changed:
+            self._save_discovery_data(player, bitfield, buildings_mem)
 
     def get_discovered_buildings(
         self, player: Any, x: int, y: int

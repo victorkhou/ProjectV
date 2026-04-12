@@ -105,22 +105,25 @@ class TileResolver:
         return self._cache.get(x, y, planet)
 
     def preload_area(self, min_x: int, max_x: int, min_y: int, max_y: int, planet: str) -> None:
-        """Batch-load all existing rooms in an area into the cache.
+        """Batch-load rooms with buildings in an area into the cache.
 
-        Runs a single DB query to find all rooms within the bounding
-        box, then populates the cache. Called once before rendering
-        so that get_cached() hits for rooms with buildings/state.
+        Only loads rooms that have building objects (via the building
+        tag). Empty rooms don't need to be in the cache for rendering.
         """
         try:
             from typeclasses.rooms import OverworldRoom
 
+            # Only load rooms that contain buildings
             rooms = OverworldRoom.objects.filter_family(
                 db_tags__db_key="overworld_tile",
                 db_tags__db_category="room_type",
             ).filter(
                 db_tags__db_key=planet,
                 db_tags__db_category="coord_planet",
-            )
+            ).filter(
+                locations_set__db_tags__db_key="building",
+                locations_set__db_tags__db_category="object_type",
+            ).distinct()
             for room in rooms:
                 rx = room.attributes.get("x")
                 ry = room.attributes.get("y")
@@ -128,7 +131,24 @@ class TileResolver:
                     if min_x <= rx <= max_x and min_y <= ry <= max_y:
                         self._cache.put(rx, ry, planet, room)
         except Exception:
-            pass
+            # Fallback: load all overworld rooms on the planet
+            try:
+                from typeclasses.rooms import OverworldRoom
+                rooms = OverworldRoom.objects.filter_family(
+                    db_tags__db_key="overworld_tile",
+                    db_tags__db_category="room_type",
+                ).filter(
+                    db_tags__db_key=planet,
+                    db_tags__db_category="coord_planet",
+                )
+                for room in rooms:
+                    rx = room.attributes.get("x")
+                    ry = room.attributes.get("y")
+                    if rx is not None and ry is not None:
+                        if min_x <= rx <= max_x and min_y <= ry <= max_y:
+                            self._cache.put(rx, ry, planet, room)
+            except Exception:
+                pass
 
     def get_or_generate_terrain(
         self, x: int, y: int, planet: str

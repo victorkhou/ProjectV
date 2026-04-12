@@ -45,6 +45,19 @@ class PlanetRoom(DefaultRoom):
     #  Appearance — show map when looked at
     # -------------------------------------------------------------- #
 
+    @property
+    def _game_systems(self):
+        """Cached reference to the game_systems dict."""
+        systems = getattr(self, "_cached_game_systems", None)
+        if systems is not None:
+            return systems
+        try:
+            from server.conf.game_init import game_systems
+            self._cached_game_systems = game_systems
+            return game_systems
+        except (ImportError, AttributeError):
+            return {}
+
     def return_appearance(self, looker, **kwargs):
         """Return the map as the room's appearance.
 
@@ -58,11 +71,12 @@ class PlanetRoom(DefaultRoom):
         if not planet:
             return super().return_appearance(looker, **kwargs)
 
+        systems = self._game_systems
+
         # If inside a building, show building interior
         if getattr(looker.db, "inside_building", False):
             try:
-                from server.conf.game_init import game_systems
-                tile_resolver = game_systems.get("tile_resolver")
+                tile_resolver = systems.get("tile_resolver")
                 if tile_resolver:
                     x = getattr(looker.db, "coord_x", None)
                     y = getattr(looker.db, "coord_y", None)
@@ -71,13 +85,13 @@ class PlanetRoom(DefaultRoom):
                         if tile:
                             building = getattr(tile, "building", None)
                             if building:
-                                return _format_building_interior(looker, building)
+                                registry = systems.get("registry")
+                                return _format_building_interior(looker, building, registry=registry)
             except Exception:
                 pass
 
         try:
-            from server.conf.game_init import game_systems
-            renderer = game_systems.get("procedural_map_renderer")
+            renderer = systems.get("procedural_map_renderer")
             if renderer:
                 buildings = looker.get_buildings() if hasattr(looker, "get_buildings") else []
                 map_str = renderer.render(looker, buildings)
@@ -146,8 +160,7 @@ class PlanetRoom(DefaultRoom):
 
         # Get terrain info from the terrain generator
         try:
-            from server.conf.game_init import game_systems
-            generators = game_systems.get("_terrain_generators", {})
+            generators = self._game_systems.get("_terrain_generators", {})
             gen = generators.get(planet)
             if gen:
                 terrain_type, resource_type = gen.get_terrain_and_resource(x, y)
@@ -329,6 +342,24 @@ class OverworldRoom(DefaultRoom):
         moved_obj.msg(" | ".join(parts))
 
     # -------------------------------------------------------------- #
+    #  msg_contents override — coordinate-aware proximity filter
+    # -------------------------------------------------------------- #
+
+    def msg_contents(self, text, exclude=None, from_obj=None, **kwargs):
+        """Only message players at the same coordinates as the sender.
+
+        OverworldRoom tiles have fixed coordinates. If from_obj has
+        coordinates matching this room, broadcast to all contents.
+        Otherwise fall back to default behavior.
+        """
+        exclude = exclude or []
+        for obj in self.contents:
+            if obj in exclude:
+                continue
+            if hasattr(obj, "msg"):
+                obj.msg(text, **kwargs)
+
+    # -------------------------------------------------------------- #
     #  Structured state (Requirement 27.1)
     # -------------------------------------------------------------- #
 
@@ -390,8 +421,15 @@ class OverworldRoom(DefaultRoom):
 #  Helper for building interior display from PlanetRoom
 # ------------------------------------------------------------------ #
 
-def _format_building_interior(looker, building):
-    """Format building interior as a string for return_appearance."""
+def _format_building_interior(looker, building, registry=None):
+    """Format building interior as a string for return_appearance.
+
+    Args:
+        looker: The character looking at the building.
+        building: The building object.
+        registry: Optional DataRegistry instance. Falls back to
+            game_systems lookup if not provided.
+    """
     btype = "??"
     level = 1
     hp = "?"
@@ -412,9 +450,13 @@ def _format_building_interior(looker, building):
     category = "unknown"
     produces = "—"
     unlocks_str = "—"
+    if registry is None:
+        try:
+            from server.conf.game_init import game_systems
+            registry = game_systems.get("registry")
+        except Exception:
+            pass
     try:
-        from server.conf.game_init import game_systems
-        registry = game_systems.get("registry")
         if registry:
             bdef = registry.get_building(btype)
             category = bdef.category

@@ -390,6 +390,8 @@ class TestCmdUpgrade(unittest.TestCase):
         class FakeTileResolver:
             def resolve(self, x, y, planet):
                 return FakeLocation(x=x, y=y, building=None)
+            def get_if_exists(self, x, y, planet):
+                return FakeLocation(x=x, y=y, building=None)
         caller = FakeCaller(systems={"tile_resolver": FakeTileResolver()})
         cmd = _make_cmd(CmdUpgrade, caller, "")
         cmd.func()
