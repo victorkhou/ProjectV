@@ -17,29 +17,20 @@ logger = logging.getLogger("evennia")
 
 
 class ChatSystem:
-    """Thin wrapper over Evennia's channel/say/page infrastructure.
+    """Channel management for the RTS Combat Overworld.
 
     Responsibilities:
-    - Ensure the "Global" game channel exists on startup
-    - Auto-subscribe players to the "Global" channel on login
-    - Override channel message formatting to include player Rank
-    - Override page (DM) formatting to include player Rank
+    - Verify the Public channel exists on startup
+    - Auto-subscribe accounts to the Public channel on login
+    - Set up 'chat' nick alias for the Public channel
 
-    Delegates to:
-    - Evennia's Channel system for global chat delivery
-    - Evennia's built-in ``say`` command for local room chat
-    - Evennia's built-in ``page`` command for direct messages
+    Message formatting is handled by Account.at_pre_channel_msg.
+    Message tagging is handled by Account.channel_msg.
     """
 
-    GLOBAL_CHANNEL_KEY = "Global"
+    GLOBAL_CHANNEL_KEY = "Public"
 
     def __init__(self, channel_db_class: Any = None) -> None:
-        """Initialize the chat system.
-
-        Args:
-            channel_db_class: Optional override for ChannelDB class
-                (defaults to Evennia's ChannelDB). Useful for testing.
-        """
         self._channel_db_class = channel_db_class
 
     def _get_channel_db(self) -> Any:
@@ -53,39 +44,23 @@ class ChatSystem:
             return None
 
     def ensure_global_channel(self) -> Any:
-        """Ensure the Global channel exists, creating it if necessary.
+        """Ensure the Public channel exists (Evennia creates it by default).
 
-        Returns:
-            The Global channel object, or None if ChannelDB is unavailable.
+        Returns the channel object or None.
         """
         channel_db = self._get_channel_db()
         if channel_db is None:
-            logger.log_err("ChatSystem: ChannelDB not available")
             return None
-
         try:
-            channel, created = channel_db.objects.get_or_create(
-                db_key=self.GLOBAL_CHANNEL_KEY,
-                defaults={
-                    "db_key": self.GLOBAL_CHANNEL_KEY,
-                },
-            )
-            if created:
-                logger.log_info(
-                    f"ChatSystem: Created '{self.GLOBAL_CHANNEL_KEY}' channel"
-                )
-            return channel
+            return channel_db.objects.get(db_key=self.GLOBAL_CHANNEL_KEY)
         except Exception:
-            logger.exception("ChatSystem: Error ensuring Global channel")
+            logger.info("ChatSystem: Public channel not found — Evennia should create it on boot.")
             return None
 
-    def auto_subscribe(self, player: Any) -> None:
-        """Auto-subscribe a player to the Global channel on login.
+    def auto_subscribe(self, account: Any) -> None:
+        """Auto-subscribe an account to the Public channel and set up aliases.
 
-        Called from CombatCharacter.at_post_login().
-
-        Args:
-            player: The player character to subscribe.
+        Adds 'chat' as a personal alias so players can type 'chat Hello'.
         """
         channel_db = self._get_channel_db()
         if channel_db is None:
@@ -93,10 +68,13 @@ class ChatSystem:
 
         try:
             channel = channel_db.objects.get(db_key=self.GLOBAL_CHANNEL_KEY)
-            if not channel.has_connection(player):
-                channel.connect(player)
+            if not channel.has_connection(account):
+                channel.connect(account)
+            # Add 'chat' as a personal nick for the Public channel
+            if hasattr(account, "nicks"):
+                account.nicks.add("chat", self.GLOBAL_CHANNEL_KEY, category="channel")
         except Exception:
-            logger.exception("ChatSystem: Error auto-subscribing player")
+            logger.exception("ChatSystem: Error auto-subscribing account")
 
     def format_channel_message(self, sender: Any, message: str) -> str:
         """Format a channel message with the sender's rank.

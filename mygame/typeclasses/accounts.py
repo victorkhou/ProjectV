@@ -136,7 +136,40 @@ class Account(DefaultAccount):
 
     """
 
-    pass
+    def at_pre_channel_msg(self, message, channel, senders=None, **kwargs):
+        """Format channel messages with player rank.
+
+        Replaces Evennia's default "SenderName: message" with
+        "[Rank] SenderName: message".
+        """
+        from world.utils import _get_rank_name
+
+        if senders:
+            sender = senders[0]
+            # Get the puppet (character) for rank info
+            puppet = sender.get_puppet(self.sessions.get()[0]) if self.sessions.get() else None
+            rank = _get_rank_name(puppet) if puppet else _get_rank_name(sender)
+            sender_name = sender.get_display_name(self)
+
+            message_lstrip = message.lstrip()
+            if message_lstrip.startswith((":", ";")):
+                spacing = "" if message_lstrip[1:].startswith((":", "'", ",")) else " "
+                message = f"[{rank}] {sender_name}{spacing}{message_lstrip[1:]}"
+            else:
+                message = f"[{rank}] {sender_name}: {message}"
+
+        if not kwargs.get("no_prefix") and not kwargs.get("emit"):
+            message = channel.channel_prefix() + message
+
+        return message
+
+    def channel_msg(self, message, channel, senders=None, **kwargs):
+        """Override to tag channel messages with 'game-chat' for the webclient."""
+        self.msg(
+            text=(message, {"from_channel": channel.id, "cls": "game-chat"}),
+            from_obj=senders,
+            options={"from_channel": channel.id},
+        )
 
 
 class Guest(DefaultGuest):

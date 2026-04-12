@@ -13,7 +13,50 @@ Requirements: 1.6, 1.7, 1.10, 2.3, 2.5, 3.3, 5.3, 6.2, 6.3, 6.4,
 from __future__ import annotations
 
 from evennia.commands.command import Command as BaseCommand
-from world.utils import get_system as _get_system
+from world.utils import (
+    get_system as _get_system,
+    get_game_systems,
+    ensure_coords,
+    get_building_info,
+    get_building_attr,
+    get_closed_exits,
+    is_exit_closed,
+    is_owner,
+    is_admin,
+    format_dm_message,
+)
+
+
+def _send_map_update(caller):
+    """Send structured map data to the webclient via OOB.
+
+    The webclient's map_renderer plugin listens for 'map_update'
+    messages and renders them on the Canvas. This is a no-op for
+    telnet clients (they ignore unknown OOB commands).
+    """
+    provider = _get_system(caller, "map_data_provider")
+    if provider is None:
+        return
+    try:
+        buildings = caller.get_buildings() if hasattr(caller, "get_buildings") else []
+        data = provider.get_map_data(caller, buildings)
+        # Add discovered count
+        fog = _get_system(caller, "fog_system")
+        if fog:
+            data["discovered_count"] = len(fog.get_discovered_tile_set(caller))
+        caller.msg(map_update=data)
+    except Exception:
+        pass
+
+
+def _send_ascii_map(caller, map_text):
+    """Send ASCII map text tagged with cls=ascii-map.
+
+    The webclient hides elements with class 'ascii-map' when the
+    graphical map is active, avoiding duplicate display. Telnet
+    clients see it normally.
+    """
+    caller.msg(text=(map_text, {"cls": "ascii-map"}))
 
 
 class GameCommand(BaseCommand):
@@ -182,7 +225,7 @@ class CmdMove(GameCommand):
         """Handle leaving a building. Returns False if blocked."""
         if not getattr(caller.db, "inside_building", False):
             return True
-        if not _is_admin(caller):
+        if not is_admin(caller):
             tile_resolver = _get_system(caller, "tile_resolver")
             if tile_resolver is not None:
                 cx = getattr(caller.db, "coord_x", None)
@@ -192,7 +235,7 @@ class CmdMove(GameCommand):
                     cur_room = tile_resolver.get_if_exists(cx, cy, cp)
                     if cur_room is not None:
                         bld = getattr(cur_room, "building", None)
-                        if bld is not None and _is_exit_closed(bld, direction):
+                        if bld is not None and is_exit_closed(bld, direction):
                             caller.msg(f"The {direction} exit is closed.")
                             return False
         caller.db.inside_building = False
@@ -201,42 +244,11 @@ class CmdMove(GameCommand):
 
     def _resolve_coords(self, caller):
         """Resolve caller's current coordinates, syncing from room if needed."""
-        x = getattr(caller.db, "coord_x", None)
-        y = getattr(caller.db, "coord_y", None)
-        planet = getattr(caller.db, "coord_planet", None)
-
-        if x is None or y is None or not planet:
-            loc = caller.location
-            if loc is not None and hasattr(loc, "planet_name"):
-                rp = getattr(loc, "planet_name", None)
-                if rp and rp != "unknown":
-                    rx = getattr(loc, "x", None)
-                    ry = getattr(loc, "y", None)
-                    if rx is not None and ry is not None:
-                        caller.db.coord_x = rx
-                        caller.db.coord_y = ry
-                        caller.db.coord_planet = rp
-                        x, y, planet = rx, ry, rp
-                    elif rp:
-                        caller.db.coord_planet = rp
-                        planet = rp
-
-        if x is None or y is None or not planet:
-            if hasattr(caller, "_ensure_overworld_position"):
-                caller._ensure_overworld_position()
-                x = getattr(caller.db, "coord_x", None)
-                y = getattr(caller.db, "coord_y", None)
-                planet = getattr(caller.db, "coord_planet", None)
-
-        return x, y, planet
+        return ensure_coords(caller)
 
     def _ensure_planet_room(self, caller, planet):
         """Move caller to the shared PlanetRoom if not already there."""
-        try:
-            from server.conf.game_init import game_systems
-            planet_rooms = game_systems.get("planet_rooms", {})
-        except (ImportError, AttributeError):
-            return
+        planet_rooms = get_game_systems().get("planet_rooms", {})
         target_planet_room = planet_rooms.get(planet)
         if target_planet_room and caller.location is not target_planet_room:
             caller.move_to(target_planet_room, quiet=True)
@@ -252,7 +264,7 @@ class CmdMove(GameCommand):
         if building is None or getattr(building, "is_offline", False):
             return False
         opposite = _OPPOSITE_DIR.get(direction, direction)
-        if not _is_admin(caller) and _is_exit_closed(building, opposite):
+        if not is_admin(caller) and is_exit_closed(building, opposite):
             return False
         caller.db.inside_building = True
         # Update fog before showing interior
@@ -265,6 +277,7 @@ class CmdMove(GameCommand):
             except Exception:
                 pass
         _show_building_interior(caller, building)
+        _send_map_update(caller)
         return True
 
     def _update_fog_and_render(self, caller, tile_resolver):
@@ -285,10 +298,12 @@ class CmdMove(GameCommand):
                 buildings = caller.get_buildings() if hasattr(caller, "get_buildings") else []
                 map_str = renderer.render(caller, buildings)
                 if map_str:
-                    caller.msg(map_str)
+                    _send_ascii_map(caller, map_str)
             except Exception:
                 import logging
                 logging.getLogger("evennia.commands").exception("Map render failed")
+
+        _send_map_update(caller)
 
 
 class CmdHarvest(GameCommand):
@@ -382,19 +397,15 @@ class CmdUpgrade(GameCommand):
             return
 
         # Ownership check (compare by .id for reliability across restarts)
-        owner = None
-        if hasattr(building, "attributes") and hasattr(building.attributes, "get"):
-            owner = building.attributes.get("owner", default=None)
-        if not _is_owner(caller, owner):
+        owner = get_building_attr(building, "owner")
+        if not is_owner(caller, owner):
             caller.msg("You do not own this building.")
             return
 
         # Read current state
-        btype = "??"
-        level = 1
-        if hasattr(building, "attributes") and hasattr(building.attributes, "get"):
-            btype = building.attributes.get("building_type", default="??") or "??"
-            level = building.attributes.get("building_level", default=1) or 1
+        info = get_building_info(building)
+        btype = info["type"]
+        level = info["level"]
 
         if level >= self.MAX_LEVEL:
             caller.msg(f"This building is already at maximum level ({self.MAX_LEVEL}).")
@@ -477,14 +488,15 @@ class CmdDemolish(GameCommand):
             return
 
         # Check ownership (compare by .id for reliability across restarts)
-        owner = building.attributes.get("owner", default=None) if hasattr(building, "attributes") else None
-        if not _is_owner(caller, owner):
+        owner = get_building_attr(building, "owner")
+        if not is_owner(caller, owner):
             caller.msg("You do not own this building.")
             return
 
-        btype = building.attributes.get("building_type", default="??")
-        level = building.attributes.get("building_level", default=1) or 1
-        name = getattr(building, "key", btype)
+        info = get_building_info(building)
+        btype = info["type"]
+        level = info["level"]
+        name = info["name"]
 
         # Calculate refund
         refund = {}
@@ -834,23 +846,14 @@ class CmdBuildings(GameCommand):
 
         lines = ["|wYour Buildings:|n"]
         for b in buildings:
-            # Read from Evennia attributes
-            btype = "??"
-            level = 1
-            hp = "?"
-            hp_max = "?"
-            if hasattr(b, "attributes") and hasattr(b.attributes, "get"):
-                btype = b.attributes.get("building_type", default="??") or "??"
-                level = b.attributes.get("building_level", default=1) or 1
-                hp = b.attributes.get("hp", default="?")
-                hp_max = b.attributes.get("hp_max", default="?")
+            info = get_building_info(b)
             loc = getattr(b, "location", None)
             loc_str = ""
             if loc:
                 lx = getattr(loc, "x", "?")
                 ly = getattr(loc, "y", "?")
                 loc_str = f" at ({lx}, {ly})"
-            lines.append(f"  {btype} Lv{level}{loc_str} — HP: {hp}/{hp_max}")
+            lines.append(f"  {info['type']} Lv{info['level']}{loc_str} — HP: {info['hp']}/{info['hp_max']}")
 
         self.caller.msg("\n".join(lines))
 
@@ -1007,10 +1010,12 @@ class CmdInventory(GameCommand):
 
 
 class CmdChat(GameCommand):
-    """Send a message to the Global channel.
+    """Send a message to the Public channel.
 
     Usage:
         chat <message>
+
+    Shortcut for 'public <message>'. Uses Evennia's channel system.
     """
 
     key = "chat"
@@ -1022,26 +1027,17 @@ class CmdChat(GameCommand):
             self.caller.msg("Usage: chat <message>")
             return
 
-        chat_system = _get_system(self.caller, "chat_system")
-        if chat_system is None:
-            self.caller.msg("Chat system unavailable.")
+        try:
+            from evennia.comms.models import ChannelDB
+            channel = ChannelDB.objects.get(db_key="Public")
+        except Exception:
+            self.caller.msg("Public channel not available.")
             return
 
-        formatted = chat_system.format_channel_message(self.caller, message)
-        # Broadcast via the Global channel or fallback to msg
-        try:
-            channel_db = chat_system._get_channel_db()
-            if channel_db:
-                channel = channel_db.objects.get(
-                    db_key=chat_system.GLOBAL_CHANNEL_KEY
-                )
-                channel.msg(formatted)
-                return
-        except Exception:
-            pass
+        if not channel.has_connection(self.caller.account):
+            channel.connect(self.caller.account)
 
-        # Fallback: just echo
-        self.caller.msg(formatted)
+        channel.msg(message, senders=self.caller.account)
 
 
 class CmdMessage(GameCommand):
@@ -1052,7 +1048,7 @@ class CmdMessage(GameCommand):
     """
 
     key = "message"
-    aliases = ["msg", "dm"]
+    aliases = ["msg", "dm", "page", "tell", "whisper"]
     help_category = "Game"
 
     def func(self):
@@ -1068,14 +1064,10 @@ class CmdMessage(GameCommand):
             self.caller.msg(f"Could not find player '{target_name}'.")
             return
 
-        chat_system = _get_system(self.caller, "chat_system")
-        if chat_system:
-            formatted = chat_system.format_dm_message(self.caller, text)
-        else:
-            formatted = f"{self.caller.key} (DM): {text}"
+        formatted = format_dm_message(self.caller, text)
 
-        target.msg(formatted)
-        self.caller.msg(f"You message {target_name}: {text}")
+        target.msg(text=(formatted, {"cls": "game-chat"}))
+        self.caller.msg(text=(f"You message {target_name}: {text}", {"cls": "game-chat"}))
 
 
 class CmdSay(GameCommand):
@@ -1101,9 +1093,9 @@ class CmdSay(GameCommand):
             return
 
         # Broadcast to all in the room at the same tile
-        self.caller.msg(f'You say, "{message}"')
+        self.caller.msg(text=(f'You say, "{message}"', {"cls": "game-chat"}))
         loc.msg_contents(
-            f'{name} says, "{message}"',
+            text=(f'{name} says, "{message}"', {"cls": "game-chat"}),
             exclude=[self.caller],
             from_obj=self.caller,
         )
@@ -1138,9 +1130,13 @@ class CmdLook(GameCommand):
                 return
 
         # at_look calls return_appearance on the target, which for
-        # PlanetRoom returns the map or building interior automatically
+        # PlanetRoom sends the map via tagged msg and returns empty.
         desc = caller.at_look(target)
-        self.msg(text=(desc, {"type": "look"}), options=None)
+        if desc:
+            self.msg(text=(desc, {"type": "look"}), options=None)
+        # Send graphical map update to webclient
+        if not self.args:
+            _send_map_update(caller)
 
 
 class CmdMap(GameCommand):
@@ -1166,24 +1162,8 @@ class CmdMap(GameCommand):
 
         planet = getattr(caller.db, "coord_planet", None)
 
-        # If coords are missing, try to sync from the current room
         if not planet:
-            loc = caller.location
-            if loc is not None and hasattr(loc, "x") and hasattr(loc, "planet_name"):
-                rx = getattr(loc, "x", None)
-                ry = getattr(loc, "y", None)
-                rp = getattr(loc, "planet_name", None)
-                if rx is not None and ry is not None and rp and rp != "unknown":
-                    caller.db.coord_x = rx
-                    caller.db.coord_y = ry
-                    caller.db.coord_planet = rp
-                    planet = rp
-
-        # If still no coords, try spawning to the overworld
-        if not planet:
-            if hasattr(caller, "_ensure_overworld_position"):
-                caller._ensure_overworld_position()
-                planet = getattr(caller.db, "coord_planet", None)
+            _, _, planet = ensure_coords(caller)
 
         if not planet:
             caller.msg("Cannot determine your position. Try logging out and back in.")
@@ -1207,9 +1187,11 @@ class CmdMap(GameCommand):
             disc_count = 0
             if fog_system:
                 disc_count = len(fog_system.get_discovered_tile_set(caller))
-            caller.msg(f"|wMap — ({x}, {y}) on {planet} | {disc_count} tiles discovered|n\n{map_str}")
+            caller.msg(text=(f"|wMap — ({x}, {y}) on {planet} | {disc_count} tiles discovered|n\n{map_str}", {"cls": "ascii-map"}))
         else:
             caller.msg("Nothing to display — explore first.")
+
+        _send_map_update(caller)
 
 
 # ------------------------------------------------------------------ #
@@ -1225,55 +1207,6 @@ _OPPOSITE_DIR = {
 }
 
 _CARDINAL_DIRS = ("north", "south", "east", "west")
-
-
-def _is_exit_closed(building, direction):
-    """Check if a building's exit in the given direction is closed."""
-    dir_map = {"n": "north", "s": "south", "e": "east", "w": "west"}
-    direction = dir_map.get(direction, direction)
-    closed = set()
-    if hasattr(building, "attributes") and hasattr(building.attributes, "get"):
-        raw = building.attributes.get("closed_exits", default=None)
-        if raw:
-            try:
-                closed = set(raw)
-            except (TypeError, ValueError):
-                pass
-    return direction in closed
-
-
-def _is_admin(caller):
-    """Check if caller has Builder+ permissions (bypasses exit restrictions)."""
-    if hasattr(caller, "check_permstring"):
-        try:
-            return caller.check_permstring("Builder")
-        except Exception:
-            pass
-    if hasattr(caller, "permissions"):
-        perms = caller.permissions
-        if hasattr(perms, "check"):
-            try:
-                return perms.check("Builder")
-            except Exception:
-                pass
-    return False
-
-
-def _is_owner(caller, owner):
-    """Check if caller is the owner of a building.
-
-    Compares by .id for reliability across server restarts,
-    since object identity (``is``) can break when Evennia
-    deserializes attribute references.
-    """
-    if owner is None:
-        return False
-    caller_id = getattr(caller, "id", None)
-    owner_id = getattr(owner, "id", None)
-    if caller_id is not None and owner_id is not None:
-        return caller_id == owner_id
-    # Fallback to identity if .id not available
-    return owner is caller
 
 
 def _show_building_interior(caller, building):
@@ -1326,20 +1259,12 @@ class CmdCloseExit(GameCommand):
             caller.msg("No building here.")
             return
 
-        owner = None
-        if hasattr(building, "attributes") and hasattr(building.attributes, "get"):
-            owner = building.attributes.get("owner", default=None)
-        if not _is_owner(caller, owner):
+        owner = get_building_attr(building, "owner")
+        if not is_owner(caller, owner):
             caller.msg("You do not own this building.")
             return
 
-        closed = set()
-        raw = building.attributes.get("closed_exits", default=None)
-        if raw:
-            try:
-                closed = set(raw)
-            except (TypeError, ValueError):
-                pass
+        closed = get_closed_exits(building)
 
         if direction in closed:
             caller.msg(f"The {direction} exit is already closed.")
@@ -1388,20 +1313,12 @@ class CmdOpenExit(GameCommand):
             caller.msg("No building here.")
             return
 
-        owner = None
-        if hasattr(building, "attributes") and hasattr(building.attributes, "get"):
-            owner = building.attributes.get("owner", default=None)
-        if not _is_owner(caller, owner):
+        owner = get_building_attr(building, "owner")
+        if not is_owner(caller, owner):
             caller.msg("You do not own this building.")
             return
 
-        closed = set()
-        raw = building.attributes.get("closed_exits", default=None)
-        if raw:
-            try:
-                closed = set(raw)
-            except (TypeError, ValueError):
-                pass
+        closed = get_closed_exits(building)
 
         if direction not in closed:
             caller.msg(f"The {direction} exit is already open.")
@@ -1441,9 +1358,10 @@ class CmdLeave(GameCommand):
                     x = getattr(caller.db, "coord_x", "?")
                     y = getattr(caller.db, "coord_y", "?")
                     planet = getattr(caller.db, "coord_planet", "?")
-                    caller.msg(f"|wMap — ({x}, {y}) on {planet}|n\n{map_str}")
+                    _send_ascii_map(caller, f"|wMap — ({x}, {y}) on {planet}|n\n{map_str}")
             except Exception:
                 pass
+        _send_map_update(caller)
 
 
 # ------------------------------------------------------------------ #

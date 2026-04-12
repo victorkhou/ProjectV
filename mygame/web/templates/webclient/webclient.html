@@ -1,0 +1,72 @@
+{% extends "webclient/base.html" %}
+{% load static %}
+
+{# Override guilib_import: keep webclient_gui.js + essential plugins, skip GoldenLayout #}
+{% block guilib_import %}
+    <script src={% static "webclient/js/webclient_gui.js" %} language="javascript" type="text/javascript" charset="utf-8"></script>
+    <script src={% static "webclient/js/plugins/default_in.js" %} language="javascript" type="text/javascript"></script>
+    <script src={% static "webclient/js/plugins/custom_out.js" %} language="javascript" type="text/javascript"></script>
+    <script src={% static "webclient/js/plugins/text2html.js" %} language="javascript" type="text/javascript"></script>
+    <script src={% static "webclient/js/plugins/history.js" %} language="javascript" type="text/javascript"></script>
+    <script src={% static "webclient/js/plugins/oob.js" %} language="javascript" type="text/javascript"></script>
+    <script src={% static "webclient/js/plugins/multimedia.js" %} language="javascript" type="text/javascript"></script>
+    <script src={% static "webclient/js/plugins/html.js" %} language="javascript" type="text/javascript"></script>
+{% endblock %}
+
+{% block client %}
+
+<!-- View toggle bar -->
+<div id="view-toggle">
+  <button id="btn-map-view" class="view-btn active" title="Map + Text (Tab)">Map</button>
+  <button id="btn-text-view" class="view-btn" title="Full Text (Tab)">Text</button>
+</div>
+
+<!-- Main content area -->
+<div id="main-content">
+
+  <!-- Map panel (left side, hidden in text mode) -->
+  <div id="map-panel">
+    <div id="map-container">
+      <canvas id="map-canvas" width="640" height="640"></canvas>
+    </div>
+    <div id="map-info"></div>
+  </div>
+
+  <!-- Right panel: chat top, output bottom -->
+  <div id="right-panel">
+    <div id="chat-panel">
+      <div id="chat-label">Chat</div>
+      <div id="chat-scroll">
+        <div id="chatwindow"></div>
+      </div>
+    </div>
+    <div id="resize-handle-v" class="resize-handle-v"></div>
+    <div id="output-panel">
+      <div id="text-scroll-outer">
+        <div id="text-scroll-inner">
+          <div id="messagewindow"></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+</div>
+
+<!-- Horizontal resize handle between map and right panel -->
+<div id="resize-handle-h" class="resize-handle-h"></div>
+
+<!-- Input bar — always anchored to bottom -->
+<div id="input-bar">
+  <div id="prompt" class="prompt"></div>
+  <div id="inputcontrol">
+    <textarea id="inputfield" rows="1"></textarea>
+    <button id="inputsend" type="button">&gt;</button>
+  </div>
+</div>
+
+{% endblock %}
+
+{% block scripts %}
+<link rel="stylesheet" type="text/css" href={% static "webclient/css/map.css" %}>
+<script src={% static "webclient/js/plugins/map_renderer.js" %} language="javascript" type="text/javascript"></script>
+{% endblock %}

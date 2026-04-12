@@ -37,6 +37,16 @@ SERVERNAME = "mygame"
 # Use CombatCharacter as the default character typeclass
 BASE_CHARACTER_TYPECLASS = "typeclasses.characters.CombatCharacter"
 
+# Add 'chat' as a server-level alias for the Public channel
+DEFAULT_CHANNELS = [
+    {
+        "key": "Public",
+        "aliases": ("pub", "chat"),
+        "desc": "Public discussion",
+        "locks": "control:perm(Admin);listen:all();send:all()",
+    }
+]
+
 
 ######################################################################
 # Settings given in secret_settings.py override those in this file.

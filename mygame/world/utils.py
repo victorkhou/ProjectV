@@ -4,8 +4,15 @@ Shared utility functions for the RTS Combat Overworld.
 
 from __future__ import annotations
 
+import logging
 from typing import Any
 
+logger = logging.getLogger("evennia.world.utils")
+
+
+# ------------------------------------------------------------------ #
+#  System lookup
+# ------------------------------------------------------------------ #
 
 def get_system(caller: Any, system_name: str) -> Any | None:
     """Look up a game system by name.
@@ -23,6 +30,19 @@ def get_system(caller: Any, system_name: str) -> Any | None:
         return None
 
 
+def get_game_systems() -> dict:
+    """Return the global game_systems dict directly."""
+    try:
+        from server.conf.game_init import game_systems
+        return game_systems
+    except (ImportError, AttributeError):
+        return {}
+
+
+# ------------------------------------------------------------------ #
+#  Coordinates
+# ------------------------------------------------------------------ #
+
 def get_coords(obj: Any) -> tuple[int, int] | None:
     """Extract (x, y) coordinates from an object.
 
@@ -39,3 +59,157 @@ def get_coords(obj: Any) -> tuple[int, int] | None:
     if x is not None and y is not None:
         return (int(x), int(y))
     return None
+
+
+def ensure_coords(caller: Any) -> tuple[Any, Any, str | None]:
+    """Ensure caller has valid coordinates, syncing from room if needed.
+
+    Returns (x, y, planet) or (None, None, None) if unresolvable.
+    """
+    x = getattr(caller.db, "coord_x", None)
+    y = getattr(caller.db, "coord_y", None)
+    planet = getattr(caller.db, "coord_planet", None)
+
+    if x is not None and y is not None and planet:
+        return x, y, planet
+
+    loc = getattr(caller, "location", None)
+    if loc is not None and hasattr(loc, "planet_name"):
+        rp = getattr(loc, "planet_name", None)
+        if rp and rp != "unknown":
+            rx = getattr(loc, "x", None)
+            ry = getattr(loc, "y", None)
+            if rx is not None and ry is not None:
+                caller.db.coord_x = rx
+                caller.db.coord_y = ry
+                caller.db.coord_planet = rp
+                return rx, ry, rp
+            elif rp:
+                caller.db.coord_planet = rp
+                planet = rp
+
+    if hasattr(caller, "_ensure_overworld_position"):
+        caller._ensure_overworld_position()
+        x = getattr(caller.db, "coord_x", None)
+        y = getattr(caller.db, "coord_y", None)
+        planet = getattr(caller.db, "coord_planet", None)
+
+    return x, y, planet
+
+
+# ------------------------------------------------------------------ #
+#  Building attribute helpers
+# ------------------------------------------------------------------ #
+
+def get_building_attr(building: Any, key: str, default: Any = None) -> Any:
+    """Read an attribute from a building object safely."""
+    if hasattr(building, "attributes") and hasattr(building.attributes, "get"):
+        return building.attributes.get(key, default=default)
+    return default
+
+
+def get_building_info(building: Any) -> dict:
+    """Extract common building info as a dict.
+
+    Returns dict with keys: type, level, hp, hp_max, owner, name.
+    """
+    return {
+        "type": get_building_attr(building, "building_type", "??") or "??",
+        "level": get_building_attr(building, "building_level", 1) or 1,
+        "hp": get_building_attr(building, "hp", "?"),
+        "hp_max": get_building_attr(building, "hp_max", "?"),
+        "owner": get_building_attr(building, "owner"),
+        "name": getattr(building, "key", "??"),
+    }
+
+
+def get_closed_exits(building: Any) -> set[str]:
+    """Return the set of closed exit directions for a building."""
+    raw = get_building_attr(building, "closed_exits")
+    if raw:
+        try:
+            return set(raw)
+        except (TypeError, ValueError):
+            pass
+    return set()
+
+
+def is_exit_closed(building: Any, direction: str) -> bool:
+    """Check if a building's exit in the given direction is closed."""
+    dir_map = {"n": "north", "s": "south", "e": "east", "w": "west"}
+    direction = dir_map.get(direction, direction)
+    return direction in get_closed_exits(building)
+
+
+def is_owner(caller: Any, owner: Any) -> bool:
+    """Check if caller is the owner of a building.
+
+    Compares by .id for reliability across server restarts.
+    """
+    if owner is None:
+        return False
+    caller_id = getattr(caller, "id", None)
+    owner_id = getattr(owner, "id", None)
+    if caller_id is not None and owner_id is not None:
+        return caller_id == owner_id
+    return owner is caller
+
+
+def is_admin(caller: Any) -> bool:
+    """Check if caller has Builder+ permissions."""
+    if hasattr(caller, "check_permstring"):
+        try:
+            return caller.check_permstring("Builder")
+        except Exception:
+            pass
+    return False
+
+
+# ------------------------------------------------------------------ #
+#  Broadcast
+# ------------------------------------------------------------------ #
+
+def broadcast(message: str, cls: str = "game-chat") -> None:
+    """Broadcast a tagged message to all connected players.
+
+    Args:
+        message: The text to send.
+        cls: CSS class for webclient routing (default: "game-chat").
+    """
+    try:
+        from evennia import SESSION_HANDLER
+        for session in SESSION_HANDLER.get_sessions():
+            account = session.get_account()
+            if account and hasattr(account, "msg"):
+                account.msg(text=(message, {"cls": cls}))
+    except Exception:
+        logger.exception("broadcast failed")
+
+
+# ------------------------------------------------------------------ #
+#  Chat formatting
+# ------------------------------------------------------------------ #
+
+def format_channel_message(sender: Any, message: str) -> str:
+    """Format a global chat message: [Rank] Name: message"""
+    name = getattr(sender, "key", "Unknown")
+    rank = _get_rank_name(sender)
+    return f"[{rank}] {name}: {message}"
+
+
+def format_dm_message(sender: Any, message: str) -> str:
+    """Format a direct message: [Rank] Name (DM): message"""
+    name = getattr(sender, "key", "Unknown")
+    rank = _get_rank_name(sender)
+    return f"[{rank}] {name} (DM): {message}"
+
+
+def _get_rank_name(player: Any) -> str:
+    """Get the rank name for a player."""
+    rank_name = getattr(player, "rank_name", None)
+    if rank_name:
+        return rank_name
+    rank_level = getattr(player, "rank_level", None)
+    if rank_level is not None:
+        return f"Rank {rank_level}"
+    return "Recruit"

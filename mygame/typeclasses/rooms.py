@@ -98,11 +98,31 @@ class PlanetRoom(DefaultRoom):
                 if map_str:
                     x = getattr(looker.db, "coord_x", "?")
                     y = getattr(looker.db, "coord_y", "?")
-                    return f"|wMap — ({x}, {y}) on {planet}|n\n{map_str}"
+                    # Send ASCII map as tagged message (hidden by webclient when graphical map active)
+                    looker.msg(text=(f"|wMap — ({x}, {y}) on {planet}|n\n{map_str}", {"cls": "ascii-map"}))
+                    # Send structured map data to webclient via OOB
+                    self._send_map_oob(looker, systems)
+                    # Return empty so the auto-look doesn't duplicate the map
+                    return ""
         except Exception:
             pass
 
         return super().return_appearance(looker, **kwargs)
+
+    def _send_map_oob(self, looker, systems):
+        """Send structured map data to the webclient via OOB message."""
+        try:
+            provider = systems.get("map_data_provider")
+            if provider is None:
+                return
+            buildings = looker.get_buildings() if hasattr(looker, "get_buildings") else []
+            data = provider.get_map_data(looker, buildings)
+            fog = systems.get("fog_system")
+            if fog:
+                data["discovered_count"] = len(fog.get_discovered_tile_set(looker))
+            looker.msg(map_update=data)
+        except Exception:
+            pass
 
     # -------------------------------------------------------------- #
     #  msg_contents override — proximity filter
@@ -422,30 +442,12 @@ class OverworldRoom(DefaultRoom):
 # ------------------------------------------------------------------ #
 
 def _format_building_interior(looker, building, registry=None):
-    """Format building interior as a string for return_appearance.
+    """Format building interior as a string for return_appearance."""
+    from world.utils import get_building_info, get_closed_exits
 
-    Args:
-        looker: The character looking at the building.
-        building: The building object.
-        registry: Optional DataRegistry instance. Falls back to
-            game_systems lookup if not provided.
-    """
-    btype = "??"
-    level = 1
-    hp = "?"
-    hp_max = "?"
-    owner_name = "nobody"
-
-    if hasattr(building, "attributes") and hasattr(building.attributes, "get"):
-        btype = building.attributes.get("building_type", default="??") or "??"
-        level = building.attributes.get("building_level", default=1) or 1
-        hp = building.attributes.get("hp", default="?")
-        hp_max = building.attributes.get("hp_max", default="?")
-        owner = building.attributes.get("owner", default=None)
-        if owner:
-            owner_name = getattr(owner, "key", str(owner))
-
-    name = getattr(building, "key", btype)
+    info = get_building_info(building)
+    owner = info["owner"]
+    owner_name = getattr(owner, "key", str(owner)) if owner else "nobody"
 
     category = "unknown"
     produces = "—"
@@ -458,7 +460,7 @@ def _format_building_interior(looker, building, registry=None):
             pass
     try:
         if registry:
-            bdef = registry.get_building(btype)
+            bdef = registry.get_building(info["type"])
             category = bdef.category
             produces = bdef.produces or "—"
             if bdef.unlocks:
@@ -466,15 +468,7 @@ def _format_building_interior(looker, building, registry=None):
     except Exception:
         pass
 
-    closed = set()
-    if hasattr(building, "attributes") and hasattr(building.attributes, "get"):
-        raw = building.attributes.get("closed_exits", default=None)
-        if raw:
-            try:
-                closed = set(raw)
-            except (TypeError, ValueError):
-                pass
-
+    closed = get_closed_exits(building)
     exit_parts = []
     for d in ("north", "south", "east", "west"):
         if d in closed:
@@ -483,9 +477,9 @@ def _format_building_interior(looker, building, registry=None):
             exit_parts.append(f"|g{d}|n")
 
     lines = [
-        f"|w=== {name} ({btype}) ===|n",
+        f"|w=== {info['name']} ({info['type']}) ===|n",
         f"  Owner: {owner_name}",
-        f"  Level: {level} | HP: {hp}/{hp_max}",
+        f"  Level: {info['level']} | HP: {info['hp']}/{info['hp_max']}",
         f"  Category: {category}",
         f"  Produces: {produces}",
     ]

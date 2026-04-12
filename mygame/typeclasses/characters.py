@@ -209,6 +209,15 @@ class CombatCharacter(DefaultCharacter):
         # Ensure character is on the overworld with valid coordinates
         self._ensure_overworld_position()
 
+        # Auto-subscribe the account to game channels
+        try:
+            from world.utils import get_system
+            chat_system = get_system(self, "chat_system")
+            if chat_system and self.account:
+                chat_system.auto_subscribe(self.account)
+        except Exception:
+            pass
+
         # Show the map on login (delayed so the session is fully connected)
         # Note: removed — map is now shown via CmdLook which Evennia
         # triggers automatically after login.

@@ -1,0 +1,185 @@
+"""
+Unit tests for MapDataProvider.
+
+Tests that structured map data is generated correctly for the
+graphical webclient, with proper tile states and player/building info.
+"""
+
+import sys
+import types
+
+
+def _ensure_evennia_stubs():
+    if "evennia" in sys.modules:
+        mod = sys.modules["evennia"]
+        if hasattr(mod, "__file__") and mod.__file__:
+            return
+    stubs = {}
+
+    def _mod(name, attrs=None):
+        m = types.ModuleType(name)
+        if attrs:
+            for k, v in attrs.items():
+                setattr(m, k, v)
+        stubs[name] = m
+        return m
+
+    _mod("evennia")
+    _mod("evennia.objects")
+    _mod("evennia.objects.objects", {
+        "DefaultObject": type("DefaultObject", (), {}),
+        "DefaultRoom": type("DefaultRoom", (), {}),
+        "DefaultCharacter": type("DefaultCharacter", (), {}),
+    })
+    _mod("evennia.commands")
+    _mod("evennia.commands.cmdset")
+    _mod("evennia.utils")
+    _mod("evennia.utils.utils")
+    _mod("evennia.utils.logger")
+
+    for name, mod in stubs.items():
+        sys.modules.setdefault(name, mod)
+
+
+_ensure_evennia_stubs()
+
+import pytest  # noqa: E402
+
+from mygame.world.coordinate.map_data_provider import MapDataProvider  # noqa: E402
+from mygame.world.coordinate.fog_of_war import FogOfWarSystem  # noqa: E402
+from mygame.world.coordinate.discovery_bitfield import DiscoveryBitfield  # noqa: E402
+
+
+class _FakeDB:
+    def __init__(self, **kwargs):
+        for k, v in kwargs.items():
+            setattr(self, k, v)
+
+
+class _FakeBalance:
+    def __init__(self, pvr=2, bvr=1):
+        self.player_vision_radius = pvr
+        self.building_vision_radius = bvr
+        self.map_border_tiles = 1
+
+
+class _FakePlayer:
+    def __init__(self, name="Player1", x=5, y=5, planet="earth"):
+        self.key = name
+        self.has_account = True
+        self.id = 1
+        self.db = _FakeDB(
+            coord_x=x, coord_y=y, coord_planet=planet,
+            discovered_tiles=DiscoveryBitfield(),
+            discovered_buildings={},
+            discovery_memory={"discovered": {}, "buildings": {}},
+        )
+
+    def get_buildings(self):
+        return []
+
+
+class _FakeTerrainGen:
+    def __init__(self):
+        self._terrain_thresholds = [(1.0, "Plains")]
+
+    def get_terrain(self, x, y):
+        return "Plains"
+
+    def get_terrain_and_resource(self, x, y):
+        return "Plains", None
+
+
+class _FakeTileResolver:
+    def __init__(self):
+        self._rooms = {}
+
+    def get_cached(self, x, y, planet):
+        return self._rooms.get((x, y, planet))
+
+    def get_if_exists(self, x, y, planet):
+        return self._rooms.get((x, y, planet))
+
+    def preload_area(self, min_x, max_x, min_y, max_y, planet):
+        pass
+
+
+class TestMapDataProvider:
+    def _make_provider(self, pvr=2):
+        balance = _FakeBalance(pvr=pvr)
+        fog = FogOfWarSystem(balance)
+        gen = _FakeTerrainGen()
+        resolver = _FakeTileResolver()
+        provider = MapDataProvider(
+            tile_resolver=resolver,
+            fog_system=fog,
+            terrain_generators={"earth": gen},
+        )
+        return provider, resolver
+
+    def test_basic_output_structure(self):
+        provider, _ = self._make_provider()
+        player = _FakePlayer()
+        data = provider.get_map_data(player, [])
+
+        assert "player" in data
+        assert data["player"]["x"] == 5
+        assert data["player"]["y"] == 5
+        assert data["player"]["planet"] == "earth"
+        assert "bounds" in data
+        assert "tiles" in data
+        assert "vision_radius" in data
+        assert data["vision_radius"] == 2
+
+    def test_tile_states(self):
+        provider, _ = self._make_provider(pvr=1)
+        player = _FakePlayer()
+        data = provider.get_map_data(player, [])
+
+        tiles_by_state = {}
+        for t in data["tiles"]:
+            tiles_by_state.setdefault(t["state"], []).append(t)
+
+        # Player at (5,5) with pvr=1 and border=1
+        # Visible: tiles within Chebyshev distance 1 of (5,5)
+        assert "visible" in tiles_by_state
+        assert len(tiles_by_state["visible"]) > 0
+
+        # All visible tiles should have terrain
+        for t in tiles_by_state["visible"]:
+            assert t["terrain"] == "Plains"
+
+    def test_player_position_in_bounds(self):
+        provider, _ = self._make_provider()
+        player = _FakePlayer(x=10, y=10)
+        data = provider.get_map_data(player, [])
+
+        bounds = data["bounds"]
+        assert bounds["min_x"] <= 10 <= bounds["max_x"]
+        assert bounds["min_y"] <= 10 <= bounds["max_y"]
+
+    def test_tiles_are_json_serializable(self):
+        """Ensure the output can be JSON-serialized for the webclient."""
+        import json
+        provider, _ = self._make_provider()
+        player = _FakePlayer()
+        data = provider.get_map_data(player, [])
+        # Should not raise
+        json.dumps(data)
+
+    def test_fog_tiles_after_move(self):
+        """After moving, previously visible tiles become fog."""
+        provider, _ = self._make_provider(pvr=1)
+        player = _FakePlayer(x=5, y=5)
+
+        # First render at (5,5)
+        data1 = provider.get_map_data(player, [])
+
+        # Move to (7,7) — old tiles should be fog
+        player.db.coord_x = 7
+        player.db.coord_y = 7
+        data2 = provider.get_map_data(player, [])
+
+        fog_coords = {(t["x"], t["y"]) for t in data2["tiles"] if t["state"] == "fog"}
+        # (5,5) was visible before, now should be fog
+        assert (5, 5) in fog_coords

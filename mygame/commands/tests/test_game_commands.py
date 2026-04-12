@@ -98,7 +98,7 @@ from mygame.commands.game_commands import (  # noqa: E402
     CmdMove, CmdHarvest, CmdBuild, CmdUpgrade,
     CmdAttack, CmdEquip, CmdUnequip, CmdResearch, CmdPowerup,
     CmdScore, CmdEquipment, CmdBuildings, CmdScan, CmdTechnology,
-    CmdInventory, CmdChat, CmdMessage, CmdSay, CmdMap,
+    CmdInventory, CmdMessage, CmdSay, CmdMap,
 )
 
 # -------------------------------------------------------------- #
@@ -141,8 +141,12 @@ class FakeLocation:
         self.contents = contents or []
         self._messages = []
 
-    def msg_contents(self, text, exclude=None, **kwargs):
-        self._messages.append(text)
+    def msg_contents(self, text=None, exclude=None, **kwargs):
+        if text is not None:
+            if isinstance(text, tuple):
+                self._messages.append(text[0])
+            else:
+                self._messages.append(text)
 
 class FakeCaller:
     """Simulates a player character (caller)."""
@@ -155,8 +159,13 @@ class FakeCaller:
         self._moved_to = None
         self._search_results = {}
 
-    def msg(self, text, **kwargs):
-        self._messages.append(text)
+    def msg(self, text=None, **kwargs):
+        if text is not None:
+            # Handle tuple form: (text_str, kwargs_dict)
+            if isinstance(text, tuple):
+                self._messages.append(text[0])
+            else:
+                self._messages.append(text)
 
     def move_to(self, target, **kwargs):
         self._moved_to = target
@@ -562,22 +571,6 @@ class TestCmdInventory(unittest.TestCase):
         cmd.func()
         output = "\n".join(caller._messages)
         self.assertIn("Empty", output)
-
-class TestCmdChat(unittest.TestCase):
-    def test_no_args(self):
-        caller = FakeCaller()
-        cmd = _make_cmd(CmdChat, caller, "")
-        cmd.func()
-        self.assertTrue(any("Usage" in m for m in caller._messages))
-
-    def test_fallback_echo(self):
-        from mygame.world.chat_system import ChatSystem
-        chat = ChatSystem()
-        caller = FakeCaller(systems={"chat_system": chat})
-        cmd = _make_cmd(CmdChat, caller, " hello world")
-        cmd.func()
-        output = "\n".join(caller._messages)
-        self.assertIn("hello world", output)
 
 class TestCmdMessage(unittest.TestCase):
     def test_no_args(self):

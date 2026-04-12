@@ -150,6 +150,15 @@ def initialize_game() -> dict:
         )
         logger.info("ProceduralMapRenderer initialized.")
 
+        # 6b. MapDataProvider (graphical webclient)
+        from world.coordinate.map_data_provider import MapDataProvider
+        map_data_provider = MapDataProvider(
+            tile_resolver=tile_resolver,
+            fog_system=fog_system,
+            terrain_generators=terrain_generators,
+        )
+        logger.info("MapDataProvider initialized.")
+
         # 7. RoomGarbageCollector
         gc_interval = getattr(balance, "gc_interval_ticks", 100) if balance else 100
         gc_min_age = getattr(balance, "gc_min_age_ticks", 50) if balance else 50
@@ -240,6 +249,7 @@ def initialize_game() -> dict:
         "tile_resolver": tile_resolver,
         "fog_system": fog_system,
         "procedural_map_renderer": procedural_map_renderer,
+        "map_data_provider": map_data_provider,
         "garbage_collector": garbage_collector,
         "_terrain_generators": terrain_generators,
         "planet_rooms": planet_rooms,

@@ -6,7 +6,7 @@ can be part of any number of cmdsets and cmdsets can be added/removed
 and merged onto entities at runtime.
 
 To create new commands to populate the cmdset, see
-`commands/command.py`.
+`commands/game_commands.py`.
 
 This module wraps the default command sets of Evennia; overloads them
 to add/remove commands from the default lineup. You can create your
@@ -40,6 +40,9 @@ class CharacterCmdSet(default_cmds.CharacterCmdSet):
         Populates the cmdset
         """
         super().at_cmdset_creation()
+        # Remove Evennia built-ins replaced by game commands
+        from evennia.commands.default.general import CmdWhisper
+        self.remove(CmdWhisper)
         # Game commands
         self.add(CmdMove())
         self.add(CmdHarvest())
@@ -89,9 +92,9 @@ class AccountCmdSet(default_cmds.AccountCmdSet):
         Populates the cmdset
         """
         super().at_cmdset_creation()
-        #
-        # any commands you add below will overload the default ones.
-        #
+        # Remove Evennia's built-in page/tell — replaced by CmdMessage
+        from evennia.commands.default.comms import CmdPage
+        self.remove(CmdPage)
 
 
 class UnloggedinCmdSet(default_cmds.UnloggedinCmdSet):

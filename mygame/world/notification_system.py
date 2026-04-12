@@ -25,22 +25,10 @@ logger = logging.getLogger("evennia")
 
 
 class NotificationSystem:
-    """Subscribes to game events and sends global notifications.
+    """Subscribes to game events and sends global notifications."""
 
-    Uses Evennia's SESSION_HANDLER to broadcast to all connected
-    sessions rather than implementing custom broadcast infrastructure.
-
-    Args:
-        event_bus: The EventBus to subscribe to.
-        session_handler: Optional override for the session handler
-            (defaults to Evennia's SESSION_HANDLER). Useful for testing.
-    """
-
-    def __init__(
-        self, event_bus: EventBus, session_handler: Any = None
-    ) -> None:
+    def __init__(self, event_bus: EventBus, **kwargs) -> None:
         self.event_bus = event_bus
-        self._session_handler = session_handler
         self._subscribe()
 
     def _subscribe(self) -> None:
@@ -51,31 +39,11 @@ class NotificationSystem:
         self.event_bus.subscribe(RANK_PROMOTED, self.on_rank_promoted)
         self.event_bus.subscribe(RANK_DEMOTED, self.on_rank_demoted)
 
-    def _get_session_handler(self) -> Any:
-        """Get the session handler, importing lazily if needed."""
-        if self._session_handler is not None:
-            return self._session_handler
-        try:
-            from evennia import SESSION_HANDLER
-            return SESSION_HANDLER
-        except ImportError:
-            return None
-
-    def _broadcast(self, message: str) -> None:
-        """Send a message to all connected sessions.
-
-        Args:
-            message: The notification text to broadcast.
-        """
-        handler = self._get_session_handler()
-        if handler is None:
-            return
-
-        try:
-            for session in handler.all_connected_sessions():
-                session.msg(text=message)
-        except Exception:
-            logger.exception("NotificationSystem: broadcast error")
+    @staticmethod
+    def _broadcast(message: str) -> None:
+        """Send a tagged message to all connected players."""
+        from world.utils import broadcast
+        broadcast(message)
 
     # ------------------------------------------------------------------ #
     #  Event handlers
