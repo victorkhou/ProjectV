@@ -171,6 +171,125 @@ def _get_registry(caller):
         return None
 
 
+class CmdSpawnBuilding(BaseCommand):
+    """Spawn a building on your current tile.
+
+    Usage:
+        @spawnbuilding <type> [owner=<name>] [level=<n>]
+
+    Arguments:
+        type  - Building abbreviation (HQ, MM, QQ, VV, AA, AR, etc.)
+        owner - Character name to own the building (default: you)
+        level - Building level 1-5 (default: 1)
+
+    Examples:
+        @spawnbuilding HQ
+        @spawnbuilding MM owner=victor level=3
+        @spawnbuilding VV level=5
+
+    Restricted to Builder+ permission level.
+    """
+
+    key = "@spawnbuilding"
+    aliases = ["@sb"]
+    locks = "cmd:perm(Builder)"
+    help_category = "Admin"
+
+    def func(self):
+        caller = self.caller
+        args = self.args.strip()
+        if not args:
+            caller.msg("Usage: @spawnbuilding <type> [owner=<name>] [level=<n>]")
+            return
+
+        parts = args.split()
+        btype = parts[0].upper()
+
+        # Parse optional kwargs
+        owner = caller
+        level = 1
+        for part in parts[1:]:
+            if part.lower().startswith("owner="):
+                owner_name = part.split("=", 1)[1]
+                if owner_name.lower() in ("none", "nobody", "null", ""):
+                    owner = None
+                else:
+                    found = caller.search(owner_name, quiet=True) if hasattr(caller, "search") else None
+                    if not found:
+                        caller.msg(f"Could not find player '{owner_name}'.")
+                        return
+                    owner = found[0] if isinstance(found, list) else found
+            elif part.lower().startswith("level="):
+                try:
+                    level = int(part.split("=", 1)[1])
+                    level = max(1, min(level, 5))
+                except ValueError:
+                    caller.msg("Level must be a number 1-5.")
+                    return
+
+        # Validate building type exists
+        registry = _get_registry(caller)
+        if registry:
+            try:
+                bdef = registry.get_building(btype)
+            except KeyError:
+                caller.msg(f"Unknown building type '{btype}'. Valid: HQ, MM, QQ, II, LL, KK, AA, AR, VV, TL, HV")
+                return
+        else:
+            bdef = None
+
+        # Get current tile — buildings need a real room at their coordinates
+        loc = caller.location
+        if loc is None:
+            caller.msg("You have no location.")
+            return
+
+        # For buildings, we need a real OverworldRoom at the tile coordinates
+        # (not the shared PlanetRoom)
+        building_room = loc
+        cx = getattr(caller.db, "coord_x", None)
+        cy = getattr(caller.db, "coord_y", None)
+        cp = getattr(caller.db, "coord_planet", None)
+
+        if cx is not None and cy is not None and cp:
+            resolver = _get_system(caller, "tile_resolver")
+            if resolver is not None:
+                try:
+                    building_room = resolver.resolve(cx, cy, cp)
+                except (ValueError, KeyError):
+                    caller.msg("Could not resolve tile for building placement.")
+                    return
+
+        # Create the building
+        try:
+            from evennia.utils.create import create_object
+
+            hp = bdef.max_health if bdef else 500
+            name = bdef.name if bdef else btype
+
+            building = create_object(
+                typeclass="typeclasses.objects.Building",
+                key=name,
+                location=building_room,
+            )
+            building.attributes.add("building_type", btype)
+            building.attributes.add("owner", owner)
+            building.attributes.add("building_level", level)
+            building.attributes.add("hp", hp)
+            building.attributes.add("hp_max", hp)
+            building.attributes.add("offline", False)
+            building.tags.add("building", category="object_type")
+
+            owner_name = getattr(owner, "key", "nobody") if owner else "nobody"
+            logger.info(
+                "Admin %s spawned %s (level %d, owner=%s) at %s",
+                caller.key, btype, level, owner_name, building_room.key if hasattr(building_room, "key") else building_room,
+            )
+            caller.msg(f"Spawned {name} ({btype}) level {level}, owned by {owner_name}.")
+        except Exception as e:
+            caller.msg(f"Failed to create building: {e}")
+
+
 class CmdTeleport(BaseCommand):
     """Teleport to coordinates on the overworld.
 
@@ -227,40 +346,40 @@ class CmdTeleport(BaseCommand):
                 caller.msg("No planet specified and no current planet set.")
                 return
 
-        # Get tile resolver
-        resolver = _get_system(caller, "tile_resolver")
-        if resolver is None:
-            caller.msg("Tile resolver not available.")
-            return
-
         # Validate bounds
         if not registry.is_valid_coordinate(tx, ty, planet):
             caller.msg(f"Coordinates ({tx}, {ty}) are out of bounds for {planet}.")
             return
 
-        # Resolve (creates room on demand)
+        # Get the shared planet room
+        planet_rooms = None
         try:
-            target = resolver.resolve(tx, ty, planet)
-        except (ValueError, KeyError) as e:
-            caller.msg(f"Could not resolve coordinates: {e}")
-            return
+            from server.conf.game_init import game_systems
+            planet_rooms = game_systems.get("planet_rooms", {})
+        except (ImportError, AttributeError):
+            pass
 
-        if target is None:
-            caller.msg("Could not create room at those coordinates.")
-            return
-
-        # Remember old room for cleanup
-        old_room = caller.location
-
-        caller.move_to(target, quiet=True)
+        # Update coordinates
         caller.db.coord_x = tx
         caller.db.coord_y = ty
         caller.db.coord_planet = planet
 
-        # Clean up old room if empty
-        if old_room is not None and old_room is not target:
-            from commands.game_commands import _maybe_cleanup_room
-            _maybe_cleanup_room(old_room, resolver)
+        # Only move_to if changing planets or not in a planet room
+        if planet_rooms:
+            target_room = planet_rooms.get(planet)
+            if target_room and caller.location is not target_room:
+                caller.move_to(target_room, quiet=True)
+        else:
+            # Fallback: use tile resolver if no planet rooms
+            resolver = _get_system(caller, "tile_resolver")
+            if resolver is not None:
+                try:
+                    target = resolver.resolve(tx, ty, planet)
+                    if target:
+                        caller.move_to(target, quiet=True)
+                except (ValueError, KeyError) as e:
+                    caller.msg(f"Could not resolve coordinates: {e}")
+                    return
 
         logger.info("Admin %s teleported to (%d, %d, %s)", caller.key, tx, ty, planet)
         caller.msg(f"Teleported to ({tx}, {ty}) on {planet}.")
@@ -276,6 +395,41 @@ def _get_system(caller, system_name):
         return game_systems.get(system_name)
     except (ImportError, AttributeError):
         return None
+
+
+class CmdClearFog(BaseCommand):
+    """Clear a player's fog of war discovery memory.
+
+    Usage:
+        @clearfog [player]
+
+    If no player is specified, clears your own fog.
+    Restricted to Builder+ permission level.
+    """
+
+    key = "@clearfog"
+    locks = "cmd:perm(Builder)"
+    help_category = "Admin"
+
+    def func(self):
+        caller = self.caller
+        target_name = self.args.strip()
+
+        if target_name:
+            target = caller.search(target_name, quiet=True) if hasattr(caller, "search") else None
+            if not target:
+                caller.msg(f"Could not find player '{target_name}'.")
+                return
+            target = target[0] if isinstance(target, list) else target
+        else:
+            target = caller
+
+        if hasattr(target, "db"):
+            target.db.discovery_memory = {"discovered": {}, "buildings": {}}
+
+        name = getattr(target, "key", "?")
+        logger.info("Admin %s cleared fog of war for %s", caller.key, name)
+        caller.msg(f"Cleared fog of war for {name}.")
 
 
 class CmdPurgeRooms(BaseCommand):

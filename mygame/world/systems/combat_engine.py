@@ -83,10 +83,14 @@ class CombatEngine:
         # 3. Range validation
         weapon_range = self._get_stat(weapon_item, "range", 1)
         if not self._validate_range(attacker, target, weapon_range):
-            attacker_loc = getattr(attacker, "location", attacker)
-            target_loc = self._get_target_location(target)
-            a_coords = self._get_coords(attacker_loc)
-            t_coords = self._get_coords(target_loc)
+            a_coords = self._get_coords(attacker)
+            if a_coords is None:
+                attacker_loc = getattr(attacker, "location", attacker)
+                a_coords = self._get_coords(attacker_loc)
+            t_coords = self._get_coords(target)
+            if t_coords is None:
+                target_loc = self._get_target_location(target)
+                t_coords = self._get_coords(target_loc)
             if a_coords and t_coords:
                 dist = _manhattan_distance(a_coords[0], a_coords[1],
                                            t_coords[0], t_coords[1])
@@ -222,8 +226,10 @@ class CombatEngine:
                 if player is owner:
                     continue
 
-                p_loc = getattr(player, "location", player)
-                p_coords = self._get_coords(p_loc)
+                p_coords = self._get_coords(player)
+                if p_coords is None:
+                    p_loc = getattr(player, "location", player)
+                    p_coords = self._get_coords(p_loc)
                 if p_coords is None:
                     continue
 
@@ -402,11 +408,17 @@ class CombatEngine:
         self, attacker: Any, target: Any, weapon_range: int
     ) -> bool:
         """Check if target is within weapon range (Manhattan distance)."""
-        attacker_loc = getattr(attacker, "location", attacker)
-        target_loc = self._get_target_location(target)
+        # Read coords from the entity directly (handles PlanetRoom players)
+        a_coords = self._get_coords(attacker)
+        t_coords = self._get_coords(target)
 
-        a_coords = self._get_coords(attacker_loc)
-        t_coords = self._get_coords(target_loc)
+        # Fall back to location coords for entities without direct coords
+        if a_coords is None:
+            attacker_loc = getattr(attacker, "location", attacker)
+            a_coords = self._get_coords(attacker_loc)
+        if t_coords is None:
+            target_loc = self._get_target_location(target)
+            t_coords = self._get_coords(target_loc)
 
         if a_coords is None or t_coords is None:
             # Can't validate without coordinates — allow by default
@@ -487,7 +499,18 @@ class CombatEngine:
 
     @staticmethod
     def _get_coords(obj: Any) -> tuple[int, int] | None:
-        """Extract (x, y) coordinates from an object."""
+        """Extract (x, y) coordinates from an object.
+
+        Checks coord_x/coord_y first (player in PlanetRoom),
+        then x/y (OverworldRoom or building location).
+        """
+        # Player coordinates (for characters in PlanetRoom)
+        if hasattr(obj, "db"):
+            cx = getattr(obj.db, "coord_x", None)
+            cy = getattr(obj.db, "coord_y", None)
+            if cx is not None and cy is not None:
+                return (int(cx), int(cy))
+        # Room/building coordinates
         x = getattr(obj, "x", None)
         y = getattr(obj, "y", None)
         if x is not None and y is not None:

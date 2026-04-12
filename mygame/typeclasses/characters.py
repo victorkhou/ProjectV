@@ -93,6 +93,9 @@ class CombatCharacter(DefaultCharacter):
         # Fog of war discovery memory (Requirement 11.1, 11.7)
         self.db.discovery_memory = {}
 
+        # Building interior tracking
+        self.db.inside_building = False
+
     # ------------------------------------------------------------------ #
     #  Equipment handler (lazy property)
     # ------------------------------------------------------------------ #
@@ -120,10 +123,11 @@ class CombatCharacter(DefaultCharacter):
     def get_resource(self, resource_type: str) -> int:
         """Return the current amount of *resource_type*."""
         res = self._ensure_resources()
-        return res.get(resource_type, 0)
+        return res.get(resource_type.title(), 0)
 
     def add_resource(self, resource_type: str, amount: int) -> None:
         """Add *amount* units of *resource_type*."""
+        resource_type = resource_type.title()
         res = self._ensure_resources()
         res[resource_type] = res.get(resource_type, 0) + amount
         self.db.resources = res
@@ -131,7 +135,7 @@ class CombatCharacter(DefaultCharacter):
     def has_resources(self, costs: dict[str, int]) -> bool:
         """Return ``True`` iff the character has all resources in *costs*."""
         res = self._ensure_resources()
-        return all(res.get(r, 0) >= amt for r, amt in costs.items())
+        return all(res.get(r.title(), 0) >= amt for r, amt in costs.items())
 
     def deduct_resources(self, costs: dict[str, int]) -> bool:
         """Deduct *costs* from resources if sufficient. Return success."""
@@ -139,7 +143,8 @@ class CombatCharacter(DefaultCharacter):
             return False
         res = self._ensure_resources()
         for r, amt in costs.items():
-            res[r] = res.get(r, 0) - amt
+            key = r.title()
+            res[key] = res.get(key, 0) - amt
         self.db.resources = res
         return True
 
@@ -204,6 +209,10 @@ class CombatCharacter(DefaultCharacter):
         # Ensure character is on the overworld with valid coordinates
         self._ensure_overworld_position()
 
+        # Show the map on login (delayed so the session is fully connected)
+        # Note: removed — map is now shown via CmdLook which Evennia
+        # triggers automatically after login.
+
         try:
             from world.event_bus import event_bus, PLAYER_LOGIN
             event_bus.publish(PLAYER_LOGIN, player=self)
@@ -214,8 +223,8 @@ class CombatCharacter(DefaultCharacter):
         """Ensure the character is on the overworld with valid coordinates.
 
         Three cases:
-        1. Character in Limbo (room id 2) → move to spawn tile
-        2. Character on an OverworldRoom but missing coord attrs → sync from room
+        1. Character in Limbo (room id 2) → move to shared planet room
+        2. Character on a PlanetRoom but missing coord attrs → sync planet
         3. Character already has valid coords → nothing to do
 
         Requirements: 7.8, 8.2
@@ -223,7 +232,7 @@ class CombatCharacter(DefaultCharacter):
         try:
             loc = self.location
 
-            # Case 2: already on an OverworldRoom but coords not set
+            # Case 2: already on a room but coords not set
             if loc is not None and loc.id != 2:
                 if not self.db.coord_planet:
                     self._sync_coords_from_room(loc)
@@ -232,38 +241,24 @@ class CombatCharacter(DefaultCharacter):
                     return
                 # Otherwise fall through to spawn logic (room has no coords)
 
-            # Case 1: in Limbo — move to spawn
+            # Case 1: in Limbo — move to spawn on the shared planet room
             # Try shared systems first (initialised in game_init)
             registry = None
-            resolver = None
+            planet_rooms = None
             try:
                 from server.conf.game_init import game_systems
 
                 registry = game_systems.get("planet_registry")
-                resolver = game_systems.get("tile_resolver")
+                planet_rooms = game_systems.get("planet_rooms", {})
             except (ImportError, AttributeError):
                 pass
 
             # Fallback: create local instances if game_init hasn't run yet
-            if registry is None or resolver is None:
+            if registry is None:
                 from world.coordinate.planet_registry import PlanetRegistry
-                from world.coordinate.terrain_generator import TerrainGenerator
-                from world.coordinate.room_cache import RoomCache
-                from world.coordinate.tile_resolver import TileResolver
 
                 registry = PlanetRegistry()
                 registry.load_from_yaml("data/definitions/planets.yaml")
-
-                terrain_generators = {}
-                for pk in registry.list_planets():
-                    space_def = registry.get_space(pk)
-                    terrain_generators[pk] = TerrainGenerator(space_def)
-
-                resolver = TileResolver(
-                    planet_registry=registry,
-                    terrain_generators=terrain_generators,
-                    room_cache=RoomCache(),
-                )
 
             # Find the default planet
             default_space = None
@@ -279,13 +274,50 @@ class CombatCharacter(DefaultCharacter):
 
             spawn_x = default_space.spawn_x
             spawn_y = default_space.spawn_y
-            target = resolver.resolve(spawn_x, spawn_y, default_space.planet_key)
+            planet_key = default_space.planet_key
+
+            # Try to use the shared planet room
+            target = None
+            if planet_rooms:
+                target = planet_rooms.get(planet_key)
+
+            # Fallback: resolve a tile room if no planet room available
+            if target is None:
+                resolver = None
+                try:
+                    from server.conf.game_init import game_systems
+                    resolver = game_systems.get("tile_resolver")
+                except (ImportError, AttributeError):
+                    pass
+
+                if resolver is None:
+                    from world.coordinate.planet_registry import PlanetRegistry
+                    from world.coordinate.terrain_generator import TerrainGenerator
+                    from world.coordinate.room_cache import RoomCache
+                    from world.coordinate.tile_resolver import TileResolver
+
+                    if not hasattr(registry, '_spaces'):
+                        registry = PlanetRegistry()
+                        registry.load_from_yaml("data/definitions/planets.yaml")
+
+                    terrain_generators = {}
+                    for pk in registry.list_planets():
+                        space_def = registry.get_space(pk)
+                        terrain_generators[pk] = TerrainGenerator(space_def)
+
+                    resolver = TileResolver(
+                        planet_registry=registry,
+                        terrain_generators=terrain_generators,
+                        room_cache=RoomCache(),
+                    )
+
+                target = resolver.resolve(spawn_x, spawn_y, planet_key)
 
             if target:
                 self.move_to(target, quiet=True)
                 self.db.coord_x = spawn_x
                 self.db.coord_y = spawn_y
-                self.db.coord_planet = default_space.planet_key
+                self.db.coord_planet = planet_key
                 self.msg(
                     f"You arrive at the overworld ({spawn_x}, {spawn_y})."
                 )

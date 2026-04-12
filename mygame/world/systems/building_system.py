@@ -25,7 +25,7 @@ from world.event_bus import (
 # Default maximum build range (Manhattan distance)
 DEFAULT_BUILD_RANGE = 10
 
-# Maximum building level for resource buildings
+# Maximum building level
 MAX_BUILDING_LEVEL = 5
 
 
@@ -294,12 +294,14 @@ class BuildingSystem:
 
     def _validate_build_range(self, player: Any, tile: Any) -> str | None:
         """Check tile is within build range. Returns error or None."""
-        player_loc = getattr(player, "location", None)
-        if player_loc is None:
-            return None  # Can't validate without location
+        # Get player coordinates directly (handles PlanetRoom)
+        player_coords = self._get_coords(player)
+        if player_coords is None:
+            player_loc = getattr(player, "location", None)
+            if player_loc is None:
+                return None  # Can't validate without location
+            player_coords = self._get_coords(player_loc)
 
-        # Get coordinates
-        player_coords = self._get_coords(player_loc)
         tile_coords = self._get_coords(tile)
 
         if player_coords is None or tile_coords is None:
@@ -371,7 +373,18 @@ class BuildingSystem:
         return []
 
     def _get_coords(self, obj: Any) -> tuple[int, int] | None:
-        """Extract (x, y) coordinates from an object."""
+        """Extract (x, y) coordinates from an object.
+
+        Checks coord_x/coord_y first (player in PlanetRoom),
+        then x/y (OverworldRoom or building location).
+        """
+        # Player coordinates (for characters in PlanetRoom)
+        if hasattr(obj, "db"):
+            cx = getattr(obj.db, "coord_x", None)
+            cy = getattr(obj.db, "coord_y", None)
+            if cx is not None and cy is not None:
+                return (int(cx), int(cy))
+        # Room/building coordinates
         x = getattr(obj, "x", None)
         y = getattr(obj, "y", None)
         if x is not None and y is not None:

@@ -140,3 +140,4 @@ class BalanceConfig:
     room_cache_max_size: int = 1000
     gc_interval_ticks: int = 100
     gc_min_age_ticks: int = 50
+    map_border_tiles: int = 5

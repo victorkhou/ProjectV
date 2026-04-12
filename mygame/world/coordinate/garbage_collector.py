@@ -138,8 +138,14 @@ class RoomGarbageCollector:
 
         Both static and dynamic empty rooms are eligible. A room is
         kept only if it has players, buildings, custom descriptions,
-        or depleted resources (meaningful state).
+        depleted resources (meaningful state), or is a shared planet room.
         """
+        # Never touch shared planet rooms
+        if hasattr(room, "tags"):
+            planet_room_tag = room.tags.get(category="planet_room", return_list=False)
+            if planet_room_tag:
+                return False
+
         if self._has_players(room):
             return False
 

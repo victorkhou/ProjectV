@@ -52,6 +52,7 @@ from mygame.world.coordinate.fog_of_war import (  # noqa: E402
     DiscoveredBuildingState,
     FogOfWarSystem,
 )
+from mygame.world.coordinate.discovery_bitfield import DiscoveryBitfield  # noqa: E402
 
 
 # -------------------------------------------------------------- #
@@ -216,7 +217,7 @@ class TestGetTileVisibility:
     def test_fog_tile(self):
         fow = FogOfWarSystem(_FakeBalance())
         player = _FakePlayer()
-        player.db.discovery_memory = {"discovered": {(10, 10)}, "buildings": {}}
+        player.db.discovery_memory = {"discovered": DiscoveryBitfield.from_set({(10, 10)}).to_dict(), "buildings": {}}
         visible = set()
         assert fow.get_tile_visibility(player, 10, 10, visible) == "fog"
 
@@ -230,7 +231,7 @@ class TestGetTileVisibility:
         """A tile that is both visible and discovered should be 'visible'."""
         fow = FogOfWarSystem(_FakeBalance())
         player = _FakePlayer()
-        player.db.discovery_memory = {"discovered": {(5, 5)}, "buildings": {}}
+        player.db.discovery_memory = {"discovered": DiscoveryBitfield.from_set({(5, 5)}).to_dict(), "buildings": {}}
         visible = {(5, 5)}
         assert fow.get_tile_visibility(player, 5, 5, visible) == "visible"
 
@@ -246,10 +247,10 @@ class TestUpdateDiscovery:
         resolver = _FakeTileResolver()
         visible = {(1, 1), (2, 2), (3, 3)}
         fow.update_discovery(player, visible, resolver)
-        mem = player.db.discovery_memory
-        assert (1, 1) in mem["discovered"]
-        assert (2, 2) in mem["discovered"]
-        assert (3, 3) in mem["discovered"]
+        bf = fow.get_discovered_tile_set(player)
+        assert (1, 1) in bf
+        assert (2, 2) in bf
+        assert (3, 3) in bf
 
     def test_snapshots_enemy_building(self):
         fow = FogOfWarSystem(_FakeBalance())
@@ -261,9 +262,9 @@ class TestUpdateDiscovery:
         resolver = _FakeTileResolver({(6, 6, "earth"): building_room})
         visible = {(6, 6)}
         fow.update_discovery(player, visible, resolver)
-        mem = player.db.discovery_memory
-        assert (6, 6) in mem["buildings"]
-        snap = mem["buildings"][(6, 6)]
+        bmap = fow.get_discovered_buildings_map(player)
+        assert (6, 6) in bmap
+        snap = bmap[(6, 6)]
         assert snap["building_type"] == "HQ"
         assert snap["owner_name"] == "Enemy1"
 
@@ -276,8 +277,8 @@ class TestUpdateDiscovery:
         resolver = _FakeTileResolver({(5, 5, "earth"): building_room})
         visible = {(5, 5)}
         fow.update_discovery(player, visible, resolver)
-        mem = player.db.discovery_memory
-        assert (5, 5) not in mem.get("buildings", {})
+        bmap = fow.get_discovered_buildings_map(player)
+        assert (5, 5) not in bmap
 
     def test_removes_stale_building_snapshot(self):
         """When vision is regained and building is gone, remove snapshot."""
@@ -285,7 +286,7 @@ class TestUpdateDiscovery:
         player = _FakePlayer(name="Player1", planet="earth")
         # Pre-populate a building snapshot
         player.db.discovery_memory = {
-            "discovered": {(10, 10)},
+            "discovered": DiscoveryBitfield.from_set({(10, 10)}).to_dict(),
             "buildings": {
                 (10, 10): {
                     "building_type": "HQ",
@@ -300,15 +301,15 @@ class TestUpdateDiscovery:
         resolver = _FakeTileResolver({(10, 10, "earth"): empty_room})
         visible = {(10, 10)}
         fow.update_discovery(player, visible, resolver)
-        mem = player.db.discovery_memory
-        assert (10, 10) not in mem["buildings"]
+        bmap = fow.get_discovered_buildings_map(player)
+        assert (10, 10) not in bmap
 
     def test_removes_stale_when_no_room(self):
         """When vision is regained and no room exists, remove snapshot."""
         fow = FogOfWarSystem(_FakeBalance())
         player = _FakePlayer(name="Player1", planet="earth")
         player.db.discovery_memory = {
-            "discovered": {(20, 20)},
+            "discovered": DiscoveryBitfield.from_set({(20, 20)}).to_dict(),
             "buildings": {
                 (20, 20): {
                     "building_type": "VV",
@@ -321,8 +322,8 @@ class TestUpdateDiscovery:
         resolver = _FakeTileResolver()  # no rooms
         visible = {(20, 20)}
         fow.update_discovery(player, visible, resolver)
-        mem = player.db.discovery_memory
-        assert (20, 20) not in mem["buildings"]
+        bmap = fow.get_discovered_buildings_map(player)
+        assert (20, 20) not in bmap
 
     def test_updates_existing_snapshot(self):
         """When regaining vision, snapshot is updated to current state."""
@@ -330,7 +331,7 @@ class TestUpdateDiscovery:
         player = _FakePlayer(name="Player1", planet="earth")
         enemy = _FakePlayer(name="Enemy1")
         player.db.discovery_memory = {
-            "discovered": {(7, 7)},
+            "discovered": DiscoveryBitfield.from_set({(7, 7)}).to_dict(),
             "buildings": {
                 (7, 7): {
                     "building_type": "HQ",
@@ -347,8 +348,8 @@ class TestUpdateDiscovery:
         resolver = _FakeTileResolver({(7, 7, "earth"): building_room})
         visible = {(7, 7)}
         fow.update_discovery(player, visible, resolver)
-        mem = player.db.discovery_memory
-        assert mem["buildings"][(7, 7)]["building_type"] == "VV"
+        bmap = fow.get_discovered_buildings_map(player)
+        assert bmap[(7, 7)]["building_type"] == "VV"
 
 
 # -------------------------------------------------------------- #
@@ -360,7 +361,7 @@ class TestGetDiscoveredBuildings:
         fow = FogOfWarSystem(_FakeBalance())
         player = _FakePlayer()
         player.db.discovery_memory = {
-            "discovered": {(15, 20)},
+            "discovered": DiscoveryBitfield.from_set({(15, 20)}).to_dict(),
             "buildings": {
                 (15, 20): {
                     "building_type": "HQ",
@@ -381,7 +382,7 @@ class TestGetDiscoveredBuildings:
     def test_returns_empty_for_no_building(self):
         fow = FogOfWarSystem(_FakeBalance())
         player = _FakePlayer()
-        player.db.discovery_memory = {"discovered": set(), "buildings": {}}
+        player.db.discovery_memory = {"discovered": {}, "buildings": {}}
         result = fow.get_discovered_buildings(player, 99, 99)
         assert result == []
 
@@ -405,10 +406,8 @@ class TestDiscoveryMemoryInit:
         visible = {(0, 0)}
         resolver = _FakeTileResolver()
         fow.update_discovery(player, visible, resolver)
-        mem = player.db.discovery_memory
-        assert isinstance(mem, dict)
-        assert "discovered" in mem
-        assert (0, 0) in mem["discovered"]
+        bf = fow.get_discovered_tile_set(player)
+        assert (0, 0) in bf
 
     def test_handles_non_dict_memory(self):
         fow = FogOfWarSystem(_FakeBalance())

@@ -10,6 +10,7 @@ Requirements: 25.2, 25.3, 28.4
 from __future__ import annotations
 
 import logging
+from typing import Any
 
 logger = logging.getLogger("evennia.server.game_init")
 
@@ -87,6 +88,7 @@ def initialize_game() -> dict:
     procedural_map_renderer = None
     garbage_collector = None
     terrain_generators = None
+    planet_rooms: dict[str, Any] = {}
 
     try:
         import os
@@ -158,6 +160,31 @@ def initialize_game() -> dict:
         )
         logger.info("RoomGarbageCollector initialized.")
 
+        # 8. Shared PlanetRooms — one room per planet
+        planet_rooms: dict[str, Any] = {}
+        try:
+            from typeclasses.rooms import PlanetRoom
+            from evennia.utils.search import search_tag
+
+            for planet_key in planet_registry.list_planets():
+                tag_key = f"planet_room_{planet_key}"
+                existing = search_tag(tag_key, category="planet_room")
+                if existing:
+                    planet_rooms[planet_key] = existing[0]
+                    logger.info("Found existing PlanetRoom for %s.", planet_key)
+                else:
+                    from evennia.utils.create import create_object
+                    room = create_object(
+                        typeclass="typeclasses.rooms.PlanetRoom",
+                        key=f"Overworld ({planet_key})",
+                    )
+                    room.attributes.add("planet", planet_key)
+                    room.tags.add(tag_key, category="planet_room")
+                    planet_rooms[planet_key] = room
+                    logger.info("Created PlanetRoom for %s.", planet_key)
+        except Exception:
+            logger.exception("PlanetRoom creation failed — using fallback.")
+
     except Exception:
         logger.exception(
             "Procedural Coordinate World initialization failed — "
@@ -215,6 +242,7 @@ def initialize_game() -> dict:
         "procedural_map_renderer": procedural_map_renderer,
         "garbage_collector": garbage_collector,
         "_terrain_generators": terrain_generators,
+        "planet_rooms": planet_rooms,
     })
 
     # ---------------------------------------------------------- #

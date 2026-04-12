@@ -209,7 +209,7 @@ class _FakePlayer:
         self.db.coord_x = x
         self.db.coord_y = y
         self.db.coord_planet = planet
-        self.db.discovery_memory = {"discovered": set(), "buildings": {}}
+        self.db.discovery_memory = {"discovered": {}, "buildings": {}}
         self.location = None
         self._messages = []
 
@@ -429,11 +429,10 @@ class TestMovementFogMapCycle(unittest.TestCase):
         self.fog.update_discovery(player, visible, self.resolver)
 
         # Verify discovery memory contains tiles around (50, 51)
-        mem = player.db.discovery_memory
-        discovered = mem["discovered"]
-        self.assertIn((50, 51), discovered)
-        self.assertIn((50, 52), discovered)  # within radius 2
-        self.assertIn((49, 50), discovered)
+        bf = self.fog.get_discovered_tile_set(player)
+        self.assertIn((50, 51), bf)
+        self.assertIn((50, 52), bf)  # within radius 2
+        self.assertIn((49, 50), bf)
 
     def test_map_renders_after_move(self):
         """Map renderer produces non-empty output after a move."""
@@ -698,8 +697,8 @@ class TestFullCycle(unittest.TestCase):
         # 2. Initial fog update at spawn
         visible = self.fog.get_visible_tiles(player, [])
         self.fog.update_discovery(player, visible, self.resolver)
-        mem = player.db.discovery_memory
-        self.assertIn((50, 50), mem["discovered"])
+        bf = self.fog.get_discovered_tile_set(player)
+        self.assertIn((50, 50), bf)
 
         # 3. Render initial map
         map_str = self.renderer.render(player, [])
@@ -722,11 +721,11 @@ class TestFullCycle(unittest.TestCase):
         self.fog.update_discovery(player, visible, self.resolver)
 
         # 7. Verify new tiles discovered
-        mem = player.db.discovery_memory
-        self.assertIn((50, 53), mem["discovered"])  # within radius 2 of y=51
+        bf = self.fog.get_discovered_tile_set(player)
+        self.assertIn((50, 53), bf)  # within radius 2 of y=51
 
         # 8. Old spawn tile is still discovered (now fog)
-        self.assertIn((50, 50), mem["discovered"])
+        self.assertIn((50, 50), bf)
 
         # 9. Render map after move
         map_str = self.renderer.render(player, [])
@@ -751,10 +750,10 @@ class TestFullCycle(unittest.TestCase):
 
         # Building vision radius is 1 in our test balance
         # Tiles around (55, 50) should be discovered
-        mem = player.db.discovery_memory
-        self.assertIn((55, 50), mem["discovered"])
-        self.assertIn((55, 51), mem["discovered"])
-        self.assertIn((54, 50), mem["discovered"])
+        bf = self.fog.get_discovered_tile_set(player)
+        self.assertIn((55, 50), bf)
+        self.assertIn((55, 51), bf)
+        self.assertIn((54, 50), bf)
 
         # Render includes building area
         map_str = self.renderer.render(player, [building])

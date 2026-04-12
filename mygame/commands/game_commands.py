@@ -51,6 +51,26 @@ class GameCommand(BaseCommand):
 
         return None, None
 
+    def _resolve_player_tile(self):
+        """Resolve the OverworldRoom at the caller's coordinates.
+
+        Returns the tile room (creating on demand if needed), or None.
+        Used by commands that need tile-specific state (buildings, resources).
+        """
+        caller = self.caller
+        tile_resolver = _get_system(caller, "tile_resolver")
+        if tile_resolver is None:
+            return None
+        x = getattr(caller.db, "coord_x", None)
+        y = getattr(caller.db, "coord_y", None)
+        planet = getattr(caller.db, "coord_planet", None)
+        if x is None or y is None or not planet:
+            return None
+        try:
+            return tile_resolver.resolve(x, y, planet)
+        except (ValueError, KeyError):
+            return None
+
 
 class CmdMove(GameCommand):
     """Move to an adjacent tile.
@@ -94,10 +114,27 @@ class CmdMove(GameCommand):
             return
 
         caller = self.caller
-        tile_resolver = _get_system(caller, "tile_resolver")
+
+        # If currently inside a building, check exit is open before leaving
+        if getattr(caller.db, "inside_building", False):
+            if not _is_admin(caller):
+                tile_resolver = _get_system(caller, "tile_resolver")
+                if tile_resolver is not None:
+                    cx = getattr(caller.db, "coord_x", None)
+                    cy = getattr(caller.db, "coord_y", None)
+                    cp = getattr(caller.db, "coord_planet", None)
+                    if cx is not None and cy is not None and cp:
+                        cur_room = tile_resolver.get_if_exists(cx, cy, cp)
+                        if cur_room is not None:
+                            bld = getattr(cur_room, "building", None)
+                            if bld is not None and _is_exit_closed(bld, direction):
+                                caller.msg(f"The {direction} exit is closed.")
+                                return
+            caller.db.inside_building = False
+            caller.msg("You step outside.")
         planet_registry = _get_system(caller, "planet_registry")
 
-        if tile_resolver is None or planet_registry is None:
+        if planet_registry is None:
             caller.msg("Movement systems are not available yet.")
             return
 
@@ -111,15 +148,21 @@ class CmdMove(GameCommand):
         # If coords are missing, try to sync from the current room
         if x is None or y is None or not planet:
             loc = caller.location
-            if loc is not None and hasattr(loc, "x") and hasattr(loc, "planet_name"):
-                rx = getattr(loc, "x", None)
-                ry = getattr(loc, "y", None)
+            if loc is not None and hasattr(loc, "planet_name"):
                 rp = getattr(loc, "planet_name", None)
-                if rx is not None and ry is not None and rp and rp != "unknown":
-                    caller.db.coord_x = rx
-                    caller.db.coord_y = ry
-                    caller.db.coord_planet = rp
-                    x, y, planet = rx, ry, rp
+                if rp and rp != "unknown":
+                    # For PlanetRoom, coords come from the player, not the room
+                    # For OverworldRoom, coords come from the room
+                    rx = getattr(loc, "x", None)
+                    ry = getattr(loc, "y", None)
+                    if rx is not None and ry is not None:
+                        caller.db.coord_x = rx
+                        caller.db.coord_y = ry
+                        caller.db.coord_planet = rp
+                        x, y, planet = rx, ry, rp
+                    elif rp:
+                        caller.db.coord_planet = rp
+                        planet = rp
 
         # If still no coords, try spawning to the overworld
         if x is None or y is None or not planet:
@@ -140,43 +183,65 @@ class CmdMove(GameCommand):
             caller.msg("You have reached the edge of the map.")
             return
 
-        # Resolve target room
-        try:
-            target = tile_resolver.resolve(tx, ty, planet)
-        except (ValueError, KeyError):
-            caller.msg("You cannot move there — tile is impassable or does not exist.")
-            return
+        # Check for offline buildings at the target tile
+        tile_resolver = _get_system(caller, "tile_resolver")
+        if tile_resolver is not None:
+            target_room = tile_resolver.get_if_exists(tx, ty, planet)
+            if target_room is not None:
+                building = getattr(target_room, "building", None)
+                if building is not None and getattr(building, "is_offline", False):
+                    caller.msg("That tile is blocked by an offline building.")
+                    return
 
-        if target is None:
-            caller.msg("You cannot move there — tile is impassable or does not exist.")
-            return
-
-        # Check for offline buildings blocking entry
-        building = getattr(target, "building", None)
-        if building is not None and getattr(building, "is_offline", False):
-            caller.msg("That tile is blocked by an offline building.")
-            return
-
-        # Remember old room before moving
-        old_room = caller.location
-
-        # Move player
-        caller.move_to(target, quiet=True)
-
-        # Clean up the room we just left if it has no reason to persist.
-        # Rooms with buildings, other players, or custom state are kept.
-        if old_room is not None and old_room is not target:
-            _maybe_cleanup_room(old_room, tile_resolver)
-
-        # Update coordinate Attributes
+        # Update coordinate Attributes — no room creation needed
         caller.db.coord_x = tx
         caller.db.coord_y = ty
 
+        # If player is not yet in a PlanetRoom (e.g. first move), move them
+        planet_rooms = None
+        try:
+            from server.conf.game_init import game_systems
+            planet_rooms = game_systems.get("planet_rooms", {})
+        except (ImportError, AttributeError):
+            pass
+
+        if planet_rooms:
+            target_planet_room = planet_rooms.get(planet)
+            if target_planet_room and caller.location is not target_planet_room:
+                caller.move_to(target_planet_room, quiet=True)
+
         caller.msg(f"You move {direction} to ({tx}, {ty}).")
+
+        # Check if target tile has a building — auto-enter
+        if tile_resolver is not None:
+            target_room = tile_resolver.get_if_exists(tx, ty, planet)
+            if target_room is not None:
+                building = getattr(target_room, "building", None)
+                if building is not None and not getattr(building, "is_offline", False):
+                    # Check if the entry direction is open
+                    opposite = _OPPOSITE_DIR.get(direction, direction)
+                    if not _is_admin(caller) and _is_exit_closed(building, opposite):
+                        pass  # Can't enter — fall through to normal map display
+                    else:
+                        caller.db.inside_building = True
+                        # Trigger fog of war before showing interior
+                        fog_system = _get_system(caller, "fog_system")
+                        if fog_system is not None:
+                            try:
+                                player_buildings = caller.get_buildings() if hasattr(caller, "get_buildings") else []
+                                visible = fog_system.get_visible_tiles(caller, player_buildings)
+                                fog_system.update_discovery(caller, visible, tile_resolver)
+                            except Exception:
+                                pass
+                        _show_building_interior(caller, building)
+                        return
+
+        # Not inside a building
+        caller.db.inside_building = False
 
         # Trigger fog of war discovery update
         fog_system = _get_system(caller, "fog_system")
-        if fog_system is not None:
+        if fog_system is not None and tile_resolver is not None:
             try:
                 buildings = caller.get_buildings() if hasattr(caller, "get_buildings") else []
                 visible = fog_system.get_visible_tiles(caller, buildings)
@@ -215,9 +280,10 @@ class CmdHarvest(GameCommand):
             self.caller.msg("Resource system unavailable.")
             return
 
-        tile = self.caller.location
+        # Resolve the actual tile room at player's coordinates
+        tile = self._resolve_player_tile()
         if tile is None:
-            self.caller.msg("You have no location.")
+            self.caller.msg("Cannot determine your position.")
             return
 
         success, msg = resource_system.harvest(self.caller, tile)
@@ -248,9 +314,10 @@ class CmdBuild(GameCommand):
             self.caller.msg("Building system unavailable.")
             return
 
-        tile = self.caller.location
+        # Resolve the actual tile room at player's coordinates
+        tile = self._resolve_player_tile()
         if tile is None:
-            self.caller.msg("You have no location.")
+            self.caller.msg("Cannot determine your position.")
             return
 
         success, msg = building_system.construct(self.caller, tile, building_type)
@@ -258,48 +325,170 @@ class CmdBuild(GameCommand):
 
 
 class CmdUpgrade(GameCommand):
-    """Upgrade a building you own.
+    """Upgrade the building you're standing on.
 
     Usage:
-        upgrade <building_type>
+        upgrade
 
-    Upgrades the building of the given type on your current tile.
+    Must be on a tile with a building you own. Costs base_cost × target_level.
+    Increases max HP by 20% per level. All buildings can reach level 5.
     """
 
     key = "upgrade"
     aliases = ["up"]
     help_category = "Game"
 
-    def func(self):
-        building_type = self.args.strip().upper()
-        if not building_type:
-            self.caller.msg("Usage: upgrade <building_type>")
-            return
+    MAX_LEVEL = 5
 
-        tile = self.caller.location
+    def func(self):
+        caller = self.caller
+
+        tile = self._resolve_player_tile()
         if tile is None:
-            self.caller.msg("You have no location.")
+            caller.msg("Cannot determine your position.")
             return
 
         building = getattr(tile, "building", None)
         if building is None:
-            self.caller.msg("No building on this tile.")
+            caller.msg("No building on this tile.")
             return
 
-        btype = getattr(building, "building_type", None)
-        if hasattr(building, "db"):
-            btype = btype or getattr(building.db, "building_type", None)
-        if btype and btype.upper() != building_type:
-            self.caller.msg(f"No {building_type} building on this tile.")
+        # Ownership check
+        owner = None
+        if hasattr(building, "attributes") and hasattr(building.attributes, "get"):
+            owner = building.attributes.get("owner", default=None)
+        if owner is not caller:
+            caller.msg("You do not own this building.")
             return
 
-        building_system = _get_system(self.caller, "building_system")
-        if building_system is None:
-            self.caller.msg("Building system unavailable.")
+        # Read current state
+        btype = "??"
+        level = 1
+        if hasattr(building, "attributes") and hasattr(building.attributes, "get"):
+            btype = building.attributes.get("building_type", default="??") or "??"
+            level = building.attributes.get("building_level", default=1) or 1
+
+        if level >= self.MAX_LEVEL:
+            caller.msg(f"This building is already at maximum level ({self.MAX_LEVEL}).")
             return
 
-        success, msg = building_system.upgrade(self.caller, building)
-        self.caller.msg(msg)
+        target_level = level + 1
+
+        # Look up cost from registry
+        registry = _get_system(caller, "registry")
+        if registry is None:
+            caller.msg("Registry unavailable.")
+            return
+
+        try:
+            bdef = registry.get_building(btype)
+        except (KeyError, AttributeError):
+            caller.msg(f"Unknown building type: {btype}")
+            return
+
+        upgrade_cost = {res: amt * target_level for res, amt in bdef.cost.items()}
+
+        # Check resources
+        if not caller.has_resources(upgrade_cost):
+            cost_str = ", ".join(f"{res}: {amt}" for res, amt in upgrade_cost.items())
+            caller.msg(f"Insufficient resources. Upgrade to level {target_level} requires: {cost_str}")
+            return
+
+        # Deduct and upgrade
+        caller.deduct_resources(upgrade_cost)
+        building.attributes.add("building_level", target_level)
+
+        # Increase max HP by 20% per level (from base)
+        base_hp = bdef.max_health
+        new_max_hp = int(base_hp * (1 + 0.2 * (target_level - 1)))
+        building.attributes.add("hp_max", new_max_hp)
+        # Heal to new max
+        building.attributes.add("hp", new_max_hp)
+
+        caller.msg(f"Upgraded {bdef.name} to level {target_level}. HP: {new_max_hp}/{new_max_hp}")
+
+
+class CmdDemolish(GameCommand):
+    """Demolish a building you own on your current tile.
+
+    Usage:
+        demolish
+
+    Destroys the building and refunds resources based on level.
+    Refund scales from 40% at level 1 to 80% at level 5.
+
+    The total invested cost accounts for the base build plus all
+    upgrade costs (base × 2 for level 2, base × 3 for level 3, etc).
+    """
+
+    key = "demolish"
+    aliases = ["demo"]
+    help_category = "Game"
+
+    # Refund percentage by level: 40% at L1, scaling to 80% at L5
+    _REFUND_RATES = {1: 0.40, 2: 0.50, 3: 0.60, 4: 0.70, 5: 0.80}
+
+    def func(self):
+        caller = self.caller
+
+        # Resolve the actual tile room at player's coordinates
+        loc = self._resolve_player_tile()
+        if loc is None:
+            caller.msg("Cannot determine your position.")
+            return
+
+        # Find building on this tile
+        building = None
+        for obj in getattr(loc, "contents", []):
+            if hasattr(obj, "attributes") and obj.attributes.has("building_type"):
+                building = obj
+                break
+
+        if building is None:
+            caller.msg("There is no building on this tile.")
+            return
+
+        # Check ownership
+        owner = building.attributes.get("owner", default=None) if hasattr(building, "attributes") else None
+        if owner is not caller:
+            caller.msg("You do not own this building.")
+            return
+
+        btype = building.attributes.get("building_type", default="??")
+        level = building.attributes.get("building_level", default=1) or 1
+        name = getattr(building, "key", btype)
+
+        # Calculate refund
+        refund = {}
+        registry = _get_system(caller, "registry")
+        if registry:
+            try:
+                bdef = registry.get_building(btype)
+                # Total invested = base cost × (1 + 2 + ... + level)
+                level_sum = level * (level + 1) // 2
+                rate = self._REFUND_RATES.get(level, 0.40)
+                refund = {
+                    res: int(amt * level_sum * rate)
+                    for res, amt in bdef.cost.items()
+                }
+            except (KeyError, AttributeError):
+                pass
+
+        # Refund resources
+        if refund and hasattr(caller, "add_resource"):
+            for res, amt in refund.items():
+                if amt > 0:
+                    caller.add_resource(res, amt)
+
+        # Delete the building
+        if hasattr(building, "delete"):
+            building.delete()
+
+        if refund:
+            refund_str = ", ".join(f"{res}: {amt}" for res, amt in refund.items() if amt > 0)
+            caller.msg(f"Demolished {name} ({btype}). Refunded: {refund_str}.")
+        else:
+            caller.msg(f"Demolished {name} ({btype}).")
 
 
 class CmdAttack(GameCommand):
@@ -599,16 +788,16 @@ class CmdBuildings(GameCommand):
 
         lines = ["|wYour Buildings:|n"]
         for b in buildings:
-            btype = getattr(b, "building_type", "??")
-            if hasattr(b, "db"):
-                btype = btype or getattr(b.db, "building_type", "??")
-            level = getattr(b, "building_level", 1)
-            hp = getattr(b, "hp", "?")
-            if hasattr(b, "db"):
-                hp = getattr(b.db, "hp", hp)
-            hp_max = getattr(b, "hp_max", "?")
-            if hasattr(b, "db"):
-                hp_max = getattr(b.db, "hp_max", hp_max)
+            # Read from Evennia attributes
+            btype = "??"
+            level = 1
+            hp = "?"
+            hp_max = "?"
+            if hasattr(b, "attributes") and hasattr(b.attributes, "get"):
+                btype = b.attributes.get("building_type", default="??") or "??"
+                level = b.attributes.get("building_level", default=1) or 1
+                hp = b.attributes.get("hp", default="?")
+                hp_max = b.attributes.get("hp_max", default="?")
             loc = getattr(b, "location", None)
             loc_str = ""
             if loc:
@@ -637,19 +826,39 @@ class CmdScan(GameCommand):
             self.caller.msg("You have no location.")
             return
 
-        # Gather entities from the current tile's contents
+        caller_x = getattr(self.caller.db, "coord_x", None)
+        caller_y = getattr(self.caller.db, "coord_y", None)
+
+        # Gather players from PlanetRoom, filtered by matching coordinates
         contents = getattr(loc, "contents", [])
         players = []
-        buildings = []
         for obj in contents:
             if obj is self.caller:
                 continue
             if hasattr(obj, "db") and hasattr(obj.db, "combat_xp"):
+                # Filter by coordinate match when in a PlanetRoom
+                if caller_x is not None and caller_y is not None:
+                    ox = getattr(obj.db, "coord_x", None)
+                    oy = getattr(obj.db, "coord_y", None)
+                    if ox is None or oy is None:
+                        continue
+                    if int(ox) != int(caller_x) or int(oy) != int(caller_y):
+                        continue
                 players.append(obj)
-            elif hasattr(obj, "building_type") or (
-                hasattr(obj, "db") and hasattr(obj.db, "building_type")
-            ):
-                buildings.append(obj)
+
+        # Check the resolved tile room for buildings
+        buildings = []
+        tile = self._resolve_player_tile()
+        if tile is not None:
+            for obj in getattr(tile, "contents", []):
+                if hasattr(obj, "building_type") or (
+                    hasattr(obj, "db") and hasattr(obj.db, "building_type")
+                ):
+                    buildings.append(obj)
+            # Also check tile.building attribute
+            tile_building = getattr(tile, "building", None)
+            if tile_building is not None and tile_building not in buildings:
+                buildings.append(tile_building)
 
         lines = ["|wScan Results:|n"]
         if players:
@@ -845,9 +1054,47 @@ class CmdSay(GameCommand):
             self.caller.msg("You have no location.")
             return
 
-        # Broadcast to all in the room
+        # Broadcast to all in the room at the same tile
         self.caller.msg(f'You say, "{message}"')
-        loc.msg_contents(f'{name} says, "{message}"', exclude=[self.caller])
+        loc.msg_contents(
+            f'{name} says, "{message}"',
+            exclude=[self.caller],
+            from_obj=self.caller,
+        )
+
+
+class CmdLook(GameCommand):
+    """Look at your surroundings.
+
+    Usage:
+        look
+        look <obj>
+
+    Shows the ASCII map (or building interior if inside one).
+    """
+
+    key = "look"
+    aliases = ["l", "ls"]
+    locks = "cmd:all()"
+    arg_regex = r"\s|$"
+    help_category = "General"
+
+    def func(self):
+        caller = self.caller
+        if not self.args:
+            target = caller.location
+            if not target:
+                caller.msg("You have no location to look at!")
+                return
+        else:
+            target = caller.search(self.args)
+            if not target:
+                return
+
+        # at_look calls return_appearance on the target, which for
+        # PlanetRoom returns the map or building interior automatically
+        desc = caller.at_look(target)
+        self.msg(text=(desc, {"type": "look"}), options=None)
 
 
 class CmdMap(GameCommand):
@@ -909,58 +1156,230 @@ class CmdMap(GameCommand):
         if map_str:
             x = getattr(caller.db, "coord_x", "?")
             y = getattr(caller.db, "coord_y", "?")
-            caller.msg(f"|wMap — ({x}, {y}) on {planet}|n\n{map_str}")
+            # Show discovered tile count for debugging fog of war
+            fog_system = _get_system(caller, "fog_system")
+            disc_count = 0
+            if fog_system:
+                disc_count = len(fog_system.get_discovered_tile_set(caller))
+            caller.msg(f"|wMap — ({x}, {y}) on {planet} | {disc_count} tiles discovered|n\n{map_str}")
         else:
             caller.msg("Nothing to display — explore first.")
 
 
 # ------------------------------------------------------------------ #
-#  Helper: clean up empty rooms after a player leaves
+#  Helper: display building interior
 # ------------------------------------------------------------------ #
 
-def _maybe_cleanup_room(room, tile_resolver):
-    """Delete a room if it has no players, no buildings, and no custom state.
+# Direction opposites for entry checking
+_OPPOSITE_DIR = {
+    "north": "south", "n": "south",
+    "south": "north", "s": "north",
+    "east": "west", "e": "west",
+    "west": "east", "w": "east",
+}
 
-    This keeps the DB lean — only rooms with meaningful state persist.
-    Rooms are cheap to recreate from the terrain generator.
+_CARDINAL_DIRS = ("north", "south", "east", "west")
+
+
+def _is_exit_closed(building, direction):
+    """Check if a building's exit in the given direction is closed."""
+    dir_map = {"n": "north", "s": "south", "e": "east", "w": "west"}
+    direction = dir_map.get(direction, direction)
+    closed = set()
+    if hasattr(building, "attributes") and hasattr(building.attributes, "get"):
+        raw = building.attributes.get("closed_exits", default=None)
+        if raw:
+            try:
+                closed = set(raw)
+            except (TypeError, ValueError):
+                pass
+    return direction in closed
+
+
+def _is_admin(caller):
+    """Check if caller has Builder+ permissions (bypasses exit restrictions)."""
+    if hasattr(caller, "check_permstring"):
+        try:
+            return caller.check_permstring("Builder")
+        except Exception:
+            pass
+    if hasattr(caller, "permissions"):
+        perms = caller.permissions
+        if hasattr(perms, "check"):
+            try:
+                return perms.check("Builder")
+            except Exception:
+                pass
+    return False
+
+
+def _show_building_interior(caller, building):
+    """Display the interior of a building.
+
+    Uses the shared formatter from rooms.py to avoid duplication.
     """
     try:
-        # Don't clean up non-overworld rooms (Limbo, tutorial, etc.)
-        if not hasattr(room, "tags"):
+        from typeclasses.rooms import _format_building_interior
+        caller.msg(_format_building_interior(caller, building))
+    except ImportError:
+        caller.msg("You are inside a building.")
+
+
+class CmdCloseExit(GameCommand):
+    """Close an exit in a building you own.
+
+    Usage:
+        closeexit <direction>
+
+    Prevents anyone from entering or leaving through that direction.
+    Admin users are not affected by closed exits.
+    """
+
+    key = "closeexit"
+    help_category = "Game"
+
+    def func(self):
+        caller = self.caller
+        direction = self.args.strip().lower()
+        dir_map = {"n": "north", "s": "south", "e": "east", "w": "west"}
+        direction = dir_map.get(direction, direction)
+
+        if direction not in _CARDINAL_DIRS:
+            caller.msg("Usage: closeexit <north, south, east, or west>")
             return
-        room_type = room.tags.get(category="room_type", return_list=False)
-        if room_type != "overworld_tile":
+
+        if not getattr(caller.db, "inside_building", False):
+            caller.msg("You must be inside a building to close an exit.")
             return
 
-        # Keep rooms with players still in them
-        contents = getattr(room, "contents", [])
-        for obj in contents:
-            if hasattr(obj, "has_account") and obj.has_account:
-                return
-            if hasattr(obj, "attributes") and obj.attributes.has("building_type"):
-                return
-
-        # Keep rooms with custom descriptions
-        desc = getattr(room.db, "desc", None) if hasattr(room, "db") else None
-        if desc and desc != "" and desc != "You see nothing special.":
+        tile = self._resolve_player_tile()
+        if tile is None:
+            caller.msg("Cannot determine your position.")
             return
 
-        # Keep rooms with depleted resources (state that matters)
-        rn = getattr(room.db, "resource_node_data", None) if hasattr(room, "db") else None
-        if rn and isinstance(rn, dict) and rn.get("depleted"):
+        building = getattr(tile, "building", None)
+        if building is None:
+            caller.msg("No building here.")
             return
 
-        # Safe to delete — evict from cache and remove from DB
-        x = getattr(room, "x", None)
-        y = getattr(room, "y", None)
-        planet = getattr(room, "planet_name", None)
-        if x is not None and y is not None and planet:
-            tile_resolver._cache.remove(x, y, planet)
+        owner = None
+        if hasattr(building, "attributes") and hasattr(building.attributes, "get"):
+            owner = building.attributes.get("owner", default=None)
+        if owner is not caller:
+            caller.msg("You do not own this building.")
+            return
 
-        if hasattr(room, "delete"):
-            room.delete()
-    except Exception:
-        pass  # Never crash the move command over cleanup
+        closed = set()
+        raw = building.attributes.get("closed_exits", default=None)
+        if raw:
+            try:
+                closed = set(raw)
+            except (TypeError, ValueError):
+                pass
+
+        if direction in closed:
+            caller.msg(f"The {direction} exit is already closed.")
+            return
+
+        if len(closed) >= 3:
+            caller.msg("You must leave at least one exit open.")
+            return
+
+        closed.add(direction)
+        building.attributes.add("closed_exits", list(closed))
+        caller.msg(f"Closed the {direction} exit.")
+
+
+class CmdOpenExit(GameCommand):
+    """Open a closed exit in a building you own.
+
+    Usage:
+        openexit <direction>
+    """
+
+    key = "openexit"
+    help_category = "Game"
+
+    def func(self):
+        caller = self.caller
+        direction = self.args.strip().lower()
+        dir_map = {"n": "north", "s": "south", "e": "east", "w": "west"}
+        direction = dir_map.get(direction, direction)
+
+        if direction not in _CARDINAL_DIRS:
+            caller.msg("Usage: openexit <north, south, east, or west>")
+            return
+
+        if not getattr(caller.db, "inside_building", False):
+            caller.msg("You must be inside a building to open an exit.")
+            return
+
+        tile = self._resolve_player_tile()
+        if tile is None:
+            caller.msg("Cannot determine your position.")
+            return
+
+        building = getattr(tile, "building", None)
+        if building is None:
+            caller.msg("No building here.")
+            return
+
+        owner = None
+        if hasattr(building, "attributes") and hasattr(building.attributes, "get"):
+            owner = building.attributes.get("owner", default=None)
+        if owner is not caller:
+            caller.msg("You do not own this building.")
+            return
+
+        closed = set()
+        raw = building.attributes.get("closed_exits", default=None)
+        if raw:
+            try:
+                closed = set(raw)
+            except (TypeError, ValueError):
+                pass
+
+        if direction not in closed:
+            caller.msg(f"The {direction} exit is already open.")
+            return
+
+        closed.discard(direction)
+        building.attributes.add("closed_exits", list(closed))
+        caller.msg(f"Opened the {direction} exit.")
+
+
+class CmdLeave(GameCommand):
+    """Leave the building you're currently inside.
+
+    Usage:
+        leave
+        outside
+    """
+
+    key = "leave"
+    aliases = ["outside", "exit building", "out"]
+    help_category = "Game"
+
+    def func(self):
+        caller = self.caller
+        if not getattr(caller.db, "inside_building", False):
+            caller.msg("You are not inside a building.")
+            return
+        caller.db.inside_building = False
+        caller.msg("You step outside.")
+        # Show the map
+        renderer = _get_system(caller, "procedural_map_renderer")
+        if renderer:
+            buildings = caller.get_buildings() if hasattr(caller, "get_buildings") else []
+            try:
+                map_str = renderer.render(caller, buildings)
+                if map_str:
+                    x = getattr(caller.db, "coord_x", "?")
+                    y = getattr(caller.db, "coord_y", "?")
+                    planet = getattr(caller.db, "coord_planet", "?")
+                    caller.msg(f"|wMap — ({x}, {y}) on {planet}|n\n{map_str}")
+            except Exception:
+                pass
 
 
 # ------------------------------------------------------------------ #

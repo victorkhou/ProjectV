@@ -141,7 +141,7 @@ class FakeLocation:
         self.contents = contents or []
         self._messages = []
 
-    def msg_contents(self, text, exclude=None):
+    def msg_contents(self, text, exclude=None, **kwargs):
         self._messages.append(text)
 
 class FakeCaller:
@@ -214,20 +214,17 @@ class TestCmdMove(unittest.TestCase):
         self.assertTrue(any("Unknown direction" in m for m in caller._messages))
 
     def test_no_systems_available(self):
-        """When tile_resolver is not wired, player gets an error message."""
+        """When planet_registry is not wired, player gets an error message."""
         caller = FakeCaller()
         cmd = _make_cmd(CmdMove, caller, " north")
         cmd.func()
         self.assertTrue(any("not available" in m.lower() for m in caller._messages))
 
     def test_successful_move_via_resolver(self):
-        """New path: TileResolver resolves target room."""
-        target = FakeLocation(x=5, y=6)
+        """New path: coordinates update on successful move (no room creation)."""
 
         class FakeTileResolver:
-            def resolve(self, x, y, planet):
-                if (x, y) == (5, 6):
-                    return target
+            def get_if_exists(self, x, y, planet):
                 return None
 
         class FakePlanetRegistry:
@@ -240,14 +237,14 @@ class TestCmdMove(unittest.TestCase):
         })
         cmd = _make_cmd(CmdMove, caller, " north")
         cmd.func()
-        self.assertIs(caller._moved_to, target)
         self.assertEqual(caller.db.coord_x, 5)
         self.assertEqual(caller.db.coord_y, 6)
 
     def test_edge_of_map_rejected(self):
         """New path: out-of-bounds coordinate is rejected."""
         class FakeTileResolver:
-            pass
+            def get_if_exists(self, x, y, planet):
+                return None
 
         class FakePlanetRegistry:
             def is_valid_coordinate(self, x, y, planet):
@@ -268,12 +265,12 @@ class TestCmdMove(unittest.TestCase):
         """New path: offline building blocks movement."""
         class OfflineBuilding:
             is_offline = True
-        target = FakeLocation(x=5, y=6)
-        target.building = OfflineBuilding()
 
         class FakeTileResolver:
-            def resolve(self, x, y, planet):
-                return target
+            def get_if_exists(self, x, y, planet):
+                room = FakeLocation(x=x, y=y)
+                room.building = OfflineBuilding()
+                return room
 
         class FakePlanetRegistry:
             def is_valid_coordinate(self, x, y, planet):
@@ -290,11 +287,10 @@ class TestCmdMove(unittest.TestCase):
 
     def test_coord_attributes_updated_after_move(self):
         """New path: coord_x and coord_y are updated after successful move."""
-        target = FakeLocation(x=6, y=5)
 
         class FakeTileResolver:
-            def resolve(self, x, y, planet):
-                return target
+            def get_if_exists(self, x, y, planet):
+                return None
 
         class FakePlanetRegistry:
             def is_valid_coordinate(self, x, y, planet):
@@ -313,9 +309,6 @@ class TestCmdMove(unittest.TestCase):
 
     def test_no_planet_attribute_rejects(self):
         """When coord_planet is empty and room has no coords, reject movement."""
-        class FakeTileResolver:
-            pass
-
         class FakePlanetRegistry:
             pass
 
@@ -324,7 +317,6 @@ class TestCmdMove(unittest.TestCase):
             id = 99
 
         caller = FakeCaller(systems={
-            "tile_resolver": FakeTileResolver(),
             "planet_registry": FakePlanetRegistry(),
         })
         caller.db.coord_planet = ""
@@ -345,7 +337,13 @@ class TestCmdHarvest(unittest.TestCase):
         class FakeResourceSystem:
             def harvest(self, player, tile):
                 return True, "Harvested 1 Iron."
-        caller = FakeCaller(systems={"resource_system": FakeResourceSystem()})
+        class FakeTileResolver:
+            def resolve(self, x, y, planet):
+                return FakeLocation(x=x, y=y)
+        caller = FakeCaller(systems={
+            "resource_system": FakeResourceSystem(),
+            "tile_resolver": FakeTileResolver(),
+        })
         cmd = _make_cmd(CmdHarvest, caller)
         cmd.func()
         self.assertTrue(any("Harvested" in m for m in caller._messages))
@@ -354,7 +352,13 @@ class TestCmdHarvest(unittest.TestCase):
         class FakeResourceSystem:
             def harvest(self, player, tile):
                 return False, "No resource node on this tile."
-        caller = FakeCaller(systems={"resource_system": FakeResourceSystem()})
+        class FakeTileResolver:
+            def resolve(self, x, y, planet):
+                return FakeLocation(x=x, y=y)
+        caller = FakeCaller(systems={
+            "resource_system": FakeResourceSystem(),
+            "tile_resolver": FakeTileResolver(),
+        })
         cmd = _make_cmd(CmdHarvest, caller)
         cmd.func()
         self.assertTrue(any("No resource" in m for m in caller._messages))
@@ -370,22 +374,24 @@ class TestCmdBuild(unittest.TestCase):
         class FakeBuildingSystem:
             def construct(self, player, tile, btype):
                 return True, f"Built {btype}."
-        caller = FakeCaller(systems={"building_system": FakeBuildingSystem()})
+        class FakeTileResolver:
+            def resolve(self, x, y, planet):
+                return FakeLocation(x=x, y=y)
+        caller = FakeCaller(systems={
+            "building_system": FakeBuildingSystem(),
+            "tile_resolver": FakeTileResolver(),
+        })
         cmd = _make_cmd(CmdBuild, caller, " hq")
         cmd.func()
         self.assertTrue(any("Built HQ" in m for m in caller._messages))
 
 class TestCmdUpgrade(unittest.TestCase):
-    def test_no_args(self):
-        caller = FakeCaller()
-        cmd = _make_cmd(CmdUpgrade, caller, "")
-        cmd.func()
-        self.assertTrue(any("Usage" in m for m in caller._messages))
-
     def test_no_building_on_tile(self):
-        caller = FakeCaller()
-        caller.location.building = None
-        cmd = _make_cmd(CmdUpgrade, caller, " MM")
+        class FakeTileResolver:
+            def resolve(self, x, y, planet):
+                return FakeLocation(x=x, y=y, building=None)
+        caller = FakeCaller(systems={"tile_resolver": FakeTileResolver()})
+        cmd = _make_cmd(CmdUpgrade, caller, "")
         cmd.func()
         self.assertTrue(any("No building" in m for m in caller._messages))
 
@@ -478,16 +484,17 @@ class TestCmdBuildings(unittest.TestCase):
         self.assertTrue(any("no buildings" in m.lower() for m in caller._messages))
 
     def test_with_buildings(self):
+        class FakeAttrs:
+            def __init__(self):
+                self._data = {"building_type": "MM", "building_level": 2, "hp": 400, "hp_max": 500}
+            def get(self, key, default=None, **kw):
+                return self._data.get(key, default)
+            def has(self, key):
+                return key in self._data
         class FakeBuilding:
-            building_type = "MM"
-            building_level = 2
-            location = FakeLocation(x=3, y=4)
-            class db:
-                hp = 400
-                hp_max = 500
-                building_type = "MM"
-            hp = 400
-            hp_max = 500
+            def __init__(self):
+                self.attributes = FakeAttrs()
+                self.location = FakeLocation(x=3, y=4)
         caller = FakeCaller()
         caller.get_buildings = lambda: [FakeBuilding()]
         cmd = _make_cmd(CmdBuildings, caller)
@@ -507,12 +514,28 @@ class TestCmdScan(unittest.TestCase):
 
     def test_scan_with_player(self):
         other = FakeCaller(name="Enemy")
+        # Set matching coordinates so the player passes the filter
+        other.db.coord_x = 5
+        other.db.coord_y = 5
         caller = FakeCaller()
         caller.location.contents = [other]
         cmd = _make_cmd(CmdScan, caller)
         cmd.func()
         output = "\n".join(caller._messages)
         self.assertIn("Enemy", output)
+
+    def test_scan_filters_players_by_coords(self):
+        """Players at different coordinates should not appear in scan."""
+        other = FakeCaller(name="FarAway")
+        other.db.coord_x = 99
+        other.db.coord_y = 99
+        caller = FakeCaller()
+        caller.location.contents = [other]
+        cmd = _make_cmd(CmdScan, caller)
+        cmd.func()
+        output = "\n".join(caller._messages)
+        self.assertNotIn("FarAway", output)
+        self.assertIn("Nothing visible", output)
 
 class TestCmdTechnology(unittest.TestCase):
     def test_shows_researched(self):
@@ -588,6 +611,7 @@ class TestCmdSay(unittest.TestCase):
         cmd = _make_cmd(CmdSay, caller, " hello room")
         cmd.func()
         self.assertTrue(any("You say" in m for m in caller._messages))
+        # msg_contents is called with from_obj for proximity filtering
         self.assertTrue(any("hello room" in m for m in caller.location._messages))
 
 

@@ -25,7 +25,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
-from world.coordinate.fog_of_war import _get_planet
+from world.coordinate.fog_of_war import _get_planet, _get_coord
 
 if TYPE_CHECKING:
     from world.coordinate.fog_of_war import FogOfWarSystem
@@ -53,7 +53,8 @@ _TERRAIN_COLORS: dict[str, str] = {
     "Ice_Field":     "|C",   # bright cyan
 }
 
-_FOG_COLOR = "|x"  # dark grey for fog-of-war tiles
+_FOG_COLOR = "|x"  # grey for fog-of-war tiles
+_UNEXPLORED = "|X..|n"  # near-black dots for never-seen tiles
 
 
 class ProceduralMapRenderer:
@@ -99,7 +100,13 @@ class ProceduralMapRenderer:
         player: Any,
         player_buildings: list[Any],
     ) -> str:
-        """Render the full colored ASCII map for a player."""
+        """Render the full colored ASCII map for a player.
+
+        The map is centered on the player's vision range. Tiles are:
+        - Visible (in vision): full color terrain/players/buildings
+        - Fog (previously discovered, outside vision): dimmed terrain
+        - Unexplored (never seen): dark empty
+        """
         planet = _get_planet(player)
 
         # 1. Compute visible tiles
@@ -110,40 +117,48 @@ class ProceduralMapRenderer:
             player, visible_tiles, self._tile_resolver
         )
 
-        # 3. Determine render bounds from visible + discovered tiles
-        discovered = self._fog_system.get_discovered_tile_set(player)
-
-        all_relevant = visible_tiles | discovered
-        if not all_relevant:
+        # 3. Render bounds anchored to PLAYER position only (not buildings)
+        if not visible_tiles:
             return ""
 
-        # Single-pass min/max
-        first = next(iter(all_relevant))
-        min_x = max_x = first[0]
-        min_y = max_y = first[1]
-        for tx, ty in all_relevant:
-            if tx < min_x: min_x = tx
-            elif tx > max_x: max_x = tx
-            if ty < min_y: min_y = ty
-            elif ty > max_y: max_y = ty
+        discovered = self._fog_system.get_discovered_tile_set(player)
+
+        # Bounds from player vision radius, not building vision
+        px = _get_coord(player, "coord_x")
+        py = _get_coord(player, "coord_y")
+        pvr = self._fog_system.player_vision_radius
+        _BORDER = getattr(self._fog_system, '_map_border', 5)
+        min_x = px - pvr - _BORDER
+        max_x = px + pvr + _BORDER
+        min_y = py - pvr - _BORDER
+        max_y = py + pvr + _BORDER
 
         # Pre-fetch discovery memory once
         buildings_mem = self._fog_system.get_discovered_buildings_map(player)
 
+        # Preload all rooms in the visible area into cache (single DB query)
+        self._tile_resolver.preload_area(min_x, max_x, min_y, max_y, planet)
+
         # 4. Render — inlined visibility check for speed
         get_cached = self._tile_resolver.get_cached
+        player_coord = (px, py)
         lines: list[str] = []
         for y in range(max_y, min_y - 1, -1):
             row: list[str] = []
             for x in range(min_x, max_x + 1):
                 coord = (x, y)
                 if coord in visible_tiles:
-                    room = get_cached(x, y, planet)
-                    if room is not None:
-                        sym = self._colored_room(room, player, x, y, planet)
+                    # Check if the player is on this tile
+                    if coord == player_coord:
+                        sym = "|Y@@|n"
                     else:
-                        sym = self._colored_terrain(x, y, planet)
+                        room = get_cached(x, y, planet)
+                        if room is not None:
+                            sym = self._colored_room(room, player, x, y, planet)
+                        else:
+                            sym = self._colored_terrain(x, y, planet)
                 elif coord in discovered:
+                    # Fog — dimmed but recognizable terrain
                     entry = buildings_mem.get(coord)
                     if entry:
                         abbr = entry.get("building_type", "??")
@@ -152,7 +167,8 @@ class ProceduralMapRenderer:
                     else:
                         sym = self._fog_terrain(x, y, planet)
                 else:
-                    sym = self._fog_terrain(x, y, planet)
+                    # Unexplored — faint dashes
+                    sym = _UNEXPLORED
                 row.append(sym)
             lines.append(" ".join(row))
 
@@ -237,17 +253,24 @@ class ProceduralMapRenderer:
     def _colored_room(self, room: Any, looker: Any, x: int, y: int, planet: str) -> str:
         """Get the colored symbol for a room tile.
 
-        Uses the room only for player/building detection.
+        Uses the room only for building detection.
+        For player detection, checks coordinates to handle the shared
+        PlanetRoom where ALL players are in contents.
         Terrain symbol always comes from the generator + symbol cache
         so it stays in sync with the YAML definitions.
         """
-        # Check for player characters
+        # Check for player characters by coordinate match
         contents = getattr(room, "contents", [])
         for obj in contents:
             if hasattr(obj, "has_account") and obj.has_account:
-                if obj is looker:
-                    return "|Y@@|n"
-                return "|r**|n"
+                # Filter by coordinates — in a PlanetRoom, all players
+                # are in contents, so we must check position
+                ox = _get_coord(obj, "coord_x") if hasattr(obj, "db") else None
+                oy = _get_coord(obj, "coord_y") if hasattr(obj, "db") else None
+                if ox == x and oy == y:
+                    if obj is looker:
+                        return "|Y@@|n"
+                    return "|r**|n"
 
         # Check for building
         bld = getattr(room, "building", None)

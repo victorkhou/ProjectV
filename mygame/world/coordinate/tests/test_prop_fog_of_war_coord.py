@@ -74,6 +74,7 @@ from mygame.world.coordinate.fog_of_war import (  # noqa: E402
     DiscoveredBuildingState,
     FogOfWarSystem,
 )
+from mygame.world.coordinate.discovery_bitfield import DiscoveryBitfield  # noqa: E402
 
 
 # -------------------------------------------------------------- #
@@ -320,7 +321,7 @@ class TestProperty11FogHidesEnemies(unittest.TestCase):
         player = _FakePlayer(x=0, y=0)
         # Mark tile as discovered but ensure it's outside current vision
         assume(max(abs(fx), abs(fy)) > 10)  # outside player vision radius of 10
-        player.db.discovery_memory = {"discovered": {(fx, fy)}, "buildings": {}}
+        player.db.discovery_memory = {"discovered": DiscoveryBitfield.from_set({(fx, fy)}).to_dict(), "buildings": {}}
 
         visible_tiles = fow.get_visible_tiles(player, [])
         visibility = fow.get_tile_visibility(player, fx, fy, visible_tiles)
@@ -345,7 +346,7 @@ class TestProperty11FogHidesEnemies(unittest.TestCase):
         assume(max(abs(fx), abs(fy)) > 10)
 
         player.db.discovery_memory = {
-            "discovered": {(fx, fy)},
+            "discovered": DiscoveryBitfield.from_set({(fx, fy)}).to_dict(),
             "buildings": {
                 (fx, fy): {
                     "building_type": abbrev,
@@ -379,7 +380,7 @@ class TestProperty11FogHidesEnemies(unittest.TestCase):
         player = _FakePlayer(x=0, y=0)
         assume(max(abs(fx), abs(fy)) > 10)
 
-        player.db.discovery_memory = {"discovered": {(fx, fy)}, "buildings": {}}
+        player.db.discovery_memory = {"discovered": DiscoveryBitfield.from_set({(fx, fy)}).to_dict(), "buildings": {}}
 
         visible_tiles = fow.get_visible_tiles(player, [])
         visibility = fow.get_tile_visibility(player, fx, fy, visible_tiles)
@@ -399,7 +400,7 @@ class TestProperty11FogHidesEnemies(unittest.TestCase):
         player = _FakePlayer(x=0, y=0)
         assume(max(abs(fx), abs(fy)) > 10)
 
-        player.db.discovery_memory = {"discovered": set(), "buildings": {}}
+        player.db.discovery_memory = {"discovered": {}, "buildings": {}}
 
         visible_tiles = fow.get_visible_tiles(player, [])
         visibility = fow.get_tile_visibility(player, fx, fy, visible_tiles)
@@ -440,8 +441,7 @@ class TestProperty12DiscoveryMemory(unittest.TestCase):
         visible = fow.get_visible_tiles(player, [])
         fow.update_discovery(player, visible, resolver)
 
-        mem = player.db.discovery_memory
-        discovered = mem.get("discovered", set())
+        discovered = fow.get_discovered_tile_set(player)
 
         for tile in visible:
             self.assertIn(
@@ -545,8 +545,7 @@ class TestProperty12DiscoveryMemory(unittest.TestCase):
         visible2 = fow.get_visible_tiles(player, [])
         fow.update_discovery(player, visible2, resolver)
 
-        mem = player.db.discovery_memory
-        discovered = mem.get("discovered", set())
+        discovered = fow.get_discovered_tile_set(player)
 
         # All tiles from both updates should be discovered
         for tile in visible1:

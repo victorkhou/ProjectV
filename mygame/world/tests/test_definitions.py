@@ -253,7 +253,7 @@ class TestDataclassContracts:
         assert len(fields(PlanetDef)) == 3
 
     def test_balance_config_field_count(self):
-        assert len(fields(BalanceConfig)) == 21
+        assert len(fields(BalanceConfig)) == 22
 
     def test_coordinate_space_def_field_count(self):
         assert len(fields(CoordinateSpaceDef)) == 13

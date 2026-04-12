@@ -67,3 +67,6 @@ docs/build
 
 # Testing folder 
 .test_game_dir
+
+# Hypothesis test database
+.hypothesis/

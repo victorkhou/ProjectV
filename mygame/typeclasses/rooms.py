@@ -24,10 +24,167 @@ class Room(ObjectParent, DefaultRoom):
     pass
 
 
+class PlanetRoom(DefaultRoom):
+    """Shared room for an entire planet — one per planet.
+
+    All players on a planet share this room. Player position is tracked
+    via coord_x/coord_y/coord_planet attributes on the character, NOT
+    by which room they are in.
+
+    This eliminates DB writes during movement: no room creation or
+    deletion when a player moves between tiles.
+
+    Buildings still get their own OverworldRoom at their coordinates.
+    """
+
+    @property
+    def planet_name(self) -> str:
+        return self.attributes.get("planet", default="unknown")
+
+    # -------------------------------------------------------------- #
+    #  Appearance — show map when looked at
+    # -------------------------------------------------------------- #
+
+    def return_appearance(self, looker, **kwargs):
+        """Return the map as the room's appearance.
+
+        Called by Evennia's look system (including auto-look on login).
+        Shows the ASCII map instead of "This is a room."
+        """
+        if not hasattr(looker, "db"):
+            return super().return_appearance(looker, **kwargs)
+
+        planet = getattr(looker.db, "coord_planet", None)
+        if not planet:
+            return super().return_appearance(looker, **kwargs)
+
+        # If inside a building, show building interior
+        if getattr(looker.db, "inside_building", False):
+            try:
+                from server.conf.game_init import game_systems
+                tile_resolver = game_systems.get("tile_resolver")
+                if tile_resolver:
+                    x = getattr(looker.db, "coord_x", None)
+                    y = getattr(looker.db, "coord_y", None)
+                    if x is not None and y is not None:
+                        tile = tile_resolver.get_if_exists(x, y, planet)
+                        if tile:
+                            building = getattr(tile, "building", None)
+                            if building:
+                                return _format_building_interior(looker, building)
+            except Exception:
+                pass
+
+        try:
+            from server.conf.game_init import game_systems
+            renderer = game_systems.get("procedural_map_renderer")
+            if renderer:
+                buildings = looker.get_buildings() if hasattr(looker, "get_buildings") else []
+                map_str = renderer.render(looker, buildings)
+                if map_str:
+                    x = getattr(looker.db, "coord_x", "?")
+                    y = getattr(looker.db, "coord_y", "?")
+                    return f"|wMap — ({x}, {y}) on {planet}|n\n{map_str}"
+        except Exception:
+            pass
+
+        return super().return_appearance(looker, **kwargs)
+
+    # -------------------------------------------------------------- #
+    #  msg_contents override — proximity filter
+    # -------------------------------------------------------------- #
+
+    def msg_contents(self, text, exclude=None, from_obj=None, **kwargs):
+        """Only message players within proximity (same tile as sender).
+
+        If *from_obj* has coordinates, only players at the same
+        (coord_x, coord_y) receive the message. Otherwise falls back
+        to messaging all contents.
+        """
+        if from_obj is not None and hasattr(from_obj, "db"):
+            sx = getattr(from_obj.db, "coord_x", None)
+            sy = getattr(from_obj.db, "coord_y", None)
+            if sx is not None and sy is not None:
+                exclude = exclude or []
+                for obj in self.contents:
+                    if obj in exclude:
+                        continue
+                    if hasattr(obj, "db"):
+                        ox = getattr(obj.db, "coord_x", None)
+                        oy = getattr(obj.db, "coord_y", None)
+                        if ox == sx and oy == sy:
+                            if hasattr(obj, "msg"):
+                                obj.msg(text, **kwargs)
+                return
+
+        # Fallback: broadcast to all (e.g. system messages)
+        exclude = exclude or []
+        for obj in self.contents:
+            if obj in exclude:
+                continue
+            if hasattr(obj, "msg"):
+                obj.msg(text, **kwargs)
+
+    # -------------------------------------------------------------- #
+    #  at_object_receive — show tile info based on player coords
+    # -------------------------------------------------------------- #
+
+    def at_object_receive(self, moved_obj, source_location, **kwargs):
+        """Show tile info when a player arrives, based on their coordinates."""
+        super().at_object_receive(moved_obj, source_location, **kwargs)
+
+        if not (hasattr(moved_obj, "has_account") and moved_obj.has_account):
+            return
+
+        # Read coordinates from the player, not the room
+        x = getattr(moved_obj.db, "coord_x", None) if hasattr(moved_obj, "db") else None
+        y = getattr(moved_obj.db, "coord_y", None) if hasattr(moved_obj, "db") else None
+        planet = getattr(moved_obj.db, "coord_planet", None) if hasattr(moved_obj, "db") else None
+
+        if x is None or y is None or not planet:
+            return
+
+        # Get terrain info from the terrain generator
+        try:
+            from server.conf.game_init import game_systems
+            generators = game_systems.get("_terrain_generators", {})
+            gen = generators.get(planet)
+            if gen:
+                terrain_type, resource_type = gen.get_terrain_and_resource(x, y)
+            else:
+                terrain_type = "unknown"
+                resource_type = None
+        except (ImportError, AttributeError):
+            terrain_type = "unknown"
+            resource_type = None
+
+        parts = [f"Terrain: {terrain_type}"]
+        if resource_type:
+            parts.append(f"Resource: {resource_type}")
+
+        # Show other players at the same tile
+        other_names = []
+        for obj in self.contents:
+            if obj is moved_obj:
+                continue
+            if hasattr(obj, "has_account") and obj.has_account and hasattr(obj, "db"):
+                ox = getattr(obj.db, "coord_x", None)
+                oy = getattr(obj.db, "coord_y", None)
+                if ox == x and oy == y:
+                    other_names.append(obj.key)
+        if other_names:
+            parts.append(f"Players: {', '.join(other_names)}")
+
+        moved_obj.msg(" | ".join(parts))
+
+
 class OverworldRoom(DefaultRoom):
     """A single tile on the overworld map.
 
     Extends DefaultRoom (not XYZRoom). Coordinates stored as Attributes.
+
+    In the one-room-per-planet architecture, OverworldRoom is used only
+    for tiles that contain buildings. Players live in PlanetRoom.
 
     Requirements: 7.1, 7.2, 8.1
     """
@@ -227,3 +384,72 @@ class OverworldRoom(DefaultRoom):
             "building": bld_info,
             "players": players,
         }
+
+
+# ------------------------------------------------------------------ #
+#  Helper for building interior display from PlanetRoom
+# ------------------------------------------------------------------ #
+
+def _format_building_interior(looker, building):
+    """Format building interior as a string for return_appearance."""
+    btype = "??"
+    level = 1
+    hp = "?"
+    hp_max = "?"
+    owner_name = "nobody"
+
+    if hasattr(building, "attributes") and hasattr(building.attributes, "get"):
+        btype = building.attributes.get("building_type", default="??") or "??"
+        level = building.attributes.get("building_level", default=1) or 1
+        hp = building.attributes.get("hp", default="?")
+        hp_max = building.attributes.get("hp_max", default="?")
+        owner = building.attributes.get("owner", default=None)
+        if owner:
+            owner_name = getattr(owner, "key", str(owner))
+
+    name = getattr(building, "key", btype)
+
+    category = "unknown"
+    produces = "—"
+    unlocks_str = "—"
+    try:
+        from server.conf.game_init import game_systems
+        registry = game_systems.get("registry")
+        if registry:
+            bdef = registry.get_building(btype)
+            category = bdef.category
+            produces = bdef.produces or "—"
+            if bdef.unlocks:
+                unlocks_str = ", ".join(bdef.unlocks)
+    except Exception:
+        pass
+
+    closed = set()
+    if hasattr(building, "attributes") and hasattr(building.attributes, "get"):
+        raw = building.attributes.get("closed_exits", default=None)
+        if raw:
+            try:
+                closed = set(raw)
+            except (TypeError, ValueError):
+                pass
+
+    exit_parts = []
+    for d in ("north", "south", "east", "west"):
+        if d in closed:
+            exit_parts.append(f"|r{d} (closed)|n")
+        else:
+            exit_parts.append(f"|g{d}|n")
+
+    lines = [
+        f"|w=== {name} ({btype}) ===|n",
+        f"  Owner: {owner_name}",
+        f"  Level: {level} | HP: {hp}/{hp_max}",
+        f"  Category: {category}",
+        f"  Produces: {produces}",
+    ]
+    if unlocks_str != "—":
+        lines.append(f"  Unlocks: {unlocks_str}")
+    lines.append("")
+    lines.append(f"  Exits: {', '.join(exit_parts)}")
+
+    return "\n".join(lines)

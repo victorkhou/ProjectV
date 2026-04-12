@@ -151,6 +151,13 @@ class FakeTileResolver:
         self._rooms[(x, y)] = room
         return room
 
+    def get_if_exists(self, x, y, planet):
+        """Return existing room or None. Does not create."""
+        if self._default_building is not None:
+            room = FakeLocation(x=x, y=y, building=self._default_building)
+            return room
+        return self._rooms.get((x, y))
+
 def _make_cmd(caller, args=""):
     """Create a CmdMove instance wired to a fake caller."""
     cmd = CmdMove()
@@ -201,7 +208,7 @@ class TestProperty8MovementBounds(unittest.TestCase):
     )
     @settings(max_examples=200)
     def test_in_bounds_movement_succeeds(self, x, y, direction):
-        """If target is within bounds, caller._moved_to is not None."""
+        """If target is within bounds, coordinates are updated."""
         dx, dy = DIRECTION_DELTAS[direction]
         tx, ty = x + dx, y + dy
         assume(0 <= tx < GRID_SIZE and 0 <= ty < GRID_SIZE)
@@ -218,10 +225,17 @@ class TestProperty8MovementBounds(unittest.TestCase):
         cmd = _make_cmd(caller, f" {direction}")
         cmd.func()
 
-        self.assertIsNotNone(
-            caller._moved_to,
-            f"Movement from ({x},{y}) {direction} to ({tx},{ty}) should succeed "
-            f"but caller._moved_to is None. Messages: {caller._messages}",
+        # In the one-room-per-planet architecture, same-planet moves
+        # don't call move_to — they just update coordinates.
+        self.assertEqual(
+            caller.db.coord_x, tx,
+            f"Movement from ({x},{y}) {direction} to ({tx},{ty}) should update coord_x "
+            f"but got {caller.db.coord_x}. Messages: {caller._messages}",
+        )
+        self.assertEqual(
+            caller.db.coord_y, ty,
+            f"Movement from ({x},{y}) {direction} to ({tx},{ty}) should update coord_y "
+            f"but got {caller.db.coord_y}. Messages: {caller._messages}",
         )
 
     @given(data=st.data())
@@ -263,6 +277,9 @@ class TestProperty8MovementBounds(unittest.TestCase):
             f"Movement from ({x},{y}) {direction} to ({tx},{ty}) should be rejected "
             f"but caller._moved_to is {caller._moved_to}",
         )
+        # Coordinates should NOT have changed
+        self.assertEqual(caller.db.coord_x, x)
+        self.assertEqual(caller.db.coord_y, y)
         self.assertTrue(
             any("edge" in m.lower() for m in caller._messages),
             f"Expected 'edge' message for out-of-bounds move from ({x},{y}) {direction}. "
@@ -309,9 +326,6 @@ class TestProperty9CoordAttributesAfterMove(unittest.TestCase):
         cmd = _make_cmd(caller, f" {direction}")
         cmd.func()
 
-        # Verify move succeeded
-        self.assertIsNotNone(caller._moved_to)
-
         # Verify coordinate attributes
         self.assertEqual(
             caller.db.coord_x, tx,
@@ -330,7 +344,7 @@ class TestProperty9CoordAttributesAfterMove(unittest.TestCase):
 # -------------------------------------------------------------- #
 
 class TestCmdMoveDirections(unittest.TestCase):
-    """Test movement in all four cardinal directions via resolver."""
+    """Test movement in all four cardinal directions — coordinates update."""
 
     def _move(self, direction, start_x=50, start_y=50):
         """Helper: move from (start_x, start_y) in the given direction."""
@@ -349,25 +363,21 @@ class TestCmdMoveDirections(unittest.TestCase):
 
     def test_move_north(self):
         caller = self._move("north")
-        self.assertIsNotNone(caller._moved_to)
         self.assertEqual(caller.db.coord_x, 50)
         self.assertEqual(caller.db.coord_y, 51)
 
     def test_move_south(self):
         caller = self._move("south")
-        self.assertIsNotNone(caller._moved_to)
         self.assertEqual(caller.db.coord_x, 50)
         self.assertEqual(caller.db.coord_y, 49)
 
     def test_move_east(self):
         caller = self._move("east")
-        self.assertIsNotNone(caller._moved_to)
         self.assertEqual(caller.db.coord_x, 51)
         self.assertEqual(caller.db.coord_y, 50)
 
     def test_move_west(self):
         caller = self._move("west")
-        self.assertIsNotNone(caller._moved_to)
         self.assertEqual(caller.db.coord_x, 49)
         self.assertEqual(caller.db.coord_y, 50)
 
@@ -428,7 +438,9 @@ class TestCmdMoveOfflineBuildingBlocking(unittest.TestCase):
         cmd = _make_cmd(caller, " north")
         cmd.func()
 
-        self.assertIsNone(caller._moved_to)
+        # Coordinates should NOT have changed
+        self.assertEqual(caller.db.coord_x, 50)
+        self.assertEqual(caller.db.coord_y, 50)
         self.assertTrue(any("offline" in m.lower() for m in caller._messages))
 
     def test_online_building_does_not_block(self):
@@ -448,7 +460,9 @@ class TestCmdMoveOfflineBuildingBlocking(unittest.TestCase):
         cmd = _make_cmd(caller, " north")
         cmd.func()
 
-        self.assertIsNotNone(caller._moved_to)
+        # Coordinates should have changed
+        self.assertEqual(caller.db.coord_x, 50)
+        self.assertEqual(caller.db.coord_y, 51)
 
 if __name__ == "__main__":
     unittest.main()

@@ -82,13 +82,53 @@ class TileResolver:
 
         return None
 
+    def get_planet_room(self, planet: str) -> Any | None:
+        """Return the shared PlanetRoom for a planet, or None.
+
+        Looks up the planet room from game_systems. Returns None if
+        game_systems is not initialized or the planet has no room.
+        """
+        try:
+            from server.conf.game_init import game_systems
+            planet_rooms = game_systems.get("planet_rooms", {})
+            return planet_rooms.get(planet)
+        except (ImportError, AttributeError):
+            return None
+
     def get_cached(self, x: int, y: int, planet: str) -> Any | None:
         """Return a room only if it's in the cache. No DB query.
 
         Used by the map renderer and fog system for fast lookups
         during rendering — avoids hundreds of DB queries per frame.
+        Only returns building tile rooms, not the shared planet room.
         """
         return self._cache.get(x, y, planet)
+
+    def preload_area(self, min_x: int, max_x: int, min_y: int, max_y: int, planet: str) -> None:
+        """Batch-load all existing rooms in an area into the cache.
+
+        Runs a single DB query to find all rooms within the bounding
+        box, then populates the cache. Called once before rendering
+        so that get_cached() hits for rooms with buildings/state.
+        """
+        try:
+            from typeclasses.rooms import OverworldRoom
+
+            rooms = OverworldRoom.objects.filter_family(
+                db_tags__db_key="overworld_tile",
+                db_tags__db_category="room_type",
+            ).filter(
+                db_tags__db_key=planet,
+                db_tags__db_category="coord_planet",
+            )
+            for room in rooms:
+                rx = room.attributes.get("x")
+                ry = room.attributes.get("y")
+                if rx is not None and ry is not None:
+                    if min_x <= rx <= max_x and min_y <= ry <= max_y:
+                        self._cache.put(rx, ry, planet, room)
+        except Exception:
+            pass
 
     def get_or_generate_terrain(
         self, x: int, y: int, planet: str

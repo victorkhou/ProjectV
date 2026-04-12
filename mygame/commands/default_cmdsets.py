@@ -17,12 +17,13 @@ own cmdsets by inheriting from them or directly from `evennia.CmdSet`.
 from evennia import default_cmds
 
 from commands.game_commands import (
-    CmdMove, CmdHarvest, CmdBuild, CmdUpgrade,
+    CmdMove, CmdHarvest, CmdBuild, CmdUpgrade, CmdDemolish,
     CmdAttack, CmdEquip, CmdUnequip, CmdResearch, CmdPowerup,
     CmdScore, CmdEquipment, CmdBuildings, CmdScan, CmdTechnology,
-    CmdInventory, CmdChat, CmdMessage, CmdSay, CmdMap,
+    CmdInventory, CmdChat, CmdMessage, CmdSay, CmdLook, CmdMap,
+    CmdLeave, CmdCloseExit, CmdOpenExit,
 )
-from commands.admin_commands import CmdReloadData, CmdGiveResource, CmdPurgeRooms, CmdTeleport
+from commands.admin_commands import CmdReloadData, CmdGiveResource, CmdPurgeRooms, CmdTeleport, CmdSpawnBuilding, CmdClearFog
 
 
 class CharacterCmdSet(default_cmds.CharacterCmdSet):
@@ -44,6 +45,7 @@ class CharacterCmdSet(default_cmds.CharacterCmdSet):
         self.add(CmdHarvest())
         self.add(CmdBuild())
         self.add(CmdUpgrade())
+        self.add(CmdDemolish())
         self.add(CmdAttack())
         self.add(CmdEquip())
         self.add(CmdUnequip())
@@ -58,12 +60,18 @@ class CharacterCmdSet(default_cmds.CharacterCmdSet):
         self.add(CmdChat())
         self.add(CmdMessage())
         self.add(CmdSay())
+        self.add(CmdLook())
         self.add(CmdMap())
+        self.add(CmdLeave())
+        self.add(CmdCloseExit())
+        self.add(CmdOpenExit())
         # Admin commands (lock-gated to Builder+)
         self.add(CmdReloadData())
         self.add(CmdGiveResource())
         self.add(CmdPurgeRooms())
         self.add(CmdTeleport())
+        self.add(CmdSpawnBuilding())
+        self.add(CmdClearFog())
 
 
 class AccountCmdSet(default_cmds.AccountCmdSet):

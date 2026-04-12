@@ -234,7 +234,7 @@ class TestGetStructuredStatus(unittest.TestCase):
         char = _make_char()
         char.add_resource("iron", 42)
         status = char.get_structured_status()
-        self.assertEqual(status["resources"]["iron"], 42)
+        self.assertEqual(status["resources"]["Iron"], 42)
 
 
 # -------------------------------------------------------------- #

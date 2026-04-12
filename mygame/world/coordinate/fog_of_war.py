@@ -17,6 +17,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
+from world.coordinate.discovery_bitfield import DiscoveryBitfield
+
 if TYPE_CHECKING:
     from world.definitions import BalanceConfig
     from world.coordinate.tile_resolver import TileResolver
@@ -45,6 +47,7 @@ class FogOfWarSystem:
     def __init__(self, balance: BalanceConfig) -> None:
         self.player_vision_radius: int = balance.player_vision_radius
         self.building_vision_radius: int = balance.building_vision_radius
+        self._map_border: int = getattr(balance, "map_border_tiles", 5)
 
     # ------------------------------------------------------------------ #
     #  Public API
@@ -82,9 +85,8 @@ class FogOfWarSystem:
         if (x, y) in visible_tiles:
             return "visible"
 
-        memory = self._get_discovery_memory(player)
-        discovered: set = memory.get("discovered", set())
-        if (x, y) in discovered:
+        bitfield, _ = self._get_discovery_data(player)
+        if (x, y) in bitfield:
             return "fog"
 
         return "unexplored"
@@ -95,30 +97,18 @@ class FogOfWarSystem:
         visible_tiles: set[tuple[int, int]],
         tile_resolver: TileResolver,
     ) -> None:
-        """Update the player's discovery memory for all currently visible tiles.
+        """Update the player's discovery memory for all currently visible tiles."""
+        bitfield, buildings_mem = self._get_discovery_data(player)
 
-        - Mark tiles as discovered
-        - Snapshot enemy buildings on visible tiles
-        - Remove stale building snapshots when vision is regained and
-          the building no longer exists
-        """
-        memory = self._get_discovery_memory(player)
-        discovered: set = memory.setdefault("discovered", set())
-        buildings_mem: dict = memory.setdefault("buildings", {})
-
-        # Get player identity for ownership checks
         player_key = player.key if hasattr(player, "key") else ""
-
         planet = _get_planet(player)
 
+        # Batch-add all visible tiles to the bitfield
+        bitfield.add_many(visible_tiles)
+
+        # Check for buildings on cached tiles
         for coord in visible_tiles:
             x, y = coord
-            # Mark tile as discovered
-            discovered.add((x, y))
-
-            # Only check for buildings on tiles that already have rooms
-            # in the cache. This avoids hundreds of DB queries per move —
-            # tiles without rooms can't have buildings.
             room = tile_resolver.get_cached(x, y, planet)
             building = _get_room_building(room) if room is not None else None
 
@@ -126,7 +116,6 @@ class FogOfWarSystem:
                 owner = _get_building_owner(building)
                 owner_name = _owner_name(owner)
 
-                # Only snapshot enemy buildings
                 if owner is not player and owner_name != player_key:
                     btype = _get_building_type(building)
                     buildings_mem[(x, y)] = {
@@ -136,20 +125,17 @@ class FogOfWarSystem:
                         "y": y,
                     }
                 else:
-                    # Own building — remove any stale enemy snapshot
                     buildings_mem.pop((x, y), None)
             else:
-                # No building on this tile — remove stale snapshot
                 buildings_mem.pop((x, y), None)
 
-        self._save_discovery_memory(player, memory)
+        self._save_discovery_data(player, bitfield, buildings_mem)
 
     def get_discovered_buildings(
         self, player: Any, x: int, y: int
     ) -> list[DiscoveredBuildingState]:
         """Return last-known enemy building snapshots for a fog tile."""
-        memory = self._get_discovery_memory(player)
-        buildings_mem: dict = memory.get("buildings", {})
+        _, buildings_mem = self._get_discovery_data(player)
         entry = buildings_mem.get((x, y))
         if entry is None:
             return []
@@ -162,42 +148,65 @@ class FogOfWarSystem:
             )
         ]
 
-    def get_discovered_tile_set(self, player: Any) -> set[tuple[int, int]]:
-        """Return the set of all tiles the player has previously discovered.
+    def get_discovered_tile_set(self, player: Any) -> DiscoveryBitfield:
+        """Return the bitfield of all discovered tiles.
 
-        Used by the ProceduralMapRenderer to compute render bounds
-        without accessing private internals.
+        The returned object supports ``(x, y) in bitfield`` checks.
         """
-        memory = self._get_discovery_memory(player)
-        return set(memory.get("discovered", set()))
+        bitfield, _ = self._get_discovery_data(player)
+        return bitfield
 
     def get_discovered_buildings_map(self, player: Any) -> dict:
-        """Return the full buildings memory dict for the player.
+        """Return the full buildings memory dict for the player."""
+        _, buildings = self._get_discovery_data(player)
+        return buildings
 
-        Used by the ProceduralMapRenderer for fast inlined rendering
-        without per-tile method calls.
+    # ------------------------------------------------------------------ #
+    #  Discovery memory persistence (chunk-based bitfield)
+    # ------------------------------------------------------------------ #
+
+    def _get_discovery_data(self, player: Any) -> tuple[DiscoveryBitfield, dict]:
+        """Return (bitfield, buildings_dict) from the player's discovery memory.
+
+        Auto-migrates from the old set-based format if detected.
         """
-        memory = self._get_discovery_memory(player)
-        return memory.get("buildings", {})
-
-    # ------------------------------------------------------------------ #
-    #  Discovery memory persistence
-    # ------------------------------------------------------------------ #
-
-    def _get_discovery_memory(self, player: Any) -> dict:
-        """Return the player's discovery_memory dict, initialising if needed."""
         mem = None
         if hasattr(player, "db"):
             mem = player.db.discovery_memory
-        if not isinstance(mem, dict):
-            mem = {"discovered": set(), "buildings": {}}
-            self._save_discovery_memory(player, mem)
-        return mem
+        if not mem or not hasattr(mem, "get"):
+            return DiscoveryBitfield(), {}
 
-    def _save_discovery_memory(self, player: Any, memory: dict) -> None:
-        """Persist the discovery memory dict on the player."""
+        discovered_raw = mem.get("discovered")
+        buildings_raw = mem.get("buildings")
+
+        # Build the bitfield
+        if isinstance(discovered_raw, dict) or (
+            hasattr(discovered_raw, "keys") and not hasattr(discovered_raw, "add")
+        ):
+            # New format: dict of "cx,cy" -> int bitfield chunks
+            bitfield = DiscoveryBitfield.from_dict(dict(discovered_raw))
+        elif discovered_raw and hasattr(discovered_raw, "__iter__"):
+            # Old format: set/list of (x, y) tuples — migrate
+            bitfield = DiscoveryBitfield.from_set(set(discovered_raw))
+            # Save back in new format so migration only happens once
+            self._save_discovery_data(player, bitfield, dict(buildings_raw or {}))
+        else:
+            bitfield = DiscoveryBitfield()
+
+        try:
+            buildings = dict(buildings_raw or {})
+        except (TypeError, ValueError):
+            buildings = {}
+
+        return bitfield, buildings
+
+    def _save_discovery_data(self, player: Any, bitfield: DiscoveryBitfield, buildings: dict) -> None:
+        """Persist discovery data using the bitfield format."""
         if hasattr(player, "db"):
-            player.db.discovery_memory = memory
+            player.db.discovery_memory = {
+                "discovered": bitfield.to_dict(),
+                "buildings": buildings,
+            }
 
 
 # ------------------------------------------------------------------ #
