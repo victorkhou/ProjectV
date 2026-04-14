@@ -18,6 +18,7 @@ from mygame.world.event_bus import (
     RANK_PROMOTED,
     RANK_DEMOTED,
     COMBAT_ACTION,
+    COMBAT_TIMER_STARTED,
     POWERUP_ACTIVATED,
     POWERUP_EXPIRED,
     TECHNOLOGY_RESEARCHED,
@@ -27,13 +28,13 @@ from mygame.world.event_bus import (
 
 
 class TestEventConstants:
-    """Verify all 15 event name constants are defined."""
+    """Verify all event name constants are defined."""
 
-    def test_all_events_has_15_entries(self):
-        assert len(ALL_EVENTS) == 15
+    def test_all_events_has_correct_count(self):
+        assert len(ALL_EVENTS) == 18
 
     def test_all_event_names_are_unique(self):
-        assert len(set(ALL_EVENTS)) == 15
+        assert len(set(ALL_EVENTS)) == len(ALL_EVENTS)
 
     def test_expected_events_present(self):
         expected = {
@@ -44,9 +45,12 @@ class TestEventConstants:
             "building_constructed",
             "building_destroyed",
             "building_upgraded",
+            "construction_started",
+            "construction_completed",
             "rank_promoted",
             "rank_demoted",
             "combat_action",
+            "combat_timer_started",
             "powerup_activated",
             "powerup_expired",
             "technology_researched",

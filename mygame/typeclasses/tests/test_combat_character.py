@@ -114,10 +114,14 @@ class TestAtObjectCreation(unittest.TestCase):
         char = _make_char()
         self.assertEqual(char.db.rank_level, 1)
 
-    def test_resources_initialized_to_zero(self):
+    def test_resources_initialized_with_starting_values(self):
         char = _make_char()
-        for r in RESOURCE_TYPES:
-            self.assertEqual(char.get_resource(r), 0)
+        self.assertEqual(char.get_resource("Wood"), 40)
+        self.assertEqual(char.get_resource("Stone"), 25)
+        self.assertEqual(char.get_resource("Iron"), 10)
+        self.assertEqual(char.get_resource("Energy"), 0)
+        self.assertEqual(char.get_resource("Circuits"), 0)
+        self.assertEqual(char.get_resource("Nexium"), 0)
 
     def test_powerup_attributes_initialized(self):
         char = _make_char()
@@ -150,18 +154,18 @@ class TestAtObjectCreation(unittest.TestCase):
 class TestResourceHelpers(unittest.TestCase):
     def test_get_resource_default_zero(self):
         char = _make_char()
-        self.assertEqual(char.get_resource("straw"), 0)
+        self.assertEqual(char.get_resource("unobtanium"), 0)
 
     def test_add_resource(self):
         char = _make_char()
         char.add_resource("wood", 50)
-        self.assertEqual(char.get_resource("wood"), 50)
+        self.assertEqual(char.get_resource("wood"), 90)  # 40 starting + 50
 
     def test_add_resource_accumulates(self):
         char = _make_char()
         char.add_resource("iron", 10)
         char.add_resource("iron", 20)
-        self.assertEqual(char.get_resource("iron"), 30)
+        self.assertEqual(char.get_resource("iron"), 40)  # 10 starting + 10 + 20
 
     def test_has_resources_true(self):
         char = _make_char()
@@ -170,7 +174,7 @@ class TestResourceHelpers(unittest.TestCase):
 
     def test_has_resources_false(self):
         char = _make_char()
-        self.assertFalse(char.has_resources({"clay": 1}))
+        self.assertFalse(char.has_resources({"Nexium": 1}))
 
     def test_has_resources_exact_amount(self):
         char = _make_char()
@@ -179,29 +183,30 @@ class TestResourceHelpers(unittest.TestCase):
 
     def test_deduct_resources_success(self):
         char = _make_char()
-        char.add_resource("metals", 50)
+        char.add_resource("energy", 50)
         char.add_resource("circuits", 30)
-        result = char.deduct_resources({"metals": 20, "circuits": 10})
+        result = char.deduct_resources({"energy": 20, "circuits": 10})
         self.assertTrue(result)
-        self.assertEqual(char.get_resource("metals"), 30)
+        self.assertEqual(char.get_resource("energy"), 30)
         self.assertEqual(char.get_resource("circuits"), 20)
 
     def test_deduct_resources_failure_no_change(self):
         char = _make_char()
-        char.add_resource("straw", 5)
-        result = char.deduct_resources({"straw": 10})
+        char.add_resource("nexium", 5)
+        result = char.deduct_resources({"nexium": 10})
         self.assertFalse(result)
-        self.assertEqual(char.get_resource("straw"), 5)
+        self.assertEqual(char.get_resource("nexium"), 5)
 
     def test_deduct_multi_resource_failure_no_partial(self):
         """If one resource is insufficient, none are deducted."""
         char = _make_char()
-        char.add_resource("wood", 100)
-        char.add_resource("stone", 1)
-        result = char.deduct_resources({"wood": 50, "stone": 10})
+        char.add_resource("energy", 100)
+        # Nexium starts at 0, add only 1
+        char.add_resource("nexium", 1)
+        result = char.deduct_resources({"energy": 50, "nexium": 10})
         self.assertFalse(result)
-        self.assertEqual(char.get_resource("wood"), 100)
-        self.assertEqual(char.get_resource("stone"), 1)
+        self.assertEqual(char.get_resource("energy"), 100)
+        self.assertEqual(char.get_resource("nexium"), 1)
 
     def test_get_resource_unknown_type_returns_zero(self):
         char = _make_char()
@@ -234,7 +239,7 @@ class TestGetStructuredStatus(unittest.TestCase):
         char = _make_char()
         char.add_resource("iron", 42)
         status = char.get_structured_status()
-        self.assertEqual(status["resources"]["Iron"], 42)
+        self.assertEqual(status["resources"]["Iron"], 52)  # 10 starting + 42
 
 
 # -------------------------------------------------------------- #

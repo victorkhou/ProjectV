@@ -10,17 +10,51 @@ let map_renderer_plugin = (function () {
     const TILE_SIZE = 20;
 
     const TERRAIN_COLORS = {
-        "Plains":"#4a7c3f","Dirt":"#8b7355","Forest":"#2d5a1e",
-        "Rock":"#888888","Mountain":"#aaaaaa",
-        "Power_Grid":"#c8b400","Scrapyard":"#8b6914",
-        "Circuit_Field":"#2a9d8f","Ruins":"#555555",
+        // Terra (earth)
+        "Plains":"#4a7c3f","Forest":"#2d5a1e","Dirt":"#8b7355",
+        "Rock":"#888888","Mountain":"#aaaaaa","River":"#3388bb",
+        "Sand":"#c8b060","Snow":"#ccccdd",
+        // Forge (industrial)
+        "Power_Grid":"#c8b400","Scrapyard":"#8b6914","Circuit_Field":"#2a9d8f",
+        "Factory_Floor":"#777777","Ruins":"#555555","Toxic_Waste":"#aa3333",
+        "Pipeline":"#888888","Warehouse":"#888888",
+        // Tundra (frozen)
+        "Snowfield":"#ccccdd","Frozen_Lake":"#88ccdd","Pine_Forest":"#2d5a1e",
+        "Ice_Cave":"#77bbcc","Permafrost":"#999999","Glacier":"#bbccdd",
+        "Hot_Spring":"#ccaa33","Tundra_Moss":"#5a8c4f",
+        // Inferno (volcanic)
+        "Ash_Wastes":"#555555","Lava_Flow":"#cc3300","Obsidian_Plain":"#444444",
+        "Magma_Vent":"#ff4400","Scorched_Rock":"#8b6914","Sulfur_Pit":"#ccaa00",
+        "Ember_Field":"#993300","Basalt_Ridge":"#777777",
+        // Citadel (fortress)
+        "Corridor":"#777777","Vault_Room":"#8844aa","Armory_Ruin":"#8b6914",
+        "Control_Room":"#2a9d8f","Open_Chamber":"#999999","Blast_Door":"#aaaaaa",
+        "Generator_Room":"#c8b400","Barracks_Ruin":"#555555",
+        // Space
         "Void":"#0a0a1a","Nebula":"#6a2c8a","Asteroid":"#777777",
-        "Debris":"#8b6914","Ice_Field":"#88ccdd","unknown":"#333333",
+        "Debris":"#8b6914","Ice_Field":"#88ccdd","Wormhole":"#8844aa",
+        "Radiation_Zone":"#aa3333","Derelict_Ship":"#555555",
+        "unknown":"#333333",
     };
     const TERRAIN_SYMBOLS = {
-        "Plains":"..","Dirt":"~~","Forest":"&&","Rock":"##","Mountain":"/\\",
-        "Power_Grid":"++","Scrapyard":"%%","Circuit_Field":"::","Ruins":";;",
-        "Void":"  ","Nebula":"**","Asteroid":"<>","Debris":"%%","Ice_Field":"><",
+        // Terra
+        "Plains":"..","Forest":"&&","Dirt":"~~",
+        "Rock":"##","Mountain":"/\\","River":"==","Sand":"::","Snow":"**",
+        // Forge
+        "Power_Grid":"++","Scrapyard":"%%","Circuit_Field":"::",
+        "Factory_Floor":"==","Ruins":";;","Toxic_Waste":"!!","Pipeline":"--","Warehouse":"[]",
+        // Tundra
+        "Snowfield":"**","Frozen_Lake":"><","Pine_Forest":"&&","Ice_Cave":"()",
+        "Permafrost":"##","Glacier":"/\\","Hot_Spring":"@@","Tundra_Moss":",,",
+        // Inferno
+        "Ash_Wastes":"~~","Lava_Flow":"!!","Obsidian_Plain":"##","Magma_Vent":"^^",
+        "Scorched_Rock":"..","Sulfur_Pit":"%%","Ember_Field":"**","Basalt_Ridge":"/\\",
+        // Citadel
+        "Corridor":"..","Vault_Room":"[]","Armory_Ruin":"{}","Control_Room":"<>",
+        "Open_Chamber":"  ","Blast_Door":"||","Generator_Room":"++","Barracks_Ruin":"==",
+        // Space
+        "Void":"  ","Nebula":"**","Asteroid":"<>","Debris":"%%",
+        "Ice_Field":"><","Wormhole":"@@","Radiation_Zone":"!!","Derelict_Ship":"[]",
     };
 
     let canvas = null, ctx = null, lastMapData = null;
@@ -102,11 +136,32 @@ let map_renderer_plugin = (function () {
                 }
                 if(tile.building){
                     var abbr=(tile.building.type||"??").substring(0,2);
-                    ctx.fillStyle=(tile.state==="visible")?(tile.building.own?"#00dddd":"#cc3333"):"#662222";
+                    var bldColor;
+                    if(tile.state==="visible"){
+                        if(tile.building.occupied){
+                            bldColor="#2244aa"; // dark blue for occupied
+                        } else {
+                            bldColor=tile.building.own?"#00dddd":"#cc3333";
+                        }
+                    } else {
+                        bldColor="#662222";
+                    }
+                    ctx.fillStyle=bldColor;
                     ctx.fillRect(sx+2,sy+2,TILE_SIZE-4,TILE_SIZE-4);
                     ctx.fillStyle="#fff";ctx.font="bold 10px monospace";
                     ctx.textAlign="center";ctx.textBaseline="middle";
                     ctx.fillText(abbr,sx+TILE_SIZE/2,sy+TILE_SIZE/2);
+                }
+                // Agent markers (overworld, not inside buildings)
+                if(tile.agents&&tile.agents.length>0&&tile.state==="visible"){
+                    var ag=tile.agents[0]; // show highest-priority agent
+                    var agColor=ag.own?"#33cc33":"#ff3333";
+                    var agLabel=ag.own?(ag.role?ag.role.charAt(0).toUpperCase():"A"):"!";
+                    ctx.fillStyle=agColor;ctx.beginPath();
+                    ctx.arc(sx+TILE_SIZE/2,sy+TILE_SIZE/2,6,0,Math.PI*2);ctx.fill();
+                    ctx.fillStyle="#fff";ctx.font="bold 9px monospace";
+                    ctx.textAlign="center";ctx.textBaseline="middle";
+                    ctx.fillText(agLabel,sx+TILE_SIZE/2,sy+TILE_SIZE/2);
                 }
                 if(tile.players&&tile.players.length>0){
                     ctx.fillStyle="#ff3333";ctx.beginPath();
@@ -133,7 +188,14 @@ let map_renderer_plugin = (function () {
         ctx.arc(psx+TILE_SIZE/2,psy+TILE_SIZE/2,(vr+0.5)*TILE_SIZE,0,Math.PI*2);ctx.stroke();
         // Info
         var info=document.getElementById("map-info");
-        if(info) info.textContent="("+px+", "+py+") "+(data.player.planet||"?")+" | "+(data.discovered_count||0)+" discovered";
+        if(info) {
+            var terrainStr=data.player.terrain||"";
+            if(data.player.resource) terrainStr+=" ("+data.player.resource+")";
+            var parts=["("+px+", "+py+") "+(data.player.planet||"?")];
+            if(terrainStr) parts.push(terrainStr);
+            parts.push((data.discovered_count||0)+" discovered");
+            info.textContent=parts.join(" | ");
+        }
     }
 
     // ---- Resizable panels ----
@@ -209,18 +271,8 @@ let map_renderer_plugin = (function () {
     // ---- Keyboard ----
     function setupKeyboard() {
         document.addEventListener("keydown", function(e) {
-            var a = document.activeElement;
-            if (a && (a.tagName==="TEXTAREA"||a.tagName==="INPUT")) return;
+            // Tab toggles map/text view regardless of focus
             if (e.key==="Tab"){e.preventDefault();switchView(currentView==="map"?"text":"map");return;}
-            var cmd=null;
-            switch(e.key){
-                case "ArrowUp":case "w":case "W":cmd="north";break;
-                case "ArrowDown":case "s":case "S":cmd="south";break;
-                case "ArrowLeft":case "a":case "A":cmd="west";break;
-                case "ArrowRight":case "d":case "D":cmd="east";break;
-                default:return;
-            }
-            if(cmd){e.preventDefault();Evennia.msg("text",[cmd],{});}
         });
     }
 
@@ -243,6 +295,47 @@ let map_renderer_plugin = (function () {
     }
 
     // ---- Init ----
+    // ---- Input history (Up/Down arrows in input field) ----
+    function setupInputHistory() {
+        var inputEl = document.getElementById("inputfield");
+        if (!inputEl) return;
+        var hist = [], histPos = -1, savedLine = "";
+        // Hook into send to capture history
+        var origOnSend = null;
+        if (typeof plugin_handler !== "undefined") {
+            // Intercept lines sent to capture history
+            var _origSend = Evennia.msg;
+        }
+        inputEl.addEventListener("keydown", function(e) {
+            if (e.key === "ArrowUp") {
+                // Save current line if starting navigation
+                if (histPos === -1) savedLine = inputEl.value;
+                if (histPos < hist.length - 1) {
+                    histPos++;
+                    inputEl.value = hist[hist.length - 1 - histPos];
+                }
+                e.preventDefault();
+            } else if (e.key === "ArrowDown") {
+                if (histPos > 0) {
+                    histPos--;
+                    inputEl.value = hist[hist.length - 1 - histPos];
+                } else if (histPos === 0) {
+                    histPos = -1;
+                    inputEl.value = savedLine;
+                }
+                e.preventDefault();
+            } else if (e.key === "Enter" && !e.shiftKey) {
+                var val = inputEl.value.trim();
+                if (val && (hist.length === 0 || hist[hist.length-1] !== val)) {
+                    hist.push(val);
+                    if (hist.length > 50) hist.shift();
+                }
+                histPos = -1;
+                savedLine = "";
+            }
+        });
+    }
+
     var init = function() {
         canvas = document.getElementById("map-canvas");
         if (canvas) ctx = canvas.getContext("2d");
@@ -258,6 +351,7 @@ let map_renderer_plugin = (function () {
         setupResize();
         setupKeyboard();
         setupClickMove();
+        setupInputHistory();
         console.log("Map Renderer Plugin initialized.");
     };
 

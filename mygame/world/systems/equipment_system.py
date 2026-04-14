@@ -105,11 +105,8 @@ class EquipmentSystem:
     @staticmethod
     def _get_building_type(building: Any) -> str | None:
         """Read the building_type string from a building."""
-        if hasattr(building, "attributes") and hasattr(building.attributes, "get"):
-            return building.attributes.get("building_type", default=None)
-        if hasattr(building, "db"):
-            return getattr(building.db, "building_type", None)
-        return None
+        from world.utils import get_building_type
+        return get_building_type(building)
 
     @staticmethod
     def _default_create_item(item_def: ItemDef, owner: Any) -> dict:

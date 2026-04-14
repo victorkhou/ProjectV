@@ -232,13 +232,13 @@ class TestDataclassContracts:
     """Verify all definitions are proper dataclasses with expected field counts."""
 
     def test_building_def_field_count(self):
-        assert len(fields(BuildingDef)) == 10
+        assert len(fields(BuildingDef)) == 15
 
     def test_item_def_field_count(self):
         assert len(fields(ItemDef)) == 7
 
     def test_rank_def_field_count(self):
-        assert len(fields(RankDef)) == 4
+        assert len(fields(RankDef)) == 6
 
     def test_technology_def_field_count(self):
         assert len(fields(TechnologyDef)) == 7
@@ -256,7 +256,7 @@ class TestDataclassContracts:
         assert len(fields(BalanceConfig)) == 22
 
     def test_coordinate_space_def_field_count(self):
-        assert len(fields(CoordinateSpaceDef)) == 13
+        assert len(fields(CoordinateSpaceDef)) == 14
 
     def test_all_serializable_via_asdict(self):
         """All defs should be convertible to dicts for YAML round-tripping."""

@@ -24,7 +24,7 @@
 
 - name: Improved Armor
   key: improved_armor
-  required_rank: Staff Sergeant
+  required_rank: Staff_Sergeant
   resource_cost:
     Iron: 80
     Stone: 60
@@ -35,7 +35,7 @@
 
 - name: Extended Range
   key: extended_range
-  required_rank: 1st Lieutenant
+  required_rank: Lieutenant
   resource_cost:
     Iron: 100
     Circuits: 30

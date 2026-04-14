@@ -98,14 +98,119 @@ def ensure_coords(caller: Any) -> tuple[Any, Any, str | None]:
 
 
 # ------------------------------------------------------------------ #
-#  Building attribute helpers
+#  Entity type helpers
 # ------------------------------------------------------------------ #
 
-def get_building_attr(building: Any, key: str, default: Any = None) -> Any:
-    """Read an attribute from a building object safely."""
-    if hasattr(building, "attributes") and hasattr(building.attributes, "get"):
-        return building.attributes.get(key, default=default)
+def get_obj_attr(obj: Any, key: str, default: Any = None) -> Any:
+    """Read an Evennia attribute from any object safely.
+
+    Checks ``attributes`` handler first, then ``db`` proxy.
+    Works on buildings, NPCs, rooms, or any Evennia object.
+    """
+    if obj is None:
+        return default
+    if hasattr(obj, "attributes") and hasattr(obj.attributes, "get"):
+        val = obj.attributes.get(key, default=None)
+        if val is not None:
+            return val
+    if hasattr(obj, "db"):
+        val = getattr(obj.db, key, None)
+        if val is not None:
+            return val
     return default
+
+
+def set_obj_attr(obj: Any, key: str, value: Any) -> None:
+    """Write an Evennia attribute on any object safely."""
+    if obj is None:
+        return
+    if hasattr(obj, "attributes") and hasattr(obj.attributes, "add"):
+        obj.attributes.add(key, value)
+    elif hasattr(obj, "db"):
+        setattr(obj.db, key, value)
+
+
+def get_building_type(building: Any) -> str | None:
+    """Read the building_type string from a building object."""
+    return get_obj_attr(building, "building_type")
+
+
+def get_building_level(building: Any) -> int:
+    """Read the building level from a building object."""
+    if hasattr(building, "building_level"):
+        return building.building_level
+    return get_obj_attr(building, "building_level", 1) or 1
+
+
+def is_player(entity: Any) -> bool:
+    """Return True if the entity is a player character (has combat_xp)."""
+    return (
+        entity is not None
+        and hasattr(entity, "db")
+        and hasattr(entity.db, "combat_xp")
+    )
+
+
+def is_building(entity: Any) -> bool:
+    """Return True if the entity is a building (has building_type attribute)."""
+    return get_building_type(entity) is not None
+
+
+# ------------------------------------------------------------------ #
+#  Player / building location helpers
+# ------------------------------------------------------------------ #
+
+def player_at_building(player: Any, building: Any) -> bool:
+    """Return True if the player is at the same tile as the building.
+
+    Checks player's ``db.coord_x/coord_y`` first, then falls back to
+    the player's location object's ``x/y`` properties. Compares against
+    the building's tile location coordinates.
+    """
+    # Get player coordinates — try db attrs, then location object
+    px = getattr(getattr(player, "db", None), "coord_x", None)
+    py = getattr(getattr(player, "db", None), "coord_y", None)
+    if px is None or py is None:
+        player_loc = getattr(player, "location", None)
+        if player_loc is not None:
+            px = getattr(player_loc, "x", None) or getattr(getattr(player_loc, "db", None), "x", None)
+            py = getattr(player_loc, "y", None) or getattr(getattr(player_loc, "db", None), "y", None)
+    if px is None or py is None:
+        return False
+
+    # Get building coordinates — try building.location, then building itself
+    loc = getattr(building, "location", None)
+    if loc is not None:
+        bx = getattr(loc, "x", None) or getattr(getattr(loc, "db", None), "x", None)
+        by = getattr(loc, "y", None) or getattr(getattr(loc, "db", None), "y", None)
+    else:
+        bx = getattr(building, "x", None) or getattr(getattr(building, "db", None), "x", None)
+        by = getattr(building, "y", None) or getattr(getattr(building, "db", None), "y", None)
+
+    if bx is None or by is None:
+        return False
+
+    return int(px) == int(bx) and int(py) == int(by)
+
+
+def player_inside_building(player: Any, building: Any) -> bool:
+    """Return True if the player is inside the given building.
+
+    Checks ``inside_building`` flag AND coordinate match.
+    """
+    if not getattr(getattr(player, "db", None), "inside_building", False):
+        return False
+    return player_at_building(player, building)
+
+
+# ------------------------------------------------------------------ #
+#  Building attribute helpers (aliases for get_obj_attr/set_obj_attr)
+# ------------------------------------------------------------------ #
+
+# These are the same as get_obj_attr/set_obj_attr but kept for backward
+# compatibility and readability in building-specific code.
+get_building_attr = get_obj_attr
+set_building_attr = set_obj_attr
 
 
 def get_building_info(building: Any) -> dict:

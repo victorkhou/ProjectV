@@ -597,7 +597,7 @@ class TestProperty11UpgradeCostFormula(unittest.TestCase):
 
     For any resource building at level L being upgraded to level L+1,
     the resource cost SHALL equal the building's base construction cost
-    multiplied by (L+1).
+    multiplied by 2^L (exponential scaling).
 
     **Validates: Requirements 5.4**
     """
@@ -607,18 +607,17 @@ class TestProperty11UpgradeCostFormula(unittest.TestCase):
         level=st.integers(min_value=1, max_value=4),
     )
     @settings(max_examples=100)
-    def test_upgrade_cost_equals_base_times_target_level(self, building_abbr, level):
-        """Upgrade cost = base_cost * target_level."""
+    def test_upgrade_cost_equals_base_times_power_of_two(self, building_abbr, level):
+        """Upgrade cost = base_cost × 2^(target_level - 1)."""
         building_def = RESOURCE_BUILDING_DEFS[building_abbr]
         target_level = level + 1
+        multiplier = 2 ** (target_level - 1)
 
-        # Give player exactly enough resources for the upgrade
         expected_cost = {
-            r: amt * target_level
+            r: amt * multiplier
             for r, amt in building_def.cost.items()
         }
 
-        # Start with plenty of resources, record before
         resources = {r: 1000000 for r in ALL_RESOURCE_TYPES}
         player = FakePlayer(resources=resources)
         building = FakeBuilding(
@@ -632,7 +631,6 @@ class TestProperty11UpgradeCostFormula(unittest.TestCase):
 
         self.assertTrue(ok, f"Upgrade should succeed: {msg}")
 
-        # Verify exact cost deduction
         for r in ALL_RESOURCE_TYPES:
             cost_for_r = expected_cost.get(r, 0)
             expected_remaining = pre_resources[r] - cost_for_r
@@ -650,15 +648,14 @@ class TestProperty11UpgradeCostFormula(unittest.TestCase):
     )
     @settings(max_examples=100)
     def test_insufficient_for_formula_cost_rejected(self, building_abbr, level):
-        """If player has less than base_cost * target_level, upgrade is rejected."""
+        """If player has less than base_cost × 2^(target_level-1), upgrade is rejected."""
         building_def = RESOURCE_BUILDING_DEFS[building_abbr]
         target_level = level + 1
+        multiplier = 2 ** (target_level - 1)
 
-        # Give player just under the required amount for one resource
         resources = {r: 1000000 for r in ALL_RESOURCE_TYPES}
-        # Pick the first resource in the cost and set it to just under needed
         first_resource = next(iter(building_def.cost))
-        needed = building_def.cost[first_resource] * target_level
+        needed = building_def.cost[first_resource] * multiplier
         resources[first_resource] = needed - 1
 
         player = FakePlayer(resources=resources)

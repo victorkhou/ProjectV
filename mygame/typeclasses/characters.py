@@ -10,10 +10,12 @@ creation commands.
 
 from __future__ import annotations
 
+import copy
 import logging
 
 from evennia.objects.objects import DefaultCharacter
 
+from .combat_entity import CombatEntity
 from .objects import ObjectParent
 
 logger = logging.getLogger("mygame.characters")
@@ -37,22 +39,78 @@ class Character(ObjectParent, DefaultCharacter):
 # ------------------------------------------------------------------ #
 
 RESOURCE_TYPES = (
-    "Straw", "Clay", "Wood", "Stone", "Iron",
-    "Energy", "Metals", "Circuits",
+    "Wood", "Stone", "Iron",
+    "Energy", "Circuits", "Nexium",
 )
 
 DEFAULT_HEALTH = 100
 
+# ------------------------------------------------------------------ #
+#  Player attribute schema
+# ------------------------------------------------------------------ #
+#
+# Single source of truth for all player attributes and their defaults.
+# Used by at_object_creation (new players), ensure_attributes (migration),
+# and @migrate (admin command).
+#
+# To add a new player attribute:
+#   1. Add it here with its default value
+#   2. That's it — at_object_creation and ensure_attributes both read this
 
-class CombatCharacter(DefaultCharacter):
+STARTING_RESOURCES = {
+    "Wood": 40, "Stone": 25, "Iron": 10,
+    "Energy": 0, "Circuits": 0, "Nexium": 0,
+}
+
+PLAYER_DEFAULTS: dict[str, object] = {
+    # CombatEntity (shared with NPCs)
+    "hp": DEFAULT_HEALTH,
+    "hp_max": DEFAULT_HEALTH,
+    "equipment_slots": {},
+    "incapacitated": False,
+    "respawn_timer": 0,
+    "respawn_location": None,
+    # Progression
+    "combat_xp": 0,
+    "rank_level": 1,
+    # Resources
+    "resources": dict(STARTING_RESOURCES),
+    # Powerups / tech
+    "active_powerups": {},
+    "powerup_cooldowns": {},
+    "researched_techs": set(),
+    # Combat
+    "combat_lockout_tick": 0,
+    "combat_timer_expires": 0,
+    # Position
+    "coord_x": 0,
+    "coord_y": 0,
+    "coord_planet": "",
+    # Fog of war
+    "discovery_memory": {},
+    # Building state
+    "inside_building": False,
+    # Agent system
+    "next_agent_id": 2,
+    # Active-presence
+    "activity_state": "idle",
+    "activity_target": None,
+    "activity_progress": 0,
+}
+
+
+class CombatCharacter(CombatEntity, DefaultCharacter):
     """Player character with combat stats, resources, rank, and inventory.
+
+    Extends :class:`CombatEntity` (shared mixin for hp, equipment,
+    incapacitation, respawn) and Evennia's ``DefaultCharacter``.
 
     Uses simple Evennia Attributes (``self.db.*``) for all persistent
     state so the class works without the Traits contrib in test
     environments.  The Traits system can be wired in later on a real
     Evennia server.
 
-    Requirements: 2.4, 7.8, 10.1, 10.4, 27.1
+    Requirements: 2.4, 3.2, 3.3, 7.6, 7.8, 10.1, 10.4, 14.1, 16.5, 16.6, 27.1
     """
 
     # ------------------------------------------------------------------ #
@@ -60,41 +118,21 @@ class CombatCharacter(DefaultCharacter):
     # ------------------------------------------------------------------ #
 
     def at_object_creation(self):
-        """Initialize all combat-related attributes."""
+        """Initialize all attributes from PLAYER_DEFAULTS."""
         super().at_object_creation()
+        for key, default in PLAYER_DEFAULTS.items():
+            setattr(self.db, key, copy.deepcopy(default))
 
-        # Health
-        self.db.hp = DEFAULT_HEALTH
-        self.db.hp_max = DEFAULT_HEALTH
+    def ensure_attributes(self):
+        """Ensure all PLAYER_DEFAULTS attributes exist with valid values.
 
-        # Combat XP and rank
-        self.db.combat_xp = 0
-        self.db.rank_level = 1
-
-        # Resources — dict keyed by resource type name
-        self.db.resources = {r: 0 for r in RESOURCE_TYPES}
-
-        # Equipment handler (lazy-initialized via property)
-        self.db.equipment_slots = {}
-
-        # Powerups / cooldowns / tech
-        self.db.active_powerups = {}      # key -> {expires_tick, effect}
-        self.db.powerup_cooldowns = {}    # key -> ready_tick
-        self.db.researched_techs = set()  # set of tech keys
-
-        # Combat lockout
-        self.db.combat_lockout_tick = 0
-
-        # Coordinate tracking (Requirement 1.4, 8.2)
-        self.db.coord_x = 0
-        self.db.coord_y = 0
-        self.db.coord_planet = ""
-
-        # Fog of war discovery memory (Requirement 11.1, 11.7)
-        self.db.discovery_memory = {}
-
-        # Building interior tracking
-        self.db.inside_building = False
+        Called on login to auto-migrate existing players when new
+        attributes are added. Only sets attributes that are missing
+        or None — never overwrites existing valid data.
+        """
+        for key, default in PLAYER_DEFAULTS.items():
+            if self.attributes.get(key) is None:
+                self.attributes.add(key, copy.deepcopy(default))
 
     # ------------------------------------------------------------------ #
     #  Equipment handler (lazy property)
@@ -200,11 +238,13 @@ class CombatCharacter(DefaultCharacter):
     def at_post_login(self, session, **kwargs):
         """Called after the player logs in.
 
-        If the character is in Limbo (the default start room), move them
-        to the overworld spawn point. Also publishes ``player_login``
-        event and transitions buildings online.
+        Auto-migrates attributes, ensures overworld position, and
+        publishes the login event.
         """
         super().at_post_login(session, **kwargs)
+
+        # Auto-migrate: ensure all PLAYER_DEFAULTS attributes exist
+        self.ensure_attributes()
 
         # Ensure character is on the overworld with valid coordinates
         self._ensure_overworld_position()
@@ -218,9 +258,8 @@ class CombatCharacter(DefaultCharacter):
         except Exception:
             pass
 
-        # Show the map on login (delayed so the session is fully connected)
-        # Note: removed — map is now shown via CmdLook which Evennia
-        # triggers automatically after login.
+        # Map is now shown via CmdLook which Evennia triggers
+        # automatically after login (super().at_post_login calls look).
 
         try:
             from world.event_bus import event_bus, PLAYER_LOGIN

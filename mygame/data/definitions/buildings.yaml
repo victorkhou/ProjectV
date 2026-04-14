@@ -1,162 +1,234 @@
 # Building definitions for RTS Combat Overworld
-# Each building has: name, abbreviation, cost, max_health, requires_hq,
-# required_terrain (or null), category, produces (or null), unlocks, map_symbol
+# Phase 1: 12 building types with construction timers, rank requirements,
+# agent support, and storage capacities
+#
+# Build times are for initial L1 construction.
+# Upgrades use exponential scaling: time = build_time × 3^(level-1),
+# cost = base_cost × 2^(level-1). This is where agents earn their keep.
 
 - name: Headquarters
   abbreviation: HQ
   cost:
-    Straw: 50
-    Wood: 50
-    Stone: 30
+    Wood: 10
+    Stone: 10
+    Iron: 10
+  build_time_seconds: 30
+  max_level: 5
+  rank_requirement: 1
   max_health: 500
   requires_hq: false
   required_terrain: null
   category: headquarters
   produces: null
+  requires_agent: false
+  storage_capacity: 0
   unlocks:
-    - MM
-    - QQ
-    - II
-    - LL
-    - KK
-    - AA
-    - AR
-    - VV
-    - TL
-    - HV
+    - EX
+    - AC
+    - WL
+    - LB
+    - VT
   map_symbol: HQ
 
-- name: Mill
-  abbreviation: MM
+- name: Extractor
+  abbreviation: EX
   cost:
-    Straw: 20
-    Wood: 10
-  max_health: 150
-  requires_hq: true
-  required_terrain: Plains
-  category: resource
-  produces: Straw
-  unlocks: []
-  map_symbol: MM
-
-- name: Quarry
-  abbreviation: QQ
-  cost:
-    Wood: 20
+    Wood: 15
     Stone: 10
+  build_time_seconds: 22
+  max_level: 5
+  rank_requirement: 1
   max_health: 200
   requires_hq: true
-  required_terrain: Rock
+  required_terrain: null
   category: resource
-  produces: Stone
+  produces: null
+  requires_agent: false
+  storage_capacity: 100
   unlocks: []
-  map_symbol: QQ
+  map_symbol: EX
 
-- name: Mine
-  abbreviation: II
+- name: Academy
+  abbreviation: AC
   cost:
-    Wood: 30
+    Wood: 20
+    Stone: 15
+    Iron: 10
+  build_time_seconds: 30
+  max_level: 5
+  rank_requirement: 1
+  max_health: 300
+  requires_hq: true
+  required_terrain: null
+  category: training
+  produces: null
+  requires_agent: false
+  storage_capacity: 0
+  unlocks: []
+  map_symbol: AC
+
+- name: Lab
+  abbreviation: LB
+  cost:
+    Wood: 25
     Stone: 20
+    Iron: 15
+  build_time_seconds: 38
+  max_level: 5
+  rank_requirement: 6
   max_health: 250
   requires_hq: true
-  required_terrain: Mountain
-  category: resource
-  produces: Iron
+  required_terrain: null
+  category: research
+  produces: null
+  requires_agent: true
+  storage_capacity: 0
   unlocks: []
-  map_symbol: II
-
-- name: Lumberyard
-  abbreviation: LL
-  cost:
-    Straw: 15
-    Wood: 15
-  max_health: 150
-  requires_hq: true
-  required_terrain: Forest
-  category: resource
-  produces: Wood
-  unlocks: []
-  map_symbol: LL
-
-- name: Kiln
-  abbreviation: KK
-  cost:
-    Wood: 20
-    Clay: 10
-  max_health: 150
-  requires_hq: true
-  required_terrain: Dirt
-  category: resource
-  produces: Clay
-  unlocks: []
-  map_symbol: KK
+  map_symbol: LB
 
 - name: Armory
-  abbreviation: AA
-  cost:
-    Iron: 40
-    Wood: 30
-    Stone: 20
-  max_health: 200
-  requires_hq: true
-  required_terrain: null
-  category: equipment
-  produces: weapon
-  unlocks: []
-  map_symbol: AA
-
-- name: Armorer
   abbreviation: AR
   cost:
-    Iron: 40
-    Stone: 30
     Wood: 20
-  max_health: 200
+    Stone: 15
+    Iron: 15
+  build_time_seconds: 30
+  max_level: 5
+  rank_requirement: 5
+  max_health: 250
   requires_hq: true
   required_terrain: null
   category: equipment
-  produces: armor
+  produces: null
+  requires_agent: true
+  storage_capacity: 0
   unlocks: []
   map_symbol: AR
 
 - name: Turret
-  abbreviation: VV
+  abbreviation: TU
   cost:
-    Iron: 50
-    Stone: 40
-    Wood: 20
+    Stone: 20
+    Iron: 15
+  build_time_seconds: 22
+  max_level: 5
+  rank_requirement: 7
   max_health: 300
   requires_hq: true
   required_terrain: null
   category: defense
   produces: null
+  requires_agent: true
+  storage_capacity: 0
   unlocks: []
-  map_symbol: VV
+  map_symbol: TU
 
-- name: Tech Lab
-  abbreviation: TL
+- name: Vault
+  abbreviation: VT
   cost:
-    Iron: 60
-    Stone: 40
-    Wood: 30
+    Stone: 25
+    Iron: 10
+  build_time_seconds: 30
+  max_level: 5
+  rank_requirement: 8
+  max_health: 400
+  requires_hq: true
+  required_terrain: null
+  category: storage
+  produces: null
+  requires_agent: false
+  storage_capacity: 100
+  unlocks: []
+  map_symbol: VT
+
+- name: Radar
+  abbreviation: RD
+  cost:
+    Iron: 15
+    Energy: 10
+  build_time_seconds: 22
+  max_level: 5
+  rank_requirement: 7
+  max_health: 150
+  requires_hq: true
+  required_terrain: null
+  category: intelligence
+  produces: null
+  requires_agent: true
+  storage_capacity: 0
+  unlocks: []
+  map_symbol: RD
+
+- name: Wall
+  abbreviation: WL
+  cost:
+    Stone: 5
+  build_time_seconds: 15
+  max_level: 5
+  rank_requirement: 3
+  max_health: 600
+  requires_hq: true
+  required_terrain: null
+  category: defense
+  produces: null
+  requires_agent: false
+  storage_capacity: 0
+  unlocks: []
+  map_symbol: WL
+
+- name: Barracks
+  abbreviation: BK
+  cost:
+    Wood: 15
+    Stone: 15
+    Iron: 10
+  build_time_seconds: 30
+  max_level: 5
+  rank_requirement: 3
+  max_health: 350
+  requires_hq: true
+  required_terrain: null
+  category: military
+  produces: null
+  requires_agent: false
+  storage_capacity: 0
+  unlocks: []
+  map_symbol: BK
+
+- name: Medbay
+  abbreviation: MB
+  cost:
+    Wood: 15
+    Stone: 10
+    Iron: 10
+    Energy: 5
+  build_time_seconds: 30
+  max_level: 5
+  rank_requirement: 10
+  max_health: 250
+  requires_hq: true
+  required_terrain: null
+  category: medical
+  produces: null
+  requires_agent: false
+  storage_capacity: 0
+  unlocks: []
+  map_symbol: MB
+
+- name: Relay
+  abbreviation: RL
+  cost:
+    Iron: 20
+    Energy: 15
+  build_time_seconds: 22
+  max_level: 5
+  rank_requirement: 9
   max_health: 200
   requires_hq: true
   required_terrain: null
-  category: research
+  category: defense
   produces: null
+  requires_agent: false
+  storage_capacity: 0
   unlocks: []
-  map_symbol: TL
-
-- name: Harvester
-  abbreviation: HV
-  cost:
-    Metals: 30
-    Energy: 20
-    Circuits: 10
-  max_health: 200
-  requires_hq: true
-  required_terrain: null
-  category: resource
-  produces: null
-  unlocks: []
-  map_symbol: HV
+  map_symbol: RL

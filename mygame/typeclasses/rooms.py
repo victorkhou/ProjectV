@@ -59,10 +59,11 @@ class PlanetRoom(DefaultRoom):
             return {}
 
     def return_appearance(self, looker, **kwargs):
-        """Return the map as the room's appearance.
+        """Return the room's appearance.
 
         Called by Evennia's look system (including auto-look on login).
-        Shows the ASCII map instead of "This is a room."
+        When inside a building, shows building interior first, then
+        the overworld map below it. Otherwise shows just the map.
         """
         if not hasattr(looker, "db"):
             return super().return_appearance(looker, **kwargs)
@@ -72,8 +73,9 @@ class PlanetRoom(DefaultRoom):
             return super().return_appearance(looker, **kwargs)
 
         systems = self._game_systems
+        parts = []
 
-        # If inside a building, show building interior
+        # If inside a building, show building interior first
         if getattr(looker.db, "inside_building", False):
             try:
                 tile_resolver = systems.get("tile_resolver")
@@ -86,10 +88,11 @@ class PlanetRoom(DefaultRoom):
                             building = getattr(tile, "building", None)
                             if building:
                                 registry = systems.get("registry")
-                                return _format_building_interior(looker, building, registry=registry)
+                                parts.append(_format_building_interior(looker, building, registry=registry))
             except Exception:
                 pass
 
+        # Always render the overworld map
         try:
             renderer = systems.get("procedural_map_renderer")
             if renderer:
@@ -98,16 +101,15 @@ class PlanetRoom(DefaultRoom):
                 if map_str:
                     x = getattr(looker.db, "coord_x", "?")
                     y = getattr(looker.db, "coord_y", "?")
-                    # Send ASCII map as tagged message (hidden by webclient when graphical map active)
                     looker.msg(text=(f"|wMap — ({x}, {y}) on {planet}|n\n{map_str}", {"cls": "ascii-map"}))
-                    # Send structured map data to webclient via OOB
                     self._send_map_oob(looker, systems)
-                    # Return empty so the auto-look doesn't duplicate the map
-                    return ""
         except Exception:
             pass
 
-        return super().return_appearance(looker, **kwargs)
+        if parts:
+            return "\n".join(parts)
+        # Return empty so auto-look doesn't duplicate the map text
+        return ""
 
     def _send_map_oob(self, looker, systems):
         """Send structured map data to the webclient via OOB message."""
@@ -443,7 +445,7 @@ class OverworldRoom(DefaultRoom):
 
 def _format_building_interior(looker, building, registry=None):
     """Format building interior as a string for return_appearance."""
-    from world.utils import get_building_info, get_closed_exits
+    from world.utils import get_building_info, get_building_attr, get_closed_exits
 
     info = get_building_info(building)
     owner = info["owner"]
@@ -476,15 +478,64 @@ def _format_building_interior(looker, building, registry=None):
         else:
             exit_parts.append(f"|g{d}|n")
 
+    # Check construction state
+    under_construction = get_building_attr(building, "under_construction", False)
+    progress = get_building_attr(building, "construction_progress", 0) or 0
+    total = get_building_attr(building, "construction_total", 0) or 0
+
     lines = [
         f"|w=== {info['name']} ({info['type']}) ===|n",
+    ]
+
+    if under_construction and total > 0:
+        pct = int((progress / total) * 100) if total > 0 else 0
+        remaining = max(0, total - progress)
+        lines.append(f"  |y*** UNDER CONSTRUCTION ***|n")
+        lines.append(f"  Progress: {progress}/{total}s ({pct}%) — {remaining}s remaining")
+        lines.append(f"  Stay on the tile or assign an Engineer to continue.")
+        lines.append("")
+
+    lines.extend([
         f"  Owner: {owner_name}",
         f"  Level: {info['level']} | HP: {info['hp']}/{info['hp_max']}",
         f"  Category: {category}",
         f"  Produces: {produces}",
-    ]
+    ])
     if unlocks_str != "—":
         lines.append(f"  Unlocks: {unlocks_str}")
+
+    # Show training progress for Academies
+    training_agent_id = get_building_attr(building, "training_agent_id")
+    if training_agent_id is not None:
+        training_remaining = get_building_attr(building, "training_ticks_remaining", 0) or 0
+        lines.append("")
+        lines.append(f"  |c[Training] Agent #{training_agent_id} — {training_remaining}s remaining|n")
+
+    # Show assigned agent
+    assigned = get_building_attr(building, "assigned_agent")
+    if assigned is not None:
+        aid = getattr(getattr(assigned, "db", None), "agent_id", "?")
+        role = getattr(getattr(assigned, "db", None), "role", "") or "idle"
+        lines.append(f"  |gAgent #{aid}|n assigned as |w{role}|n")
+
+    # Show other agents on this tile (in the room contents)
+    tile = getattr(building, "location", None)
+    if tile is not None:
+        tile_agents = []
+        for obj in getattr(tile, "contents", []):
+            if obj is building:
+                continue
+            if obj is assigned:
+                continue  # already shown above
+            if hasattr(obj, "tags") and obj.tags.get(category="npc_type"):
+                npc_owner = getattr(getattr(obj, "db", None), "owner", None)
+                if npc_owner is looker:
+                    aid = getattr(obj.db, "agent_id", "?")
+                    role = getattr(obj.db, "role", "") or "idle"
+                    tile_agents.append(f"Agent #{aid} ({role})")
+        if tile_agents:
+            lines.append(f"  Agents here: {', '.join(tile_agents)}")
+
     lines.append("")
     lines.append(f"  Exits: {', '.join(exit_parts)}")
 

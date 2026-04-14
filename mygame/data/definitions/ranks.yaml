@@ -1,121 +1,139 @@
 # Rank definitions for RTS Combat Overworld
-# 22 military ranks with strictly increasing XP thresholds
+# Phase 1: 12 ranks with strictly increasing XP thresholds
+# Each rank defines agent_cap, planet_access, and unlocks
+# Planet rank requirements: Terra=1, Forge=5, Tundra=7, Space=7, Inferno=9, Citadel=11
 
 - name: Recruit
   level: 1
   xp_threshold: 0
-  unlocks: []
+  agent_cap: 2
+  planet_access:
+    - terra
+  unlocks:
+    - Extractor
+    - Academy
 
 - name: Private
   level: 2
-  xp_threshold: 100
+  xp_threshold: 200
+  agent_cap: 3
+  planet_access:
+    - terra
   unlocks: []
-
-- name: Private First Class
-  level: 3
-  xp_threshold: 250
-  unlocks: []
-
-- name: Specialist
-  level: 4
-  xp_threshold: 500
-  unlocks:
-    - speed_surge
 
 - name: Corporal
-  level: 5
-  xp_threshold: 800
+  level: 3
+  xp_threshold: 600
+  agent_cap: 4
+  planet_access:
+    - terra
   unlocks:
-    - adrenaline_rush
+    - Wall
+    - Barracks
 
 - name: Sergeant
+  level: 4
+  xp_threshold: 1500
+  agent_cap: 6
+  planet_access:
+    - terra
+  unlocks: []
+
+- name: Staff_Sergeant
+  level: 5
+  xp_threshold: 3500
+  agent_cap: 8
+  planet_access:
+    - terra
+    - forge
+  unlocks:
+    - Armory
+
+- name: Lieutenant
   level: 6
-  xp_threshold: 1200
-  unlocks:
-    - reinforced_walls
-    - shield_boost
-
-- name: Staff Sergeant
-  level: 7
-  xp_threshold: 1700
-  unlocks:
-    - improved_armor
-
-- name: Sergeant First Class
-  level: 8
-  xp_threshold: 2300
-  unlocks: []
-
-- name: First Sergeant
-  level: 9
-  xp_threshold: 3000
-  unlocks: []
-
-- name: Master Sergeant
-  level: 10
-  xp_threshold: 3800
-  unlocks: []
-
-- name: Command Sergeant Major
-  level: 11
-  xp_threshold: 4700
-  unlocks: []
-
-- name: Sergeant Major
-  level: 12
-  xp_threshold: 5700
-  unlocks: []
-
-- name: 2nd Lieutenant
-  level: 13
   xp_threshold: 7000
-  unlocks: []
-
-- name: 1st Lieutenant
-  level: 14
-  xp_threshold: 8500
+  agent_cap: 10
+  planet_access:
+    - terra
+    - forge
   unlocks:
-    - extended_range
+    - Lab
 
 - name: Captain
-  level: 15
-  xp_threshold: 10000
+  level: 7
+  xp_threshold: 12000
+  agent_cap: 12
+  planet_access:
+    - terra
+    - forge
+    - tundra
+    - space
   unlocks:
-    - advanced_weapons
-    - berserker_rage
+    - Turret
+    - Radar
 
 - name: Major
-  level: 16
-  xp_threshold: 12000
+  level: 8
+  xp_threshold: 20000
+  agent_cap: 14
+  planet_access:
+    - terra
+    - forge
+    - tundra
+    - space
   unlocks:
-    - rapid_production
-
-- name: Lieutenant Colonel
-  level: 17
-  xp_threshold: 14500
-  unlocks: []
+    - Vault
 
 - name: Colonel
-  level: 18
-  xp_threshold: 17500
-  unlocks: []
+  level: 9
+  xp_threshold: 35000
+  agent_cap: 16
+  planet_access:
+    - terra
+    - forge
+    - tundra
+    - space
+    - inferno
+  unlocks:
+    - Relay
 
-- name: Brigadier General
-  level: 19
-  xp_threshold: 21000
-  unlocks: []
-
-- name: Major General
-  level: 20
-  xp_threshold: 25000
-  unlocks: []
-
-- name: Lieutenant General
-  level: 21
-  xp_threshold: 30000
-  unlocks: []
+- name: Brigadier
+  level: 10
+  xp_threshold: 55000
+  agent_cap: 17
+  planet_access:
+    - terra
+    - forge
+    - tundra
+    - space
+    - inferno
+  unlocks:
+    - Medbay
 
 - name: General
-  level: 22
-  xp_threshold: 36000
-  unlocks: []
+  level: 11
+  xp_threshold: 80000
+  agent_cap: 19
+  planet_access:
+    - terra
+    - forge
+    - tundra
+    - space
+    - inferno
+    - citadel
+  unlocks:
+    - Barracks_L2
+
+- name: Marshal
+  level: 12
+  xp_threshold: 120000
+  agent_cap: 20
+  planet_access:
+    - terra
+    - forge
+    - tundra
+    - space
+    - inferno
+    - citadel
+  unlocks:
+    - All

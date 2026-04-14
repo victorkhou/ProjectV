@@ -23,11 +23,14 @@ PLAYER_ELIMINATED = "player_eliminated"
 BUILDING_CONSTRUCTED = "building_constructed"
 BUILDING_DESTROYED = "building_destroyed"
 BUILDING_UPGRADED = "building_upgraded"
+CONSTRUCTION_STARTED = "construction_started"
+CONSTRUCTION_COMPLETED = "construction_completed"
 
 RANK_PROMOTED = "rank_promoted"
 RANK_DEMOTED = "rank_demoted"
 
 COMBAT_ACTION = "combat_action"
+COMBAT_TIMER_STARTED = "combat_timer_started"
 
 POWERUP_ACTIVATED = "powerup_activated"
 POWERUP_EXPIRED = "powerup_expired"
@@ -46,9 +49,12 @@ ALL_EVENTS = (
     BUILDING_CONSTRUCTED,
     BUILDING_DESTROYED,
     BUILDING_UPGRADED,
+    CONSTRUCTION_STARTED,
+    CONSTRUCTION_COMPLETED,
     RANK_PROMOTED,
     RANK_DEMOTED,
     COMBAT_ACTION,
+    COMBAT_TIMER_STARTED,
     POWERUP_ACTIVATED,
     POWERUP_EXPIRED,
     TECHNOLOGY_RESEARCHED,

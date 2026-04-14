@@ -514,27 +514,20 @@ class CombatEngine:
     @staticmethod
     def _is_player(entity: Any) -> bool:
         """Check if an entity is a player character."""
-        if hasattr(entity, "db") and hasattr(entity.db, "hp"):
-            # Buildings also have hp via attributes, so check for combat_xp
-            if hasattr(entity.db, "combat_xp"):
-                return True
-        return False
+        from world.utils import is_player
+        return is_player(entity)
 
     @staticmethod
     def _is_building(entity: Any) -> bool:
         """Check if an entity is a building."""
-        if hasattr(entity, "attributes") and hasattr(entity.attributes, "get"):
-            btype = entity.attributes.get("building_type", default=None)
-            if btype is not None:
-                return True
-        return False
+        from world.utils import is_building
+        return is_building(entity)
 
     @staticmethod
     def _get_building_type(building: Any) -> str | None:
         """Read building_type from a building."""
-        if hasattr(building, "attributes") and hasattr(building.attributes, "get"):
-            return building.attributes.get("building_type", default=None)
-        return None
+        from world.utils import get_building_type
+        return get_building_type(building)
 
     @staticmethod
     def _get_building_owner(entity: Any) -> Any | None:

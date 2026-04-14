@@ -79,14 +79,13 @@ items:
       move_speed: 2.0
     ammo_cost: null
     classification: futuristic
-    required_rank: Specialist
+    required_rank: Staff_Sergeant
 
 production_map:
-  AA:
+  AR:
     - combat_knife
     - assault_rifle
     - sniper_rifle
     - plasma_rifle
-  AR:
     - kevlar_vest
     - power_armor

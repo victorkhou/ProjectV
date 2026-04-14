@@ -18,7 +18,7 @@
 
 - name: Speed Surge
   key: speed_surge
-  required_rank: Specialist
+  required_rank: Staff_Sergeant
   effect_type: move_speed
   effect_value: 2.0
   duration_ticks: 15

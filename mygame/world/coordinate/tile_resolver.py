@@ -107,31 +107,47 @@ class TileResolver:
     def preload_area(self, min_x: int, max_x: int, min_y: int, max_y: int, planet: str) -> None:
         """Batch-load rooms with buildings in an area into the cache.
 
-        Only loads rooms that have building objects (via the building
-        tag). Empty rooms don't need to be in the cache for rendering.
+        Loads rooms that contain building objects so the map renderer
+        can display them without creating new rooms.
         """
         try:
             from typeclasses.rooms import OverworldRoom
 
-            # Only load rooms that contain buildings
+            # Load rooms on this planet that have building objects inside.
+            # Primary: tagged buildings. Fallback: any room with contents
+            # that have a building_type attribute.
             rooms = OverworldRoom.objects.filter_family(
                 db_tags__db_key="overworld_tile",
                 db_tags__db_category="room_type",
             ).filter(
                 db_tags__db_key=planet,
                 db_tags__db_category="coord_planet",
-            ).filter(
+            )
+
+            # Try tag-based filter first (fast)
+            tagged_rooms = rooms.filter(
                 locations_set__db_tags__db_key="building",
                 locations_set__db_tags__db_category="object_type",
             ).distinct()
-            for room in rooms:
+
+            # Also include rooms with contents that have building_type
+            # attribute (catches buildings created before tagging was added)
+            attr_rooms = rooms.filter(
+                locations_set__db_attributes__db_key="building_type",
+            ).distinct()
+
+            loaded = set()
+            for room in list(tagged_rooms) + list(attr_rooms):
                 rx = room.attributes.get("x")
                 ry = room.attributes.get("y")
                 if rx is not None and ry is not None:
                     if min_x <= rx <= max_x and min_y <= ry <= max_y:
-                        self._cache.put(rx, ry, planet, room)
+                        key = (rx, ry)
+                        if key not in loaded:
+                            self._cache.put(rx, ry, planet, room)
+                            loaded.add(key)
         except Exception:
-            # Fallback: load all overworld rooms on the planet
+            # Last-resort fallback: load all overworld rooms on the planet
             try:
                 from typeclasses.rooms import OverworldRoom
                 rooms = OverworldRoom.objects.filter_family(

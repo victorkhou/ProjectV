@@ -1,102 +1,379 @@
 # Terrain and planet definitions for RTS Combat Overworld
+# Phase 1: 48 terrain types (8 per planet) with resource associations
+# Resources: Wood, Stone, Iron, Energy, Circuits, Nexium
+# ~40% of tiles produce resources; the rest are cosmetic/gameplay terrain.
 
 terrain:
-  # Earth_Planet terrain types
+  # ── Terra (earth) — Rank 1+ ────────────────────────────────
+  # Basics: Wood, Stone, Iron
   - terrain_type: Plains
     map_symbol: ".."
-    resource_type: Straw
+    resource_type: null
     passable: true
-
-  - terrain_type: Dirt
-    map_symbol: "~~"
-    resource_type: Clay
-    passable: true
+    planet: terra
 
   - terrain_type: Forest
     map_symbol: "&&"
     resource_type: Wood
     passable: true
+    planet: terra
+
+  - terrain_type: Dirt
+    map_symbol: "~~"
+    resource_type: null
+    passable: true
+    planet: terra
 
   - terrain_type: Rock
     map_symbol: "##"
     resource_type: Stone
     passable: true
+    planet: terra
 
   - terrain_type: Mountain
     map_symbol: "/\\"
     resource_type: Iron
     passable: true
+    planet: terra
 
-  # Industrial_Planet terrain types
+  - terrain_type: River
+    map_symbol: "=="
+    resource_type: null
+    passable: true
+    planet: terra
+
+  - terrain_type: Sand
+    map_symbol: "::"
+    resource_type: null
+    passable: true
+    planet: terra
+
+  - terrain_type: Snow
+    map_symbol: "**"
+    resource_type: null
+    passable: true
+    planet: terra
+
+  # ── Forge (industrial) — Rank 5+ ───────────────────────────
+  # Introduces Energy + Circuits for mid-game tech
   - terrain_type: Power_Grid
     map_symbol: "++"
     resource_type: Energy
     passable: true
+    planet: forge
 
   - terrain_type: Scrapyard
     map_symbol: "%%"
-    resource_type: Metals
+    resource_type: Iron
     passable: true
+    planet: forge
 
   - terrain_type: Circuit_Field
     map_symbol: "::"
     resource_type: Circuits
     passable: true
+    planet: forge
+
+  - terrain_type: Factory_Floor
+    map_symbol: "=="
+    resource_type: null
+    passable: true
+    planet: forge
 
   - terrain_type: Ruins
     map_symbol: ";;"
     resource_type: null
     passable: true
+    planet: forge
 
-  # Space terrain types
+  - terrain_type: Toxic_Waste
+    map_symbol: "!!"
+    resource_type: null
+    passable: true
+    planet: forge
+
+  - terrain_type: Pipeline
+    map_symbol: "--"
+    resource_type: null
+    passable: true
+    planet: forge
+
+  - terrain_type: Warehouse
+    map_symbol: "[]"
+    resource_type: null
+    passable: true
+    planet: forge
+
+  # ── Tundra (frozen) — Rank 7+ ──────────────────────────────
+  # Alternate sources of Wood, Stone, Iron
+  - terrain_type: Snowfield
+    map_symbol: "**"
+    resource_type: null
+    passable: true
+    planet: tundra
+
+  - terrain_type: Frozen_Lake
+    map_symbol: "><"
+    resource_type: null
+    passable: true
+    planet: tundra
+
+  - terrain_type: Pine_Forest
+    map_symbol: "&&"
+    resource_type: Wood
+    passable: true
+    planet: tundra
+
+  - terrain_type: Ice_Cave
+    map_symbol: "()"
+    resource_type: Iron
+    passable: true
+    planet: tundra
+
+  - terrain_type: Permafrost
+    map_symbol: "##"
+    resource_type: Stone
+    passable: true
+    planet: tundra
+
+  - terrain_type: Glacier
+    map_symbol: "/\\"
+    resource_type: null
+    passable: true
+    planet: tundra
+
+  - terrain_type: Hot_Spring
+    map_symbol: "@@"
+    resource_type: null
+    passable: true
+    planet: tundra
+
+  - terrain_type: Tundra_Moss
+    map_symbol: ",,"
+    resource_type: null
+    passable: true
+    planet: tundra
+
+  # ── Inferno (volcanic) — Rank 9+ ───────────────────────────
+  # Alternate Stone, Iron + Energy
+  - terrain_type: Ash_Wastes
+    map_symbol: "~~"
+    resource_type: null
+    passable: true
+    planet: inferno
+
+  - terrain_type: Lava_Flow
+    map_symbol: "!!"
+    resource_type: null
+    passable: true
+    planet: inferno
+
+  - terrain_type: Obsidian_Plain
+    map_symbol: "##"
+    resource_type: Stone
+    passable: true
+    planet: inferno
+
+  - terrain_type: Magma_Vent
+    map_symbol: "^^"
+    resource_type: Energy
+    passable: true
+    planet: inferno
+
+  - terrain_type: Scorched_Rock
+    map_symbol: ".."
+    resource_type: Iron
+    passable: true
+    planet: inferno
+
+  - terrain_type: Sulfur_Pit
+    map_symbol: "%%"
+    resource_type: null
+    passable: true
+    planet: inferno
+
+  - terrain_type: Ember_Field
+    map_symbol: "**"
+    resource_type: null
+    passable: true
+    planet: inferno
+
+  - terrain_type: Basalt_Ridge
+    map_symbol: "/\\"
+    resource_type: null
+    passable: true
+    planet: inferno
+
+  # ── Citadel (fortress) — Rank 11+ ──────────────────────────
+  # Nexium (only source), plus Iron, Circuits, Energy
+  - terrain_type: Corridor
+    map_symbol: ".."
+    resource_type: null
+    passable: true
+    planet: citadel
+
+  - terrain_type: Vault_Room
+    map_symbol: "[]"
+    resource_type: Nexium
+    passable: true
+    planet: citadel
+
+  - terrain_type: Armory_Ruin
+    map_symbol: "{}"
+    resource_type: Iron
+    passable: true
+    planet: citadel
+
+  - terrain_type: Control_Room
+    map_symbol: "<>"
+    resource_type: Circuits
+    passable: true
+    planet: citadel
+
+  - terrain_type: Open_Chamber
+    map_symbol: "  "
+    resource_type: null
+    passable: true
+    planet: citadel
+
+  - terrain_type: Blast_Door
+    map_symbol: "||"
+    resource_type: null
+    passable: true
+    planet: citadel
+
+  - terrain_type: Generator_Room
+    map_symbol: "++"
+    resource_type: Energy
+    passable: true
+    planet: citadel
+
+  - terrain_type: Barracks_Ruin
+    map_symbol: "=="
+    resource_type: null
+    passable: true
+    planet: citadel
+
+  # ── Space — Rank 7+ ────────────────────────────────────────
+  # Energy, Iron, Circuits from space sources
   - terrain_type: Void
     map_symbol: "  "
     resource_type: null
     passable: true
+    planet: space
 
   - terrain_type: Nebula
     map_symbol: "**"
     resource_type: Energy
     passable: true
+    planet: space
 
   - terrain_type: Asteroid
     map_symbol: "<>"
     resource_type: Iron
     passable: true
+    planet: space
 
   - terrain_type: Debris
     map_symbol: "%%"
-    resource_type: Metals
+    resource_type: Circuits
     passable: true
+    planet: space
 
   - terrain_type: Ice_Field
     map_symbol: "><"
     resource_type: null
     passable: true
+    planet: space
 
+  - terrain_type: Wormhole
+    map_symbol: "@@"
+    resource_type: null
+    passable: true
+    planet: space
+
+  - terrain_type: Radiation_Zone
+    map_symbol: "!!"
+    resource_type: null
+    passable: true
+    planet: space
+
+  - terrain_type: Derelict_Ship
+    map_symbol: "[]"
+    resource_type: null
+    passable: true
+    planet: space
+
+# Legacy planet list for backward compatibility with DataRegistry._populate_terrain
 planets:
-  - name: Earth_Planet
-    planet_type: Earth_Planet
+  - name: Terra
+    planet_type: earth
     terrain_types:
       - Plains
-      - Dirt
       - Forest
+      - Dirt
       - Rock
       - Mountain
+      - River
+      - Sand
+      - Snow
 
-  - name: Industrial_Planet
-    planet_type: Industrial_Planet
+  - name: Forge
+    planet_type: industrial
     terrain_types:
       - Power_Grid
       - Scrapyard
       - Circuit_Field
+      - Factory_Floor
       - Ruins
+      - Toxic_Waste
+      - Pipeline
+      - Warehouse
+
+  - name: Tundra
+    planet_type: frozen
+    terrain_types:
+      - Snowfield
+      - Frozen_Lake
+      - Pine_Forest
+      - Ice_Cave
+      - Permafrost
+      - Glacier
+      - Hot_Spring
+      - Tundra_Moss
+
+  - name: Inferno
+    planet_type: volcanic
+    terrain_types:
+      - Ash_Wastes
+      - Lava_Flow
+      - Obsidian_Plain
+      - Magma_Vent
+      - Scorched_Rock
+      - Sulfur_Pit
+      - Ember_Field
+      - Basalt_Ridge
+
+  - name: Citadel
+    planet_type: fortress
+    terrain_types:
+      - Corridor
+      - Vault_Room
+      - Armory_Ruin
+      - Control_Room
+      - Open_Chamber
+      - Blast_Door
+      - Generator_Room
+      - Barracks_Ruin
 
   - name: Space
-    planet_type: Space
+    planet_type: space
     terrain_types:
       - Void
       - Nebula
       - Asteroid
       - Debris
       - Ice_Field
+      - Wormhole
+      - Radiation_Zone
+      - Derelict_Ship

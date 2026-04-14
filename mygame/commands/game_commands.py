@@ -44,9 +44,23 @@ def _send_map_update(caller):
         fog = _get_system(caller, "fog_system")
         if fog:
             data["discovered_count"] = len(fog.get_discovered_tile_set(caller))
+        # Add current terrain info for the webclient header
+        try:
+            tile_resolver = _get_system(caller, "tile_resolver")
+            x = getattr(caller.db, "coord_x", None)
+            y = getattr(caller.db, "coord_y", None)
+            planet = getattr(caller.db, "coord_planet", None)
+            if tile_resolver and x is not None and y is not None and planet:
+                tt, res = tile_resolver.get_or_generate_terrain(int(x), int(y), planet)
+                data["player"]["terrain"] = tt
+                if res:
+                    data["player"]["resource"] = res
+        except Exception:
+            pass
         caller.msg(map_update=data)
     except Exception:
-        pass
+        import logging
+        logging.getLogger("evennia.commands").exception("Map update failed")
 
 
 def _send_ascii_map(caller, map_text):
@@ -57,6 +71,61 @@ def _send_ascii_map(caller, map_text):
     clients see it normally.
     """
     caller.msg(text=(map_text, {"cls": "ascii-map"}))
+
+
+def _render_and_send_map(caller):
+    """Render the full ASCII map with header and send to the caller.
+
+    Also sends the webclient graphical map update. Used by both
+    CmdLook (no args) and CmdMap.
+    """
+    renderer = _get_system(caller, "procedural_map_renderer")
+    if renderer is None:
+        return
+
+    planet = getattr(caller.db, "coord_planet", None)
+    if not planet:
+        _, _, planet = ensure_coords(caller)
+    if not planet:
+        return
+
+    buildings = caller.get_buildings() if hasattr(caller, "get_buildings") else []
+
+    try:
+        map_str = renderer.render(caller, buildings)
+    except Exception:
+        import logging
+        logging.getLogger("evennia.commands").exception("Map render failed")
+        return
+
+    if map_str:
+        x = getattr(caller.db, "coord_x", "?")
+        y = getattr(caller.db, "coord_y", "?")
+
+        terrain_info = ""
+        try:
+            tile_resolver = _get_system(caller, "tile_resolver")
+            if tile_resolver and x != "?" and y != "?":
+                terrain_type, resource = tile_resolver.get_or_generate_terrain(
+                    int(x), int(y), planet
+                )
+                terrain_info = f" | {terrain_type}"
+                if resource:
+                    terrain_info += f" ({resource})"
+        except Exception:
+            pass
+
+        fog_system = _get_system(caller, "fog_system")
+        disc_count = 0
+        if fog_system:
+            disc_count = len(fog_system.get_discovered_tile_set(caller))
+        _send_ascii_map(
+            caller,
+            f"|wMap — ({x}, {y}) on {planet}{terrain_info} | "
+            f"{disc_count} discovered|n\n{map_str}",
+        )
+
+    _send_map_update(caller)
 
 
 class GameCommand(BaseCommand):
@@ -195,12 +264,47 @@ class CmdMove(GameCommand):
                 if building is not None and getattr(building, "is_offline", False):
                     caller.msg("That tile is blocked by an offline building.")
                     return
+                # Wall passage check: block owner during combat timer (Req 6.24, 17.1-17.5)
+                if building is not None:
+                    btype = get_building_attr(building, "building_type")
+                    if btype == "WL" and is_owner(caller, get_building_attr(building, "owner")):
+                        combat_expires = getattr(caller.db, "combat_timer_expires", 0) or 0
+                        if combat_expires > 0:
+                            caller.msg(
+                                "You cannot pass through your own Wall during combat."
+                            )
+                            return
+
+        # Reset active-presence state on movement (Req 6.6, 6.7)
+        if hasattr(caller, "db"):
+            prev_state = getattr(caller.db, "activity_state", "idle")
+            if prev_state != "idle":
+                if prev_state == "building":
+                    target = getattr(caller.db, "activity_target", None)
+                    btype = get_building_attr(target, "building_type", "??") if target else "??"
+                    caller.msg(f"|y[Paused] Construction of {btype} paused. Return to the tile or type 'build' to resume.|n")
+                elif prev_state == "harvesting":
+                    caller.msg("|y[Paused] Harvesting paused. Return to the tile to resume.|n")
+                caller.db.activity_state = "idle"
+                caller.db.activity_target = None
+                caller.db.activity_progress = 0
 
         # Update coordinates
         caller.db.coord_x = tx
         caller.db.coord_y = ty
         self._ensure_planet_room(caller, planet)
-        caller.msg(f"You move {direction} to ({tx}, {ty}).")
+
+        # Show terrain at new position
+        terrain_label = ""
+        if tile_resolver is not None:
+            try:
+                tt, res = tile_resolver.get_or_generate_terrain(tx, ty, planet)
+                terrain_label = f" — {tt}"
+                if res:
+                    terrain_label += f" ({res})"
+            except Exception:
+                pass
+        caller.msg(f"You move {direction} to ({tx}, {ty}){terrain_label}.")
 
         # Auto-enter building if present
         if self._try_enter_building(caller, direction, tile_resolver, tx, ty, planet):
@@ -329,7 +433,8 @@ class CmdHarvest(GameCommand):
             self.caller.msg("Cannot determine your position.")
             return
 
-        success, msg = resource_system.harvest(self.caller, tile)
+        # Use active-presence harvesting (Req 3.4, 6.6, 6.7)
+        success, msg = resource_system.start_harvest(self.caller, tile)
         self.caller.msg(msg)
 
 
@@ -340,6 +445,9 @@ class CmdBuild(GameCommand):
         build <type>
 
     Example: build HQ
+
+    If you're on a tile with your own incomplete building, typing
+    ``build`` (no arguments) resumes construction.
     """
 
     key = "build"
@@ -347,24 +455,93 @@ class CmdBuild(GameCommand):
     help_category = "Game"
 
     def func(self):
-        building_type = self.args.strip().upper()
-        if not building_type:
-            self.caller.msg("Usage: build <type>")
-            return
+        caller = self.caller
 
-        building_system = _get_system(self.caller, "building_system")
+        building_system = _get_system(caller, "building_system")
         if building_system is None:
-            self.caller.msg("Building system unavailable.")
+            caller.msg("Building system unavailable.")
             return
 
         # Resolve the actual tile room at player's coordinates
         tile = self._resolve_player_tile()
         if tile is None:
-            self.caller.msg("Cannot determine your position.")
+            caller.msg("Cannot determine your position.")
             return
 
-        success, msg = building_system.construct(self.caller, tile, building_type)
-        self.caller.msg(msg)
+        building_type = self.args.strip().upper()
+
+        # Check for resuming construction on an incomplete building
+        existing = getattr(tile, "building", None)
+        if existing is not None:
+            under_construction = get_building_attr(existing, "under_construction", False)
+            if under_construction and is_owner(caller, get_building_attr(existing, "owner")):
+                # If player typed a specific building type, don't auto-resume
+                if building_type:
+                    btype = get_building_attr(existing, "building_type", "??")
+                    if building_type != btype:
+                        caller.msg("This tile already has a building under construction.")
+                        return
+                # Resume: set player back into building state
+                total = get_building_attr(existing, "construction_total", 0) or 0
+                progress = get_building_attr(existing, "construction_progress", 0) or 0
+                remaining = max(0, total - progress)
+                if hasattr(caller, "db"):
+                    caller.db.activity_state = "building"
+                    caller.db.activity_target = existing
+                    caller.db.activity_progress = 0
+                btype = get_building_attr(existing, "building_type", "??")
+                caller.msg(
+                    f"Resuming construction of {btype} "
+                    f"({progress}/{total}s, {remaining}s remaining). "
+                    f"Stay on the tile to continue."
+                )
+                return
+
+        if not building_type:
+            self._show_available_buildings(caller)
+            return
+
+        # Start new construction
+        success, msg = building_system.start_construction(
+            caller, tile, building_type
+        )
+        caller.msg(msg)
+
+        # Refresh the map so the new building is visible immediately
+        if success:
+            _send_map_update(caller)
+            renderer = _get_system(caller, "procedural_map_renderer")
+            if renderer:
+                try:
+                    buildings = caller.get_buildings() if hasattr(caller, "get_buildings") else []
+                    map_str = renderer.render(caller, buildings)
+                    if map_str:
+                        _send_ascii_map(caller, map_str)
+                except Exception:
+                    pass
+
+    def _show_available_buildings(self, caller):
+        """Show buildings the player can construct at their current rank."""
+        registry = _get_system(caller, "registry")
+        if registry is None:
+            caller.msg("Usage: build <type>")
+            return
+
+        rank_level = getattr(getattr(caller, "db", None), "rank_level", 1) or 1
+
+        lines = ["|wAvailable buildings:|n"]
+        for abbr, bdef in sorted(registry.buildings.items(), key=lambda x: x[1].rank_requirement):
+            if bdef.rank_requirement > rank_level:
+                continue
+            cost_str = ", ".join(f"{amt} {res}" for res, amt in bdef.cost.items())
+            lines.append(f"  |w{abbr}|n — {bdef.name} ({cost_str}) [{bdef.build_time_seconds}s]")
+
+        if len(lines) == 1:
+            lines.append("  None available at your rank.")
+
+        lines.append("")
+        lines.append("Usage: |wbuild <type>|n  (e.g. |wbuild HQ|n)")
+        caller.msg("\n".join(lines))
 
 
 class CmdUpgrade(GameCommand):
@@ -373,18 +550,22 @@ class CmdUpgrade(GameCommand):
     Usage:
         upgrade
 
-    Must be on a tile with a building you own. Costs base_cost × target_level.
-    Increases max HP by 20% per level. All buildings can reach level 5.
+    Must be on a tile with a building you own. Uses active-presence:
+    stay on the tile for the timer to progress. Cost and time scale
+    exponentially with level (cost × 2^L, time × 3^L).
     """
 
     key = "upgrade"
     aliases = ["up"]
     help_category = "Game"
 
-    MAX_LEVEL = 5
-
     def func(self):
         caller = self.caller
+
+        building_system = _get_system(caller, "building_system")
+        if building_system is None:
+            caller.msg("Building system unavailable.")
+            return
 
         tile = self._find_player_tile()
         if tile is None:
@@ -396,55 +577,8 @@ class CmdUpgrade(GameCommand):
             caller.msg("No building on this tile.")
             return
 
-        # Ownership check (compare by .id for reliability across restarts)
-        owner = get_building_attr(building, "owner")
-        if not is_owner(caller, owner):
-            caller.msg("You do not own this building.")
-            return
-
-        # Read current state
-        info = get_building_info(building)
-        btype = info["type"]
-        level = info["level"]
-
-        if level >= self.MAX_LEVEL:
-            caller.msg(f"This building is already at maximum level ({self.MAX_LEVEL}).")
-            return
-
-        target_level = level + 1
-
-        # Look up cost from registry
-        registry = _get_system(caller, "registry")
-        if registry is None:
-            caller.msg("Registry unavailable.")
-            return
-
-        try:
-            bdef = registry.get_building(btype)
-        except (KeyError, AttributeError):
-            caller.msg(f"Unknown building type: {btype}")
-            return
-
-        upgrade_cost = {res: amt * target_level for res, amt in bdef.cost.items()}
-
-        # Check resources
-        if not caller.has_resources(upgrade_cost):
-            cost_str = ", ".join(f"{res}: {amt}" for res, amt in upgrade_cost.items())
-            caller.msg(f"Insufficient resources. Upgrade to level {target_level} requires: {cost_str}")
-            return
-
-        # Deduct and upgrade
-        caller.deduct_resources(upgrade_cost)
-        building.attributes.add("building_level", target_level)
-
-        # Increase max HP by 20% per level (from base)
-        base_hp = bdef.max_health
-        new_max_hp = int(base_hp * (1 + 0.2 * (target_level - 1)))
-        building.attributes.add("hp_max", new_max_hp)
-        # Heal to new max
-        building.attributes.add("hp", new_max_hp)
-
-        caller.msg(f"Upgraded {bdef.name} to level {target_level}. HP: {new_max_hp}/{new_max_hp}")
+        success, msg = building_system.start_upgrade(caller, building)
+        caller.msg(msg)
 
 
 class CmdDemolish(GameCommand):
@@ -723,10 +857,21 @@ class CmdScore(GameCommand):
         hp = status.get("hp", "?")
         hp_max = status.get("hp_max", "?")
 
-        # Rank name lookup
+        # Rank name and sub-level lookup (Req 4b.5)
         rank_name = f"Rank {rank}"
+        sub_level = None
+        xp_to_next_level = None
+        rank_system = _get_system(caller, "rank_system")
         registry = _get_system(caller, "registry")
-        if registry:
+        if rank_system:
+            try:
+                rank_info = rank_system.get_status(caller)
+                rank_name = rank_info.get("rank_name", rank_name)
+                sub_level = rank_info.get("sub_level")
+                xp_to_next_level = rank_info.get("xp_to_next_level")
+            except Exception:
+                pass
+        elif registry:
             try:
                 rdef = registry.get_rank_for_xp(xp)
                 rank_name = rdef.name
@@ -738,12 +883,56 @@ class CmdScore(GameCommand):
         y = getattr(caller.db, "coord_y", "?")
         planet = getattr(caller.db, "coord_planet", "?")
 
+        # Build rank display line with sub-level (Req 4b.5)
+        rank_display = rank_name.replace("_", " ")
+        if sub_level is not None:
+            rank_display = f"{rank_display} Level {sub_level}"
+        xp_line = f"  {rank_display} | XP: {xp}"
+        if xp_to_next_level is not None and xp_to_next_level > 0:
+            next_level_xp = xp + xp_to_next_level
+            xp_line += f"/{next_level_xp}"
+            if sub_level is not None and sub_level < 5:
+                xp_line += f" to Level {sub_level + 1}"
+
         lines = [
             f"|w=== {name} ===|n",
-            f"  {rank_name} (Level {rank}) | XP: {xp}",
+            xp_line,
             f"  HP: {hp}/{hp_max}",
             f"  Position: ({x}, {y}) on {planet}",
         ]
+
+        # Agent count (Req 7b.10)
+        agent_system = _get_system(caller, "agent_system")
+        if agent_system:
+            try:
+                agent_count = agent_system.get_agent_count(caller)
+                # Get agent cap from rank
+                agent_cap = "?"
+                if rank_system:
+                    try:
+                        current_rank = rank_system.get_rank(caller)
+                        agent_cap = getattr(current_rank, "agent_cap", "?")
+                    except Exception:
+                        pass
+                lines.append(f"  Agents: {agent_count}/{agent_cap}")
+            except Exception:
+                pass
+
+        # Combat timer (Req 17.5)
+        combat_expires = getattr(caller.db, "combat_timer_expires", 0) or 0
+        if combat_expires > 0:
+            # Estimate remaining seconds from tick count
+            remaining = combat_expires
+            try:
+                from evennia.utils.search import search_script
+                tick_scripts = search_script("game_tick")
+                if tick_scripts:
+                    current_tick = getattr(tick_scripts[0].db, "tick_count", 0)
+                    remaining = max(0, combat_expires - current_tick)
+            except Exception:
+                pass
+            if remaining > 0:
+                lines.append(f"  |rCombat: {remaining}s|n")
 
         # Resources
         resources = status.get("resources", {})
@@ -853,7 +1042,12 @@ class CmdBuildings(GameCommand):
                 lx = getattr(loc, "x", "?")
                 ly = getattr(loc, "y", "?")
                 loc_str = f" at ({lx}, {ly})"
-            lines.append(f"  {info['type']} Lv{info['level']}{loc_str} — HP: {info['hp']}/{info['hp_max']}")
+            status = ""
+            if get_building_attr(b, "under_construction", False):
+                progress = get_building_attr(b, "construction_progress", 0) or 0
+                total = get_building_attr(b, "construction_total", 0) or 0
+                status = f" |y[building {progress}/{total}s]|n"
+            lines.append(f"  {info['type']} Lv{info['level']}{loc_str} — HP: {info['hp']}/{info['hp_max']}{status}")
 
         self.caller.msg("\n".join(lines))
 
@@ -1108,7 +1302,7 @@ class CmdLook(GameCommand):
         look
         look <obj>
 
-    Shows the ASCII map (or building interior if inside one).
+    Shows the overworld map and building interior (if inside one).
     """
 
     key = "look"
@@ -1130,13 +1324,14 @@ class CmdLook(GameCommand):
                 return
 
         # at_look calls return_appearance on the target, which for
-        # PlanetRoom sends the map via tagged msg and returns empty.
+        # PlanetRoom shows the building interior if inside one.
         desc = caller.at_look(target)
         if desc:
             self.msg(text=(desc, {"type": "look"}), options=None)
-        # Send graphical map update to webclient
+
+        # Always render and send the overworld map on bare 'look'
         if not self.args:
-            _send_map_update(caller)
+            _render_and_send_map(caller)
 
 
 class CmdMap(GameCommand):
@@ -1154,44 +1349,7 @@ class CmdMap(GameCommand):
     help_category = "Game"
 
     def func(self):
-        caller = self.caller
-        renderer = _get_system(caller, "procedural_map_renderer")
-        if renderer is None:
-            caller.msg("Map system is not available.")
-            return
-
-        planet = getattr(caller.db, "coord_planet", None)
-
-        if not planet:
-            _, _, planet = ensure_coords(caller)
-
-        if not planet:
-            caller.msg("Cannot determine your position. Try logging out and back in.")
-            return
-
-        buildings = caller.get_buildings() if hasattr(caller, "get_buildings") else []
-
-        try:
-            map_str = renderer.render(caller, buildings)
-        except Exception:
-            import logging
-            logging.getLogger("evennia.commands").exception("Map render failed")
-            caller.msg("Could not render the map.")
-            return
-
-        if map_str:
-            x = getattr(caller.db, "coord_x", "?")
-            y = getattr(caller.db, "coord_y", "?")
-            # Show discovered tile count for debugging fog of war
-            fog_system = _get_system(caller, "fog_system")
-            disc_count = 0
-            if fog_system:
-                disc_count = len(fog_system.get_discovered_tile_set(caller))
-            caller.msg(text=(f"|wMap — ({x}, {y}) on {planet} | {disc_count} tiles discovered|n\n{map_str}", {"cls": "ascii-map"}))
-        else:
-            caller.msg("Nothing to display — explore first.")
-
-        _send_map_update(caller)
+        _render_and_send_map(self.caller)
 
 
 # ------------------------------------------------------------------ #
@@ -1329,6 +1487,43 @@ class CmdOpenExit(GameCommand):
         caller.msg(f"Opened the {direction} exit.")
 
 
+class CmdStop(GameCommand):
+    """Stop your current activity and return to idle.
+
+    Usage:
+        stop
+
+    Cancels building construction or harvesting in progress.
+    Construction progress is saved — you can resume later with
+    ``build`` on the same tile.
+    """
+
+    key = "stop"
+    aliases = ["cancel"]
+    help_category = "Game"
+
+    def func(self):
+        caller = self.caller
+        state = getattr(getattr(caller, "db", None), "activity_state", "idle")
+
+        if state == "idle":
+            caller.msg("You aren't doing anything.")
+            return
+
+        if state == "building":
+            target = getattr(caller.db, "activity_target", None)
+            btype = "??"
+            if target is not None:
+                btype = get_building_attr(target, "building_type", "??")
+            caller.msg(f"You stop working on {btype}. Progress is saved.")
+        elif state == "harvesting":
+            caller.msg("You stop harvesting.")
+
+        caller.db.activity_state = "idle"
+        caller.db.activity_target = None
+        caller.db.activity_progress = 0
+
+
 class CmdLeave(GameCommand):
     """Leave the building you're currently inside.
 
@@ -1358,7 +1553,19 @@ class CmdLeave(GameCommand):
                     x = getattr(caller.db, "coord_x", "?")
                     y = getattr(caller.db, "coord_y", "?")
                     planet = getattr(caller.db, "coord_planet", "?")
-                    _send_ascii_map(caller, f"|wMap — ({x}, {y}) on {planet}|n\n{map_str}")
+                    terrain_info = ""
+                    try:
+                        tile_resolver = _get_system(caller, "tile_resolver")
+                        if tile_resolver and x != "?" and y != "?":
+                            tt, res = tile_resolver.get_or_generate_terrain(
+                                int(x), int(y), str(planet)
+                            )
+                            terrain_info = f" | {tt}"
+                            if res:
+                                terrain_info += f" ({res})"
+                    except Exception:
+                        pass
+                    _send_ascii_map(caller, f"|wMap — ({x}, {y}) on {planet}{terrain_info}|n\n{map_str}")
             except Exception:
                 pass
         _send_map_update(caller)

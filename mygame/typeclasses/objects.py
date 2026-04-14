@@ -367,14 +367,17 @@ class Building(DefaultObject):
     def take_damage(self, amount: int, attacker=None) -> None:
         """Apply *amount* damage to this building's HP.
 
-        If HP reaches zero the building is considered destroyed.
-        Publishes ``building_destroyed`` when HP hits 0.
+        If HP reaches zero the building goes offline (Req 6.9) rather
+        than being destroyed.  Publishes ``building_destroyed`` when HP
+        hits 0.
         """
         hp = self.attributes.get("hp", default=0)
         hp = max(0, hp - amount)
         self.attributes.add("hp", hp)
 
         if hp <= 0:
+            # Req 6.9: set offline instead of destroying
+            self.set_offline(True)
             try:
                 from world.event_bus import event_bus, BUILDING_DESTROYED
                 event_bus.publish(

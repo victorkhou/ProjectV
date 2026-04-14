@@ -12,6 +12,11 @@ def make_valid_building(**overrides):
         "requires_hq": False,
         "category": "headquarters",
         "map_symbol": "HQ",
+        "build_time_seconds": 180,
+        "max_level": 5,
+        "rank_requirement": 1,
+        "requires_agent": False,
+        "storage_capacity": 0,
     }
     base.update(overrides)
     return base
@@ -24,7 +29,13 @@ def make_valid_item(**overrides):
 
 
 def make_valid_rank(level=1, xp=0, **overrides):
-    base = {"name": f"Rank{level}", "level": level, "xp_threshold": xp}
+    base = {
+        "name": f"Rank{level}",
+        "level": level,
+        "xp_threshold": xp,
+        "agent_cap": 2,
+        "planet_access": ["terra"],
+    }
     base.update(overrides)
     return base
 
@@ -330,7 +341,7 @@ class TestCrossValidate:
         """Create a minimal mock registry with valid cross-references."""
         from types import SimpleNamespace
         from mygame.world.definitions import (
-            BuildingDef, ItemDef, RankDef, TechnologyDef, PowerupDef,
+            BuildingDef, ItemDef, RankDef, TechnologyDef, PowerupDef, PlanetDef,
         )
 
         defaults = {
@@ -375,6 +386,12 @@ class TestCrossValidate:
             },
             "item_production_map": {
                 "AA": ["rifle"],
+            },
+            "planets": {
+                "Earth": PlanetDef(
+                    name="Earth", planet_type="Earth_Planet",
+                    terrain_types=["Plains", "Forest"],
+                ),
             },
         }
         defaults.update(overrides)

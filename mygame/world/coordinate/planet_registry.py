@@ -113,6 +113,7 @@ class PlanetRegistry:
                 default_planet=entry.get("default_planet", False),
                 z_level=entry.get("z_level", i),
                 seed_rotation_ticks=entry.get("seed_rotation_ticks", 0),
+                rank_requirement=entry.get("rank_requirement", 1),
             )
             spaces[planet_key] = space
 

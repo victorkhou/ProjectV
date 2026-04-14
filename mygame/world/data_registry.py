@@ -189,6 +189,11 @@ class DataRegistry:
                 produces=entry.get("produces"),
                 unlocks=entry.get("unlocks", []),
                 map_symbol=entry.get("map_symbol", entry["abbreviation"]),
+                build_time_seconds=entry.get("build_time_seconds", 120),
+                max_level=entry.get("max_level", 5),
+                rank_requirement=entry.get("rank_requirement", 1),
+                requires_agent=entry.get("requires_agent", False),
+                storage_capacity=entry.get("storage_capacity", 0),
             )
             self.buildings[bdef.abbreviation] = bdef
 
@@ -217,6 +222,8 @@ class DataRegistry:
                 level=entry["level"],
                 xp_threshold=entry["xp_threshold"],
                 unlocks=entry.get("unlocks", []),
+                agent_cap=entry.get("agent_cap", 2),
+                planet_access=entry.get("planet_access", []),
             )
             ranks.append(rdef)
         self.ranks = sorted(ranks, key=lambda r: r.level)
@@ -373,6 +380,8 @@ class DataRegistry:
         """
         if not self.ranks:
             raise ValueError("No ranks loaded in registry")
+        if xp is None:
+            xp = 0
         result = self.ranks[0]
         for rank in self.ranks:
             if rank.xp_threshold <= xp:

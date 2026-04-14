@@ -21,9 +21,10 @@ from commands.game_commands import (
     CmdAttack, CmdEquip, CmdUnequip, CmdResearch, CmdPowerup,
     CmdScore, CmdEquipment, CmdBuildings, CmdScan, CmdTechnology,
     CmdInventory, CmdChat, CmdMessage, CmdSay, CmdLook, CmdMap,
-    CmdLeave, CmdCloseExit, CmdOpenExit,
+    CmdLeave, CmdCloseExit, CmdOpenExit, CmdStop,
 )
-from commands.admin_commands import CmdReloadData, CmdGiveResource, CmdPurgeRooms, CmdTeleport, CmdSpawnBuilding, CmdClearFog
+from commands.agent_commands import CmdAgents, CmdAssign, CmdUnassign, CmdTrain
+from commands.admin_commands import CmdReloadData, CmdGiveResource, CmdPurgeRooms, CmdTeleport, CmdSpawnBuilding, CmdClearFog, CmdResetResources, CmdMigrate, CmdDestroyAgent, CmdListAgents
 
 
 class CharacterCmdSet(default_cmds.CharacterCmdSet):
@@ -66,8 +67,14 @@ class CharacterCmdSet(default_cmds.CharacterCmdSet):
         self.add(CmdLook())
         self.add(CmdMap())
         self.add(CmdLeave())
+        self.add(CmdStop())
         self.add(CmdCloseExit())
         self.add(CmdOpenExit())
+        # Agent commands
+        self.add(CmdAgents())
+        self.add(CmdAssign())
+        self.add(CmdUnassign())
+        self.add(CmdTrain())
         # Admin commands (lock-gated to Builder+)
         self.add(CmdReloadData())
         self.add(CmdGiveResource())
@@ -75,6 +82,10 @@ class CharacterCmdSet(default_cmds.CharacterCmdSet):
         self.add(CmdTeleport())
         self.add(CmdSpawnBuilding())
         self.add(CmdClearFog())
+        self.add(CmdResetResources())
+        self.add(CmdMigrate())
+        self.add(CmdDestroyAgent())
+        self.add(CmdListAgents())
 
 
 class AccountCmdSet(default_cmds.AccountCmdSet):

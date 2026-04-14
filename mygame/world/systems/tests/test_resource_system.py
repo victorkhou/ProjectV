@@ -374,3 +374,375 @@ class TestProcessRespawns(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+# -------------------------------------------------------------- #
+#  Enhanced Fakes for active-presence & Extractor tests
+# -------------------------------------------------------------- #
+
+class FakeDB:
+    """Simulates Evennia's db handler (attribute-style access)."""
+
+    def __init__(self, **kwargs):
+        for k, v in kwargs.items():
+            setattr(self, k, v)
+
+
+class FakePlayerWithDB(FakePlayer):
+    """FakePlayer extended with a db handler for active-presence state."""
+
+    def __init__(self, name="TestPlayer", resources=None, location=None):
+        super().__init__(name=name, resources=resources)
+        self.db = FakeDB(
+            activity_state="idle",
+            activity_target=None,
+            activity_progress=0,
+            coord_x=0,
+            coord_y=0,
+        )
+        self.location = location
+
+
+class FakeExtractor:
+    """Lightweight stand-in for an Extractor building with inventory."""
+
+    def __init__(self, building_type="EX", owner=None, level=1,
+                 offline=False, assigned_agent=None, resource_inventory=None):
+        self.key = building_type
+        self.attributes = FakeAttributes({
+            "building_type": building_type,
+            "owner": owner,
+            "building_level": level,
+            "offline": offline,
+            "assigned_agent": assigned_agent,
+            "resource_inventory": resource_inventory if resource_inventory is not None else {},
+        })
+        self._owner = owner
+
+    @property
+    def owner(self):
+        return self._owner
+
+    @property
+    def building_level(self):
+        return self.attributes.get("building_level", default=1)
+
+    @property
+    def is_offline(self):
+        return bool(self.attributes.get("offline", default=False))
+
+
+class FakeAgent:
+    """Lightweight stand-in for an NPC agent."""
+
+    def __init__(self, role="harvester", incapacitated=False):
+        self.db = FakeDB(role=role, incapacitated=incapacitated)
+
+
+def _make_extractor_registry() -> DataRegistry:
+    """Create a DataRegistry with an Extractor building definition."""
+    registry = _make_registry()
+    registry.buildings["EX"] = BuildingDef(
+        name="Extractor", abbreviation="EX",
+        cost={"Wood": 20, "Stone": 10},
+        max_health=200, requires_hq=True, required_terrain="Forest",
+        category="resource", produces="Wood", unlocks=[], map_symbol="EX",
+        storage_capacity=100,
+    )
+    return registry
+
+
+# -------------------------------------------------------------- #
+#  start_harvest Tests
+# -------------------------------------------------------------- #
+
+class TestStartHarvest(unittest.TestCase):
+    """Test start_harvest sets player into harvesting state."""
+
+    def test_start_harvest_success(self):
+        tile = FakeTile(
+            terrain_type="Forest",
+            resource_node={"resource_type": "Wood", "depleted": False},
+        )
+        player = FakePlayerWithDB(location=tile)
+        system, _ = _make_system()
+        ok, msg = system.start_harvest(player, tile)
+        self.assertTrue(ok)
+        self.assertEqual(player.db.activity_state, "harvesting")
+        self.assertIs(player.db.activity_target, tile)
+        self.assertEqual(player.db.activity_progress, 0)
+
+    def test_start_harvest_no_node(self):
+        tile = FakeTile(terrain_type="Plains")
+        player = FakePlayerWithDB(location=tile)
+        system, _ = _make_system()
+        ok, msg = system.start_harvest(player, tile)
+        self.assertFalse(ok)
+        self.assertIn("No resource node", msg)
+
+    def test_start_harvest_depleted(self):
+        tile = FakeTile(
+            terrain_type="Forest",
+            resource_node={"resource_type": "Wood", "depleted": True},
+        )
+        player = FakePlayerWithDB(location=tile)
+        system, _ = _make_system()
+        ok, msg = system.start_harvest(player, tile)
+        self.assertFalse(ok)
+        self.assertIn("depleted", msg)
+
+    def test_start_harvest_no_resource_type(self):
+        tile = FakeTile(
+            terrain_type="Plains",
+            resource_node={"resource_type": None, "depleted": False},
+        )
+        player = FakePlayerWithDB(location=tile)
+        system, _ = _make_system()
+        ok, msg = system.start_harvest(player, tile)
+        self.assertFalse(ok)
+
+
+# -------------------------------------------------------------- #
+#  process_harvest_tick Tests
+# -------------------------------------------------------------- #
+
+class TestProcessHarvestTick(unittest.TestCase):
+    """Test active-presence harvest tick processing."""
+
+    def _setup_harvesting_player(self):
+        tile = FakeTile(
+            terrain_type="Forest",
+            resource_node={"resource_type": "Wood", "depleted": False},
+        )
+        player = FakePlayerWithDB(location=tile)
+        player.db.activity_state = "harvesting"
+        player.db.activity_target = tile
+        player.db.activity_progress = 0
+        return player, tile
+
+    def test_yields_on_cooldown(self):
+        """Resources yielded every HARVEST_COOLDOWN_TICKS ticks."""
+        player, tile = self._setup_harvesting_player()
+        system, _ = _make_system()
+
+        # Ticks 1-3: no yield (cooldown is 4)
+        for _ in range(3):
+            self.assertFalse(system.process_harvest_tick(player))
+        self.assertEqual(player.get_resource("Wood"), 0)
+
+        # Tick 4: yield (1 unit per 4 ticks on raw terrain)
+        self.assertTrue(system.process_harvest_tick(player))
+        self.assertEqual(player.get_resource("Wood"), 1)
+
+    def test_multiple_cycles(self):
+        """Resources accumulate over multiple cooldown cycles."""
+        player, tile = self._setup_harvesting_player()
+        system, _ = _make_system()
+
+        for _ in range(8):
+            system.process_harvest_tick(player)
+
+        # 2 full cycles × 1 unit = 2
+        self.assertEqual(player.get_resource("Wood"), 2)
+
+    def test_not_harvesting_state(self):
+        player = FakePlayerWithDB()
+        player.db.activity_state = "idle"
+        system, _ = _make_system()
+        self.assertFalse(system.process_harvest_tick(player))
+
+    def test_player_moved_away(self):
+        """Harvest pauses when player is not on the target tile."""
+        player, tile = self._setup_harvesting_player()
+        player.location = None  # moved away
+        system, _ = _make_system()
+        self.assertFalse(system.process_harvest_tick(player))
+        # State preserved (paused, not reset)
+        self.assertEqual(player.db.activity_state, "harvesting")
+
+    def test_depleted_node_resets_state(self):
+        tile = FakeTile(
+            terrain_type="Forest",
+            resource_node={"resource_type": "Wood", "depleted": True},
+        )
+        player = FakePlayerWithDB(location=tile)
+        player.db.activity_state = "harvesting"
+        player.db.activity_target = tile
+        system, _ = _make_system()
+        self.assertFalse(system.process_harvest_tick(player))
+        self.assertEqual(player.db.activity_state, "idle")
+
+    def test_publishes_event_on_yield(self):
+        player, tile = self._setup_harvesting_player()
+        events = []
+        event_bus = EventBus()
+        event_bus.subscribe("resource_gathered", lambda **kw: events.append(kw))
+        system = ResourceSystem(_make_registry(), event_bus)
+
+        # Cooldown is 4 ticks, so tick 4 yields
+        for _ in range(4):
+            system.process_harvest_tick(player)
+
+        self.assertEqual(len(events), 1)
+        self.assertEqual(events[0]["resource_type"], "Wood")
+        self.assertEqual(events[0]["amount"], 1)
+
+
+# -------------------------------------------------------------- #
+#  Extractor Inventory Tests
+# -------------------------------------------------------------- #
+
+class TestExtractorInventory(unittest.TestCase):
+    """Test Extractor storage capacity and inventory management."""
+
+    def test_capacity_level_1(self):
+        self.assertEqual(ResourceSystem.get_extractor_capacity(1), 100)
+
+    def test_capacity_level_3(self):
+        # 100 + 50 × (3-1) = 200
+        self.assertEqual(ResourceSystem.get_extractor_capacity(3), 200)
+
+    def test_capacity_level_5(self):
+        # 100 + 50 × (5-1) = 300
+        self.assertEqual(ResourceSystem.get_extractor_capacity(5), 300)
+
+    def test_add_to_inventory(self):
+        building = FakeExtractor(level=1)
+        added = ResourceSystem.add_to_extractor_inventory(building, "Wood", 50, 1)
+        self.assertEqual(added, 50)
+        inv = ResourceSystem.get_extractor_inventory(building)
+        self.assertEqual(inv["Wood"], 50)
+
+    def test_add_respects_capacity(self):
+        building = FakeExtractor(level=1, resource_inventory={"Wood": 80})
+        # Capacity is 100, only 20 space left
+        added = ResourceSystem.add_to_extractor_inventory(building, "Wood", 50, 1)
+        self.assertEqual(added, 20)
+        inv = ResourceSystem.get_extractor_inventory(building)
+        self.assertEqual(inv["Wood"], 100)
+
+    def test_add_at_full_capacity(self):
+        building = FakeExtractor(level=1, resource_inventory={"Wood": 100})
+        added = ResourceSystem.add_to_extractor_inventory(building, "Wood", 10, 1)
+        self.assertEqual(added, 0)
+
+    def test_stored_amount(self):
+        building = FakeExtractor(
+            level=1, resource_inventory={"Wood": 30, "Stone": 20}
+        )
+        self.assertEqual(ResourceSystem.get_extractor_stored_amount(building), 50)
+
+    def test_empty_inventory(self):
+        building = FakeExtractor(level=1)
+        self.assertEqual(ResourceSystem.get_extractor_stored_amount(building), 0)
+        self.assertEqual(ResourceSystem.get_extractor_inventory(building), {})
+
+
+# -------------------------------------------------------------- #
+#  process_extractor_production Tests
+# -------------------------------------------------------------- #
+
+class TestProcessExtractorProduction(unittest.TestCase):
+    """Test Harvester agent production via Extractors."""
+
+    def test_production_with_harvester(self):
+        player = FakePlayer()
+        agent = FakeAgent(role="harvester")
+        building = FakeExtractor(
+            building_type="EX", owner=player, level=1, assigned_agent=agent
+        )
+        registry = _make_extractor_registry()
+        system, _ = _make_system(registry=registry)
+        system.process_extractor_production([building])
+        inv = ResourceSystem.get_extractor_inventory(building)
+        # base_rate=1, level 1 → 1 × (1 + 0.25×0) = 1
+        self.assertEqual(inv.get("Wood", 0), 1)
+
+    def test_production_scales_with_level(self):
+        player = FakePlayer()
+        agent = FakeAgent(role="harvester")
+        building = FakeExtractor(
+            building_type="EX", owner=player, level=3, assigned_agent=agent
+        )
+        registry = _make_extractor_registry()
+        system, _ = _make_system(registry=registry)
+        system.process_extractor_production([building])
+        inv = ResourceSystem.get_extractor_inventory(building)
+        # base_rate=1, level 3 → 1 × (1 + 0.25×2) = 1.5 → int(1.5) = 1, max(1,1) = 1
+        self.assertEqual(inv.get("Wood", 0), 1)
+
+    def test_production_no_agent(self):
+        player = FakePlayer()
+        building = FakeExtractor(
+            building_type="EX", owner=player, level=1, assigned_agent=None
+        )
+        registry = _make_extractor_registry()
+        system, _ = _make_system(registry=registry)
+        system.process_extractor_production([building])
+        inv = ResourceSystem.get_extractor_inventory(building)
+        self.assertEqual(sum(inv.values()), 0)
+
+    def test_production_incapacitated_agent(self):
+        player = FakePlayer()
+        agent = FakeAgent(role="harvester", incapacitated=True)
+        building = FakeExtractor(
+            building_type="EX", owner=player, level=1, assigned_agent=agent
+        )
+        registry = _make_extractor_registry()
+        system, _ = _make_system(registry=registry)
+        system.process_extractor_production([building])
+        inv = ResourceSystem.get_extractor_inventory(building)
+        self.assertEqual(sum(inv.values()), 0)
+
+    def test_production_wrong_role(self):
+        player = FakePlayer()
+        agent = FakeAgent(role="soldier")
+        building = FakeExtractor(
+            building_type="EX", owner=player, level=1, assigned_agent=agent
+        )
+        registry = _make_extractor_registry()
+        system, _ = _make_system(registry=registry)
+        system.process_extractor_production([building])
+        inv = ResourceSystem.get_extractor_inventory(building)
+        self.assertEqual(sum(inv.values()), 0)
+
+    def test_production_pauses_at_capacity(self):
+        player = FakePlayer()
+        agent = FakeAgent(role="harvester")
+        building = FakeExtractor(
+            building_type="EX", owner=player, level=1,
+            assigned_agent=agent, resource_inventory={"Wood": 100},
+        )
+        registry = _make_extractor_registry()
+        system, _ = _make_system(registry=registry)
+        system.process_extractor_production([building])
+        inv = ResourceSystem.get_extractor_inventory(building)
+        self.assertEqual(inv["Wood"], 100)  # unchanged
+
+    def test_production_skips_offline(self):
+        player = FakePlayer()
+        agent = FakeAgent(role="harvester")
+        building = FakeExtractor(
+            building_type="EX", owner=player, level=1,
+            assigned_agent=agent, offline=True,
+        )
+        registry = _make_extractor_registry()
+        system, _ = _make_system(registry=registry)
+        system.process_extractor_production([building])
+        inv = ResourceSystem.get_extractor_inventory(building)
+        self.assertEqual(sum(inv.values()), 0)
+
+    def test_production_publishes_event(self):
+        player = FakePlayer()
+        agent = FakeAgent(role="harvester")
+        building = FakeExtractor(
+            building_type="EX", owner=player, level=1, assigned_agent=agent
+        )
+        events = []
+        event_bus = EventBus()
+        event_bus.subscribe("resource_gathered", lambda **kw: events.append(kw))
+        registry = _make_extractor_registry()
+        system = ResourceSystem(registry, event_bus)
+        system.process_extractor_production([building])
+        self.assertEqual(len(events), 1)
+        self.assertEqual(events[0]["resource_type"], "Wood")

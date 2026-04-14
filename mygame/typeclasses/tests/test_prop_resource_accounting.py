@@ -166,6 +166,9 @@ class TestProperty3ResourceAccounting(unittest.TestCase):
     def test_deduct_resources_fails_when_insufficient(self, costs):
         """deduct_resources fails when any resource is insufficient."""
         char = _make_character()
+        # Zero out all resources first so we control the exact amounts
+        for r in RESOURCE_TYPES:
+            char.db.resources[r] = 0
         # Give less than needed for the first resource
         first_r = list(costs.keys())[0]
         char.add_resource(first_r, costs[first_r] - 1)
@@ -204,7 +207,9 @@ class TestProperty3ResourceAccounting(unittest.TestCase):
     def test_has_resources_false_when_insufficient(self, costs):
         """has_resources returns False when any resource < cost."""
         char = _make_character()
-        # Don't add any resources — all start at 0, costs are >= 1
+        # Zero out all resources so costs (>= 1) are always insufficient
+        for r in RESOURCE_TYPES:
+            char.db.resources[r] = 0
         self.assertFalse(char.has_resources(costs))
 
     @given(costs=costs_strategy())
@@ -212,7 +217,9 @@ class TestProperty3ResourceAccounting(unittest.TestCase):
     def test_failed_deduction_does_not_change_resources(self, costs):
         """A failed deduct_resources does not modify any resource."""
         char = _make_character()
-        # Resources all at 0, costs all >= 1 → will fail
+        # Zero out all resources so costs (>= 1) will always fail
+        for r in RESOURCE_TYPES:
+            char.db.resources[r] = 0
         before = {r: char.get_resource(r) for r in RESOURCE_TYPES}
         char.deduct_resources(costs)
         for r in RESOURCE_TYPES:

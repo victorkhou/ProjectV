@@ -235,17 +235,20 @@ class GameTickScript(DefaultScript):
         powerup_system = systems.get("powerup_system")
         tech_system = systems.get("tech_system")
         event_bus = systems.get("event_bus")
+        agent_system = systems.get("agent_system")
+        building_system = systems.get("building_system")
 
         # Compute active data once, shared across steps.
         # Mutable container so the active_chunks step can populate it
         # and subsequent steps use the result.
-        tick_data = {"buildings": [], "tiles": []}
+        tick_data = {"buildings": [], "tiles": [], "online_players": []}
 
         def compute_active_chunks():
             """Step 1: determine active chunks and filter world data."""
+            online_players = self._get_online_players()
+            tick_data["online_players"] = online_players
             if not chunking:
                 return
-            online_players = self._get_online_players()
             buildings, tiles = self._compute_active_data(
                 chunking, online_players
             )
@@ -266,16 +269,43 @@ class GameTickScript(DefaultScript):
                         gen.advance_tick(tick_number)
             steps.append(("terrain_epochs", advance_terrain_epochs))
 
-        # 2. Resource building production
+        # 2. Agent system tick — process all agent behavior scripts
+        if agent_system:
+            steps.append((
+                "agent_processing",
+                lambda: agent_system.process_tick(tick_number),
+            ))
+
+        # 2b. Agent training timer — uses in-memory cache, no DB query per tick
+        if agent_system:
+            steps.append((
+                "agent_training",
+                lambda: agent_system.process_training_tick(
+                    agent_system._training_buildings
+                ),
+            ))
+
+        # 3. Active-presence processing — building and harvesting for online players
+        if building_system or resource_system:
+            def process_active_presence():
+                for player in tick_data["online_players"]:
+                    state = getattr(getattr(player, "db", None), "activity_state", "idle")
+                    if state == "building" and building_system:
+                        building_system.process_construction_tick(player)
+                    elif state == "harvesting" and resource_system:
+                        resource_system.process_harvest_tick(player)
+            steps.append(("active_presence", process_active_presence))
+
+        # 4. Extractor production — Harvester agents produce into Extractor inventory
         if resource_system:
             steps.append((
-                "resource_production",
-                lambda: resource_system.process_production(
+                "extractor_production",
+                lambda: resource_system.process_extractor_production(
                     tick_data["buildings"]
                 ),
             ))
 
-        # 3. Equipment building production
+        # 5. Equipment building production
         if equipment_system:
             steps.append((
                 "equipment_production",
@@ -284,7 +314,7 @@ class GameTickScript(DefaultScript):
                 ),
             ))
 
-        # 4. Combat resolution
+        # 6. Combat resolution
         if combat_engine:
             steps.append((
                 "combat_resolution",
@@ -293,7 +323,7 @@ class GameTickScript(DefaultScript):
                 ),
             ))
 
-        # 5. Turret auto-attacks
+        # 7. Turret auto-attacks
         if combat_engine:
             steps.append((
                 "turret_attacks",
@@ -302,21 +332,32 @@ class GameTickScript(DefaultScript):
                 ),
             ))
 
-        # 6. Powerup duration decrements
+        # 8. Combat timer decrement — expire combat timers for online players
+        def decrement_combat_timers():
+            for player in tick_data["online_players"]:
+                db = getattr(player, "db", None)
+                if db is None:
+                    continue
+                expires = getattr(db, "combat_timer_expires", 0) or 0
+                if expires > 0 and tick_number >= expires:
+                    db.combat_timer_expires = 0
+        steps.append(("combat_timer_decrement", decrement_combat_timers))
+
+        # 9. Powerup duration decrements
         if powerup_system:
             steps.append((
                 "powerup_ticks",
                 lambda: powerup_system.process_tick(tick_number),
             ))
 
-        # 7. Technology research timer decrements
+        # 10. Technology research timer decrements
         if tech_system:
             steps.append((
                 "tech_research",
                 lambda: tech_system.process_tick(),
             ))
 
-        # 8. Resource node respawn counter decrements
+        # 11. Resource node respawn counter decrements
         if resource_system:
             steps.append((
                 "resource_respawns",
@@ -325,7 +366,7 @@ class GameTickScript(DefaultScript):
                 ),
             ))
 
-        # 9. Publish tick_completed event
+        # 12. Publish tick_completed event
         if event_bus:
             steps.append((
                 "tick_completed",
@@ -335,7 +376,7 @@ class GameTickScript(DefaultScript):
                 ),
             ))
 
-        # 10. Garbage collection for dynamic rooms (runs every gc_interval_ticks)
+        # 13. Garbage collection for dynamic rooms (runs every gc_interval_ticks)
         garbage_collector = systems.get("garbage_collector")
         if garbage_collector:
             gc_interval = getattr(garbage_collector, "interval_ticks", 100)

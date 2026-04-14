@@ -34,23 +34,60 @@ if TYPE_CHECKING:
 
 # Terrain type -> Evennia color code
 _TERRAIN_COLORS: dict[str, str] = {
-    # Earth
+    # Terra (earth)
     "Plains":        "|g",   # green
-    "Dirt":           "|y",   # yellow
     "Forest":        "|G",   # dark green
+    "Dirt":          "|y",   # yellow
     "Rock":          "|w",   # white
     "Mountain":      "|W",   # bright white
-    # Industrial
+    "River":         "|c",   # cyan
+    "Sand":          "|Y",   # bright yellow
+    "Snow":          "|W",   # bright white
+    # Forge (industrial)
     "Power_Grid":    "|Y",   # bright yellow
     "Scrapyard":     "|y",   # yellow
     "Circuit_Field": "|c",   # cyan
+    "Factory_Floor": "|w",   # white
     "Ruins":         "|x",   # dark grey
+    "Toxic_Waste":   "|R",   # dark red
+    "Pipeline":      "|w",   # white
+    "Warehouse":     "|w",   # white
+    # Tundra (frozen)
+    "Snowfield":     "|W",   # bright white
+    "Frozen_Lake":   "|C",   # bright cyan
+    "Pine_Forest":   "|G",   # dark green
+    "Ice_Cave":      "|C",   # bright cyan
+    "Permafrost":    "|w",   # white
+    "Glacier":       "|W",   # bright white
+    "Hot_Spring":    "|Y",   # bright yellow
+    "Tundra_Moss":   "|g",   # green
+    # Inferno (volcanic)
+    "Ash_Wastes":    "|x",   # dark grey
+    "Lava_Flow":     "|R",   # dark red
+    "Obsidian_Plain":"|w",   # white
+    "Magma_Vent":    "|r",   # red
+    "Scorched_Rock": "|y",   # yellow
+    "Sulfur_Pit":    "|Y",   # bright yellow
+    "Ember_Field":   "|R",   # dark red
+    "Basalt_Ridge":  "|w",   # white
+    # Citadel (fortress)
+    "Corridor":      "|w",   # white
+    "Vault_Room":    "|m",   # magenta
+    "Armory_Ruin":   "|y",   # yellow
+    "Control_Room":  "|c",   # cyan
+    "Open_Chamber":  "|w",   # white
+    "Blast_Door":    "|W",   # bright white
+    "Generator_Room":"|Y",   # bright yellow
+    "Barracks_Ruin": "|x",   # dark grey
     # Space
     "Void":          "|X",   # dark grey (near black)
     "Nebula":        "|m",   # magenta
     "Asteroid":      "|w",   # white
     "Debris":        "|y",   # yellow
     "Ice_Field":     "|C",   # bright cyan
+    "Wormhole":      "|m",   # magenta
+    "Radiation_Zone":"|R",   # dark red
+    "Derelict_Ship": "|x",   # dark grey
 }
 
 _FOG_COLOR = "|x"  # grey for fog-of-war tiles
@@ -253,18 +290,31 @@ class ProceduralMapRenderer:
     def _colored_room(self, room: Any, looker: Any, x: int, y: int, planet: str) -> str:
         """Get the colored symbol for a room tile.
 
-        Uses the room only for building detection.
-        For player detection, checks coordinates to handle the shared
-        PlanetRoom where ALL players are in contents.
-        Terrain symbol always comes from the generator + symbol cache
-        so it stays in sync with the YAML definitions.
+        Display priority (highest to lowest):
+        1. Player self -> |Y@@|n (yellow)
+        2. Enemy player -> |r**|n (red)
+        3. Own agent (overworld) -> |g{sym}|n (green)
+        4. Enemy agent (overworld) -> |r{sym}|n (red)
+        5. Neutral NPC -> |y{sym}|n (yellow)
+        6. Occupied building (entity inside) -> |B{abbr}|n (dark blue)
+        7. Unoccupied own building -> |c{abbr}|n (cyan)
+        8. Unoccupied enemy building -> |R{abbr}|n (dark red)
+        9. Terrain symbol
+
+        Agents inside buildings do NOT render as separate symbols —
+        only the building color changes to dark blue.
         """
-        # Check for player characters by coordinate match
         contents = getattr(room, "contents", [])
+        looker_id = getattr(looker, "id", None)
+
+        # Scan contents for players and overworld NPCs
+        own_agent = None
+        enemy_agent = None
+        neutral_npc = None
+
         for obj in contents:
+            # Player characters (coordinate-filtered for PlanetRoom)
             if hasattr(obj, "has_account") and obj.has_account:
-                # Filter by coordinates — in a PlanetRoom, all players
-                # are in contents, so we must check position
                 ox = _get_coord(obj, "coord_x") if hasattr(obj, "db") else None
                 oy = _get_coord(obj, "coord_y") if hasattr(obj, "db") else None
                 if ox == x and oy == y:
@@ -272,7 +322,33 @@ class ProceduralMapRenderer:
                         return "|Y@@|n"
                     return "|r**|n"
 
-        # Check for building
+            # NPC objects with npc_type tag (agents, enemies, vendors)
+            if hasattr(obj, "tags") and obj.tags.get(category="npc_type"):
+                npc_owner = getattr(obj.db, "owner", None) if hasattr(obj, "db") else None
+                npc_owner_id = getattr(npc_owner, "id", None) if npc_owner else None
+                if npc_owner_id is not None and npc_owner_id == looker_id:
+                    if own_agent is None:
+                        own_agent = obj
+                elif npc_owner_id is not None:
+                    if enemy_agent is None:
+                        enemy_agent = obj
+                else:
+                    if neutral_npc is None:
+                        neutral_npc = obj
+
+        # Overworld NPCs (not inside buildings) — priority: own > enemy > neutral
+        if own_agent is not None:
+            role = getattr(own_agent.db, "role", "") if hasattr(own_agent, "db") else ""
+            sym = _agent_symbol(role)
+            return f"|g{sym}|n"
+        if enemy_agent is not None:
+            sym = "ag"
+            return f"|r{sym}|n"
+        if neutral_npc is not None:
+            sym = "ag"
+            return f"|y{sym}|n"
+
+        # Check for building (priorities 6-8, below overworld NPCs)
         bld = getattr(room, "building", None)
         if bld is not None:
             if hasattr(bld, "get_display_abbreviation"):
@@ -283,6 +359,22 @@ class ProceduralMapRenderer:
                     bt = bld.attributes.get("building_type", default=None)
                     if bt:
                         abbr = str(bt)[:2]
+
+            # Agents inside buildings render as occupied building (dark blue),
+            # not as separate agent symbols (Req 19.5, 19.8)
+            bld_contents = getattr(bld, "contents", [])
+            has_entity_inside = False
+            for obj in bld_contents:
+                if hasattr(obj, "has_account") and obj.has_account:
+                    has_entity_inside = True
+                    break
+                if hasattr(obj, "tags") and obj.tags.get(category="npc_type"):
+                    has_entity_inside = True
+                    break
+
+            if has_entity_inside:
+                return f"|B{abbr}|n"
+
             owner = None
             if hasattr(bld, "attributes") and hasattr(bld.attributes, "get"):
                 owner = bld.attributes.get("owner", default=None)
@@ -297,6 +389,21 @@ class ProceduralMapRenderer:
 # ------------------------------------------------------------------ #
 #  Module-level helpers
 # ------------------------------------------------------------------ #
+
+# Role -> 2-char abbreviation for agent map symbols
+_ROLE_SYMBOLS: dict[str, str] = {
+    "harvester": "ha",
+    "engineer":  "en",
+    "soldier":   "so",
+    "guard":     "gu",
+    "scout":     "sc",
+    "medic":     "me",
+}
+
+
+def _agent_symbol(role: str) -> str:
+    """Return the 2-char map symbol for an agent role."""
+    return _ROLE_SYMBOLS.get(role, "ag")
 
 
 def _room_display_symbol(room: Any, looker: Any) -> str:

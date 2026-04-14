@@ -24,7 +24,7 @@ class TerrainGenerator:
     update the epoch — the terrain reshuffles when the epoch changes.
     """
 
-    def __init__(self, space_def: CoordinateSpaceDef) -> None:
+    def __init__(self, space_def: CoordinateSpaceDef, data_registry=None) -> None:
         self._base_seed: int = space_def.terrain_seed
         self._seed: int = space_def.terrain_seed
         self._cell_size: int = max(space_def.terrain_noise_cell_size, 1)
@@ -43,22 +43,24 @@ class TerrainGenerator:
                 cumulative += weight / total
                 self._terrain_thresholds.append((cumulative, terrain_type))
 
-        # Build a terrain-type -> resource-type mapping from terrain.yaml
+        # Build a terrain-type -> resource-type mapping from terrain
         # definitions loaded via the DataRegistry.
         self._resource_map: dict[str, str | None] = {}
-        try:
-            from world.data_registry import registry
-
+        reg = data_registry
+        if reg is None:
+            # Try the game_systems dict (available after game_init runs)
+            try:
+                from server.conf.game_init import game_systems
+                reg = game_systems.get("registry")
+            except (ImportError, AttributeError):
+                pass
+        if reg is not None:
             for _, terrain_type in self._terrain_thresholds:
                 try:
-                    terrain_def = registry.get_terrain(terrain_type)
+                    terrain_def = reg.get_terrain(terrain_type)
                     self._resource_map[terrain_type] = terrain_def.resource_type
                 except (KeyError, AttributeError):
                     self._resource_map[terrain_type] = None
-        except ImportError:
-            # DataRegistry not available (e.g. in unit tests).
-            # Caller can inject resource map via _set_resource_map.
-            pass
 
     # ------------------------------------------------------------------ #
     #  Public API

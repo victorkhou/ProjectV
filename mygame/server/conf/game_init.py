@@ -59,6 +59,7 @@ def initialize_game() -> dict:
     from world.systems.powerup_system import PowerupSystem
     from world.systems.tech_system import TechLabSystem
     from world.systems.equipment_system import EquipmentSystem
+    from world.systems.agent_system import AgentSystem
     from world.chunking import WorldChunkManager
     from world.notification_system import NotificationSystem
     from world.chat_system import ChatSystem
@@ -70,6 +71,14 @@ def initialize_game() -> dict:
     powerup_system = PowerupSystem(registry, event_bus)
     tech_system = TechLabSystem(registry, event_bus)
     equipment_system = EquipmentSystem(registry, event_bus)
+    agent_system = AgentSystem(registry, event_bus)
+    # Restore in-memory training cache from DB (survives server restarts)
+    try:
+        n = agent_system.restore_training_cache()
+        if n:
+            logger.info("Restored %d training building(s) from DB.", n)
+    except Exception:
+        pass
     chunking = WorldChunkManager(
         chunk_size=getattr(registry.balance, "chunk_size", 10)
         if hasattr(registry, "balance") and registry.balance
@@ -114,7 +123,7 @@ def initialize_game() -> dict:
         terrain_generators: dict[str, TerrainGenerator] = {}
         for planet_key in planet_registry.list_planets():
             space_def = planet_registry.get_space(planet_key)
-            terrain_generators[planet_key] = TerrainGenerator(space_def)
+            terrain_generators[planet_key] = TerrainGenerator(space_def, data_registry=registry)
         logger.info(
             "TerrainGenerators created for %d planet(s).", len(terrain_generators)
         )
@@ -206,6 +215,15 @@ def initialize_game() -> dict:
     # NotificationSystem auto-subscribes in __init__
     notification_system = NotificationSystem(event_bus)
 
+    # Combat timer: start/reset on COMBAT_ACTION events (Req 17.1-17.5)
+    from world.combat_timer import subscribe_combat_timer
+    subscribe_combat_timer(event_bus)
+
+    # Agent demotion/promotion: reserve or restore agents on rank change (Req 18.1, 18.2)
+    from world.event_bus import RANK_DEMOTED, RANK_PROMOTED
+    event_bus.subscribe(RANK_DEMOTED, lambda **kw: agent_system.handle_demotion(kw.get("player"), kw.get("new_agent_cap", 2)))
+    event_bus.subscribe(RANK_PROMOTED, lambda **kw: agent_system.handle_promotion(kw.get("player"), kw.get("new_agent_cap", 2)))
+
     logger.info("Event subscribers wired.")
 
     # ---------------------------------------------------------- #
@@ -241,6 +259,7 @@ def initialize_game() -> dict:
         "powerup_system": powerup_system,
         "tech_system": tech_system,
         "equipment_system": equipment_system,
+        "agent_system": agent_system,
         "chunking": chunking,
         "chat_system": chat_system,
         "notification_system": notification_system,

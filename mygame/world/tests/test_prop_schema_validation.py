@@ -43,6 +43,11 @@ def valid_building_dict():
         "requires_hq": st.booleans(),
         "category": st.sampled_from(["headquarters", "resource", "equipment", "defense", "research"]),
         "map_symbol": two_char_str,
+        "build_time_seconds": positive_int,
+        "max_level": positive_int,
+        "rank_requirement": positive_int,
+        "requires_agent": st.booleans(),
+        "storage_capacity": non_negative_int,
     })
 
 
@@ -78,7 +83,18 @@ def valid_rank_list(min_size=2, max_size=6):
         ranks = []
         for level in range(1, n + 1):
             name = draw(st.text(min_size=1, max_size=15, alphabet=st.characters(whitelist_categories=("L",))))
-            ranks.append({"name": name, "level": level, "xp_threshold": xp})
+            agent_cap = draw(st.integers(min_value=1, max_value=20))
+            planet_access = draw(st.lists(
+                st.text(min_size=1, max_size=10, alphabet=st.characters(whitelist_categories=("L",))),
+                min_size=0, max_size=3,
+            ))
+            ranks.append({
+                "name": name,
+                "level": level,
+                "xp_threshold": xp,
+                "agent_cap": agent_cap,
+                "planet_access": planet_access,
+            })
             xp += draw(st.integers(min_value=1, max_value=500))
         return ranks
     return _build()
@@ -224,9 +240,12 @@ class TestProperty26ValidInputs:
 # ================================================================== #
 
 # Strategy for required building fields to drop
-BUILDING_REQUIRED_FIELDS = ["name", "abbreviation", "cost", "max_health", "requires_hq", "category"]
+BUILDING_REQUIRED_FIELDS = [
+    "name", "abbreviation", "cost", "max_health", "requires_hq", "category",
+    "build_time_seconds", "max_level", "rank_requirement", "requires_agent", "storage_capacity",
+]
 ITEM_REQUIRED_FIELDS = ["key", "name", "slot"]
-RANK_REQUIRED_FIELDS = ["name", "level", "xp_threshold"]
+RANK_REQUIRED_FIELDS = ["name", "level", "xp_threshold", "agent_cap", "planet_access"]
 TECH_REQUIRED_FIELDS = ["name", "key", "required_rank", "resource_cost", "research_ticks"]
 POWERUP_REQUIRED_FIELDS = ["name", "key", "required_rank", "effect_type", "effect_value", "duration_ticks", "cooldown_ticks"]
 TERRAIN_REQUIRED_FIELDS = ["terrain_type", "map_symbol"]

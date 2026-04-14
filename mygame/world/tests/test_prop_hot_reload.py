@@ -38,6 +38,11 @@ VALID_BUILDINGS = [
         "produces": None,
         "unlocks": ["MM"],
         "map_symbol": "HQ",
+        "build_time_seconds": 180,
+        "max_level": 5,
+        "rank_requirement": 1,
+        "requires_agent": False,
+        "storage_capacity": 0,
     },
     {
         "name": "Mill",
@@ -50,6 +55,11 @@ VALID_BUILDINGS = [
         "produces": "Straw",
         "unlocks": [],
         "map_symbol": "MM",
+        "build_time_seconds": 120,
+        "max_level": 5,
+        "rank_requirement": 2,
+        "requires_agent": False,
+        "storage_capacity": 100,
     },
     {
         "name": "Armory",
@@ -62,6 +72,11 @@ VALID_BUILDINGS = [
         "produces": None,
         "unlocks": [],
         "map_symbol": "AA",
+        "build_time_seconds": 240,
+        "max_level": 5,
+        "rank_requirement": 3,
+        "requires_agent": True,
+        "storage_capacity": 0,
     },
 ]
 
@@ -92,10 +107,14 @@ VALID_ITEMS = {
 }
 
 VALID_RANKS = [
-    {"name": "Recruit", "level": 1, "xp_threshold": 0, "unlocks": []},
-    {"name": "Private", "level": 2, "xp_threshold": 100, "unlocks": []},
-    {"name": "Corporal", "level": 3, "xp_threshold": 300, "unlocks": []},
-    {"name": "Sergeant", "level": 4, "xp_threshold": 600, "unlocks": []},
+    {"name": "Recruit", "level": 1, "xp_threshold": 0, "unlocks": [],
+     "agent_cap": 2, "planet_access": ["terra"]},
+    {"name": "Private", "level": 2, "xp_threshold": 100, "unlocks": [],
+     "agent_cap": 3, "planet_access": ["terra"]},
+    {"name": "Corporal", "level": 3, "xp_threshold": 300, "unlocks": [],
+     "agent_cap": 4, "planet_access": ["terra"]},
+    {"name": "Sergeant", "level": 4, "xp_threshold": 600, "unlocks": [],
+     "agent_cap": 6, "planet_access": ["terra", "forge"]},
 ]
 
 VALID_TECHNOLOGIES = [

@@ -24,6 +24,11 @@ class BuildingDef:
     produces: str | None
     unlocks: list[str] = field(default_factory=list)
     map_symbol: str = "??"
+    build_time_seconds: int = 120
+    max_level: int = 5
+    rank_requirement: int = 1
+    requires_agent: bool = False
+    storage_capacity: int = 0
 
 
 @dataclass
@@ -47,6 +52,8 @@ class RankDef:
     level: int
     xp_threshold: int
     unlocks: list[str] = field(default_factory=list)
+    agent_cap: int = 2
+    planet_access: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -111,6 +118,7 @@ class CoordinateSpaceDef:
     default_planet: bool = False
     z_level: int = 0
     seed_rotation_ticks: int = 0  # 0 = never rotate; >0 = reshuffle every N ticks
+    rank_requirement: int = 1
 
 
 @dataclass

@@ -6,7 +6,14 @@ when XP meets or exceeds the next rank's threshold, and demotion when
 XP falls below the current rank's threshold. Unlocks/revokes
 technologies and powerups on rank changes.
 
-Requirements: 7.1, 7.2, 7.3, 7.4, 7.5, 7.6, 7.7, 7.8, 7.9, 7.10
+Also provides:
+- Sub-level computation (5 levels per rank) for granular progress feedback
+- Planet access gating based on rank vs planet rank_requirement
+- Agent cap integration via RANK_PROMOTED / RANK_DEMOTED events
+
+Requirements: 7.1, 7.2, 7.3, 7.4, 7.5, 7.6, 7.7, 7.8, 7.9, 7.10,
+              4.2, 4.3, 4.4, 4.5, 4.6, 4.7, 4.8, 4.9,
+              4b.1, 4b.2, 4b.3, 4b.4, 4b.5, 4b.6, 4b.7
 """
 
 from __future__ import annotations
@@ -34,9 +41,11 @@ class RankSystem:
     find correct lower rank and demote. Publish rank_demoted.
     """
 
-    def __init__(self, registry: DataRegistry, event_bus: EventBus) -> None:
+    def __init__(self, registry: DataRegistry, event_bus: EventBus,
+                 planet_registry=None) -> None:
         self.registry = registry
         self.event_bus = event_bus
+        self.planet_registry = planet_registry
 
     # ------------------------------------------------------------------ #
     #  Public API
@@ -52,12 +61,14 @@ class RankSystem:
         """
         if amount <= 0:
             return
+        old_sub_level = self.get_sub_level(player)
         player.db.combat_xp = player.db.combat_xp + amount
         logger.info(
             "Awarded %d XP to %s (reason: %s). Total: %d",
             amount, getattr(player, "key", "?"), reason, player.db.combat_xp,
         )
         self.check_promotion(player)
+        self._notify_sub_level_change(player, old_sub_level)
 
     def deduct_xp(self, player, amount: int) -> None:
         """Deduct Combat XP from a player and check for demotion.
@@ -70,12 +81,14 @@ class RankSystem:
         """
         if amount <= 0:
             return
+        old_sub_level = self.get_sub_level(player)
         player.db.combat_xp = max(0, player.db.combat_xp - amount)
         logger.info(
             "Deducted %d XP from %s. Total: %d",
             amount, getattr(player, "key", "?"), player.db.combat_xp,
         )
         self.check_demotion(player)
+        self._notify_sub_level_change(player, old_sub_level)
 
     def check_promotion(self, player) -> None:
         """Promote the player if their XP qualifies for a higher rank.
@@ -111,6 +124,7 @@ class RankSystem:
                 player=player,
                 old_rank=old_rank,
                 new_rank=new_rank,
+                new_agent_cap=new_rank.agent_cap,
             )
 
     def check_demotion(self, player) -> None:
@@ -151,6 +165,7 @@ class RankSystem:
                 player=player,
                 old_rank=current_rank,
                 new_rank=new_rank,
+                new_agent_cap=new_rank.agent_cap,
             )
 
     def get_rank(self, player) -> RankDef:
@@ -165,14 +180,29 @@ class RankSystem:
         """Return a dict with rank status info for display.
 
         Requirement 7.10: current rank, XP, XP to next rank.
+        Requirement 4b.5: includes sub-level and XP progress toward next level.
         """
         current_rank = self.get_rank(player)
         current_xp = player.db.combat_xp
         next_rank = self._get_next_rank(current_rank.level)
+        sub_level = self.get_sub_level(player)
 
         xp_to_next = None
         if next_rank is not None:
             xp_to_next = next_rank.xp_threshold - current_xp
+
+        # Compute XP to next sub-level
+        xp_to_next_level = None
+        if next_rank is not None:
+            interval = (next_rank.xp_threshold - current_rank.xp_threshold) / 5
+        else:
+            # Final rank: fixed 10000 XP per level
+            interval = 10000
+        if sub_level < 5:
+            next_level_xp = current_rank.xp_threshold + sub_level * interval
+            xp_to_next_level = int(next_level_xp) - current_xp
+        elif next_rank is not None:
+            xp_to_next_level = next_rank.xp_threshold - current_xp
 
         return {
             "rank_name": current_rank.name,
@@ -180,11 +210,84 @@ class RankSystem:
             "combat_xp": current_xp,
             "xp_to_next_rank": xp_to_next,
             "next_rank_name": next_rank.name if next_rank else None,
+            "sub_level": sub_level,
+            "xp_to_next_level": xp_to_next_level,
         }
+
+    def get_sub_level(self, player) -> int:
+        """Compute the player's sub-level (1-5) within their current rank.
+
+        Each rank has 5 sub-levels with evenly spaced XP intervals.
+        Level N starts at T1 + (N-1) × (T2-T1)/5 where T1 and T2 are
+        consecutive rank thresholds.
+
+        For the final rank (Marshal at 120000 XP), use a fixed interval
+        of 10000 XP per level.
+
+        Requirements: 4b.1, 4b.2, 4b.7
+        """
+        current_rank = self.get_rank(player)
+        current_xp = player.db.combat_xp
+        next_rank = self._get_next_rank(current_rank.level)
+
+        t1 = current_rank.xp_threshold
+
+        if next_rank is not None:
+            interval = (next_rank.xp_threshold - t1) / 5
+        else:
+            # Final rank: fixed 10000 XP per level
+            interval = 10000
+
+        if interval <= 0:
+            return 1
+
+        # How far into this rank's XP range are we?
+        xp_into_rank = current_xp - t1
+
+        # Sub-level is 1-based: level 1 starts at 0 into rank,
+        # level 2 at interval, level 3 at 2*interval, etc.
+        level = int(xp_into_rank // interval) + 1
+
+        # Cap at 5
+        return min(level, 5)
+
+    def can_access_planet(self, player, planet_key: str) -> bool:
+        """Check if a player's rank allows access to a planet.
+
+        Looks up the planet's rank_requirement from the PlanetRegistry
+        and compares against the player's current rank level.
+
+        Requirements: 1.4, 4.7
+        """
+        if self.planet_registry is None:
+            # No planet registry available — allow by default
+            return True
+
+        try:
+            space = self.planet_registry.get_space(planet_key)
+        except KeyError:
+            # Unknown planet — deny access
+            return False
+
+        return player.db.rank_level >= space.rank_requirement
 
     # ------------------------------------------------------------------ #
     #  Private helpers
     # ------------------------------------------------------------------ #
+
+    def _notify_sub_level_change(self, player, old_sub_level: int) -> None:
+        """Send a sub-level notification if the level changed.
+
+        Requirement 4b.3, 4b.4: notify player on level change with
+        "You are now {Rank Title} Level {N}."
+        """
+        new_sub_level = self.get_sub_level(player)
+        if new_sub_level != old_sub_level:
+            current_rank = self.get_rank(player)
+            rank_name = current_rank.name.replace("_", " ")
+            msg = f"You are now {rank_name} Level {new_sub_level}"
+            if hasattr(player, "msg"):
+                player.msg(msg)
 
     def _get_rank_by_level(self, level: int) -> RankDef | None:
         """Find a RankDef by its level number."""

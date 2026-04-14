@@ -2,56 +2,132 @@
 # Each entry defines a separate coordinate space with its own dimensions,
 # terrain seed, terrain weights, and room persistence type.
 # z_level provides a numeric shorthand for teleport (e.g. teleport 50,50,0)
+# Phase 1: 6 planets with rank-gated progression
 
 planets:
-  - planet_key: "earth_planet"
+  - planet_key: "terra"
     planet_type: "earth"
     z_level: 0
-    width: 100
-    height: 100
+    width: 500
+    height: 500
     terrain_seed: 42
     terrain_noise_cell_size: 8
     terrain_weights:
-      Plains: 0.35
-      Forest: 0.25
+      Plains: 0.25
+      Forest: 0.20
       Dirt: 0.15
       Rock: 0.15
-      Mountain: 0.10
+      Mountain: 0.08
+      River: 0.07
+      Sand: 0.05
+      Snow: 0.05
     persistence_type: "static"
-    spawn_x: 50
-    spawn_y: 50
+    spawn_x: 250
+    spawn_y: 250
     default_planet: true
+    rank_requirement: 1
 
-  - planet_key: "industrial_planet"
+  - planet_key: "forge"
     planet_type: "industrial"
     z_level: 1
-    width: 50
-    height: 50
+    width: 400
+    height: 400
     terrain_seed: 7
     terrain_noise_cell_size: 8
     terrain_weights:
-      Power_Grid: 0.30
-      Scrapyard: 0.30
-      Circuit_Field: 0.25
-      Ruins: 0.15
+      Power_Grid: 0.20
+      Scrapyard: 0.15
+      Circuit_Field: 0.18
+      Factory_Floor: 0.12
+      Ruins: 0.10
+      Toxic_Waste: 0.08
+      Pipeline: 0.10
+      Warehouse: 0.07
     persistence_type: "static"
-    spawn_x: 25
-    spawn_y: 25
+    spawn_x: 200
+    spawn_y: 200
+    rank_requirement: 5
+
+  - planet_key: "tundra"
+    planet_type: "frozen"
+    z_level: 2
+    width: 400
+    height: 400
+    terrain_seed: 13
+    terrain_noise_cell_size: 8
+    terrain_weights:
+      Snowfield: 0.25
+      Frozen_Lake: 0.10
+      Pine_Forest: 0.15
+      Ice_Cave: 0.08
+      Permafrost: 0.18
+      Glacier: 0.08
+      Hot_Spring: 0.08
+      Tundra_Moss: 0.08
+    persistence_type: "static"
+    spawn_x: 200
+    spawn_y: 200
+    rank_requirement: 7
+
+  - planet_key: "inferno"
+    planet_type: "volcanic"
+    z_level: 3
+    width: 300
+    height: 300
+    terrain_seed: 66
+    terrain_noise_cell_size: 8
+    terrain_weights:
+      Ash_Wastes: 0.20
+      Lava_Flow: 0.10
+      Obsidian_Plain: 0.15
+      Magma_Vent: 0.12
+      Scorched_Rock: 0.18
+      Sulfur_Pit: 0.08
+      Ember_Field: 0.10
+      Basalt_Ridge: 0.07
+    persistence_type: "static"
+    spawn_x: 150
+    spawn_y: 150
+    rank_requirement: 9
+
+  - planet_key: "citadel"
+    planet_type: "fortress"
+    z_level: 4
+    width: 200
+    height: 200
+    terrain_seed: 88
+    terrain_noise_cell_size: 8
+    terrain_weights:
+      Corridor: 0.25
+      Vault_Room: 0.05
+      Armory_Ruin: 0.12
+      Control_Room: 0.10
+      Open_Chamber: 0.20
+      Blast_Door: 0.08
+      Generator_Room: 0.10
+      Barracks_Ruin: 0.10
+    persistence_type: "static"
+    spawn_x: 100
+    spawn_y: 100
+    rank_requirement: 11
 
   - planet_key: "space"
     planet_type: "space"
-    z_level: 2
-    width: 200
-    height: 200
+    z_level: 5
+    width: 1000
+    height: 1000
     terrain_seed: 99
-    terrain_noise_cell_size: 12
-    seed_rotation_ticks: 500
+    terrain_noise_cell_size: 8
     terrain_weights:
-      Void: 0.40
-      Nebula: 0.20
-      Asteroid: 0.15
-      Debris: 0.15
+      Void: 0.30
+      Nebula: 0.12
+      Asteroid: 0.12
+      Debris: 0.10
       Ice_Field: 0.10
-    persistence_type: "dynamic"
-    spawn_x: 100
-    spawn_y: 100
+      Wormhole: 0.05
+      Radiation_Zone: 0.08
+      Derelict_Ship: 0.13
+    persistence_type: "static"
+    spawn_x: 500
+    spawn_y: 500
+    rank_requirement: 7

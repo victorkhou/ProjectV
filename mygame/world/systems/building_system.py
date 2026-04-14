@@ -19,8 +19,12 @@ from world.event_bus import (
     BUILDING_CONSTRUCTED,
     BUILDING_DESTROYED,
     BUILDING_UPGRADED,
+    CONSTRUCTION_STARTED,
+    CONSTRUCTION_COMPLETED,
     EventBus,
 )
+from world.utils import get_building_attr as _get_building_attr_shared
+from world.utils import set_building_attr as _set_building_attr_shared
 
 # Default maximum build range (Manhattan distance)
 DEFAULT_BUILD_RANGE = 10
@@ -66,65 +70,50 @@ class BuildingSystem:
     #  Construction
     # ------------------------------------------------------------------ #
 
+    def _validate_construction(
+        self, player: Any, tile: Any, building_abbr: str
+    ) -> tuple[BuildingDef | None, str | None]:
+        """Run the full construction validation chain.
+
+        Returns (building_def, None) on success, or (None, error_message) on failure.
+        """
+        try:
+            building_def = self.registry.get_building(building_abbr)
+        except KeyError:
+            return None, f"Unknown building type: {building_abbr}"
+
+        for validator in [
+            lambda: self._validate_hq_requirement(player, building_def),
+            lambda: self._validate_one_hq_per_planet(player, building_def, tile),
+            lambda: self._validate_rank_requirement(player, building_def),
+            lambda: self._validate_terrain(tile, building_def),
+            lambda: self._validate_extractor_terrain(tile, building_def),
+            lambda: self._validate_tile_empty(tile),
+            lambda: self._validate_build_range(player, tile),
+            lambda: self._validate_combat_lockout(player),
+            lambda: self._validate_resources(player, building_def.cost),
+        ]:
+            err = validator()
+            if err:
+                return None, err
+
+        return building_def, None
+
     def construct(
         self, player: Any, tile: Any, building_abbr: str
     ) -> tuple[bool, str]:
-        """Construct a building on the given tile.
-
-        Validation chain:
-            1. HQ requirement (unless building HQ)
-            2. Terrain match (for resource buildings)
-            3. Tile empty
-            4. Build range
-            5. Combat lockout
-            6. Sufficient resources
+        """Construct a building on the given tile (instant, for testing/admin).
 
         Returns:
             (success, message) tuple.
         """
-        # Look up building definition
-        try:
-            building_def = self.registry.get_building(building_abbr)
-        except KeyError:
-            return False, f"Unknown building type: {building_abbr}"
-
-        # 1. HQ requirement
-        err = self._validate_hq_requirement(player, building_def)
+        building_def, err = self._validate_construction(player, tile, building_abbr)
         if err:
             return False, err
 
-        # 2. Terrain match
-        err = self._validate_terrain(tile, building_def)
-        if err:
-            return False, err
-
-        # 3. Tile empty
-        err = self._validate_tile_empty(tile)
-        if err:
-            return False, err
-
-        # 4. Build range
-        err = self._validate_build_range(player, tile)
-        if err:
-            return False, err
-
-        # 5. Combat lockout
-        err = self._validate_combat_lockout(player)
-        if err:
-            return False, err
-
-        # 6. Sufficient resources
-        err = self._validate_resources(player, building_def.cost)
-        if err:
-            return False, err
-
-        # All checks passed — deduct resources
         player.deduct_resources(building_def.cost)
-
-        # Create the building object on the tile
         building = self._create_building_func(building_def, tile, player)
 
-        # Publish event
         self.event_bus.publish(
             BUILDING_CONSTRUCTED,
             player=player,
@@ -137,6 +126,93 @@ class BuildingSystem:
     # ------------------------------------------------------------------ #
     #  Upgrade
     # ------------------------------------------------------------------ #
+
+    @staticmethod
+    def get_upgrade_cost(building_def: BuildingDef, target_level: int) -> dict[str, int]:
+        """Calculate upgrade cost: base_cost × 2^(target_level - 1).
+
+        Exponential scaling makes higher levels increasingly expensive,
+        creating the resource sink that drives agent utilization.
+        """
+        multiplier = 2 ** (target_level - 1)
+        return {res: amt * multiplier for res, amt in building_def.cost.items()}
+
+    @staticmethod
+    def get_upgrade_time(building_def: BuildingDef, target_level: int) -> int:
+        """Calculate upgrade time: build_time × 3^(target_level - 1).
+
+        Exponential scaling makes higher levels take significantly longer,
+        making Engineer agents essential for mid/late-game upgrades.
+        """
+        return int(building_def.build_time_seconds * (3 ** (target_level - 1)))
+
+    def start_upgrade(
+        self, player: Any, building: Any
+    ) -> tuple[bool, str]:
+        """Begin a timed upgrade requiring player active-presence.
+
+        Uses the same active-presence mechanic as construction: the
+        player must stay on the tile for progress to continue. An
+        Engineer agent can also progress the upgrade autonomously.
+
+        Returns:
+            (success, message) tuple.
+        """
+        # Ownership check
+        owner = self._get_building_attr(building, "owner")
+        if owner is not player:
+            return False, "You do not own this building."
+
+        building_type = self._get_building_attr(building, "building_type")
+        if building_type is None:
+            return False, "Cannot determine building type."
+
+        try:
+            building_def = self.registry.get_building(building_type)
+        except KeyError:
+            return False, f"Unknown building type: {building_type}"
+
+        current_level = self._get_building_attr(building, "building_level", 1)
+        if current_level >= MAX_BUILDING_LEVEL:
+            return False, f"This building is already at maximum level ({MAX_BUILDING_LEVEL})."
+
+        target_level = current_level + 1
+
+        # Exponential cost
+        upgrade_cost = self.get_upgrade_cost(building_def, target_level)
+        err = self._validate_resources(player, upgrade_cost)
+        if err:
+            return False, err
+
+        # Deduct resources
+        player.deduct_resources(upgrade_cost)
+
+        # Set upgrade timer on the building
+        upgrade_time = self.get_upgrade_time(building_def, target_level)
+        self._set_building_attr(building, "construction_progress", 0)
+        self._set_building_attr(building, "construction_total", upgrade_time)
+        self._set_building_attr(building, "under_construction", True)
+        # Store the target level so completion knows what to set
+        self._set_building_attr(building, "upgrade_target_level", target_level)
+
+        # Set player into "building" activity state
+        if hasattr(player, "db"):
+            player.db.activity_state = "building"
+            player.db.activity_target = building
+            player.db.activity_progress = 0
+
+        self.event_bus.publish(
+            CONSTRUCTION_STARTED,
+            player=player,
+            building=building,
+            tile=getattr(building, "location", None),
+        )
+
+        cost_str = ", ".join(f"{amt} {res}" for res, amt in upgrade_cost.items())
+        return True, (
+            f"Upgrading {building_def.name} to level {target_level} "
+            f"(0/{upgrade_time}s, cost: {cost_str}). Stay on the tile to continue."
+        )
 
     def upgrade(self, player: Any, building: Any) -> tuple[bool, str]:
         """Upgrade a resource building to the next level.
@@ -179,11 +255,8 @@ class BuildingSystem:
 
         target_level = current_level + 1
 
-        # 4. Calculate upgrade cost: base_cost * target_level
-        upgrade_cost = {
-            resource: amount * target_level
-            for resource, amount in building_def.cost.items()
-        }
+        # 4. Calculate upgrade cost: base_cost × 2^(target_level - 1)
+        upgrade_cost = self.get_upgrade_cost(building_def, target_level)
 
         err = self._validate_resources(player, upgrade_cost)
         if err:
@@ -234,6 +307,138 @@ class BuildingSystem:
         # Remove the building from the tile
         if hasattr(building, "delete"):
             building.delete()
+
+    # ------------------------------------------------------------------ #
+    #  Construction timer & active-presence (Req 6.5, 6.6, 6.7)
+    # ------------------------------------------------------------------ #
+
+    def start_construction(
+        self, player: Any, tile: Any, building_abbr: str
+    ) -> tuple[bool, str]:
+        """Begin a timed construction requiring player active-presence.
+
+        Returns:
+            (success, message) tuple.
+        """
+        building_def, err = self._validate_construction(player, tile, building_abbr)
+        if err:
+            return False, err
+
+        player.deduct_resources(building_def.cost)
+        building = self._create_building_func(building_def, tile, player)
+
+        # Initialise construction timer
+        build_time = building_def.build_time_seconds
+        self._set_building_attr(building, "construction_progress", 0)
+        self._set_building_attr(building, "construction_total", build_time)
+        self._set_building_attr(building, "under_construction", True)
+
+        # Set player into "building" activity state
+        if hasattr(player, "db"):
+            player.db.activity_state = "building"
+            player.db.activity_target = building
+            player.db.activity_progress = 0
+
+        self.event_bus.publish(
+            CONSTRUCTION_STARTED,
+            player=player,
+            building=building,
+            tile=tile,
+        )
+
+        return True, (
+            f"Construction of {building_def.name} started "
+            f"(0/{build_time}s). Stay on the tile to continue."
+        )
+
+    # How often to send progress updates (in ticks/seconds)
+    CONSTRUCTION_PROGRESS_INTERVAL = 5
+
+    def process_construction_tick(self, player: Any) -> bool:
+        """Advance construction for a player in the ``"building"`` state.
+
+        Called once per game tick for each online player.  Checks that
+        the player is still in the ``"building"`` state and on the
+        correct tile, then increments ``construction_progress``.  When
+        progress reaches ``construction_total``, construction completes
+        and the player returns to ``"idle"``.
+
+        Returns:
+            ``True`` if construction completed this tick.
+        """
+        if not hasattr(player, "db"):
+            return False
+
+        if getattr(player.db, "activity_state", "idle") != "building":
+            return False
+
+        building = getattr(player.db, "activity_target", None)
+        if building is None:
+            player.db.activity_state = "idle"
+            return False
+
+        # Verify player is still on the correct tile
+        if not self._player_on_building_tile(player, building):
+            return False
+
+        # Increment progress
+        progress = self._get_building_attr(building, "construction_progress", 0)
+        total = self._get_building_attr(building, "construction_total", 0)
+        progress += 1
+        self._set_building_attr(building, "construction_progress", progress)
+
+        if progress >= total:
+            self._complete_construction(player, building)
+            return True
+
+        # Periodic progress update
+        if hasattr(player, "msg") and progress % self.CONSTRUCTION_PROGRESS_INTERVAL == 0:
+            remaining = total - progress
+            btype = self._get_building_attr(building, "building_type", "??")
+            target_level = self._get_building_attr(building, "upgrade_target_level")
+            if target_level:
+                player.msg(f"|y[Building] Upgrading {btype} to L{target_level}... {progress}/{total}s ({remaining}s remaining)|n")
+            else:
+                player.msg(f"|y[Building] Constructing {btype}... {progress}/{total}s ({remaining}s remaining)|n")
+
+        return False
+
+    def process_agent_construction(self, buildings: list) -> None:
+        """Progress construction for buildings with assigned Engineer agents.
+
+        Called once per game tick.  For each building that has an
+        ``assigned_agent`` and a non-zero ``construction_total``,
+        increments ``construction_progress``.  When complete, finalises
+        the building and frees the agent.
+
+        Args:
+            buildings: Iterable of building objects to check.
+        """
+        for building in buildings:
+            agent = self._get_building_attr(building, "assigned_agent", None)
+            if agent is None:
+                continue
+
+            # Check agent is not incapacitated
+            if getattr(getattr(agent, "db", None), "incapacitated", False):
+                continue
+
+            total = self._get_building_attr(building, "construction_total", 0)
+            if total <= 0:
+                continue
+
+            progress = self._get_building_attr(
+                building, "construction_progress", 0
+            )
+            if progress >= total:
+                continue  # already complete
+
+            progress += 1
+            self._set_building_attr(building, "construction_progress", progress)
+
+            if progress >= total:
+                owner = self._get_building_attr(building, "owner", None)
+                self._complete_construction(owner, building)
 
     # ------------------------------------------------------------------ #
     #  Offline protection
@@ -349,6 +554,135 @@ class BuildingSystem:
                 )
         return "Insufficient resources: " + "; ".join(missing) + "."
 
+    def _validate_rank_requirement(
+        self, player: Any, building_def: BuildingDef
+    ) -> str | None:
+        """Check player rank meets building's rank_requirement (Req 6.5).
+
+        Returns error message or None.
+        """
+        rank_req = getattr(building_def, "rank_requirement", 1)
+        player_rank = 1
+        if hasattr(player, "db"):
+            player_rank = getattr(player.db, "rank_level", 1) or 1
+        if player_rank < rank_req:
+            return (
+                f"Rank {rank_req} required to build {building_def.name} "
+                f"(current rank: {player_rank})."
+            )
+        return None
+
+    def _validate_one_hq_per_planet(
+        self, player: Any, building_def: BuildingDef, tile: Any
+    ) -> str | None:
+        """Enforce one HQ per player per planet (Req 6.4).
+
+        Returns error message or None.
+        """
+        if building_def.abbreviation != "HQ":
+            return None
+
+        # Check if the player already has an HQ
+        if self._player_has_hq(player):
+            return "You can only have one Headquarters per planet."
+
+        return None
+
+    def _validate_extractor_terrain(
+        self, tile: Any, building_def: BuildingDef
+    ) -> str | None:
+        """Enforce Extractor placement on resource terrain (Req 6.11).
+
+        Queries the TerrainGenerator directly using the tile's
+        coordinates, since room attributes may not be populated yet.
+
+        Returns error message or None.
+        """
+        if building_def.abbreviation != "EX":
+            return None
+
+        # Get tile coordinates
+        x = getattr(tile, "x", None)
+        if x is None and hasattr(tile, "db"):
+            x = getattr(tile.db, "x", None)
+        y = getattr(tile, "y", None)
+        if y is None and hasattr(tile, "db"):
+            y = getattr(tile.db, "y", None)
+
+        # Try planet from tile tags or db
+        planet = None
+        if hasattr(tile, "tags"):
+            try:
+                planet = tile.tags.get(category="coord_planet", return_list=False)
+            except Exception:
+                pass
+        if not planet and hasattr(tile, "db"):
+            planet = getattr(tile.db, "planet", None)
+        if not planet:
+            planet = getattr(tile, "planet_name", None)
+
+        # Ask the terrain generator directly — most reliable source
+        if x is not None and y is not None and planet:
+            try:
+                from server.conf.game_init import game_systems
+                generators = game_systems.get("_terrain_generators", {})
+                gen = generators.get(planet)
+                if gen:
+                    _, resource = gen.get_terrain_and_resource(int(x), int(y))
+                    if resource:
+                        return None
+                    return "Extractor must be placed on terrain with a resource."
+            except Exception:
+                pass
+
+        # Fallback: check room's resource_node_data
+        rn = getattr(tile, "resource_node", None)
+        if rn and isinstance(rn, dict) and rn.get("resource_type"):
+            return None
+
+        if hasattr(tile, "db"):
+            rn_data = getattr(tile.db, "resource_node_data", None)
+            if rn_data and isinstance(rn_data, dict) and rn_data.get("resource_type"):
+                return None
+
+        # Fallback: direct attribute (test fakes)
+        if getattr(tile, "resource_type", None):
+            return None
+
+        return "Extractor must be placed on terrain with a resource."
+
+    # ------------------------------------------------------------------ #
+    #  Repair (Req 6.10, 14b.3)
+    # ------------------------------------------------------------------ #
+
+    def get_repair_cost(self, building: Any) -> dict[str, int]:
+        """Return the repair cost for an offline building (50% of base cost).
+
+        Args:
+            building: The building object to repair.
+
+        Returns:
+            Dict of resource_type -> amount (50% of base construction cost).
+        """
+        building_type = None
+        if hasattr(building, "attributes"):
+            building_type = building.attributes.get("building_type", default=None)
+        elif hasattr(building, "db"):
+            building_type = getattr(building.db, "building_type", None)
+
+        if building_type is None:
+            return {}
+
+        try:
+            building_def = self.registry.get_building(building_type)
+        except KeyError:
+            return {}
+
+        return {
+            resource: max(1, amount // 2)
+            for resource, amount in building_def.cost.items()
+        }
+
     # ------------------------------------------------------------------ #
     #  Internal helpers
     # ------------------------------------------------------------------ #
@@ -395,4 +729,93 @@ class BuildingSystem:
         building.attributes.add("offline", False)
         building.attributes.add("hp", building_def.max_health)
         building.attributes.add("hp_max", building_def.max_health)
+        # Tag for DB queries (preload_area, get_all_buildings)
+        building.tags.add("building", category="object_type")
+        # Phase 1 construction timer & inventory attributes (Req 6.6, 6.10)
+        building.attributes.add("assigned_agent", None)
+        building.attributes.add("construction_progress", 0)
+        building.attributes.add("construction_total", 0)
+        building.attributes.add("under_construction", False)
+        building.attributes.add("resource_inventory", {})
         return building
+
+    # ------------------------------------------------------------------ #
+    #  Construction completion & tile helpers
+    # ------------------------------------------------------------------ #
+
+    def _complete_construction(self, player: Any, building: Any) -> None:
+        """Finalise a completed construction or upgrade and reset player state."""
+        # Mark construction as done
+        self._set_building_attr(building, "construction_progress",
+                                self._get_building_attr(building, "construction_total", 0))
+
+        # Clear under-construction flag — building is now operational
+        self._set_building_attr(building, "under_construction", False)
+
+        building_type = self._get_building_attr(building, "building_type", "??")
+
+        # If this was an upgrade, apply the new level and HP
+        target_level = self._get_building_attr(building, "upgrade_target_level")
+        if target_level is not None:
+            old_level = self._get_building_attr(building, "building_level", 1)
+            self._set_building_attr(building, "building_level", target_level)
+            self._set_building_attr(building, "upgrade_target_level", None)
+
+            # Increase max HP by 20% per level from base
+            try:
+                bdef = self.registry.get_building(building_type)
+                new_max_hp = int(bdef.max_health * (1 + 0.2 * (target_level - 1)))
+                self._set_building_attr(building, "hp_max", new_max_hp)
+                self._set_building_attr(building, "hp", new_max_hp)
+            except (KeyError, AttributeError):
+                pass
+
+            self.event_bus.publish(
+                BUILDING_UPGRADED,
+                player=player,
+                building=building,
+                old_level=old_level,
+                new_level=target_level,
+            )
+
+            # Notify player
+            if player is not None and hasattr(player, "msg"):
+                player.msg(f"|g[Complete] {building_type} upgraded to level {target_level}!|n")
+        else:
+            # New construction complete
+            if player is not None and hasattr(player, "msg"):
+                player.msg(f"|g[Complete] {building_type} construction finished! The building is now operational.|n")
+
+        # Clear construction timer
+        self._set_building_attr(building, "construction_total", 0)
+
+        # Reset player activity state to idle
+        if player is not None and hasattr(player, "db"):
+            if getattr(player.db, "activity_state", "") == "building":
+                player.db.activity_state = "idle"
+                player.db.activity_target = None
+                player.db.activity_progress = 0
+
+        # Publish completion event
+        tile = getattr(building, "location", None)
+        self.event_bus.publish(
+            CONSTRUCTION_COMPLETED,
+            player=player,
+            building=building,
+            tile=tile,
+        )
+
+    def _player_on_building_tile(self, player: Any, building: Any) -> bool:
+        """Check if the player is on the same tile as the building."""
+        from world.utils import player_at_building
+        return player_at_building(player, building)
+
+    @staticmethod
+    def _get_building_attr(building: Any, key: str, default: Any = None) -> Any:
+        """Read an attribute from a building object safely."""
+        return _get_building_attr_shared(building, key, default)
+
+    @staticmethod
+    def _set_building_attr(building: Any, key: str, value: Any) -> None:
+        """Write an attribute on a building object safely."""
+        _set_building_attr_shared(building, key, value)

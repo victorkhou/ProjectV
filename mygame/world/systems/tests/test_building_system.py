@@ -68,6 +68,10 @@ class FakeDB:
     """Simulates Evennia's db attribute handler."""
     def __init__(self):
         self.combat_lockout_tick = 0
+        self.rank_level = 1
+        self.activity_state = "idle"
+        self.activity_target = None
+        self.activity_progress = 0
 
 class FakePlayer:
     """Lightweight stand-in for CombatCharacter."""
@@ -126,6 +130,9 @@ class FakeBuilding:
             "hp": hp,
             "hp_max": hp_max,
             "offline": offline,
+            "assigned_agent": None,
+            "construction_progress": 0,
+            "construction_total": 0,
         })
         self._deleted = False
 
@@ -146,7 +153,7 @@ class FakeBuilding:
 
     @property
     def location(self):
-        return None
+        return getattr(self, "_location", None)
 
     def delete(self):
         self._deleted = True
@@ -178,6 +185,7 @@ def _make_registry_with_buildings() -> DataRegistry:
             max_health=500, requires_hq=False, required_terrain=None,
             category="headquarters", produces=None,
             unlocks=["MM", "QQ"], map_symbol="HQ",
+            build_time_seconds=180, rank_requirement=1,
         ),
         "MM": BuildingDef(
             name="Mill", abbreviation="MM",
@@ -185,6 +193,7 @@ def _make_registry_with_buildings() -> DataRegistry:
             max_health=150, requires_hq=True, required_terrain="Plains",
             category="resource", produces="Straw",
             unlocks=[], map_symbol="MM",
+            build_time_seconds=60, rank_requirement=1,
         ),
         "QQ": BuildingDef(
             name="Quarry", abbreviation="QQ",
@@ -192,6 +201,7 @@ def _make_registry_with_buildings() -> DataRegistry:
             max_health=200, requires_hq=True, required_terrain="Rock",
             category="resource", produces="Stone",
             unlocks=[], map_symbol="QQ",
+            build_time_seconds=90, rank_requirement=2,
         ),
         "VV": BuildingDef(
             name="Turret", abbreviation="VV",
@@ -199,6 +209,7 @@ def _make_registry_with_buildings() -> DataRegistry:
             max_health=300, requires_hq=True, required_terrain=None,
             category="defense", produces=None,
             unlocks=[], map_symbol="VV",
+            build_time_seconds=120, rank_requirement=3,
         ),
         "AA": BuildingDef(
             name="Armory", abbreviation="AA",
@@ -206,6 +217,7 @@ def _make_registry_with_buildings() -> DataRegistry:
             max_health=200, requires_hq=True, required_terrain=None,
             category="equipment", produces="weapon",
             unlocks=[], map_symbol="AA",
+            build_time_seconds=100, rank_requirement=2,
         ),
     }
     return registry
@@ -232,6 +244,7 @@ def _make_building_system(
         created_buildings.append(b)
         # Simulate placing on tile
         tile._building = b
+        b._location = tile
         return b
 
     system = BuildingSystem(
@@ -333,6 +346,7 @@ class TestConstructTerrainValidation(unittest.TestCase):
             resources={"Iron": 100, "Stone": 100, "Wood": 100},
             buildings=[hq],
         )
+        player.db.rank_level = 3  # VV requires rank 3
         tile = FakeTile(terrain_type="Forest")  # VV has no terrain requirement
         system, created, _ = _make_building_system()
         ok, msg = system.construct(player, tile, "VV")
@@ -449,24 +463,24 @@ class TestUpgrade(unittest.TestCase):
         self.assertEqual(building.building_level, 2)
 
     def test_upgrade_deducts_correct_cost(self):
-        # MM cost: Straw=20, Wood=10. Target level 2 -> cost * 2
+        # MM cost: Straw=20, Wood=10. Target level 2 -> cost × 2^1 = ×2
         player = FakePlayer(resources={"Straw": 100, "Wood": 100})
         building = self._make_resource_building(player, level=1)
         system, _, _ = _make_building_system()
         system.upgrade(player, building)
-        # Cost: Straw=40, Wood=20
+        # Cost: Straw=40, Wood=20 (base × 2^(2-1) = base × 2)
         self.assertEqual(player.get_resource("Straw"), 60)
         self.assertEqual(player.get_resource("Wood"), 80)
 
     def test_upgrade_level_3_cost(self):
-        # MM cost: Straw=20, Wood=10. Target level 3 -> cost * 3
+        # MM cost: Straw=20, Wood=10. Target level 3 -> cost × 2^2 = ×4
         player = FakePlayer(resources={"Straw": 200, "Wood": 200})
         building = self._make_resource_building(player, level=2)
         system, _, _ = _make_building_system()
         system.upgrade(player, building)
-        # Cost: Straw=60, Wood=30
-        self.assertEqual(player.get_resource("Straw"), 140)
-        self.assertEqual(player.get_resource("Wood"), 170)
+        # Cost: Straw=80, Wood=40 (base × 2^(3-1) = base × 4)
+        self.assertEqual(player.get_resource("Straw"), 120)
+        self.assertEqual(player.get_resource("Wood"), 160)
 
     def test_upgrade_max_level_rejected(self):
         player = FakePlayer(resources={"Straw": 1000, "Wood": 1000})
@@ -563,6 +577,569 @@ class TestOfflineProtection(unittest.TestCase):
         system.set_player_buildings_offline(player, False)
         self.assertFalse(b1.is_offline)
         self.assertFalse(b2.is_offline)
+
+
+# -------------------------------------------------------------- #
+#  Rank Requirement Tests (Req 6.5)
+# -------------------------------------------------------------- #
+
+class TestConstructRankRequirement(unittest.TestCase):
+    """Test rank requirement enforcement on construction."""
+
+    def test_rank_too_low_rejected(self):
+        """Player rank 1 cannot build QQ (requires rank 2)."""
+        hq = FakeBuilding(building_type="HQ")
+        player = FakePlayer(
+            resources={"Wood": 100, "Stone": 100},
+            buildings=[hq],
+        )
+        player.db.rank_level = 1
+        tile = FakeTile(terrain_type="Rock")
+        system, created, _ = _make_building_system()
+        ok, msg = system.construct(player, tile, "QQ")
+        self.assertFalse(ok)
+        self.assertIn("Rank", msg)
+        self.assertEqual(len(created), 0)
+
+    def test_rank_meets_requirement_succeeds(self):
+        """Player rank 2 can build QQ (requires rank 2)."""
+        hq = FakeBuilding(building_type="HQ")
+        player = FakePlayer(
+            resources={"Wood": 100, "Stone": 100},
+            buildings=[hq],
+        )
+        player.db.rank_level = 2
+        tile = FakeTile(terrain_type="Rock")
+        system, created, _ = _make_building_system()
+        ok, msg = system.construct(player, tile, "QQ")
+        self.assertTrue(ok)
+        self.assertEqual(len(created), 1)
+
+    def test_rank_exceeds_requirement_succeeds(self):
+        """Player rank 5 can build VV (requires rank 3)."""
+        hq = FakeBuilding(building_type="HQ")
+        player = FakePlayer(
+            resources={"Iron": 100, "Stone": 100, "Wood": 100},
+            buildings=[hq],
+        )
+        player.db.rank_level = 5
+        tile = FakeTile(terrain_type="Plains")
+        system, created, _ = _make_building_system()
+        ok, msg = system.construct(player, tile, "VV")
+        self.assertTrue(ok)
+
+    def test_hq_rank_1_always_allowed(self):
+        """HQ has rank_requirement=1, any player can build it."""
+        player = FakePlayer(resources={"Straw": 100, "Wood": 100, "Stone": 100})
+        player.db.rank_level = 1
+        tile = FakeTile()
+        system, created, _ = _make_building_system()
+        ok, msg = system.construct(player, tile, "HQ")
+        self.assertTrue(ok)
+
+
+# -------------------------------------------------------------- #
+#  Start Construction Tests (Req 6.6)
+# -------------------------------------------------------------- #
+
+class TestStartConstruction(unittest.TestCase):
+    """Test start_construction with active-presence timer."""
+
+    def test_start_construction_success(self):
+        player = FakePlayer(resources={"Straw": 100, "Wood": 100, "Stone": 100})
+        tile = FakeTile()
+        system, created, _ = _make_building_system()
+        ok, msg = system.start_construction(player, tile, "HQ")
+        self.assertTrue(ok)
+        self.assertIn("started", msg.lower())
+        self.assertEqual(len(created), 1)
+
+    def test_start_construction_sets_player_state(self):
+        player = FakePlayer(resources={"Straw": 100, "Wood": 100, "Stone": 100})
+        tile = FakeTile()
+        system, created, _ = _make_building_system()
+        system.start_construction(player, tile, "HQ")
+        self.assertEqual(player.db.activity_state, "building")
+        self.assertIsNotNone(player.db.activity_target)
+        self.assertEqual(player.db.activity_progress, 0)
+
+    def test_start_construction_sets_building_timer(self):
+        player = FakePlayer(resources={"Straw": 100, "Wood": 100, "Stone": 100})
+        tile = FakeTile()
+        system, created, _ = _make_building_system()
+        system.start_construction(player, tile, "HQ")
+        building = created[0]
+        self.assertEqual(building.attributes.get("construction_progress"), 0)
+        self.assertEqual(building.attributes.get("construction_total"), 180)
+
+    def test_start_construction_deducts_resources(self):
+        player = FakePlayer(resources={"Straw": 100, "Wood": 100, "Stone": 100})
+        tile = FakeTile()
+        system, _, _ = _make_building_system()
+        system.start_construction(player, tile, "HQ")
+        self.assertEqual(player.get_resource("Straw"), 50)
+        self.assertEqual(player.get_resource("Wood"), 50)
+        self.assertEqual(player.get_resource("Stone"), 70)
+
+    def test_start_construction_publishes_event(self):
+        player = FakePlayer(resources={"Straw": 100, "Wood": 100, "Stone": 100})
+        tile = FakeTile()
+        events = []
+        event_bus = EventBus()
+        event_bus.subscribe("construction_started", lambda **kw: events.append(kw))
+        system, _, _ = _make_building_system(event_bus=event_bus)
+        system.start_construction(player, tile, "HQ")
+        self.assertEqual(len(events), 1)
+        self.assertEqual(events[0]["player"], player)
+
+    def test_start_construction_rank_too_low_rejected(self):
+        hq = FakeBuilding(building_type="HQ")
+        player = FakePlayer(
+            resources={"Iron": 100, "Stone": 100, "Wood": 100},
+            buildings=[hq],
+        )
+        player.db.rank_level = 1
+        tile = FakeTile(terrain_type="Plains")
+        system, created, _ = _make_building_system()
+        ok, msg = system.start_construction(player, tile, "VV")
+        self.assertFalse(ok)
+        self.assertIn("Rank", msg)
+
+    def test_start_construction_insufficient_resources(self):
+        player = FakePlayer(resources={"Straw": 1, "Wood": 1, "Stone": 1})
+        tile = FakeTile()
+        system, created, _ = _make_building_system()
+        ok, msg = system.start_construction(player, tile, "HQ")
+        self.assertFalse(ok)
+        self.assertIn("Insufficient", msg)
+
+
+# -------------------------------------------------------------- #
+#  Process Construction Tick Tests (Req 6.6)
+# -------------------------------------------------------------- #
+
+class TestProcessConstructionTick(unittest.TestCase):
+    """Test process_construction_tick for player active-presence."""
+
+    def _setup_construction(self, build_time=5):
+        """Helper: start a construction and return (system, player, building, tile)."""
+        player_tile = FakeTile(xyz=(5, 5, "earth"))
+        player = FakePlayer(
+            resources={"Straw": 100, "Wood": 100, "Stone": 100},
+            location=player_tile,
+        )
+        tile = FakeTile(xyz=(5, 5, "earth"))
+        registry = _make_registry_with_buildings()
+        # Override HQ build time for faster testing
+        registry.buildings["HQ"] = BuildingDef(
+            name="Headquarters", abbreviation="HQ",
+            cost={"Straw": 50, "Wood": 50, "Stone": 30},
+            max_health=500, requires_hq=False, required_terrain=None,
+            category="headquarters", produces=None,
+            unlocks=["MM", "QQ"], map_symbol="HQ",
+            build_time_seconds=build_time, rank_requirement=1,
+        )
+        system, created, event_bus = _make_building_system(registry=registry)
+        system.start_construction(player, tile, "HQ")
+        building = created[0]
+        # Set player activity_target to the building
+        player.db.activity_target = building
+        return system, player, building, tile, event_bus
+
+    def test_tick_increments_progress(self):
+        system, player, building, tile, _ = self._setup_construction(build_time=5)
+        system.process_construction_tick(player)
+        self.assertEqual(building.attributes.get("construction_progress"), 1)
+
+    def test_tick_completes_construction(self):
+        system, player, building, tile, event_bus = self._setup_construction(build_time=3)
+        events = []
+        event_bus.subscribe("construction_completed", lambda **kw: events.append(kw))
+        # Tick 3 times to complete
+        for _ in range(3):
+            system.process_construction_tick(player)
+        self.assertEqual(player.db.activity_state, "idle")
+        self.assertIsNone(player.db.activity_target)
+        self.assertEqual(len(events), 1)
+
+    def test_tick_pauses_when_player_moves_away(self):
+        system, player, building, tile, _ = self._setup_construction(build_time=5)
+        # Tick once (progress = 1)
+        system.process_construction_tick(player)
+        self.assertEqual(building.attributes.get("construction_progress"), 1)
+        # Move player away
+        player.location = FakeTile(xyz=(99, 99, "earth"))
+        # Tick again — should NOT increment
+        system.process_construction_tick(player)
+        self.assertEqual(building.attributes.get("construction_progress"), 1)
+
+    def test_tick_resumes_when_player_returns(self):
+        system, player, building, tile, _ = self._setup_construction(build_time=5)
+        # Tick once
+        system.process_construction_tick(player)
+        self.assertEqual(building.attributes.get("construction_progress"), 1)
+        # Move away
+        player.location = FakeTile(xyz=(99, 99, "earth"))
+        system.process_construction_tick(player)
+        # Move back
+        player.location = FakeTile(xyz=(5, 5, "earth"))
+        system.process_construction_tick(player)
+        self.assertEqual(building.attributes.get("construction_progress"), 2)
+
+    def test_tick_no_op_when_idle(self):
+        player = FakePlayer()
+        player.db.activity_state = "idle"
+        system, _, _ = _make_building_system()
+        result = system.process_construction_tick(player)
+        self.assertFalse(result)
+
+    def test_tick_resets_if_no_target(self):
+        player = FakePlayer()
+        player.db.activity_state = "building"
+        player.db.activity_target = None
+        system, _, _ = _make_building_system()
+        system.process_construction_tick(player)
+        self.assertEqual(player.db.activity_state, "idle")
+
+
+# -------------------------------------------------------------- #
+#  Process Agent Construction Tests (Req 6.6, 10.1)
+# -------------------------------------------------------------- #
+
+class FakeAgent:
+    """Lightweight stand-in for an agent NPC."""
+    def __init__(self, incapacitated=False):
+        self.db = FakeDB()
+        self.db.incapacitated = incapacitated
+
+
+class TestProcessAgentConstruction(unittest.TestCase):
+    """Test process_agent_construction for Engineer agents."""
+
+    def test_agent_increments_progress(self):
+        agent = FakeAgent()
+        building = FakeBuilding(building_type="HQ")
+        building.attributes.add("assigned_agent", agent)
+        building.attributes.add("construction_progress", 0)
+        building.attributes.add("construction_total", 5)
+        system, _, _ = _make_building_system()
+        system.process_agent_construction([building])
+        self.assertEqual(building.attributes.get("construction_progress"), 1)
+
+    def test_agent_completes_construction(self):
+        agent = FakeAgent()
+        player = FakePlayer()
+        building = FakeBuilding(building_type="HQ", owner=player)
+        building.attributes.add("assigned_agent", agent)
+        building.attributes.add("construction_progress", 4)
+        building.attributes.add("construction_total", 5)
+        events = []
+        event_bus = EventBus()
+        event_bus.subscribe("construction_completed", lambda **kw: events.append(kw))
+        system, _, _ = _make_building_system(event_bus=event_bus)
+        system.process_agent_construction([building])
+        self.assertEqual(building.attributes.get("construction_progress"), 5)
+        self.assertEqual(len(events), 1)
+
+    def test_incapacitated_agent_does_not_progress(self):
+        agent = FakeAgent(incapacitated=True)
+        building = FakeBuilding(building_type="HQ")
+        building.attributes.add("assigned_agent", agent)
+        building.attributes.add("construction_progress", 0)
+        building.attributes.add("construction_total", 5)
+        system, _, _ = _make_building_system()
+        system.process_agent_construction([building])
+        self.assertEqual(building.attributes.get("construction_progress"), 0)
+
+    def test_no_agent_does_not_progress(self):
+        building = FakeBuilding(building_type="HQ")
+        building.attributes.add("assigned_agent", None)
+        building.attributes.add("construction_progress", 0)
+        building.attributes.add("construction_total", 5)
+        system, _, _ = _make_building_system()
+        system.process_agent_construction([building])
+        self.assertEqual(building.attributes.get("construction_progress"), 0)
+
+    def test_already_complete_does_not_increment(self):
+        agent = FakeAgent()
+        building = FakeBuilding(building_type="HQ")
+        building.attributes.add("assigned_agent", agent)
+        building.attributes.add("construction_progress", 5)
+        building.attributes.add("construction_total", 5)
+        system, _, _ = _make_building_system()
+        system.process_agent_construction([building])
+        self.assertEqual(building.attributes.get("construction_progress"), 5)
+
+
+# -------------------------------------------------------------- #
+#  Building Offline on 0 HP Tests (Req 6.9)
+# -------------------------------------------------------------- #
+
+class TestBuildingOfflineOnZeroHP(unittest.TestCase):
+    """Test that buildings go offline at 0 HP instead of being destroyed."""
+
+    def test_building_goes_offline_at_zero_hp(self):
+        """Req 6.9: building at 0 HP is set offline, not destroyed."""
+        building = FakeBuilding(building_type="MM", hp=50, hp_max=200)
+        # Simulate take_damage reducing HP to 0
+        building.attributes.add("hp", 0)
+        building.set_offline(True)
+        self.assertTrue(building.is_offline)
+        self.assertFalse(building._deleted)
+
+    def test_building_not_deleted_at_zero_hp(self):
+        """Req 6.9: building object persists when HP reaches 0."""
+        building = FakeBuilding(building_type="MM", hp=10, hp_max=200)
+        # Reduce HP to 0 and set offline
+        building.attributes.add("hp", 0)
+        building.set_offline(True)
+        self.assertEqual(building.attributes.get("hp"), 0)
+        self.assertTrue(building.is_offline)
+        self.assertFalse(building._deleted)
+
+    def test_offline_building_retains_attributes(self):
+        """Offline building keeps its type, level, and owner."""
+        player = FakePlayer(name="Owner")
+        building = FakeBuilding(
+            building_type="MM", owner=player, level=3,
+            hp=0, hp_max=200, offline=True,
+        )
+        self.assertEqual(building.attributes.get("building_type"), "MM")
+        self.assertEqual(building.building_level, 3)
+        self.assertEqual(building.owner, player)
+
+
+# -------------------------------------------------------------- #
+#  Repair Cost Tests (Req 6.10, 14b.3)
+# -------------------------------------------------------------- #
+
+class TestRepairCost(unittest.TestCase):
+    """Test repair cost = 50% of base construction cost."""
+
+    def test_repair_cost_is_half_base(self):
+        """Req 6.10/14b.3: repair cost is 50% of base cost."""
+        building = FakeBuilding(building_type="HQ")
+        system, _, _ = _make_building_system()
+        # HQ base cost: Straw=50, Wood=50, Stone=30
+        cost = system.get_repair_cost(building)
+        self.assertEqual(cost["Straw"], 25)
+        self.assertEqual(cost["Wood"], 25)
+        self.assertEqual(cost["Stone"], 15)
+
+    def test_repair_cost_rounds_down_minimum_one(self):
+        """Small costs round down but never below 1."""
+        building = FakeBuilding(building_type="MM")
+        system, _, _ = _make_building_system()
+        # MM base cost: Straw=20, Wood=10 -> repair: Straw=10, Wood=5
+        cost = system.get_repair_cost(building)
+        self.assertEqual(cost["Straw"], 10)
+        self.assertEqual(cost["Wood"], 5)
+
+    def test_repair_cost_unknown_building_returns_empty(self):
+        """Unknown building type returns empty cost dict."""
+        building = FakeBuilding(building_type="ZZ")
+        system, _, _ = _make_building_system()
+        cost = system.get_repair_cost(building)
+        self.assertEqual(cost, {})
+
+
+# -------------------------------------------------------------- #
+#  Extractor Requires Resource Terrain Tests (Req 6.11)
+# -------------------------------------------------------------- #
+
+class FakeTileWithResource(FakeTile):
+    """Tile that also exposes a resource_type attribute."""
+
+    def __init__(self, terrain_type="Forest", resource_type="Wood", **kwargs):
+        super().__init__(terrain_type=terrain_type, **kwargs)
+        self.resource_type = resource_type
+
+
+def _make_registry_with_extractor() -> DataRegistry:
+    """Create a DataRegistry that includes an Extractor definition."""
+    registry = _make_registry_with_buildings()
+    registry.buildings["EX"] = BuildingDef(
+        name="Extractor", abbreviation="EX",
+        cost={"Wood": 15, "Stone": 10},
+        max_health=200, requires_hq=True, required_terrain=None,
+        category="resource", produces=None,
+        unlocks=[], map_symbol="EX",
+        build_time_seconds=120, rank_requirement=2,
+    )
+    return registry
+
+
+class TestExtractorRequiresResourceTerrain(unittest.TestCase):
+    """Test Extractor placement requires terrain with a resource type."""
+
+    def test_extractor_on_resource_terrain_succeeds(self):
+        """Req 6.11: Extractor on terrain with resource_type succeeds."""
+        hq = FakeBuilding(building_type="HQ")
+        player = FakePlayer(
+            resources={"Wood": 100, "Stone": 100},
+            buildings=[hq],
+        )
+        player.db.rank_level = 2
+        tile = FakeTileWithResource(terrain_type="Forest", resource_type="Wood")
+        registry = _make_registry_with_extractor()
+        system, created, _ = _make_building_system(registry=registry)
+        ok, msg = system.construct(player, tile, "EX")
+        self.assertTrue(ok)
+        self.assertEqual(len(created), 1)
+
+    def test_extractor_on_non_resource_terrain_rejected(self):
+        """Req 6.11: Extractor on terrain without resource_type is rejected."""
+        hq = FakeBuilding(building_type="HQ")
+        player = FakePlayer(
+            resources={"Wood": 100, "Stone": 100},
+            buildings=[hq],
+        )
+        player.db.rank_level = 2
+        tile = FakeTile(terrain_type="Plains")  # No resource_type attribute
+        registry = _make_registry_with_extractor()
+        system, created, _ = _make_building_system(registry=registry)
+        ok, msg = system.construct(player, tile, "EX")
+        self.assertFalse(ok)
+        self.assertIn("resource", msg.lower())
+        self.assertEqual(len(created), 0)
+
+    def test_non_extractor_ignores_resource_check(self):
+        """Non-Extractor buildings skip the resource terrain check."""
+        hq = FakeBuilding(building_type="HQ")
+        player = FakePlayer(
+            resources={"Iron": 100, "Stone": 100, "Wood": 100},
+            buildings=[hq],
+        )
+        player.db.rank_level = 3
+        tile = FakeTile(terrain_type="Plains")  # No resource_type
+        system, created, _ = _make_building_system()
+        ok, msg = system.construct(player, tile, "VV")
+        self.assertTrue(ok)
+
+
+# -------------------------------------------------------------- #
+#  Vault Rejects Non-Resource Objects Tests (Req 6b.5)
+# -------------------------------------------------------------- #
+
+class FakeResourceObject:
+    """Lightweight stand-in for a resource stack object."""
+
+    def __init__(self, resource_type="Wood", amount=10):
+        self.key = resource_type
+        self.tags = FakeTags([("resource", "object_type")])
+        self.db = type("DB", (), {"resource_type": resource_type, "amount": amount})()
+
+
+class FakeNonResourceObject:
+    """Lightweight stand-in for a non-resource object (weapon, etc.)."""
+
+    def __init__(self, name="Sword"):
+        self.key = name
+        self.tags = FakeTags([])
+        self.db = type("DB", (), {})()
+
+
+class FakeTags:
+    """Simulates Evennia's tag handler."""
+
+    def __init__(self, tag_list=None):
+        self._tags = tag_list or []
+
+    def has(self, key, category=None):
+        for tag_key, tag_cat in self._tags:
+            if tag_key == key and (category is None or tag_cat == category):
+                return True
+        return False
+
+    def get(self, category=None):
+        return [k for k, c in self._tags if category is None or c == category]
+
+
+def _vault_accepts_object(obj) -> bool:
+    """Check if a Vault would accept the given object (Req 6b.5).
+
+    Vaults only accept resource objects — those tagged with
+    ("resource", "object_type").
+    """
+    if hasattr(obj, "tags") and hasattr(obj.tags, "has"):
+        return obj.tags.has("resource", category="object_type")
+    return False
+
+
+class TestVaultRejectsNonResource(unittest.TestCase):
+    """Test Vault only accepts resource objects (Req 6b.5)."""
+
+    def test_vault_accepts_resource_object(self):
+        """Vault accepts objects tagged as resource."""
+        resource = FakeResourceObject(resource_type="Wood", amount=10)
+        self.assertTrue(_vault_accepts_object(resource))
+
+    def test_vault_rejects_non_resource_object(self):
+        """Vault rejects objects not tagged as resource."""
+        weapon = FakeNonResourceObject(name="Sword")
+        self.assertFalse(_vault_accepts_object(weapon))
+
+    def test_vault_rejects_object_without_tags(self):
+        """Vault rejects objects with no tag handler."""
+        plain_obj = type("Obj", (), {"key": "thing"})()
+        self.assertFalse(_vault_accepts_object(plain_obj))
+
+
+# -------------------------------------------------------------- #
+#  HQ-First and One HQ Per Player Per Planet Tests (Req 6.3, 6.4)
+# -------------------------------------------------------------- #
+
+class TestOneHQPerPlayerPerPlanet(unittest.TestCase):
+    """Test one HQ per player per planet enforcement (Req 6.4)."""
+
+    def test_second_hq_on_same_planet_rejected(self):
+        """Req 6.4: player cannot build a second HQ on the same planet."""
+        existing_hq = FakeBuilding(building_type="HQ")
+        player = FakePlayer(
+            resources={"Straw": 200, "Wood": 200, "Stone": 200},
+            buildings=[existing_hq],
+        )
+        tile = FakeTile(terrain_type="Plains")
+        system, created, _ = _make_building_system()
+        ok, msg = system.construct(player, tile, "HQ")
+        self.assertFalse(ok)
+        self.assertIn("one", msg.lower())
+        self.assertEqual(len(created), 0)
+
+    def test_first_hq_succeeds(self):
+        """Req 6.3: first HQ construction succeeds."""
+        player = FakePlayer(
+            resources={"Straw": 200, "Wood": 200, "Stone": 200},
+        )
+        tile = FakeTile(terrain_type="Plains")
+        system, created, _ = _make_building_system()
+        ok, msg = system.construct(player, tile, "HQ")
+        self.assertTrue(ok)
+        self.assertEqual(len(created), 1)
+
+    def test_hq_first_enforcement(self):
+        """Req 6.3: non-HQ building requires HQ to exist first."""
+        player = FakePlayer(
+            resources={"Straw": 200, "Wood": 200},
+        )
+        tile = FakeTile(terrain_type="Plains")
+        system, created, _ = _make_building_system()
+        ok, msg = system.construct(player, tile, "MM")
+        self.assertFalse(ok)
+        self.assertIn("Headquarters", msg)
+
+    def test_non_hq_after_hq_succeeds(self):
+        """Req 6.3: non-HQ building succeeds when HQ exists."""
+        hq = FakeBuilding(building_type="HQ")
+        player = FakePlayer(
+            resources={"Straw": 200, "Wood": 200},
+            buildings=[hq],
+        )
+        tile = FakeTile(terrain_type="Plains")
+        system, created, _ = _make_building_system()
+        ok, msg = system.construct(player, tile, "MM")
+        self.assertTrue(ok)
+
 
 if __name__ == "__main__":
     unittest.main()

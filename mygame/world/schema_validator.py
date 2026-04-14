@@ -26,7 +26,11 @@ class SchemaValidator:
         if not isinstance(data, list):
             return [f"buildings: expected a list, got {type(data).__name__}"]
 
-        required = {"name", "abbreviation", "cost", "max_health", "requires_hq", "category"}
+        required = {
+            "name", "abbreviation", "cost", "max_health", "requires_hq", "category",
+            "build_time_seconds", "max_level", "rank_requirement", "requires_agent",
+            "storage_capacity",
+        }
         for idx, entry in enumerate(data):
             prefix = f"buildings[{idx}]"
             if not isinstance(entry, dict):
@@ -62,6 +66,45 @@ class SchemaValidator:
             ms = entry.get("map_symbol")
             if ms is not None and isinstance(ms, str) and len(ms) != 2:
                 errors.append(f"{prefix}: map_symbol must be 2 characters, got '{ms}'")
+
+            # build_time_seconds must be a positive int
+            bts = entry.get("build_time_seconds")
+            if bts is not None:
+                if not isinstance(bts, int) or bts <= 0:
+                    errors.append(
+                        f"{prefix}: build_time_seconds must be a positive integer, got {bts!r}"
+                    )
+
+            # max_level must be a positive int
+            ml = entry.get("max_level")
+            if ml is not None:
+                if not isinstance(ml, int) or ml <= 0:
+                    errors.append(
+                        f"{prefix}: max_level must be a positive integer, got {ml!r}"
+                    )
+
+            # rank_requirement must be a positive int
+            rr = entry.get("rank_requirement")
+            if rr is not None:
+                if not isinstance(rr, int) or rr <= 0:
+                    errors.append(
+                        f"{prefix}: rank_requirement must be a positive integer, got {rr!r}"
+                    )
+
+            # requires_agent must be a bool
+            ra = entry.get("requires_agent")
+            if ra is not None and not isinstance(ra, bool):
+                errors.append(
+                    f"{prefix}: requires_agent must be a boolean, got {type(ra).__name__}"
+                )
+
+            # storage_capacity must be a non-negative int
+            sc = entry.get("storage_capacity")
+            if sc is not None:
+                if not isinstance(sc, int) or sc < 0:
+                    errors.append(
+                        f"{prefix}: storage_capacity must be a non-negative integer, got {sc!r}"
+                    )
 
         return errors
 
@@ -136,7 +179,7 @@ class SchemaValidator:
         if not isinstance(data, list):
             return [f"ranks: expected a list, got {type(data).__name__}"]
 
-        required = {"name", "level", "xp_threshold"}
+        required = {"name", "level", "xp_threshold", "agent_cap", "planet_access"}
         levels_seen: set[int] = set()
         level_xp: list[tuple[int, int]] = []
 
@@ -161,6 +204,29 @@ class SchemaValidator:
                 xp = entry.get("xp_threshold")
                 if isinstance(xp, int):
                     level_xp.append((level, xp))
+
+            # agent_cap must be a positive int
+            ac = entry.get("agent_cap")
+            if ac is not None:
+                if not isinstance(ac, int) or ac <= 0:
+                    errors.append(
+                        f"{prefix}: agent_cap must be a positive integer, got {ac!r}"
+                    )
+
+            # planet_access must be a list of strings
+            pa = entry.get("planet_access")
+            if pa is not None:
+                if not isinstance(pa, list):
+                    errors.append(
+                        f"{prefix}: planet_access must be a list, got {type(pa).__name__}"
+                    )
+                else:
+                    for pi, item in enumerate(pa):
+                        if not isinstance(item, str):
+                            errors.append(
+                                f"{prefix}: planet_access[{pi}] must be a string, "
+                                f"got {type(item).__name__}"
+                            )
 
         # xp_thresholds must be strictly increasing when sorted by level
         level_xp.sort(key=lambda t: t[0])
@@ -415,6 +481,15 @@ class SchemaValidator:
                     errors.append(
                         f"production_map['{babbr}']: item key '{ik}' "
                         f"not found in item definitions"
+                    )
+
+        # Planet terrain_weights → terrain types must exist in terrain definitions
+        for pname, pdef in registry.planets.items():
+            for tt in pdef.terrain_types:
+                if tt not in terrain_types:
+                    errors.append(
+                        f"planet '{pname}': terrain_weight type '{tt}' "
+                        f"not found in terrain definitions"
                     )
 
         return errors

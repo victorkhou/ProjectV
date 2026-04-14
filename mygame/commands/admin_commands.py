@@ -27,7 +27,7 @@ class CmdReloadData(BaseCommand):
     """
 
     key = "@reloaddata"
-    locks = "cmd:perm(Builder)"
+    locks = "cmd:perm(Builder);view:perm(Builder)"
     help_category = "Admin"
 
     def func(self):
@@ -71,7 +71,7 @@ class CmdGiveResource(BaseCommand):
     """
 
     key = "@giveresource"
-    locks = "cmd:perm(Builder)"
+    locks = "cmd:perm(Builder);view:perm(Builder)"
     help_category = "Admin"
 
     def func(self):
@@ -193,7 +193,7 @@ class CmdSpawnBuilding(BaseCommand):
 
     key = "@spawnbuilding"
     aliases = ["@sb"]
-    locks = "cmd:perm(Builder)"
+    locks = "cmd:perm(Builder);view:perm(Builder)"
     help_category = "Admin"
 
     def func(self):
@@ -306,9 +306,9 @@ class CmdTeleport(BaseCommand):
         teleport 25,25
     """
 
-    key = "teleport"
+    key = "@teleport"
     aliases = ["@tel"]
-    locks = "cmd:perm(Builder)"
+    locks = "cmd:perm(Builder);view:perm(Builder)"
     help_category = "Admin"
 
     def func(self):
@@ -397,7 +397,7 @@ class CmdClearFog(BaseCommand):
     """
 
     key = "@clearfog"
-    locks = "cmd:perm(Builder)"
+    locks = "cmd:perm(Builder);view:perm(Builder)"
     help_category = "Admin"
 
     def func(self):
@@ -435,7 +435,7 @@ class CmdPurgeRooms(BaseCommand):
     """
 
     key = "@purgerooms"
-    locks = "cmd:perm(Builder)"
+    locks = "cmd:perm(Builder);view:perm(Builder)"
     help_category = "Admin"
 
     def func(self):
@@ -497,3 +497,354 @@ class CmdPurgeRooms(BaseCommand):
             caller.key, deleted, kept,
         )
         caller.msg(f"Purged {deleted} empty rooms. {kept} rooms with state kept.")
+
+
+class CmdResetResources(BaseCommand):
+    """Reset all players to starting resources.
+
+    Usage:
+        @resetresources
+
+    Sets every player's resources back to starting values.
+    Does NOT touch other attributes — use @migrate for that.
+
+    Restricted to Admin+ permission level.
+    """
+
+    key = "@resetresources"
+    locks = "cmd:perm(Admin);view:perm(Admin)"
+    help_category = "Admin"
+
+    def func(self):
+        caller = self.caller
+
+        if not _check_perm(caller, "Admin"):
+            caller.msg("Permission denied. Admin+ required.")
+            return
+
+        try:
+            from typeclasses.characters import STARTING_RESOURCES
+            from evennia.objects.models import ObjectDB
+
+            characters = list(
+                ObjectDB.objects.filter(db_attributes__db_key="combat_xp")
+            )
+        except Exception:
+            caller.msg("Could not query player characters from the database.")
+            return
+
+        if not characters:
+            caller.msg("No player characters found in the database.")
+            return
+
+        updated = 0
+        for char in characters:
+            try:
+                char.attributes.add("resources", dict(STARTING_RESOURCES))
+                updated += 1
+            except Exception:
+                logger.exception("Failed to reset resources for %s", getattr(char, "key", "?"))
+
+        logger.info("Admin %s reset resources for %d characters", caller.key, updated)
+        caller.msg(f"Reset {updated} player(s) to starting resources.")
+
+
+class CmdMigrate(BaseCommand):
+    """Ensure all players have valid attributes.
+
+    Usage:
+        @migrate
+
+    Reads PLAYER_DEFAULTS from characters.py and ensures every player
+    has all attributes with valid (non-None) values. Only fills in
+    missing attributes — never overwrites existing data.
+
+    Run this after adding new player attributes to the codebase.
+
+    Restricted to Admin+ permission level.
+    """
+
+    key = "@migrate"
+    locks = "cmd:perm(Admin);view:perm(Admin)"
+    help_category = "Admin"
+
+    def func(self):
+        caller = self.caller
+
+        if not _check_perm(caller, "Admin"):
+            caller.msg("Permission denied. Admin+ required.")
+            return
+
+        try:
+            from typeclasses.characters import PLAYER_DEFAULTS
+            from evennia.objects.models import ObjectDB
+
+            characters = list(
+                ObjectDB.objects.filter(db_attributes__db_key="combat_xp")
+            )
+        except Exception:
+            caller.msg("Could not query player characters from the database.")
+            return
+
+        if not characters:
+            caller.msg("No player characters found in the database.")
+            return
+
+        updated = 0
+        attrs_added = 0
+        for char in characters:
+            try:
+                for key, default in PLAYER_DEFAULTS.items():
+                    current = char.attributes.get(key)
+                    if current is None:
+                        import copy
+                        char.attributes.add(key, copy.deepcopy(default))
+                        attrs_added += 1
+                updated += 1
+            except Exception:
+                logger.exception("Failed to migrate %s", getattr(char, "key", "?"))
+
+        logger.info("Admin %s migrated %d characters (%d attrs added)", caller.key, updated, attrs_added)
+        caller.msg(f"Migrated {updated} player(s). {attrs_added} missing attribute(s) filled in.")
+
+
+class CmdDestroyAgent(BaseCommand):
+    """Destroy an agent NPC by ID, or clear stuck training state.
+
+    Usage:
+        @destroyagent <player> <agent_id>
+        @destroyagent <player> training
+
+    The ``training`` variant clears any stuck training state on all
+    Academy buildings owned by the player and resets their next_agent_id.
+
+    Restricted to Admin+ permission level.
+    """
+
+    key = "@destroyagent"
+    locks = "cmd:perm(Admin);view:perm(Admin)"
+    help_category = "Admin"
+
+    def func(self):
+        caller = self.caller
+
+        if not _check_perm(caller, "Admin"):
+            caller.msg("Permission denied. Admin+ required.")
+            return
+
+        args = self.args.strip().split()
+        if len(args) < 2:
+            caller.msg("Usage: @destroyagent <player> <agent_id|training>")
+            return
+
+        player_name = args[0]
+        target_arg = args[1]
+
+        # Find the target player
+        target = caller.search(player_name) if hasattr(caller, "search") else None
+        if target is None:
+            caller.msg(f"Could not find player '{player_name}'.")
+            return
+
+        if target_arg.lower() == "training":
+            self._clear_training(caller, target)
+            return
+
+        try:
+            agent_id = int(target_arg)
+        except ValueError:
+            caller.msg("Agent ID must be a number or 'training'.")
+            return
+
+        self._destroy_agent(caller, target, agent_id)
+
+    def _clear_training(self, caller, target):
+        """Clear all stuck training state for a player."""
+        cleared = 0
+        try:
+            from evennia.objects.models import ObjectDB
+
+            # Find all buildings with training_owner pointing to this player
+            buildings = list(ObjectDB.objects.filter(
+                db_attributes__db_key="training_owner",
+            ))
+            for b in buildings:
+                owner = b.attributes.get("training_owner")
+                if owner is target:
+                    b.attributes.add("training_agent_id", None)
+                    b.attributes.add("training_ticks_remaining", None)
+                    b.attributes.add("training_owner", None)
+                    cleared += 1
+        except Exception:
+            pass
+
+        # Also try via player's buildings
+        try:
+            for b in target.get_buildings():
+                agent_id = None
+                if hasattr(b, "attributes"):
+                    agent_id = b.attributes.get("training_agent_id")
+                elif hasattr(b, "db"):
+                    agent_id = getattr(b.db, "training_agent_id", None)
+                if agent_id is not None:
+                    if hasattr(b, "attributes"):
+                        b.attributes.add("training_agent_id", None)
+                        b.attributes.add("training_ticks_remaining", None)
+                        b.attributes.add("training_owner", None)
+                    cleared += 1
+        except Exception:
+            pass
+
+        logger.info(
+            "Admin %s cleared training state on %d buildings for %s",
+            caller.key, cleared, target.key,
+        )
+        caller.msg(f"Cleared training state on {cleared} building(s) for {target.key}.")
+
+    def _destroy_agent(self, caller, target, agent_id):
+        """Destroy a specific agent NPC, or clear its stuck training state."""
+        agent_system = _get_system(caller, "agent_system")
+        if agent_system is None:
+            caller.msg("Agent system unavailable.")
+            return
+
+        agent = agent_system.get_agent_by_id(target, agent_id)
+        if agent is not None:
+            # Clear building assignment if any
+            building = getattr(agent.db, "role_target", None) if hasattr(agent, "db") else None
+            if building is not None and hasattr(building, "db"):
+                if getattr(building.db, "assigned_agent", None) is agent:
+                    building.db.assigned_agent = None
+
+            agent_name = getattr(agent, "key", f"Agent-{agent_id}")
+            if hasattr(agent, "delete"):
+                agent.delete()
+
+            logger.info(
+                "Admin %s destroyed agent #%d (%s) belonging to %s",
+                caller.key, agent_id, agent_name, target.key,
+            )
+            caller.msg(f"Destroyed agent #{agent_id} ({agent_name}) belonging to {target.key}.")
+            return
+
+        # Agent NPC doesn't exist — check if it's stuck in training
+        cleared = False
+        try:
+            for b in target.get_buildings():
+                tid = None
+                if hasattr(b, "attributes"):
+                    tid = b.attributes.get("training_agent_id")
+                elif hasattr(b, "db"):
+                    tid = getattr(b.db, "training_agent_id", None)
+                if tid == agent_id:
+                    if hasattr(b, "attributes"):
+                        b.attributes.add("training_agent_id", None)
+                        b.attributes.add("training_ticks_remaining", None)
+                        b.attributes.add("training_owner", None)
+                    elif hasattr(b, "db"):
+                        b.db.training_agent_id = None
+                        b.db.training_ticks_remaining = None
+                        b.db.training_owner = None
+                    cleared = True
+                    caller.msg(f"Cleared stuck training for agent #{agent_id} on {target.key}'s Academy.")
+                    logger.info(
+                        "Admin %s cleared stuck training #%d for %s",
+                        caller.key, agent_id, target.key,
+                    )
+                    break
+        except Exception:
+            pass
+
+        if not cleared:
+            caller.msg(f"Agent #{agent_id} not found for {target.key} (not spawned, not in training).")
+
+
+class CmdListAgents(BaseCommand):
+    """List all agents belonging to a player.
+
+    Usage:
+        @agents <player>
+
+    Shows agent IDs, roles, status, and location for the target player.
+    Restricted to Builder+ permission level.
+    """
+
+    key = "@agents"
+    locks = "cmd:perm(Builder);view:perm(Builder)"
+    help_category = "Admin"
+
+    def func(self):
+        caller = self.caller
+
+        if not _check_perm(caller, "Builder"):
+            caller.msg("Permission denied. Builder+ required.")
+            return
+
+        player_name = self.args.strip()
+        if not player_name:
+            caller.msg("Usage: @agents <player>")
+            return
+
+        target = caller.search(player_name) if hasattr(caller, "search") else None
+        if target is None:
+            caller.msg(f"Could not find player '{player_name}'.")
+            return
+
+        agent_system = _get_system(caller, "agent_system")
+        if agent_system is None:
+            caller.msg("Agent system unavailable.")
+            return
+
+        agents = agent_system.get_agents(target)
+        next_id = getattr(getattr(target, "db", None), "next_agent_id", None)
+        count = agent_system.get_agent_count(target)
+
+        lines = [f"|w=== Agents for {target.key} ({count} total, next_id={next_id}) ===|n"]
+        lines.append(f"  |c#1|n  Commander (player character)")
+
+        if not agents:
+            lines.append("  No trained agents.")
+        else:
+            for agent in sorted(agents, key=lambda a: getattr(a.db, "agent_id", 0)):
+                aid = getattr(agent.db, "agent_id", "?")
+                role = getattr(agent.db, "role", "") or "unassigned"
+                incap = getattr(agent.db, "incapacitated", False)
+                reserve = getattr(agent.db, "reserve", False)
+                obj_id = getattr(agent, "id", "?")
+
+                status_parts = []
+                if incap:
+                    status_parts.append("|rIncapacitated|n")
+                if reserve:
+                    status_parts.append("|yReserved|n")
+                if not status_parts:
+                    status_parts.append("|gActive|n")
+                status = " ".join(status_parts)
+
+                target_bld = getattr(agent.db, "role_target", None)
+                loc_str = "HQ"
+                if target_bld is not None:
+                    btype = getattr(target_bld.db, "building_type", "?") if hasattr(target_bld, "db") else "?"
+                    loc_str = btype
+                elif role in ("soldier", "medic"):
+                    loc_str = "army"
+
+                lines.append(
+                    f"  |c#{aid}|n (db#{obj_id})  {role:<12s}  "
+                    f"{loc_str:<10s}  {status}"
+                )
+
+        # Show training state on buildings
+        try:
+            for b in target.get_buildings():
+                tid = None
+                if hasattr(b, "attributes"):
+                    tid = b.attributes.get("training_agent_id")
+                if tid is not None:
+                    remaining = b.attributes.get("training_ticks_remaining") or 0
+                    btype = b.attributes.get("building_type") or "??"
+                    lines.append(f"  |y[Training] #{tid} at {btype} — {remaining}s remaining|n")
+        except Exception:
+            pass
+
+        caller.msg("\n".join(lines))

@@ -1,11 +1,13 @@
 """
 Resource System for the RTS Combat Overworld game.
 
-Handles manual resource gathering from terrain nodes, automated
-production from resource buildings, and depleted node respawn cycles.
+Handles manual resource gathering from terrain nodes, active-presence
+harvesting, automated Extractor production from Harvester agents,
+Extractor inventory management, and depleted node respawn cycles.
 
-Requirements: 2.1, 2.2, 2.3, 2.5, 2.6, 2.7, 5.2, 5.8, 15.1, 15.2,
-              15.3, 15.4
+Requirements: 2.1, 2.2, 2.3, 2.5, 2.6, 2.7, 3.4, 3.5, 5.2, 5.8,
+              6.6, 6.7, 6.12, 6.22, 9.1, 9.2, 9.3, 9.4, 14.7, 14.8,
+              15.1, 15.2, 15.3, 15.4
 """
 
 from __future__ import annotations
@@ -14,6 +16,7 @@ from typing import Any
 
 from world.data_registry import DataRegistry
 from world.event_bus import RESOURCE_GATHERED, EventBus
+from world.utils import get_building_attr as _get_building_attr_shared
 
 
 class ResourceSystem:
@@ -82,55 +85,353 @@ class ResourceSystem:
         return True, f"Harvested {gather_amount} {resource_type}."
 
     # ------------------------------------------------------------------ #
-    #  Automated production from resource buildings
+    #  Active-presence harvesting (Req 3.4, 6.6, 6.7)
     # ------------------------------------------------------------------ #
 
-    def process_production(self, active_buildings: list) -> None:
-        """Process resource production for active resource buildings.
+    # Harvest cooldown in seconds (game ticks at 1 tick/s)
+    HARVEST_COOLDOWN_TICKS = 4
+    # Units yielded per harvest action on raw terrain
+    HARVEST_YIELD_PER_ACTION = 1
+    # Multiplier when harvesting at an Extractor (scales with level)
+    EXTRACTOR_HARVEST_MULTIPLIER = 6
 
-        For each active resource building (not offline, owner online):
-            - Look up building_level
-            - Get yield from balance.production_scaling[level]
-            - Determine resource type from building definition's produces field
-            - Add yield to owner's resources
+    def start_harvest(self, player: Any, tile: Any) -> tuple[bool, str]:
+        """Begin active-presence harvesting on a resource tile.
+
+        Sets the player's ``activity_state`` to ``"harvesting"`` and
+        ``activity_target`` to the tile.  The player must remain on the
+        tile for :meth:`process_harvest_tick` to yield resources.
+
+        Returns:
+            (success, message) tuple.
+        """
+        # Block harvesting at incomplete buildings
+        building = getattr(tile, "building", None)
+        if building is not None:
+            under_construction = self._get_building_attr(building, "under_construction")
+            if under_construction:
+                return False, "This building is still under construction."
+
+        node = self._get_resource_node(tile)
+        if node is None:
+            return False, "No resource node on this tile."
+
+        resource_type = node.get("resource_type")
+        if not resource_type:
+            return False, "This tile has no harvestable resource."
+
+        if node.get("depleted", False):
+            return False, "This resource node is depleted."
+
+        if not hasattr(player, "db"):
+            return False, "Player has no attribute storage."
+
+        player.db.activity_state = "harvesting"
+        player.db.activity_target = tile
+        player.db.activity_progress = 0
+
+        # Tell the player what rate they'll get
+        extractor = self._get_tile_extractor(tile)
+        if extractor is not None:
+            level = self._get_building_level(extractor)
+            amount = int(self.HARVEST_YIELD_PER_ACTION * self.EXTRACTOR_HARVEST_MULTIPLIER
+                         * (1 + 0.25 * (level - 1)))
+            return True, (
+                f"You begin harvesting {resource_type} at the Extractor. "
+                f"({amount} per {self.HARVEST_COOLDOWN_TICKS}s)"
+            )
+
+        return True, (
+            f"You begin harvesting {resource_type}. "
+            f"({self.HARVEST_YIELD_PER_ACTION} per {self.HARVEST_COOLDOWN_TICKS}s)"
+        )
+
+    def process_harvest_tick(self, player: Any) -> bool:
+        """Advance active-presence harvesting for one game tick.
+
+        Called once per tick for each online player.  If the player is
+        in the ``"harvesting"`` state and still on the target tile,
+        increments ``activity_progress``.  Every
+        :attr:`HARVEST_COOLDOWN_TICKS` ticks, yields
+        :attr:`HARVEST_YIELD_PER_ACTION` units of the tile's resource
+        to the player and publishes a ``resource_gathered`` event.
+
+        If the node becomes depleted, the player returns to ``"idle"``.
+
+        Returns:
+            ``True`` if resources were yielded this tick.
+        """
+        if not hasattr(player, "db"):
+            return False
+
+        if getattr(player.db, "activity_state", "idle") != "harvesting":
+            return False
+
+        tile = getattr(player.db, "activity_target", None)
+        if tile is None:
+            player.db.activity_state = "idle"
+            return False
+
+        # Verify player is still on the target tile
+        if not self._player_on_tile(player, tile):
+            return False  # paused — don't reset, just skip
+
+        node = self._get_resource_node(tile)
+        if node is None or node.get("depleted", False):
+            player.db.activity_state = "idle"
+            player.db.activity_target = None
+            player.db.activity_progress = 0
+            return False
+
+        resource_type = node.get("resource_type")
+        if not resource_type:
+            player.db.activity_state = "idle"
+            return False
+
+        # Increment progress
+        progress = getattr(player.db, "activity_progress", 0) + 1
+        player.db.activity_progress = progress
+
+        # Yield resources on cooldown boundary
+        if progress % self.HARVEST_COOLDOWN_TICKS == 0:
+            amount = self.HARVEST_YIELD_PER_ACTION
+
+            # Extractor bonus: if the tile has an Extractor building,
+            # multiply yield by EXTRACTOR_HARVEST_MULTIPLIER scaled by level.
+            # This is the core incentive to build Extractors on resource tiles.
+            extractor = self._get_tile_extractor(tile)
+            if extractor is not None:
+                level = self._get_building_level(extractor)
+                amount = int(amount * self.EXTRACTOR_HARVEST_MULTIPLIER
+                             * (1 + 0.25 * (level - 1)))
+
+            player.add_resource(resource_type, amount)
+
+            # Notify player of resource gain
+            total_held = 0
+            if hasattr(player, "get_resource"):
+                total_held = player.get_resource(resource_type)
+            if hasattr(player, "msg"):
+                player.msg(f"|y[Harvest] +{amount} {resource_type} (total: {total_held})|n")
+
+            self.event_bus.publish(
+                RESOURCE_GATHERED,
+                player=player,
+                resource_type=resource_type,
+                amount=amount,
+                tile=tile,
+            )
+            return True
+
+        return False
+
+    # ------------------------------------------------------------------ #
+    #  Extractor inventory management (Req 6.12, 6.22)
+    # ------------------------------------------------------------------ #
+
+    @staticmethod
+    def get_extractor_capacity(level: int) -> int:
+        """Return the storage capacity for an Extractor at *level*.
+
+        Formula: ``100 + 50 × (level - 1)``
+        """
+        return 100 + 50 * (level - 1)
+
+    @staticmethod
+    def get_vault_capacity(level: int) -> int:
+        """Return the storage capacity for a Vault at *level*.
+
+        Formula: ``100 + 20 × (level - 1)``
+        """
+        return 100 + 20 * (level - 1)
+
+    @staticmethod
+    def get_turret_damage(base_damage: int, level: int) -> float:
+        """Return the turret damage at *level*.
+
+        Formula: ``base × (1 + 0.20 × (level - 1))``
+        """
+        return base_damage * (1 + 0.20 * (level - 1))
+
+    @staticmethod
+    def get_harvester_production(base_rate: int, level: int) -> float:
+        """Return the Harvester production rate at *level*.
+
+        Formula: ``base_rate × (1 + 0.25 × (level - 1))``
+        """
+        return base_rate * (1 + 0.25 * (level - 1))
+
+    @staticmethod
+    def get_extractor_inventory(building: Any) -> dict[str, int]:
+        """Return the resource inventory dict stored on an Extractor.
+
+        The inventory is a ``dict[str, int]`` mapping resource type
+        names to amounts, stored on ``building.db.resource_inventory``
+        (or via the Evennia Attribute handler).
+        """
+        if hasattr(building, "attributes") and hasattr(building.attributes, "get"):
+            inv = building.attributes.get("resource_inventory", default=None)
+            if inv is not None:
+                return inv
+        if hasattr(building, "db"):
+            inv = getattr(building.db, "resource_inventory", None)
+            if inv is not None:
+                return inv
+        return {}
+
+    @staticmethod
+    def _set_extractor_inventory(building: Any, inventory: dict[str, int]) -> None:
+        """Write the resource inventory dict back to an Extractor."""
+        if hasattr(building, "attributes") and hasattr(building.attributes, "add"):
+            building.attributes.add("resource_inventory", inventory)
+        elif hasattr(building, "db"):
+            building.db.resource_inventory = inventory
+
+    @classmethod
+    def get_extractor_stored_amount(cls, building: Any) -> int:
+        """Return the total number of resource units stored in an Extractor."""
+        inv = cls.get_extractor_inventory(building)
+        return sum(inv.values())
+
+    @classmethod
+    def add_to_extractor_inventory(
+        cls, building: Any, resource_type: str, amount: int, level: int
+    ) -> int:
+        """Add resources to an Extractor's inventory, respecting capacity.
+
+        Returns the amount actually added (may be less than *amount* if
+        the Extractor is at or near capacity).
+        """
+        capacity = cls.get_extractor_capacity(level)
+        inv = cls.get_extractor_inventory(building)
+        current_total = sum(inv.values())
+        space = max(0, capacity - current_total)
+        actual = min(amount, space)
+        if actual > 0:
+            inv[resource_type] = inv.get(resource_type, 0) + actual
+            cls._set_extractor_inventory(building, inv)
+        return actual
+
+    # ------------------------------------------------------------------ #
+    #  Harvester agent / Extractor production (Req 9.1, 9.2, 9.3, 9.4)
+    # ------------------------------------------------------------------ #
+
+    def process_extractor_production(self, buildings: list) -> None:
+        """Produce resources for Extractors with assigned Harvester agents.
+
+        Called once per game tick.  For each Extractor that has an
+        ``assigned_agent`` whose role is ``"harvester"``, produces
+        resources scaled by the Extractor's level and stores them in
+        the Extractor's local inventory.
+
+        Production formula:
+            ``base_rate × (1 + 0.25 × (level - 1))``
+
+        where ``base_rate`` is ``balance.gather_amount``.
+
+        Production pauses when the Extractor's inventory is full or the
+        agent is incapacitated.
 
         Args:
-            active_buildings: List of Building objects to process.
+            buildings: Iterable of building objects to check.
         """
-        for building in active_buildings:
-            # Skip offline buildings
-            if getattr(building, "is_offline", False):
+        base_rate = self.registry.balance.gather_amount
+
+        for building in buildings:
+            # Must have an assigned agent
+            agent = self._get_building_attr(building, "assigned_agent")
+            if agent is None:
                 continue
 
-            # Get building type
+            # Agent must be a harvester and not incapacitated
+            if getattr(getattr(agent, "db", None), "role", "") != "harvester":
+                continue
+            if getattr(getattr(agent, "db", None), "incapacitated", False):
+                continue
+
+            # Must be an Extractor (resource category)
             building_type = self._get_building_type(building)
             if not building_type:
                 continue
-
-            # Look up building definition
             try:
                 building_def = self.registry.get_building(building_type)
             except KeyError:
                 continue
-
-            # Only process resource-category buildings
             if building_def.category != "resource":
                 continue
 
-            # Determine what resource this building produces
             resource_type = building_def.produces
+            if not resource_type:
+                # Extractor: resolve from building attribute or terrain tile
+                resource_type = self._resolve_extractor_resource(building)
             if not resource_type:
                 continue
 
-            # Get owner
+            # Skip offline buildings
+            if getattr(building, "is_offline", False):
+                continue
+
+            # Calculate production amount scaled by level
+            level = self._get_building_level(building)
+            production = base_rate * (1 + 0.25 * (level - 1))
+            # Round to nearest integer (at least 1 if base_rate > 0)
+            production_int = max(1, int(production)) if base_rate > 0 else 0
+
+            if production_int <= 0:
+                continue
+
+            # Add to Extractor inventory (respects capacity)
+            added = self.add_to_extractor_inventory(
+                building, resource_type, production_int, level
+            )
+
+            if added > 0:
+                owner = self._get_building_attr(building, "owner")
+                self.event_bus.publish(
+                    RESOURCE_GATHERED,
+                    player=owner,
+                    resource_type=resource_type,
+                    amount=added,
+                    tile=building,
+                )
+
+    # ------------------------------------------------------------------ #
+    #  Automated production from resource buildings
+    # ------------------------------------------------------------------ #
+
+    def process_production(self, active_buildings: list) -> None:
+        """DEPRECATED — passive production removed in Phase 1.
+
+        Extractors now require player presence or a Harvester agent.
+        This method is kept for backward compatibility with tests but
+        is no longer called from the game tick loop.
+        """
+        import warnings
+        warnings.warn(
+            "process_production is deprecated — use process_extractor_production",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        for building in active_buildings:
+            if getattr(building, "is_offline", False):
+                continue
+            building_type = self._get_building_type(building)
+            if not building_type:
+                continue
+            try:
+                building_def = self.registry.get_building(building_type)
+            except KeyError:
+                continue
+            if building_def.category != "resource":
+                continue
+            resource_type = building_def.produces
+            if not resource_type:
+                continue
             owner = getattr(building, "owner", None)
             if owner is None:
                 continue
-
-            # Get building level and production yield
             level = self._get_building_level(building)
             production_yield = self.registry.balance.production_scaling.get(level, 0)
-
             if production_yield > 0:
                 owner.add_resource(resource_type, production_yield)
 
@@ -195,19 +496,107 @@ class ResourceSystem:
     @staticmethod
     def _get_building_type(building: Any) -> str | None:
         """Read the building_type string from a building."""
-        if hasattr(building, "attributes") and hasattr(building.attributes, "get"):
-            return building.attributes.get("building_type", default=None)
-        if hasattr(building, "db"):
-            return getattr(building.db, "building_type", None)
-        return None
+        from world.utils import get_building_type
+        return get_building_type(building)
 
     @staticmethod
     def _get_building_level(building: Any) -> int:
         """Read the building level from a building."""
-        if hasattr(building, "building_level"):
-            return building.building_level
+        from world.utils import get_building_level
+        return get_building_level(building)
+
+    @staticmethod
+    def _player_on_tile(player: Any, tile: Any) -> bool:
+        """Return ``True`` if the player is on the given tile.
+
+        Checks Evennia ``location`` first, then falls back to
+        coordinate comparison.
+        """
+        # Direct location check (Evennia rooms)
+        if hasattr(player, "location") and player.location is tile:
+            return True
+
+        # Coordinate-based check
+        px = getattr(getattr(player, "db", None), "coord_x", None)
+        py = getattr(getattr(player, "db", None), "coord_y", None)
+        tx = getattr(tile, "x", getattr(getattr(tile, "db", None), "coord_x", None))
+        ty = getattr(tile, "y", getattr(getattr(tile, "db", None), "coord_y", None))
+
+        if px is not None and py is not None and tx is not None and ty is not None:
+            return px == tx and py == ty
+
+        return False
+
+    @staticmethod
+    def _get_tile_extractor(tile: Any) -> Any | None:
+        """Return the Extractor building on *tile*, or None.
+
+        Checks the tile's ``building`` attribute and verifies it's an
+        Extractor (building_type == "EX") that is not offline and not
+        under construction.
+        """
+        building = getattr(tile, "building", None)
+        if building is None:
+            return None
+
+        btype = None
         if hasattr(building, "attributes") and hasattr(building.attributes, "get"):
-            return building.attributes.get("building_level", default=1)
+            btype = building.attributes.get("building_type", default=None)
+        elif hasattr(building, "db"):
+            btype = getattr(building.db, "building_type", None)
+
+        if btype != "EX":
+            return None
+
+        if getattr(building, "is_offline", False):
+            return None
+
+        # Not operational while under construction
+        under_construction = False
+        if hasattr(building, "attributes") and hasattr(building.attributes, "get"):
+            under_construction = building.attributes.get("under_construction", default=False)
+        elif hasattr(building, "db"):
+            under_construction = getattr(building.db, "under_construction", False)
+        if under_construction:
+            return None
+
+        return building
+
+    @staticmethod
+    def _resolve_extractor_resource(building: Any) -> str | None:
+        """Determine the resource type for an Extractor.
+
+        Checks the building's stored ``resource_type`` attribute first,
+        then falls back to reading the terrain tile's resource node.
+        Used by both ``process_extractor_production`` and
+        ``HarvesterScript``.
+        """
+        # Explicit attribute on the building
+        if hasattr(building, "attributes") and hasattr(building.attributes, "get"):
+            rt = building.attributes.get("resource_type", default=None)
+            if rt:
+                return rt
         if hasattr(building, "db"):
-            return getattr(building.db, "building_level", 1)
-        return 1
+            rt = getattr(building.db, "resource_type", None)
+            if rt:
+                return rt
+
+        # Fall back to the terrain tile the building sits on
+        tile = getattr(building, "location", None)
+        if tile is None:
+            return None
+
+        # Try resource_node_data dict
+        node = None
+        if hasattr(tile, "attributes") and hasattr(tile.attributes, "get"):
+            node = tile.attributes.get("resource_node_data", default=None)
+        if isinstance(node, dict):
+            return node.get("resource_type")
+
+        # Try direct terrain attribute
+        return getattr(tile, "resource_type", None)
+
+    @staticmethod
+    def _get_building_attr(building: Any, key: str, default: Any = None) -> Any:
+        """Read an attribute from a building object."""
+        return _get_building_attr_shared(building, key, default)
