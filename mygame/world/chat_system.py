@@ -125,10 +125,21 @@ class ChatSystem:
         if rank_name:
             return rank_name
 
-        # Try traits-based rank level lookup
-        rank_level = getattr(player, "rank_level", None)
-        if rank_level is not None:
-            # Would look up from DataRegistry in production
-            return f"Rank {rank_level}"
+        # Derive rank from level via the rank system
+        try:
+            from world.systems.rank_system import rank_from_level
+            from world.data_registry import DataRegistry
+            level = getattr(getattr(player, "db", None), "level", None)
+            if level is None:
+                level = getattr(getattr(player, "db", None), "rank_level", None)
+            if level is not None:
+                rank_num = rank_from_level(int(level))
+                registry = DataRegistry.get_instance()
+                for r in registry.ranks:
+                    if r.level == rank_num:
+                        return r.name.replace("_", " ")
+                return f"Rank {rank_num}"
+        except Exception:
+            pass
 
         return "Recruit"

@@ -25,6 +25,11 @@ from world.event_bus import (
 )
 from world.utils import get_building_attr as _get_building_attr_shared
 from world.utils import set_building_attr as _set_building_attr_shared
+from world.constants import (
+    UPGRADE_COST_BASE,
+    UPGRADE_TIME_BASE,
+    CONSTRUCTION_PROGRESS_INTERVAL,
+)
 
 # Default maximum build range (Manhattan distance)
 DEFAULT_BUILD_RANGE = 10
@@ -71,9 +76,13 @@ class BuildingSystem:
     # ------------------------------------------------------------------ #
 
     def _validate_construction(
-        self, player: Any, tile: Any, building_abbr: str
+        self, player: Any, tile: Any, building_abbr: str,
+        x: int | None = None, y: int | None = None,
     ) -> tuple[BuildingDef | None, str | None]:
         """Run the full construction validation chain.
+
+        *x*/*y* are optional target coordinates for PlanetRoom-based
+        placement.  They are forwarded to validators that need them.
 
         Returns (building_def, None) on success, or (None, error_message) on failure.
         """
@@ -87,9 +96,9 @@ class BuildingSystem:
             lambda: self._validate_one_hq_per_planet(player, building_def, tile),
             lambda: self._validate_rank_requirement(player, building_def),
             lambda: self._validate_terrain(tile, building_def),
-            lambda: self._validate_extractor_terrain(tile, building_def),
-            lambda: self._validate_tile_empty(tile),
-            lambda: self._validate_build_range(player, tile),
+            lambda: self._validate_extractor_terrain(tile, building_def, x=x, y=y),
+            lambda: self._validate_tile_empty(tile, x=x, y=y),
+            lambda: self._validate_build_range(player, tile, x=x, y=y),
             lambda: self._validate_combat_lockout(player),
             lambda: self._validate_resources(player, building_def.cost),
         ]:
@@ -99,20 +108,44 @@ class BuildingSystem:
 
         return building_def, None
 
+    def _call_create_building(
+        self, building_def: BuildingDef, tile: Any, owner: Any,
+        x: int | None = None, y: int | None = None,
+    ) -> Any:
+        """Call the building factory, forwarding x/y if supported."""
+        if x is not None and y is not None:
+            try:
+                return self._create_building_func(building_def, tile, owner, x=x, y=y)
+            except TypeError:
+                # Factory doesn't accept x/y — call without and set coords after
+                building = self._create_building_func(building_def, tile, owner)
+                if hasattr(building, "db"):
+                    building.db.coord_x = x
+                    building.db.coord_y = y
+                elif hasattr(building, "attributes"):
+                    building.attributes.add("coord_x", x)
+                    building.attributes.add("coord_y", y)
+                # Register in coordinate index (at_object_receive missed it)
+                if hasattr(tile, "coord_index"):
+                    tile.coord_index.add(building, x, y)
+                return building
+        return self._create_building_func(building_def, tile, owner)
+
     def construct(
-        self, player: Any, tile: Any, building_abbr: str
+        self, player: Any, tile: Any, building_abbr: str,
+        x: int | None = None, y: int | None = None,
     ) -> tuple[bool, str]:
         """Construct a building on the given tile (instant, for testing/admin).
 
         Returns:
             (success, message) tuple.
         """
-        building_def, err = self._validate_construction(player, tile, building_abbr)
+        building_def, err = self._validate_construction(player, tile, building_abbr, x=x, y=y)
         if err:
             return False, err
 
         player.deduct_resources(building_def.cost)
-        building = self._create_building_func(building_def, tile, player)
+        building = self._call_create_building(building_def, tile, player, x=x, y=y)
 
         self.event_bus.publish(
             BUILDING_CONSTRUCTED,
@@ -134,17 +167,17 @@ class BuildingSystem:
         Exponential scaling makes higher levels increasingly expensive,
         creating the resource sink that drives agent utilization.
         """
-        multiplier = 2 ** (target_level - 1)
+        multiplier = UPGRADE_COST_BASE ** (target_level - 1)
         return {res: amt * multiplier for res, amt in building_def.cost.items()}
 
     @staticmethod
     def get_upgrade_time(building_def: BuildingDef, target_level: int) -> int:
-        """Calculate upgrade time: build_time × 3^(target_level - 1).
+        """Calculate upgrade time: build_time × TIME_BASE^(target_level - 1).
 
         Exponential scaling makes higher levels take significantly longer,
         making Engineer agents essential for mid/late-game upgrades.
         """
-        return int(building_def.build_time_seconds * (3 ** (target_level - 1)))
+        return int(building_def.build_time_seconds * (UPGRADE_TIME_BASE ** (target_level - 1)))
 
     def start_upgrade(
         self, player: Any, building: Any
@@ -313,19 +346,20 @@ class BuildingSystem:
     # ------------------------------------------------------------------ #
 
     def start_construction(
-        self, player: Any, tile: Any, building_abbr: str
+        self, player: Any, tile: Any, building_abbr: str,
+        x: int | None = None, y: int | None = None,
     ) -> tuple[bool, str]:
         """Begin a timed construction requiring player active-presence.
 
         Returns:
             (success, message) tuple.
         """
-        building_def, err = self._validate_construction(player, tile, building_abbr)
+        building_def, err = self._validate_construction(player, tile, building_abbr, x=x, y=y)
         if err:
             return False, err
 
         player.deduct_resources(building_def.cost)
-        building = self._create_building_func(building_def, tile, player)
+        building = self._call_create_building(building_def, tile, player, x=x, y=y)
 
         # Initialise construction timer
         build_time = building_def.build_time_seconds
@@ -351,8 +385,7 @@ class BuildingSystem:
             f"(0/{build_time}s). Stay on the tile to continue."
         )
 
-    # How often to send progress updates (in ticks/seconds)
-    CONSTRUCTION_PROGRESS_INTERVAL = 5
+    # Progress interval imported from world.constants
 
     def process_construction_tick(self, player: Any) -> bool:
         """Advance construction for a player in the ``"building"`` state.
@@ -392,7 +425,7 @@ class BuildingSystem:
             return True
 
         # Periodic progress update
-        if hasattr(player, "msg") and progress % self.CONSTRUCTION_PROGRESS_INTERVAL == 0:
+        if hasattr(player, "msg") and progress % CONSTRUCTION_PROGRESS_INTERVAL == 0:
             remaining = total - progress
             btype = self._get_building_attr(building, "building_type", "??")
             target_level = self._get_building_attr(building, "upgrade_target_level")
@@ -490,16 +523,31 @@ class BuildingSystem:
             f"A {building_def.name} requires {building_def.required_terrain} terrain."
         )
 
-    def _validate_tile_empty(self, tile: Any) -> str | None:
-        """Check tile has no existing building. Returns error or None."""
+    def _validate_tile_empty(self, tile: Any, x: int | None = None, y: int | None = None) -> str | None:
+        """Check tile has no existing building. Returns error or None.
+
+        If *tile* is a PlanetRoom (has ``get_buildings_at``) and *x*/*y*
+        are provided, queries the coordinate index.  Otherwise falls
+        back to the legacy ``tile.building`` attribute check.
+        """
+        if hasattr(tile, "get_buildings_at") and x is not None and y is not None:
+            if tile.get_buildings_at(x, y):
+                return "This tile already contains a building."
+            return None
+        # Legacy fallback for OverworldRoom / test fakes
         building = getattr(tile, "building", None)
         if building is None:
             return None
         return "This tile already contains a building."
 
-    def _validate_build_range(self, player: Any, tile: Any) -> str | None:
-        """Check tile is within build range. Returns error or None."""
-        # Get player coordinates directly (handles PlanetRoom)
+    def _validate_build_range(self, player: Any, tile: Any, x: int | None = None, y: int | None = None) -> str | None:
+        """Check tile is within build range. Returns error or None.
+
+        If *x*/*y* are provided they are used as the target coordinates
+        directly (PlanetRoom path).  Otherwise falls back to extracting
+        coordinates from *tile* via ``_get_coords``.
+        """
+        # --- player coordinates ---
         player_coords = self._get_coords(player)
         if player_coords is None:
             player_loc = getattr(player, "location", None)
@@ -507,7 +555,11 @@ class BuildingSystem:
                 return None  # Can't validate without location
             player_coords = self._get_coords(player_loc)
 
-        tile_coords = self._get_coords(tile)
+        # --- target coordinates ---
+        if x is not None and y is not None:
+            tile_coords = (int(x), int(y))
+        else:
+            tile_coords = self._get_coords(tile)
 
         if player_coords is None or tile_coords is None:
             return None  # Can't validate without coordinates
@@ -557,18 +609,22 @@ class BuildingSystem:
     def _validate_rank_requirement(
         self, player: Any, building_def: BuildingDef
     ) -> str | None:
-        """Check player rank meets building's rank_requirement (Req 6.5).
+        """Check player level meets building's rank_requirement (Req 6.5).
 
+        rank_requirement is now a level requirement (1-60).
         Returns error message or None.
         """
         rank_req = getattr(building_def, "rank_requirement", 1)
-        player_rank = 1
+        player_level = 1
         if hasattr(player, "db"):
-            player_rank = getattr(player.db, "rank_level", 1) or 1
-        if player_rank < rank_req:
+            player_level = getattr(player.db, "level", None)
+            if player_level is None:
+                # Backward compat: fall back to rank_level
+                player_level = getattr(player.db, "rank_level", 1) or 1
+        if player_level < rank_req:
             return (
-                f"Rank {rank_req} required to build {building_def.name} "
-                f"(current rank: {player_rank})."
+                f"Level {rank_req} required to build {building_def.name} "
+                f"(current level: {player_level})."
             )
         return None
 
@@ -589,25 +645,31 @@ class BuildingSystem:
         return None
 
     def _validate_extractor_terrain(
-        self, tile: Any, building_def: BuildingDef
+        self, tile: Any, building_def: BuildingDef,
+        x: int | None = None, y: int | None = None,
     ) -> str | None:
         """Enforce Extractor placement on resource terrain (Req 6.11).
 
         Queries the TerrainGenerator directly using the tile's
         coordinates, since room attributes may not be populated yet.
 
+        If *x*/*y* are provided they take precedence (PlanetRoom path).
+        Otherwise coordinates are read from the tile object.
+
         Returns error message or None.
         """
         if building_def.abbreviation != "EX":
             return None
 
-        # Get tile coordinates
-        x = getattr(tile, "x", None)
-        if x is None and hasattr(tile, "db"):
-            x = getattr(tile.db, "x", None)
-        y = getattr(tile, "y", None)
-        if y is None and hasattr(tile, "db"):
-            y = getattr(tile.db, "y", None)
+        # Get tile coordinates — prefer explicit params, then db, then properties
+        if x is None:
+            x = getattr(tile, "x", None)
+            if x is None and hasattr(tile, "db"):
+                x = getattr(tile.db, "coord_x", None) or getattr(tile.db, "x", None)
+        if y is None:
+            y = getattr(tile, "y", None)
+            if y is None and hasattr(tile, "db"):
+                y = getattr(tile.db, "coord_y", None) or getattr(tile.db, "y", None)
 
         # Try planet from tile tags or db
         planet = None
@@ -713,9 +775,15 @@ class BuildingSystem:
 
     @staticmethod
     def _default_create_building(
-        building_def: BuildingDef, tile: Any, owner: Any
+        building_def: BuildingDef, tile: Any, owner: Any,
+        x: int | None = None, y: int | None = None,
     ) -> Any:
-        """Default building factory using evennia.create_object."""
+        """Default building factory using evennia.create_object.
+
+        If *x* and *y* are provided the building is placed in a
+        PlanetRoom with explicit coordinates.  Otherwise the legacy
+        OverworldRoom placement (location only) is used.
+        """
         import evennia
 
         building = evennia.create_object(
@@ -723,20 +791,26 @@ class BuildingSystem:
             key=building_def.name,
             location=tile,
         )
+        if x is not None and y is not None:
+            building.db.coord_x = x
+            building.db.coord_y = y
+            # The building was added to PlanetRoom.contents by create_object,
+            # but at_object_receive saw coord_x=None (set by at_object_creation).
+            # Manually register in the coordinate index now that coords are set.
+            if hasattr(tile, "coord_index"):
+                tile.coord_index.add(building, x, y)
         building.attributes.add("building_type", building_def.abbreviation)
         building.attributes.add("owner", owner)
         building.attributes.add("building_level", 1)
         building.attributes.add("offline", False)
         building.attributes.add("hp", building_def.max_health)
         building.attributes.add("hp_max", building_def.max_health)
-        # Tag for DB queries (preload_area, get_all_buildings)
-        building.tags.add("building", category="object_type")
+        # Tag is auto-set by Building.at_object_creation via GameEntity
         # Phase 1 construction timer & inventory attributes (Req 6.6, 6.10)
         building.attributes.add("assigned_agent", None)
         building.attributes.add("construction_progress", 0)
         building.attributes.add("construction_total", 0)
         building.attributes.add("under_construction", False)
-        building.attributes.add("resource_inventory", {})
         return building
 
     # ------------------------------------------------------------------ #

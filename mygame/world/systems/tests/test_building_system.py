@@ -69,6 +69,7 @@ class FakeDB:
     def __init__(self):
         self.combat_lockout_tick = 0
         self.rank_level = 1
+        self.level = 1
         self.activity_state = "idle"
         self.activity_target = None
         self.activity_progress = 0
@@ -159,13 +160,18 @@ class FakeBuilding:
         self._deleted = True
 
 class FakeTile:
-    """Lightweight stand-in for an OverworldRoom tile."""
+    """Lightweight stand-in for a tile (PlanetRoom or legacy OverworldRoom)."""
 
     def __init__(self, terrain_type="Plains", building=None, xyz=(0, 0, "earth")):
         self._terrain_type = terrain_type
         self._building = building
         self.x = xyz[0]
         self.y = xyz[1]
+        # Provide db.coord_x/coord_y for get_coords compatibility
+        self.db = type("_Db", (), {
+            "coord_x": xyz[0],
+            "coord_y": xyz[1],
+        })()
 
     @property
     def terrain_type(self):
@@ -346,7 +352,8 @@ class TestConstructTerrainValidation(unittest.TestCase):
             resources={"Iron": 100, "Stone": 100, "Wood": 100},
             buildings=[hq],
         )
-        player.db.rank_level = 3  # VV requires rank 3
+        player.db.rank_level = 3
+        player.db.level = 3  # VV requires rank 3
         tile = FakeTile(terrain_type="Forest")  # VV has no terrain requirement
         system, created, _ = _make_building_system()
         ok, msg = system.construct(player, tile, "VV")
@@ -594,11 +601,12 @@ class TestConstructRankRequirement(unittest.TestCase):
             buildings=[hq],
         )
         player.db.rank_level = 1
+        player.db.level = 1
         tile = FakeTile(terrain_type="Rock")
         system, created, _ = _make_building_system()
         ok, msg = system.construct(player, tile, "QQ")
         self.assertFalse(ok)
-        self.assertIn("Rank", msg)
+        self.assertIn("Level", msg)
         self.assertEqual(len(created), 0)
 
     def test_rank_meets_requirement_succeeds(self):
@@ -609,6 +617,7 @@ class TestConstructRankRequirement(unittest.TestCase):
             buildings=[hq],
         )
         player.db.rank_level = 2
+        player.db.level = 2
         tile = FakeTile(terrain_type="Rock")
         system, created, _ = _make_building_system()
         ok, msg = system.construct(player, tile, "QQ")
@@ -623,6 +632,7 @@ class TestConstructRankRequirement(unittest.TestCase):
             buildings=[hq],
         )
         player.db.rank_level = 5
+        player.db.level = 5
         tile = FakeTile(terrain_type="Plains")
         system, created, _ = _make_building_system()
         ok, msg = system.construct(player, tile, "VV")
@@ -632,6 +642,7 @@ class TestConstructRankRequirement(unittest.TestCase):
         """HQ has rank_requirement=1, any player can build it."""
         player = FakePlayer(resources={"Straw": 100, "Wood": 100, "Stone": 100})
         player.db.rank_level = 1
+        player.db.level = 1
         tile = FakeTile()
         system, created, _ = _make_building_system()
         ok, msg = system.construct(player, tile, "HQ")
@@ -699,11 +710,12 @@ class TestStartConstruction(unittest.TestCase):
             buildings=[hq],
         )
         player.db.rank_level = 1
+        player.db.level = 1
         tile = FakeTile(terrain_type="Plains")
         system, created, _ = _make_building_system()
         ok, msg = system.start_construction(player, tile, "VV")
         self.assertFalse(ok)
-        self.assertIn("Rank", msg)
+        self.assertIn("Level", msg)
 
     def test_start_construction_insufficient_resources(self):
         player = FakePlayer(resources={"Straw": 1, "Wood": 1, "Stone": 1})
@@ -980,6 +992,7 @@ class TestExtractorRequiresResourceTerrain(unittest.TestCase):
             buildings=[hq],
         )
         player.db.rank_level = 2
+        player.db.level = 2
         tile = FakeTileWithResource(terrain_type="Forest", resource_type="Wood")
         registry = _make_registry_with_extractor()
         system, created, _ = _make_building_system(registry=registry)
@@ -995,6 +1008,7 @@ class TestExtractorRequiresResourceTerrain(unittest.TestCase):
             buildings=[hq],
         )
         player.db.rank_level = 2
+        player.db.level = 2
         tile = FakeTile(terrain_type="Plains")  # No resource_type attribute
         registry = _make_registry_with_extractor()
         system, created, _ = _make_building_system(registry=registry)
@@ -1011,6 +1025,7 @@ class TestExtractorRequiresResourceTerrain(unittest.TestCase):
             buildings=[hq],
         )
         player.db.rank_level = 3
+        player.db.level = 3
         tile = FakeTile(terrain_type="Plains")  # No resource_type
         system, created, _ = _make_building_system()
         ok, msg = system.construct(player, tile, "VV")

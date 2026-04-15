@@ -1,6 +1,9 @@
 # Building definitions for RTS Combat Overworld
-# Phase 1: 12 building types with construction timers, rank requirements,
+# Phase 1: 12 building types with construction timers, level requirements,
 # agent support, and storage capacities
+#
+# rank_requirement is now a LEVEL requirement (1-60).
+# Rank is cosmetic — derived from level (every 5 levels = 1 rank).
 #
 # Build times are for initial L1 construction.
 # Upgrades use exponential scaling: time = build_time × 3^(level-1),
@@ -75,7 +78,7 @@
     Iron: 15
   build_time_seconds: 38
   max_level: 5
-  rank_requirement: 6
+  rank_requirement: 26
   max_health: 250
   requires_hq: true
   required_terrain: null
@@ -94,7 +97,7 @@
     Iron: 15
   build_time_seconds: 30
   max_level: 5
-  rank_requirement: 5
+  rank_requirement: 21
   max_health: 250
   requires_hq: true
   required_terrain: null
@@ -112,7 +115,7 @@
     Iron: 15
   build_time_seconds: 22
   max_level: 5
-  rank_requirement: 7
+  rank_requirement: 31
   max_health: 300
   requires_hq: true
   required_terrain: null
@@ -130,7 +133,7 @@
     Iron: 10
   build_time_seconds: 30
   max_level: 5
-  rank_requirement: 8
+  rank_requirement: 36
   max_health: 400
   requires_hq: true
   required_terrain: null
@@ -148,7 +151,7 @@
     Energy: 10
   build_time_seconds: 22
   max_level: 5
-  rank_requirement: 7
+  rank_requirement: 31
   max_health: 150
   requires_hq: true
   required_terrain: null
@@ -165,7 +168,7 @@
     Stone: 5
   build_time_seconds: 15
   max_level: 5
-  rank_requirement: 3
+  rank_requirement: 11
   max_health: 600
   requires_hq: true
   required_terrain: null
@@ -184,7 +187,7 @@
     Iron: 10
   build_time_seconds: 30
   max_level: 5
-  rank_requirement: 3
+  rank_requirement: 11
   max_health: 350
   requires_hq: true
   required_terrain: null
@@ -204,7 +207,7 @@
     Energy: 5
   build_time_seconds: 30
   max_level: 5
-  rank_requirement: 10
+  rank_requirement: 46
   max_health: 250
   requires_hq: true
   required_terrain: null
@@ -222,7 +225,7 @@
     Energy: 15
   build_time_seconds: 22
   max_level: 5
-  rank_requirement: 9
+  rank_requirement: 41
   max_health: 200
   requires_hq: true
   required_terrain: null

@@ -98,16 +98,30 @@ class FakeNDB:
         self.tile_lookup = None
 
 class FakeLocation:
-    """Simulates a tile/room."""
+    """Simulates a tile/room (PlanetRoom-compatible)."""
     def __init__(self, x=5, y=5, building=None):
         self.x = x
         self.y = y
         self.building = building
         self.contents = []
         self._messages = []
+        self._buildings_by_coord = {}
+        self._default_building = None  # if set, returned for all coords
 
     def msg_contents(self, text, exclude=None):
         self._messages.append(text)
+
+    def move_entity(self, obj, new_x, new_y):
+        """Simulate PlanetRoom.move_entity — update coords on the object."""
+        if hasattr(obj, "db"):
+            obj.db.coord_x = new_x
+            obj.db.coord_y = new_y
+
+    def get_buildings_at(self, x, y):
+        """Return buildings registered at (x, y)."""
+        if self._default_building is not None:
+            return [self._default_building]
+        return list(self._buildings_by_coord.get((x, y), []))
 
 class FakeCaller:
     """Simulates a player character (caller)."""
@@ -425,16 +439,16 @@ class TestCmdMoveOfflineBuildingBlocking(unittest.TestCase):
         class OfflineBuilding:
             is_offline = True
 
-        resolver = FakeTileResolver()
-        resolver._default_building = OfflineBuilding()
         registry = FakePlanetRegistry()
+        loc = FakeLocation(x=50, y=50)
+        loc._default_building = OfflineBuilding()
         caller = FakeCaller(
             coord_x=50, coord_y=50,
             systems={
-                "tile_resolver": resolver,
                 "planet_registry": registry,
             },
         )
+        caller.location = loc
         cmd = _make_cmd(caller, " north")
         cmd.func()
 
@@ -447,16 +461,16 @@ class TestCmdMoveOfflineBuildingBlocking(unittest.TestCase):
         class OnlineBuilding:
             is_offline = False
 
-        resolver = FakeTileResolver()
-        resolver._default_building = OnlineBuilding()
         registry = FakePlanetRegistry()
+        loc = FakeLocation(x=50, y=50)
+        loc._default_building = OnlineBuilding()
         caller = FakeCaller(
             coord_x=50, coord_y=50,
             systems={
-                "tile_resolver": resolver,
                 "planet_registry": registry,
             },
         )
+        caller.location = loc
         cmd = _make_cmd(caller, " north")
         cmd.func()
 

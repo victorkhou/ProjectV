@@ -121,6 +121,12 @@ class _FakeBuilding:
         self._btype = btype
         self.owner = owner
         self.location = location
+        # Provide db.coord_x/coord_y for _get_building_coords
+        self.db = type("_Db", (), {
+            "coord_x": location.x if location else None,
+            "coord_y": location.y if location else None,
+            "owner": owner,
+        })()
 
     def get_display_abbreviation(self):
         return self._btype
@@ -138,7 +144,7 @@ class _FakeBuilding:
 
 
 class _FakeTileResolver:
-    """Minimal tile resolver that returns pre-configured rooms."""
+    """Minimal tile resolver that also acts as a fake PlanetRoom for update_discovery."""
     def __init__(self, rooms=None):
         self._rooms = rooms or {}
 
@@ -147,6 +153,15 @@ class _FakeTileResolver:
 
     def get_cached(self, x, y, planet):
         return self._rooms.get((x, y, planet))
+
+    def get_buildings_at(self, x, y):
+        """PlanetRoom-compatible building query."""
+        for (rx, ry, _), room in self._rooms.items():
+            if rx == x and ry == y:
+                bld = getattr(room, "building", None)
+                if bld is not None:
+                    return [bld]
+        return []
 
 
 # -------------------------------------------------------------- #

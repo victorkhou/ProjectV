@@ -18,7 +18,6 @@ from world.coordinate.fog_of_war import _get_planet, _get_coord
 if TYPE_CHECKING:
     from world.coordinate.fog_of_war import FogOfWarSystem
     from world.coordinate.terrain_generator import TerrainGenerator
-    from world.coordinate.tile_resolver import TileResolver
 
 
 class MapDataProvider:
@@ -26,11 +25,10 @@ class MapDataProvider:
 
     def __init__(
         self,
-        tile_resolver: TileResolver,
         fog_system: FogOfWarSystem,
         terrain_generators: dict[str, TerrainGenerator],
+        tile_resolver: Any = None,
     ) -> None:
-        self._tile_resolver = tile_resolver
         self._fog_system = fog_system
         self._terrain_generators = terrain_generators
 
@@ -62,7 +60,11 @@ class MapDataProvider:
 
         # Compute visibility
         visible_tiles = self._fog_system.get_visible_tiles(player, player_buildings)
-        self._fog_system.update_discovery(player, visible_tiles, self._tile_resolver)
+
+        # Bulk query all objects in the viewport from PlanetRoom
+        planet_room = getattr(player, "location", None)
+
+        self._fog_system.update_discovery(player, visible_tiles, planet_room=planet_room)
         discovered = self._fog_system.get_discovered_tile_set(player)
         buildings_mem = self._fog_system.get_discovered_buildings_map(player)
 
@@ -72,11 +74,15 @@ class MapDataProvider:
         min_y = py - pvr - border
         max_y = py + pvr + border
 
-        # Preload building rooms
-        self._tile_resolver.preload_area(min_x, max_x, min_y, max_y, planet)
+        objects_by_coord: dict[tuple[int, int], list] = {}
+        if planet_room is not None and hasattr(planet_room, "get_objects_in_area"):
+            for obj in planet_room.get_objects_in_area(min_x, min_y, max_x, max_y):
+                cx = getattr(getattr(obj, "db", None), "coord_x", None)
+                cy = getattr(getattr(obj, "db", None), "coord_y", None)
+                if cx is not None and cy is not None:
+                    objects_by_coord.setdefault((int(cx), int(cy)), []).append(obj)
 
         gen = self._terrain_generators.get(planet)
-        get_cached = self._tile_resolver.get_cached
         tiles = []
 
         for y in range(max_y, min_y - 1, -1):
@@ -85,8 +91,8 @@ class MapDataProvider:
                 terrain = gen.get_terrain(x, y) if gen else "unknown"
 
                 if coord in visible_tiles:
-                    tile_data = self._visible_tile(
-                        x, y, planet, terrain, player, get_cached
+                    tile_data = self._visible_tile_from_objects(
+                        x, y, terrain, player, objects_by_coord.get(coord)
                     )
                 elif coord in discovered:
                     tile_data = self._fog_tile(x, y, terrain, buildings_mem)
@@ -104,6 +110,73 @@ class MapDataProvider:
             "vision_radius": pvr,
             "tiles": tiles,
         }
+
+    def _visible_tile_from_objects(self, x, y, terrain, player, tile_objects):
+        """Build tile data for a visible tile from coordinate-grouped objects."""
+        tile = {"x": x, "y": y, "terrain": terrain, "state": "visible"}
+        player_id = getattr(player, "id", None)
+
+        if not tile_objects:
+            return tile
+
+        players_here = []
+        agents_here = []
+        building_obj = None
+
+        for obj in tile_objects:
+            # Player characters
+            if hasattr(obj, "has_account") and obj.has_account:
+                if obj is not player:
+                    players_here.append(getattr(obj, "key", "?"))
+                continue
+
+            # NPC agents
+            if hasattr(obj, "tags") and obj.tags.get(category="npc_type"):
+                npc_owner = getattr(obj.db, "owner", None) if hasattr(obj, "db") else None
+                npc_owner_id = getattr(npc_owner, "id", None) if npc_owner else None
+                role = getattr(obj.db, "role", "") if hasattr(obj, "db") else ""
+                agents_here.append({
+                    "own": npc_owner_id is not None and npc_owner_id == player_id,
+                    "role": role,
+                })
+                continue
+
+            # Building objects
+            if hasattr(obj, "tags") and obj.tags.get("building", category="object_type"):
+                if building_obj is None:
+                    building_obj = obj
+
+        if building_obj is not None:
+            bld = building_obj
+            owner = None
+            if hasattr(bld, "attributes") and hasattr(bld.attributes, "get"):
+                owner = bld.attributes.get("owner", default=None)
+            owner_id = getattr(owner, "id", None) if owner else None
+            tile["building"] = {
+                "type": bld.attributes.get("building_type", default="??") if hasattr(bld, "attributes") else "??",
+                "level": bld.attributes.get("building_level", default=1) if hasattr(bld, "attributes") else 1,
+                "own": owner_id is not None and owner_id == player_id,
+                "name": getattr(bld, "key", "?"),
+            }
+
+            # Check if building has entities inside (occupied flag)
+            bld_contents = getattr(bld, "contents", [])
+            occupied = False
+            for obj in bld_contents:
+                if hasattr(obj, "has_account") and obj.has_account:
+                    occupied = True
+                    break
+                if hasattr(obj, "tags") and obj.tags.get(category="npc_type"):
+                    occupied = True
+                    break
+            tile["building"]["occupied"] = occupied
+
+        if players_here:
+            tile["players"] = players_here
+        if agents_here:
+            tile["agents"] = agents_here
+
+        return tile
 
     def _visible_tile(self, x, y, planet, terrain, player, get_cached):
         """Build tile data for a fully visible tile."""

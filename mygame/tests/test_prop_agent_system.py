@@ -135,7 +135,7 @@ class FakeBuilding:
 class FakePlayer:
     """Lightweight stand-in for CombatCharacter."""
     def __init__(self, name="TestPlayer", combat_xp=0, rank_level=1,
-                 next_agent_id=2, resources=None):
+                 next_agent_id=1, resources=None):
         self.id = 1
         self.key = name
         self.db = FakeDB(
@@ -268,7 +268,7 @@ class TestProperty11AgentRosterInvariant:
     def test_roster_invariant_holds(self, num_agents, ops):
         system, created_agents = _make_system()
         # Use Marshal rank (cap=20) so we can train many agents
-        player = FakePlayer(combat_xp=120000, next_agent_id=2)
+        player = FakePlayer(combat_xp=120000, next_agent_id=1)
 
         # Train num_agents agents
         academy = FakeBuilding(building_type="AC", building_level=1)
@@ -341,7 +341,7 @@ class TestProperty12AgentIDSequentiality:
     @settings(max_examples=200)
     def test_ids_strictly_increasing_and_unique(self, num_agents):
         system, created_agents = _make_system()
-        player = FakePlayer(combat_xp=120000, next_agent_id=2)
+        player = FakePlayer(combat_xp=120000, next_agent_id=1)
 
         academy = FakeBuilding(building_type="AC", building_level=1)
         ids_assigned = []
@@ -361,9 +361,9 @@ class TestProperty12AgentIDSequentiality:
             f"Duplicate IDs found: {ids_assigned}"
         )
 
-        # First trained agent should be ID 2 (commander is 1)
-        assert ids_assigned[0] == 2, (
-            f"First agent ID should be 2, got {ids_assigned[0]}"
+        # First trained agent should be ID 1 (no commander concept)
+        assert ids_assigned[0] == 1, (
+            f"First agent ID should be 1, got {ids_assigned[0]}"
         )
 
 
@@ -391,7 +391,7 @@ class TestProperty13IncapacitatedReservedCannotAssign:
         assume(incapacitated or reserved)
 
         system, created_agents = _make_system()
-        player = FakePlayer(combat_xp=120000, next_agent_id=2)
+        player = FakePlayer(combat_xp=120000, next_agent_id=1)
 
         npc = _train_and_complete(system, player)
 
@@ -456,7 +456,7 @@ class TestProperty14DemotionReservesHighestID:
     @settings(max_examples=200)
     def test_demotion_reserves_highest_ids(self, num_agents, data):
         system, created_agents = _make_system()
-        player = FakePlayer(combat_xp=120000, next_agent_id=2)
+        player = FakePlayer(combat_xp=120000, next_agent_id=1)
 
         academy = FakeBuilding(building_type="AC", building_level=1)
         for _ in range(num_agents):
@@ -539,8 +539,8 @@ class TestProperty15TrainingCostScaling:
         # Train agents up to n-1 to fill the roster (without actually
         # spending resources — we pre-set next_agent_id to n).
         # We need the roster to have n-1 agents so the cap check passes.
-        # Create fake agents for IDs 2..n-1 directly.
-        for aid in range(2, n):
+        # Create fake agents for IDs 1..n-1 directly.
+        for aid in range(1, n):
             agent = FakeAgent(agent_id=aid, owner=player)
             created_agents.append(agent)
 

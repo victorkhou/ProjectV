@@ -7,7 +7,7 @@
  */
 let map_renderer_plugin = (function () {
 
-    const TILE_SIZE = 20;
+    const TILE_SIZE = 30;
 
     const TERRAIN_COLORS = {
         // Terra (earth)
@@ -99,6 +99,141 @@ let map_renderer_plugin = (function () {
         return "rgb("+Math.floor(r*f)+","+Math.floor(g*f)+","+Math.floor(b*f)+")";
     }
 
+    // ---- Sprite drawing helpers ----
+    var TILE = TILE_SIZE;
+    var HALF = TILE/2;
+
+    // Building icons — clean geometric shapes per type
+    var BUILDING_ICONS = {
+        "HQ": function(ctx,x,y,own){
+            // Shield shape
+            var cx=x+HALF,cy=y+HALF;
+            ctx.beginPath();ctx.moveTo(cx,y+3);ctx.lineTo(x+TILE-3,y+HALF-2);
+            ctx.lineTo(x+TILE-4,y+TILE-5);ctx.lineTo(cx,y+TILE-2);
+            ctx.lineTo(x+4,y+TILE-5);ctx.lineTo(x+3,y+HALF-2);ctx.closePath();
+            ctx.fillStyle=own?"#00cccc":"#cc3333";ctx.fill();
+            ctx.strokeStyle="#fff";ctx.lineWidth=1;ctx.stroke();
+            ctx.fillStyle="#fff";ctx.font="bold 9px sans-serif";
+            ctx.textAlign="center";ctx.textBaseline="middle";ctx.fillText("H",cx,cy);
+        },
+        "EX": function(ctx,x,y,own){
+            // Pickaxe / diamond
+            ctx.fillStyle=own?"#22aa44":"#cc3333";
+            ctx.beginPath();ctx.moveTo(x+HALF,y+3);ctx.lineTo(x+TILE-3,y+HALF);
+            ctx.lineTo(x+HALF,y+TILE-3);ctx.lineTo(x+3,y+HALF);ctx.closePath();ctx.fill();
+            ctx.strokeStyle="#fff";ctx.lineWidth=1;ctx.stroke();
+            ctx.fillStyle="#fff";ctx.font="bold 8px sans-serif";
+            ctx.textAlign="center";ctx.textBaseline="middle";ctx.fillText("E",x+HALF,y+HALF);
+        },
+        "AC": function(ctx,x,y,own){
+            // Book / square with star
+            ctx.fillStyle=own?"#4488cc":"#cc3333";
+            ctx.fillRect(x+3,y+3,TILE-6,TILE-6);
+            ctx.strokeStyle="#fff";ctx.lineWidth=1;ctx.strokeRect(x+3,y+3,TILE-6,TILE-6);
+            ctx.fillStyle="#ffdd00";ctx.font="bold 10px sans-serif";
+            ctx.textAlign="center";ctx.textBaseline="middle";ctx.fillText("★",x+HALF,y+HALF);
+        },
+        "WL": function(ctx,x,y,own){
+            // Wall — thick horizontal bar
+            ctx.fillStyle=own?"#888888":"#993333";
+            ctx.fillRect(x+1,y+HALF-4,TILE-2,8);
+            ctx.strokeStyle="#aaa";ctx.lineWidth=1;ctx.strokeRect(x+1,y+HALF-4,TILE-2,8);
+        },
+        "TU": function(ctx,x,y,own){
+            // Turret — triangle pointing up
+            ctx.fillStyle=own?"#cc6600":"#cc3333";
+            ctx.beginPath();ctx.moveTo(x+HALF,y+3);ctx.lineTo(x+TILE-4,y+TILE-4);
+            ctx.lineTo(x+4,y+TILE-4);ctx.closePath();ctx.fill();
+            ctx.strokeStyle="#fff";ctx.lineWidth=1;ctx.stroke();
+        },
+    };
+
+    function drawBuilding(ctx,x,y,bld,state){
+        var type=(bld.type||"??").substring(0,2);
+        var own=bld.own;
+        var occupied=bld.occupied;
+        if(occupied){
+            // Dark blue background for occupied buildings
+            ctx.fillStyle="#2244aa";ctx.fillRect(x+2,y+2,TILE-4,TILE-4);
+            ctx.strokeStyle="#4466cc";ctx.lineWidth=1;ctx.strokeRect(x+2,y+2,TILE-4,TILE-4);
+            ctx.fillStyle="#fff";ctx.font="bold 10px sans-serif";
+            ctx.textAlign="center";ctx.textBaseline="middle";ctx.fillText(type,x+HALF,y+HALF);
+            return;
+        }
+        var iconFn=BUILDING_ICONS[type];
+        if(iconFn){iconFn(ctx,x,y,own);return;}
+        // Fallback: rounded rect with abbreviation
+        var color=own?"#00cccc":"#cc3333";
+        if(state==="fog") color=dimColor(color,0.5);
+        ctx.fillStyle=color;
+        roundRect(ctx,x+2,y+2,TILE-4,TILE-4,3);ctx.fill();
+        ctx.strokeStyle="#fff";ctx.lineWidth=1;roundRect(ctx,x+2,y+2,TILE-4,TILE-4,3);ctx.stroke();
+        ctx.fillStyle="#fff";ctx.font="bold 9px sans-serif";
+        ctx.textAlign="center";ctx.textBaseline="middle";ctx.fillText(type,x+HALF,y+HALF);
+    }
+
+    function drawAgent(ctx,x,y,ag){
+        var color=ag.own?"#33cc33":"#ff3333";
+        var label=ag.own?(ag.role?ag.role.charAt(0).toUpperCase():"A"):"!";
+        // Circle with role initial
+        ctx.fillStyle=color;ctx.beginPath();
+        ctx.arc(x+HALF,y+HALF,7,0,Math.PI*2);ctx.fill();
+        ctx.strokeStyle="#fff";ctx.lineWidth=1;ctx.beginPath();
+        ctx.arc(x+HALF,y+HALF,7,0,Math.PI*2);ctx.stroke();
+        ctx.fillStyle="#fff";ctx.font="bold 9px sans-serif";
+        ctx.textAlign="center";ctx.textBaseline="middle";ctx.fillText(label,x+HALF,y+HALF);
+    }
+
+    function drawPlayer(ctx,x,y){
+        // Diamond with glow
+        var cx=x+HALF,cy=y+HALF;
+        ctx.shadowColor="#ffdd00";ctx.shadowBlur=6;
+        ctx.fillStyle="#ffdd00";ctx.beginPath();
+        ctx.moveTo(cx,y+2);ctx.lineTo(x+TILE-2,cy);
+        ctx.lineTo(cx,y+TILE-2);ctx.lineTo(x+2,cy);ctx.closePath();ctx.fill();
+        ctx.shadowBlur=0;
+        ctx.strokeStyle="#000";ctx.lineWidth=1.5;ctx.beginPath();
+        ctx.moveTo(cx,y+2);ctx.lineTo(x+TILE-2,cy);
+        ctx.lineTo(cx,y+TILE-2);ctx.lineTo(x+2,cy);ctx.closePath();ctx.stroke();
+        ctx.fillStyle="#000";ctx.font="bold 11px sans-serif";
+        ctx.textAlign="center";ctx.textBaseline="middle";ctx.fillText("@",cx,cy);
+    }
+
+    function drawEnemyPlayer(ctx,x,y){
+        ctx.fillStyle="#ff3333";ctx.beginPath();
+        ctx.arc(x+HALF,y+HALF,8,0,Math.PI*2);ctx.fill();
+        ctx.strokeStyle="#fff";ctx.lineWidth=1.5;ctx.beginPath();
+        ctx.arc(x+HALF,y+HALF,8,0,Math.PI*2);ctx.stroke();
+        ctx.fillStyle="#fff";ctx.font="bold 10px sans-serif";
+        ctx.textAlign="center";ctx.textBaseline="middle";ctx.fillText("!",x+HALF,y+HALF);
+    }
+
+    // Terrain detail overlays for resource tiles
+    function drawTerrainDetail(ctx,x,y,terrain){
+        // Small icon in corner for resource-bearing terrain
+        var icon=null,color=null;
+        switch(terrain){
+            case "Forest":case "Pine_Forest":icon="♣";color="#1a4a0a";break;
+            case "Rock":case "Permafrost":case "Obsidian_Plain":icon="◆";color="#666";break;
+            case "Mountain":case "Ice_Cave":case "Scorched_Rock":case "Asteroid":case "Armory_Ruin":icon="▲";color="#888";break;
+            case "Power_Grid":case "Magma_Vent":case "Generator_Room":case "Nebula":icon="⚡";color="#cc9900";break;
+            case "Circuit_Field":case "Control_Room":case "Debris":icon="◎";color="#2a8a7f";break;
+            case "Vault_Room":icon="✦";color="#8844aa";break;
+            default:return;
+        }
+        ctx.fillStyle=color;ctx.font="bold 8px sans-serif";
+        ctx.textAlign="right";ctx.textBaseline="bottom";
+        ctx.fillText(icon,x+TILE-2,y+TILE-1);
+    }
+
+    function roundRect(ctx,x,y,w,h,r){
+        ctx.beginPath();ctx.moveTo(x+r,y);ctx.lineTo(x+w-r,y);
+        ctx.quadraticCurveTo(x+w,y,x+w,y+r);ctx.lineTo(x+w,y+h-r);
+        ctx.quadraticCurveTo(x+w,y+h,x+w-r,y+h);ctx.lineTo(x+r,y+h);
+        ctx.quadraticCurveTo(x,y+h,x,y+h-r);ctx.lineTo(x,y+r);
+        ctx.quadraticCurveTo(x,y,x+r,y);ctx.closePath();
+    }
+
     // ---- Map rendering ----
     function renderMap(data) {
         if (!canvas||!ctx) return;
@@ -127,65 +262,40 @@ let map_renderer_plugin = (function () {
                 else if(tile.state==="fog"){ctx.fillStyle=dimColor(bc,0.35);}
                 else{ctx.fillStyle="#0a0a0a";ctx.fillRect(sx,sy,TILE_SIZE,TILE_SIZE);ctx.fillStyle="#151515";ctx.fillRect(sx+8,sy+8,3,3);continue;}
                 ctx.fillRect(sx,sy,TILE_SIZE,TILE_SIZE);
-                ctx.strokeStyle="rgba(0,0,0,0.2)";ctx.strokeRect(sx,sy,TILE_SIZE,TILE_SIZE);
-                if(tile.state==="visible"){
-                    var sym=TERRAIN_SYMBOLS[tile.terrain]||"??";
-                    ctx.fillStyle="rgba(255,255,255,0.25)";ctx.font="9px monospace";
-                    ctx.textAlign="center";ctx.textBaseline="middle";
-                    ctx.fillText(sym,sx+TILE_SIZE/2,sy+TILE_SIZE/2);
-                }
-                if(tile.building){
-                    var abbr=(tile.building.type||"??").substring(0,2);
-                    var bldColor;
-                    if(tile.state==="visible"){
-                        if(tile.building.occupied){
-                            bldColor="#2244aa"; // dark blue for occupied
-                        } else {
-                            bldColor=tile.building.own?"#00dddd":"#cc3333";
-                        }
-                    } else {
-                        bldColor="#662222";
-                    }
-                    ctx.fillStyle=bldColor;
-                    ctx.fillRect(sx+2,sy+2,TILE_SIZE-4,TILE_SIZE-4);
-                    ctx.fillStyle="#fff";ctx.font="bold 10px monospace";
-                    ctx.textAlign="center";ctx.textBaseline="middle";
-                    ctx.fillText(abbr,sx+TILE_SIZE/2,sy+TILE_SIZE/2);
-                }
-                // Agent markers (overworld, not inside buildings)
+                // Subtle grid lines
+                ctx.strokeStyle="rgba(0,0,0,0.15)";ctx.lineWidth=0.5;ctx.strokeRect(sx,sy,TILE_SIZE,TILE_SIZE);
+                // Terrain detail icon for resource tiles
+                if(tile.state==="visible"){drawTerrainDetail(ctx,sx,sy,tile.terrain);}
+                // Building
+                if(tile.building){drawBuilding(ctx,sx,sy,tile.building,tile.state);}
+                // Agent marker — show as small badge in corner when on a building tile
                 if(tile.agents&&tile.agents.length>0&&tile.state==="visible"){
-                    var ag=tile.agents[0]; // show highest-priority agent
-                    var agColor=ag.own?"#33cc33":"#ff3333";
-                    var agLabel=ag.own?(ag.role?ag.role.charAt(0).toUpperCase():"A"):"!";
-                    ctx.fillStyle=agColor;ctx.beginPath();
-                    ctx.arc(sx+TILE_SIZE/2,sy+TILE_SIZE/2,6,0,Math.PI*2);ctx.fill();
-                    ctx.fillStyle="#fff";ctx.font="bold 9px monospace";
-                    ctx.textAlign="center";ctx.textBaseline="middle";
-                    ctx.fillText(agLabel,sx+TILE_SIZE/2,sy+TILE_SIZE/2);
+                    if(tile.building){
+                        // Small badge in top-right corner
+                        var ag=tile.agents[0];
+                        var agc=ag.own?"#33cc33":"#ff3333";
+                        var agl=ag.own?(ag.role?ag.role.charAt(0).toUpperCase():"A"):"!";
+                        ctx.fillStyle=agc;ctx.beginPath();
+                        ctx.arc(sx+TILE-5,sy+5,5,0,Math.PI*2);ctx.fill();
+                        ctx.fillStyle="#fff";ctx.font="bold 7px sans-serif";
+                        ctx.textAlign="center";ctx.textBaseline="middle";
+                        ctx.fillText(agl,sx+TILE-5,sy+5);
+                    } else {
+                        drawAgent(ctx,sx,sy,tile.agents[0]);
+                    }
                 }
-                if(tile.players&&tile.players.length>0){
-                    ctx.fillStyle="#ff3333";ctx.beginPath();
-                    ctx.arc(sx+TILE_SIZE/2,sy+TILE_SIZE/2,6,0,Math.PI*2);ctx.fill();
-                    ctx.fillStyle="#fff";ctx.font="bold 9px monospace";
-                    ctx.textAlign="center";ctx.textBaseline="middle";
-                    ctx.fillText("!",sx+TILE_SIZE/2,sy+TILE_SIZE/2);
-                }
+                // Enemy players
+                if(tile.players&&tile.players.length>0){drawEnemyPlayer(ctx,sx,sy);}
             }
         }
-        // Player marker
+        // Player marker (always on top)
         var pcol=px-bounds.min_x, prow=bounds.max_y-py;
         var psx=pcol*TILE_SIZE, psy=prow*TILE_SIZE;
-        ctx.fillStyle="#ffdd00";ctx.beginPath();
-        ctx.moveTo(psx+TILE_SIZE/2,psy+2);ctx.lineTo(psx+TILE_SIZE-2,psy+TILE_SIZE/2);
-        ctx.lineTo(psx+TILE_SIZE/2,psy+TILE_SIZE-2);ctx.lineTo(psx+2,psy+TILE_SIZE/2);
-        ctx.closePath();ctx.fill();ctx.strokeStyle="#000";ctx.lineWidth=1;ctx.stroke();
-        ctx.fillStyle="#000";ctx.font="bold 12px monospace";
-        ctx.textAlign="center";ctx.textBaseline="middle";
-        ctx.fillText("@",psx+TILE_SIZE/2,psy+TILE_SIZE/2);
+        drawPlayer(ctx,psx,psy);
         // Vision circle
         var vr=data.vision_radius;
-        ctx.strokeStyle="rgba(255,255,100,0.15)";ctx.lineWidth=1;ctx.beginPath();
-        ctx.arc(psx+TILE_SIZE/2,psy+TILE_SIZE/2,(vr+0.5)*TILE_SIZE,0,Math.PI*2);ctx.stroke();
+        ctx.strokeStyle="rgba(255,255,100,0.12)";ctx.lineWidth=1;ctx.beginPath();
+        ctx.arc(psx+HALF,psy+HALF,(vr+0.5)*TILE_SIZE,0,Math.PI*2);ctx.stroke();
         // Info
         var info=document.getElementById("map-info");
         if(info) {

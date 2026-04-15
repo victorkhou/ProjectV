@@ -57,6 +57,7 @@ from mygame.world.systems.agent_system import (  # noqa: E402
     BUILDING_ROLE_MAP,
     VALID_ROLES,
 )
+from mygame.world.constants import ACADEMY_TRAINING_REDUCTION_PER_LEVEL  # noqa: E402
 from mygame.world.data_registry import DataRegistry  # noqa: E402
 from mygame.world.definitions import RankDef  # noqa: E402
 from mygame.world.event_bus import EventBus  # noqa: E402
@@ -112,7 +113,7 @@ class FakeBuilding:
 class FakePlayer:
     """Lightweight stand-in for CombatCharacter."""
     def __init__(self, name="TestPlayer", combat_xp=0, rank_level=1,
-                 next_agent_id=2, resources=None):
+                 next_agent_id=1, resources=None):
         self.id = 1
         self.key = name
         self.db = FakeDB(
@@ -190,37 +191,37 @@ class AgentSystemTestBase(unittest.TestCase):
 class TestTrainAgent(AgentSystemTestBase):
 
     def test_train_first_agent_succeeds(self):
-        player = FakePlayer(combat_xp=0, next_agent_id=2)
+        player = FakePlayer(combat_xp=0, next_agent_id=1)
         academy = FakeBuilding(building_type="AC", building_level=1)
         ok, msg = self.system.train_agent(player, academy)
         self.assertTrue(ok)
-        self.assertIn("Training agent #2", msg)
-        self.assertEqual(player.db.next_agent_id, 3)
+        self.assertIn("Training agent #1", msg)
+        self.assertEqual(player.db.next_agent_id, 2)
 
     def test_train_charges_scaled_cost(self):
         """Cost scales with total agent count after training."""
-        player = FakePlayer(combat_xp=600, next_agent_id=2,
+        player = FakePlayer(combat_xp=600, next_agent_id=1,
                             resources={"Wood": 200, "Stone": 200, "Iron": 200})
         academy = FakeBuilding(building_type="AC", building_level=1)
 
-        # Train agent #2: count=1 (commander), will be 2, cost = base×2 = 30W/20S/10I
+        # Train agent #1: count=0, will be 1, cost = base×1 = 15W/10S/5I
         self.system.train_agent(player, academy)
-        self.assertEqual(player._resources["Wood"], 200 - 30)
-        self.assertEqual(player._resources["Stone"], 200 - 20)
-        self.assertEqual(player._resources["Iron"], 200 - 10)
+        self.assertEqual(player._resources["Wood"], 200 - 15)
+        self.assertEqual(player._resources["Stone"], 200 - 10)
+        self.assertEqual(player._resources["Iron"], 200 - 5)
 
         # Complete training so the NPC exists for the count
         self.system.complete_training(academy)
 
-        # Train agent #3: count=2, will be 3, cost = base×3 = 45W/30S/15I
+        # Train agent #2: count=1, will be 2, cost = base×2 = 30W/20S/10I
         self.system.train_agent(player, academy)
-        self.assertEqual(player._resources["Wood"], 200 - 30 - 45)
-        self.assertEqual(player._resources["Stone"], 200 - 20 - 30)
-        self.assertEqual(player._resources["Iron"], 200 - 10 - 15)
+        self.assertEqual(player._resources["Wood"], 200 - 15 - 30)
+        self.assertEqual(player._resources["Stone"], 200 - 10 - 20)
+        self.assertEqual(player._resources["Iron"], 200 - 5 - 10)
 
     def test_train_fails_at_cap(self):
-        """Recruit has cap=2 (commander + 1 agent). Training a 2nd should fail."""
-        player = FakePlayer(combat_xp=0, next_agent_id=2)
+        """Recruit has cap=2 (1 agent slot). Training a 2nd should fail."""
+        player = FakePlayer(combat_xp=0, next_agent_id=1)
         academy = FakeBuilding(building_type="AC", building_level=1)
 
         # Train first agent — fills cap (commander=1 + 1 agent = 2)
@@ -235,7 +236,7 @@ class TestTrainAgent(AgentSystemTestBase):
         self.assertIn("cap", msg.lower())
 
     def test_train_fails_insufficient_resources(self):
-        player = FakePlayer(combat_xp=0, next_agent_id=2,
+        player = FakePlayer(combat_xp=0, next_agent_id=1,
                             resources={"Wood": 0, "Stone": 0, "Iron": 0})
         academy = FakeBuilding(building_type="AC", building_level=1)
         ok, msg = self.system.train_agent(player, academy)
@@ -244,20 +245,20 @@ class TestTrainAgent(AgentSystemTestBase):
 
     def test_training_time_reduced_by_academy_level(self):
         """Each academy level reduces training time by 15%."""
-        player = FakePlayer(combat_xp=0, next_agent_id=2)
+        player = FakePlayer(combat_xp=0, next_agent_id=1)
         academy = FakeBuilding(building_type="AC", building_level=3)
         self.system.train_agent(player, academy)
         # Level 3: 300 * (1 - 0.15*3) = 300 * 0.55 = 165
-        expected = int(BASE_TRAINING_TICKS * (1 - 0.15 * 3))
+        expected = int(BASE_TRAINING_TICKS * (1 - ACADEMY_TRAINING_REDUCTION_PER_LEVEL * 3))
         self.assertEqual(academy.db.training_ticks_remaining, expected)
 
     def test_complete_training_creates_npc(self):
-        player = FakePlayer(combat_xp=0, next_agent_id=2)
+        player = FakePlayer(combat_xp=0, next_agent_id=1)
         academy = FakeBuilding(building_type="AC", building_level=1)
         self.system.train_agent(player, academy)
         npc = self.system.complete_training(academy)
         self.assertIsNotNone(npc)
-        self.assertEqual(npc.db.agent_id, 2)
+        self.assertEqual(npc.db.agent_id, 1)
         # Academy training state should be cleared
         self.assertIsNone(academy.db.training_agent_id)
 
@@ -276,7 +277,7 @@ class TestAssignAgent(AgentSystemTestBase):
         return self.system.complete_training(academy)
 
     def test_assign_harvester_to_extractor(self):
-        player = FakePlayer(combat_xp=600, next_agent_id=2)  # Corporal, cap=4
+        player = FakePlayer(combat_xp=600, next_agent_id=1)  # Corporal, cap=4
         npc = self._train_and_complete(player)
         building = FakeBuilding(building_type="EX")
         ok, msg = self.system.assign_agent(player, npc.db.agent_id, "harvester", building)
@@ -285,7 +286,7 @@ class TestAssignAgent(AgentSystemTestBase):
         self.assertEqual(npc.db.role_target, building)
 
     def test_assign_guard_to_turret(self):
-        player = FakePlayer(combat_xp=600, next_agent_id=2)
+        player = FakePlayer(combat_xp=600, next_agent_id=1)
         npc = self._train_and_complete(player)
         building = FakeBuilding(building_type="TU")
         ok, _ = self.system.assign_agent(player, npc.db.agent_id, "guard", building)
@@ -293,35 +294,35 @@ class TestAssignAgent(AgentSystemTestBase):
         self.assertEqual(npc.db.role, "guard")
 
     def test_assign_scout_to_radar(self):
-        player = FakePlayer(combat_xp=600, next_agent_id=2)
+        player = FakePlayer(combat_xp=600, next_agent_id=1)
         npc = self._train_and_complete(player)
         building = FakeBuilding(building_type="RD")
         ok, _ = self.system.assign_agent(player, npc.db.agent_id, "scout", building)
         self.assertTrue(ok)
 
     def test_assign_engineer_to_armory(self):
-        player = FakePlayer(combat_xp=600, next_agent_id=2)
+        player = FakePlayer(combat_xp=600, next_agent_id=1)
         npc = self._train_and_complete(player)
         building = FakeBuilding(building_type="AR")
         ok, _ = self.system.assign_agent(player, npc.db.agent_id, "engineer", building)
         self.assertTrue(ok)
 
     def test_assign_engineer_to_lab(self):
-        player = FakePlayer(combat_xp=600, next_agent_id=2)
+        player = FakePlayer(combat_xp=600, next_agent_id=1)
         npc = self._train_and_complete(player)
         building = FakeBuilding(building_type="LB")
         ok, _ = self.system.assign_agent(player, npc.db.agent_id, "engineer", building)
         self.assertTrue(ok)
 
     def test_assign_medic_to_medbay(self):
-        player = FakePlayer(combat_xp=600, next_agent_id=2)
+        player = FakePlayer(combat_xp=600, next_agent_id=1)
         npc = self._train_and_complete(player)
         building = FakeBuilding(building_type="MB")
         ok, _ = self.system.assign_agent(player, npc.db.agent_id, "medic", building)
         self.assertTrue(ok)
 
     def test_assign_soldier_no_building_needed(self):
-        player = FakePlayer(combat_xp=600, next_agent_id=2)
+        player = FakePlayer(combat_xp=600, next_agent_id=1)
         npc = self._train_and_complete(player)
         ok, _ = self.system.assign_agent(player, npc.db.agent_id, "soldier")
         self.assertTrue(ok)
@@ -329,14 +330,14 @@ class TestAssignAgent(AgentSystemTestBase):
         self.assertIsNone(npc.db.role_target)
 
     def test_assign_medic_army_no_building(self):
-        player = FakePlayer(combat_xp=600, next_agent_id=2)
+        player = FakePlayer(combat_xp=600, next_agent_id=1)
         npc = self._train_and_complete(player)
         ok, _ = self.system.assign_agent(player, npc.db.agent_id, "medic")
         self.assertTrue(ok)
 
     def test_assign_wrong_role_for_building(self):
         """Assigning harvester to a Turret should fail."""
-        player = FakePlayer(combat_xp=600, next_agent_id=2)
+        player = FakePlayer(combat_xp=600, next_agent_id=1)
         npc = self._train_and_complete(player)
         building = FakeBuilding(building_type="TU")
         ok, msg = self.system.assign_agent(player, npc.db.agent_id, "harvester", building)
@@ -344,20 +345,20 @@ class TestAssignAgent(AgentSystemTestBase):
         self.assertIn("guard", msg.lower())
 
     def test_assign_invalid_role(self):
-        player = FakePlayer(combat_xp=600, next_agent_id=2)
+        player = FakePlayer(combat_xp=600, next_agent_id=1)
         npc = self._train_and_complete(player)
         ok, msg = self.system.assign_agent(player, npc.db.agent_id, "wizard")
         self.assertFalse(ok)
         self.assertIn("Invalid role", msg)
 
     def test_assign_nonexistent_agent(self):
-        player = FakePlayer(combat_xp=600, next_agent_id=2)
+        player = FakePlayer(combat_xp=600, next_agent_id=1)
         ok, msg = self.system.assign_agent(player, 999, "soldier")
         self.assertFalse(ok)
         self.assertIn("not found", msg.lower())
 
     def test_assign_incapacitated_agent_fails(self):
-        player = FakePlayer(combat_xp=600, next_agent_id=2)
+        player = FakePlayer(combat_xp=600, next_agent_id=1)
         npc = self._train_and_complete(player)
         npc.db.incapacitated = True
         ok, msg = self.system.assign_agent(player, npc.db.agent_id, "soldier")
@@ -365,7 +366,7 @@ class TestAssignAgent(AgentSystemTestBase):
         self.assertIn("incapacitated", msg.lower())
 
     def test_assign_reserved_agent_fails(self):
-        player = FakePlayer(combat_xp=600, next_agent_id=2)
+        player = FakePlayer(combat_xp=600, next_agent_id=1)
         npc = self._train_and_complete(player)
         npc.db.reserve = True
         ok, msg = self.system.assign_agent(player, npc.db.agent_id, "soldier")
@@ -374,7 +375,7 @@ class TestAssignAgent(AgentSystemTestBase):
 
     def test_reassign_agent_without_cooldown(self):
         """Reassignment from one role to another should work immediately."""
-        player = FakePlayer(combat_xp=600, next_agent_id=2)
+        player = FakePlayer(combat_xp=600, next_agent_id=1)
         npc = self._train_and_complete(player)
         building_ex = FakeBuilding(building_type="EX")
         self.system.assign_agent(player, npc.db.agent_id, "harvester", building_ex)
@@ -387,7 +388,7 @@ class TestAssignAgent(AgentSystemTestBase):
 
     def test_assign_non_building_role_requires_building(self):
         """Harvester without a building should fail."""
-        player = FakePlayer(combat_xp=600, next_agent_id=2)
+        player = FakePlayer(combat_xp=600, next_agent_id=1)
         npc = self._train_and_complete(player)
         ok, msg = self.system.assign_agent(player, npc.db.agent_id, "harvester")
         self.assertFalse(ok)
@@ -401,7 +402,7 @@ class TestAssignAgent(AgentSystemTestBase):
 class TestUnassignAgent(AgentSystemTestBase):
 
     def test_unassign_clears_role(self):
-        player = FakePlayer(combat_xp=600, next_agent_id=2)
+        player = FakePlayer(combat_xp=600, next_agent_id=1)
         academy = FakeBuilding(building_type="AC", building_level=1)
         self.system.train_agent(player, academy)
         npc = self.system.complete_training(academy)
@@ -414,7 +415,7 @@ class TestUnassignAgent(AgentSystemTestBase):
         self.assertIsNone(npc.db.role_target)
 
     def test_unassign_nonexistent_agent(self):
-        player = FakePlayer(combat_xp=600, next_agent_id=2)
+        player = FakePlayer(combat_xp=600, next_agent_id=1)
         ok, msg = self.system.unassign_agent(player, 999)
         self.assertFalse(ok)
         self.assertIn("not found", msg.lower())
@@ -427,7 +428,7 @@ class TestUnassignAgent(AgentSystemTestBase):
 class TestQueryAgents(AgentSystemTestBase):
 
     def test_get_agents_returns_all(self):
-        player = FakePlayer(combat_xp=1500, next_agent_id=2,
+        player = FakePlayer(combat_xp=1500, next_agent_id=1,
                             resources={"Wood": 500, "Stone": 500, "Iron": 500})
         academy = FakeBuilding(building_type="AC", building_level=1)
         for _ in range(3):
@@ -437,7 +438,7 @@ class TestQueryAgents(AgentSystemTestBase):
         self.assertEqual(len(agents), 3)
 
     def test_get_agent_by_id(self):
-        player = FakePlayer(combat_xp=600, next_agent_id=2)
+        player = FakePlayer(combat_xp=600, next_agent_id=1)
         academy = FakeBuilding(building_type="AC", building_level=1)
         self.system.train_agent(player, academy)
         npc = self.system.complete_training(academy)
@@ -445,19 +446,19 @@ class TestQueryAgents(AgentSystemTestBase):
         self.assertIs(found, npc)
 
     def test_get_agent_by_id_not_found(self):
-        player = FakePlayer(combat_xp=600, next_agent_id=2)
+        player = FakePlayer(combat_xp=600, next_agent_id=1)
         found = self.system.get_agent_by_id(player, 999)
         self.assertIsNone(found)
 
-    def test_get_agent_count_includes_commander(self):
-        player = FakePlayer(combat_xp=600, next_agent_id=2)
-        # No agents trained yet — count should be 1 (commander only)
-        self.assertEqual(self.system.get_agent_count(player), 1)
+    def test_get_agent_count(self):
+        player = FakePlayer(combat_xp=600, next_agent_id=1)
+        # No agents trained yet — count should be 0
+        self.assertEqual(self.system.get_agent_count(player), 0)
 
         academy = FakeBuilding(building_type="AC", building_level=1)
         self.system.train_agent(player, academy)
         self.system.complete_training(academy)
-        self.assertEqual(self.system.get_agent_count(player), 2)
+        self.assertEqual(self.system.get_agent_count(player), 1)
 
 
 # -------------------------------------------------------------- #
@@ -477,10 +478,11 @@ class TestDemotionPromotion(AgentSystemTestBase):
             self.system.complete_training(academy)
 
     def test_demotion_reserves_highest_ids(self):
-        """With 4 agents (commander + 3 NPCs), demoting to cap=2 reserves 2 highest."""
-        player = FakePlayer(combat_xp=1500, next_agent_id=2)  # Sergeant, cap=6
-        self._create_agents(player, 3)  # IDs 2, 3, 4 → total=4
+        """With 3 agents, demoting to cap=2 (1 agent slot) reserves 2 highest."""
+        player = FakePlayer(combat_xp=1500, next_agent_id=1)  # Sergeant, cap=6
+        self._create_agents(player, 3)  # IDs 1, 2, 3
 
+        # cap=2 means 1 agent slot, so 2 excess
         self.system.handle_demotion(player, new_agent_cap=2)
 
         agents = self.system.get_agents(player)
@@ -488,16 +490,16 @@ class TestDemotionPromotion(AgentSystemTestBase):
         active = [a for a in agents if not a.db.reserve]
 
         self.assertEqual(len(reserved), 2)
-        # Highest IDs (4, 3) should be reserved
+        # Highest IDs (3, 2) should be reserved
         reserved_ids = sorted([a.db.agent_id for a in reserved])
-        self.assertEqual(reserved_ids, [3, 4])
-        # Lowest ID (2) stays active
+        self.assertEqual(reserved_ids, [2, 3])
+        # Lowest ID (1) stays active
         active_ids = [a.db.agent_id for a in active]
-        self.assertEqual(active_ids, [2])
+        self.assertEqual(active_ids, [1])
 
     def test_demotion_no_excess(self):
         """If already under cap, demotion does nothing."""
-        player = FakePlayer(combat_xp=600, next_agent_id=2)
+        player = FakePlayer(combat_xp=600, next_agent_id=1)
         self._create_agents(player, 1)  # total=2
         self.system.handle_demotion(player, new_agent_cap=3)
         agents = self.system.get_agents(player)
@@ -506,22 +508,22 @@ class TestDemotionPromotion(AgentSystemTestBase):
 
     def test_promotion_restores_lowest_ids_first(self):
         """After demotion, promotion restores lowest-ID reserved agents first."""
-        player = FakePlayer(combat_xp=1500, next_agent_id=2)
-        self._create_agents(player, 3)  # IDs 2, 3, 4 → total=4
+        player = FakePlayer(combat_xp=1500, next_agent_id=1)
+        self._create_agents(player, 3)  # IDs 1, 2, 3
 
-        # Demote to cap=2 → reserves IDs 3, 4
+        # Demote to cap=2 (1 agent slot) → reserves IDs 2, 3
         self.system.handle_demotion(player, new_agent_cap=2)
 
-        # Promote to cap=3 → should restore ID 3 (lowest reserved)
+        # Promote to cap=3 (2 agent slots) → should restore ID 2 (lowest reserved)
         self.system.handle_promotion(player, new_agent_cap=3)
 
         agents = self.system.get_agents(player)
         reserved = [a for a in agents if a.db.reserve]
         self.assertEqual(len(reserved), 1)
-        self.assertEqual(reserved[0].db.agent_id, 4)
+        self.assertEqual(reserved[0].db.agent_id, 3)
 
     def test_promotion_restores_all_if_cap_allows(self):
-        player = FakePlayer(combat_xp=1500, next_agent_id=2)
+        player = FakePlayer(combat_xp=1500, next_agent_id=1)
         self._create_agents(player, 3)
 
         self.system.handle_demotion(player, new_agent_cap=2)
@@ -533,19 +535,19 @@ class TestDemotionPromotion(AgentSystemTestBase):
 
     def test_reserved_agents_keep_role(self):
         """Reserved agents retain their role assignment."""
-        player = FakePlayer(combat_xp=1500, next_agent_id=2)
-        self._create_agents(player, 2)  # IDs 2, 3
+        player = FakePlayer(combat_xp=1500, next_agent_id=1)
+        self._create_agents(player, 2)  # IDs 1, 2
 
-        # Assign agent 3 as soldier
-        agent3 = self.system.get_agent_by_id(player, 3)
-        self.system.assign_agent(player, 3, "soldier")
-        self.assertEqual(agent3.db.role, "soldier")
+        # Assign agent 2 as soldier
+        agent2 = self.system.get_agent_by_id(player, 2)
+        self.system.assign_agent(player, 2, "soldier")
+        self.assertEqual(agent2.db.role, "soldier")
 
-        # Demote to cap=2 → reserves agent 3
+        # Demote to cap=2 → reserves agent 2
         self.system.handle_demotion(player, new_agent_cap=2)
-        self.assertTrue(agent3.db.reserve)
+        self.assertTrue(agent2.db.reserve)
         # Role is preserved
-        self.assertEqual(agent3.db.role, "soldier")
+        self.assertEqual(agent2.db.role, "soldier")
 
 
 # -------------------------------------------------------------- #
@@ -557,17 +559,17 @@ class TestTrainingTimerLifecycle(AgentSystemTestBase):
 
     def test_train_sets_timer_on_academy(self):
         """train_agent stores training state on the academy building."""
-        player = FakePlayer(combat_xp=0, next_agent_id=2)
+        player = FakePlayer(combat_xp=0, next_agent_id=1)
         academy = FakeBuilding(building_type="AC", building_level=1)
         ok, _ = self.system.train_agent(player, academy)
         self.assertTrue(ok)
-        self.assertEqual(academy.db.training_agent_id, 2)
+        self.assertEqual(academy.db.training_agent_id, 1)
         self.assertIsNotNone(academy.db.training_ticks_remaining)
         self.assertIs(academy.db.training_owner, player)
 
     def test_timer_tick_down_then_complete(self):
         """Simulate ticking the timer down and completing training."""
-        player = FakePlayer(combat_xp=0, next_agent_id=2)
+        player = FakePlayer(combat_xp=0, next_agent_id=1)
         academy = FakeBuilding(building_type="AC", building_level=1)
         self.system.train_agent(player, academy)
 
@@ -579,7 +581,7 @@ class TestTrainingTimerLifecycle(AgentSystemTestBase):
         # Complete training spawns the NPC
         npc = self.system.complete_training(academy)
         self.assertIsNotNone(npc)
-        self.assertEqual(npc.db.agent_id, 2)
+        self.assertEqual(npc.db.agent_id, 1)
 
         # Academy state is cleared after completion
         self.assertIsNone(academy.db.training_agent_id)
@@ -606,7 +608,7 @@ class TestAgentCapByRank(AgentSystemTestBase):
 
     def test_recruit_cap_is_two(self):
         """Recruit (cap=2): commander + 1 trained agent fills cap."""
-        player = FakePlayer(combat_xp=0, next_agent_id=2)
+        player = FakePlayer(combat_xp=0, next_agent_id=1)
         academy = FakeBuilding(building_type="AC", building_level=1)
         self._train_and_complete(player, academy)
         # At cap now (commander=1 + 1 NPC = 2)
@@ -616,7 +618,7 @@ class TestAgentCapByRank(AgentSystemTestBase):
 
     def test_higher_rank_allows_more_agents(self):
         """Corporal (cap=4) can train 3 agents beyond commander."""
-        player = FakePlayer(combat_xp=600, next_agent_id=2,
+        player = FakePlayer(combat_xp=600, next_agent_id=1,
                             resources={"Wood": 1000, "Stone": 1000, "Iron": 1000})
         academy = FakeBuilding(building_type="AC", building_level=1)
         for i in range(3):
@@ -644,7 +646,7 @@ class TestOfflineAgentBehavior(AgentSystemTestBase):
         """
         from mygame.typeclasses.agent_scripts import HarvesterScript
 
-        player = FakePlayer(combat_xp=600, next_agent_id=2)
+        player = FakePlayer(combat_xp=600, next_agent_id=1)
         academy = FakeBuilding(building_type="AC", building_level=1)
         self.system.train_agent(player, academy)
         npc = self.system.complete_training(academy)

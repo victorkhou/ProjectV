@@ -130,7 +130,7 @@ class FakeNDB:
         self.tile_lookup_dict = None
 
 class FakeLocation:
-    """Simulates a tile/room."""
+    """Simulates a tile/room (PlanetRoom-compatible)."""
     def __init__(self, x=5, y=5, terrain_type="Plains", building=None,
                  contents=None, planet_name="earth"):
         self.x = x
@@ -140,6 +140,8 @@ class FakeLocation:
         self.planet_name = planet_name
         self.contents = contents or []
         self._messages = []
+        self._buildings_by_coord = {}  # (x, y) -> [building, ...]
+        self._objects_by_coord = {}  # (x, y) -> [obj, ...]
 
     def msg_contents(self, text=None, exclude=None, **kwargs):
         if text is not None:
@@ -147,6 +149,36 @@ class FakeLocation:
                 self._messages.append(text[0])
             else:
                 self._messages.append(text)
+
+    def move_entity(self, obj, new_x, new_y):
+        """Simulate PlanetRoom.move_entity — update coords on the object."""
+        if hasattr(obj, "db"):
+            obj.db.coord_x = new_x
+            obj.db.coord_y = new_y
+
+    def get_buildings_at(self, x, y):
+        """Return buildings registered at (x, y)."""
+        return list(self._buildings_by_coord.get((x, y), []))
+
+    def get_players_at(self, x, y):
+        """Return player-like objects at (x, y)."""
+        result = []
+        for obj in self.contents:
+            if hasattr(obj, "has_account") and obj.has_account:
+                ox = getattr(getattr(obj, "db", None), "coord_x", None)
+                oy = getattr(getattr(obj, "db", None), "coord_y", None)
+                if ox is not None and oy is not None and int(ox) == x and int(oy) == y:
+                    result.append(obj)
+            elif hasattr(obj, "db") and hasattr(obj.db, "combat_xp"):
+                ox = getattr(obj.db, "coord_x", None)
+                oy = getattr(obj.db, "coord_y", None)
+                if ox is not None and oy is not None and int(ox) == x and int(oy) == y:
+                    result.append(obj)
+        return result
+
+    def get_objects_at(self, x, y, type_tag=None):
+        """Return objects at (x, y), optionally filtered by type_tag."""
+        return list(self._objects_by_coord.get((x, y), []))
 
 class FakeCaller:
     """Simulates a player character (caller)."""
@@ -232,16 +264,11 @@ class TestCmdMove(unittest.TestCase):
     def test_successful_move_via_resolver(self):
         """New path: coordinates update on successful move (no room creation)."""
 
-        class FakeTileResolver:
-            def get_if_exists(self, x, y, planet):
-                return None
-
         class FakePlanetRegistry:
             def is_valid_coordinate(self, x, y, planet):
                 return 0 <= x < 100 and 0 <= y < 100
 
         caller = FakeCaller(systems={
-            "tile_resolver": FakeTileResolver(),
             "planet_registry": FakePlanetRegistry(),
         })
         cmd = _make_cmd(CmdMove, caller, " north")
@@ -251,16 +278,11 @@ class TestCmdMove(unittest.TestCase):
 
     def test_edge_of_map_rejected(self):
         """New path: out-of-bounds coordinate is rejected."""
-        class FakeTileResolver:
-            def get_if_exists(self, x, y, planet):
-                return None
-
         class FakePlanetRegistry:
             def is_valid_coordinate(self, x, y, planet):
                 return 0 <= x < 100 and 0 <= y < 100
 
         caller = FakeCaller(systems={
-            "tile_resolver": FakeTileResolver(),
             "planet_registry": FakePlanetRegistry(),
         })
         caller.db.coord_x = 0
@@ -275,20 +297,15 @@ class TestCmdMove(unittest.TestCase):
         class OfflineBuilding:
             is_offline = True
 
-        class FakeTileResolver:
-            def get_if_exists(self, x, y, planet):
-                room = FakeLocation(x=x, y=y)
-                room.building = OfflineBuilding()
-                return room
-
         class FakePlanetRegistry:
             def is_valid_coordinate(self, x, y, planet):
                 return True
 
+        loc = FakeLocation()
+        loc._buildings_by_coord[(5, 6)] = [OfflineBuilding()]
         caller = FakeCaller(systems={
-            "tile_resolver": FakeTileResolver(),
             "planet_registry": FakePlanetRegistry(),
-        })
+        }, location=loc)
         cmd = _make_cmd(CmdMove, caller, " north")
         cmd.func()
         self.assertIsNone(caller._moved_to)
@@ -297,16 +314,11 @@ class TestCmdMove(unittest.TestCase):
     def test_coord_attributes_updated_after_move(self):
         """New path: coord_x and coord_y are updated after successful move."""
 
-        class FakeTileResolver:
-            def get_if_exists(self, x, y, planet):
-                return None
-
         class FakePlanetRegistry:
             def is_valid_coordinate(self, x, y, planet):
                 return True
 
         caller = FakeCaller(systems={
-            "tile_resolver": FakeTileResolver(),
             "planet_registry": FakePlanetRegistry(),
         })
         self.assertEqual(caller.db.coord_x, 5)
@@ -359,28 +371,26 @@ class TestCmdMove(unittest.TestCase):
         return WallBuilding(owner_id)
 
     def _make_wall_systems(self, wall_building):
-        class WallTileResolver:
-            def __init__(self, building):
-                self._building = building
-            def get_if_exists(self, x, y, planet):
-                room = FakeLocation(x=x, y=y)
-                room.building = self._building
-                return room
-
         class FakePlanetRegistry:
             def is_valid_coordinate(self, x, y, planet):
                 return True
 
         return {
-            "tile_resolver": WallTileResolver(wall_building),
             "planet_registry": FakePlanetRegistry(),
         }
+
+    def _make_wall_location(self, wall_building, target_x=5, target_y=6):
+        """Create a FakeLocation with a wall building at the target coords."""
+        loc = FakeLocation()
+        loc._buildings_by_coord[(target_x, target_y)] = [wall_building]
+        return loc
 
     def test_wall_blocks_owner_during_combat_timer(self):
         """Req 17.2: Wall blocks owner movement while combat timer is active."""
         wall = self._make_wall_building(owner_id=42)
         systems = self._make_wall_systems(wall)
-        caller = FakeCaller(systems=systems)
+        loc = self._make_wall_location(wall, target_x=5, target_y=6)
+        caller = FakeCaller(systems=systems, location=loc)
         caller.id = 42  # same as wall owner
         caller.db.combat_timer_expires = 999  # active timer
         old_x, old_y = caller.db.coord_x, caller.db.coord_y
@@ -400,7 +410,8 @@ class TestCmdMove(unittest.TestCase):
         """Req 17.3: Wall allows owner movement when combat timer is 0."""
         wall = self._make_wall_building(owner_id=42)
         systems = self._make_wall_systems(wall)
-        caller = FakeCaller(systems=systems)
+        loc = self._make_wall_location(wall, target_x=5, target_y=6)
+        caller = FakeCaller(systems=systems, location=loc)
         caller.id = 42
         caller.db.combat_timer_expires = 0  # no active timer
 
@@ -417,7 +428,8 @@ class TestCmdMove(unittest.TestCase):
         """Walls only block the owner during combat, not other players."""
         wall = self._make_wall_building(owner_id=42)
         systems = self._make_wall_systems(wall)
-        caller = FakeCaller(systems=systems)
+        loc = self._make_wall_location(wall, target_x=5, target_y=6)
+        caller = FakeCaller(systems=systems, location=loc)
         caller.id = 99  # different from wall owner
         caller.db.combat_timer_expires = 999  # active timer
 
@@ -433,16 +445,11 @@ class TestCmdMove(unittest.TestCase):
 
     def test_movement_resets_building_activity_state(self):
         """Req 6.6: Moving away from a construction tile pauses building."""
-        class FakeTileResolver:
-            def get_if_exists(self, x, y, planet):
-                return None
-
         class FakePlanetRegistry:
             def is_valid_coordinate(self, x, y, planet):
                 return True
 
         caller = FakeCaller(systems={
-            "tile_resolver": FakeTileResolver(),
             "planet_registry": FakePlanetRegistry(),
         })
         caller.db.activity_state = "building"
@@ -458,16 +465,11 @@ class TestCmdMove(unittest.TestCase):
 
     def test_movement_resets_harvesting_activity_state(self):
         """Req 6.7: Moving away from a harvest tile pauses harvesting."""
-        class FakeTileResolver:
-            def get_if_exists(self, x, y, planet):
-                return None
-
         class FakePlanetRegistry:
             def is_valid_coordinate(self, x, y, planet):
                 return True
 
         caller = FakeCaller(systems={
-            "tile_resolver": FakeTileResolver(),
             "planet_registry": FakePlanetRegistry(),
         })
         caller.db.activity_state = "harvesting"
@@ -483,16 +485,11 @@ class TestCmdMove(unittest.TestCase):
 
     def test_movement_does_not_reset_idle_state(self):
         """Moving while idle should not cause errors or state changes."""
-        class FakeTileResolver:
-            def get_if_exists(self, x, y, planet):
-                return None
-
         class FakePlanetRegistry:
             def is_valid_coordinate(self, x, y, planet):
                 return True
 
         caller = FakeCaller(systems={
-            "tile_resolver": FakeTileResolver(),
             "planet_registry": FakePlanetRegistry(),
         })
         caller.db.activity_state = "idle"
@@ -514,12 +511,8 @@ class TestCmdHarvest(unittest.TestCase):
         class FakeResourceSystem:
             def start_harvest(self, player, tile):
                 return True, "You begin harvesting Iron. Stay on the tile to continue."
-        class FakeTileResolver:
-            def resolve(self, x, y, planet):
-                return FakeLocation(x=x, y=y)
         caller = FakeCaller(systems={
             "resource_system": FakeResourceSystem(),
-            "tile_resolver": FakeTileResolver(),
         })
         cmd = _make_cmd(CmdHarvest, caller)
         cmd.func()
@@ -529,12 +522,8 @@ class TestCmdHarvest(unittest.TestCase):
         class FakeResourceSystem:
             def start_harvest(self, player, tile):
                 return False, "No resource node on this tile."
-        class FakeTileResolver:
-            def resolve(self, x, y, planet):
-                return FakeLocation(x=x, y=y)
         caller = FakeCaller(systems={
             "resource_system": FakeResourceSystem(),
-            "tile_resolver": FakeTileResolver(),
         })
         cmd = _make_cmd(CmdHarvest, caller)
         cmd.func()
@@ -544,12 +533,8 @@ class TestCmdBuild(unittest.TestCase):
     def test_no_args(self):
         class FakeBuildingSystem:
             pass
-        class FakeTileResolver:
-            def resolve(self, x, y, planet):
-                return FakeLocation(x=x, y=y)
         caller = FakeCaller(systems={
             "building_system": FakeBuildingSystem(),
-            "tile_resolver": FakeTileResolver(),
         })
         cmd = _make_cmd(CmdBuild, caller, "")
         cmd.func()
@@ -557,14 +542,10 @@ class TestCmdBuild(unittest.TestCase):
 
     def test_success(self):
         class FakeBuildingSystem:
-            def start_construction(self, player, tile, btype):
+            def start_construction(self, player, tile, btype, x=None, y=None):
                 return True, f"Construction of {btype} started (0/120s). Stay on the tile to continue."
-        class FakeTileResolver:
-            def resolve(self, x, y, planet):
-                return FakeLocation(x=x, y=y)
         caller = FakeCaller(systems={
             "building_system": FakeBuildingSystem(),
-            "tile_resolver": FakeTileResolver(),
         })
         cmd = _make_cmd(CmdBuild, caller, " hq")
         cmd.func()
@@ -572,15 +553,9 @@ class TestCmdBuild(unittest.TestCase):
 
 class TestCmdUpgrade(unittest.TestCase):
     def test_no_building_on_tile(self):
-        class FakeTileResolver:
-            def resolve(self, x, y, planet):
-                return FakeLocation(x=x, y=y, building=None)
-            def get_if_exists(self, x, y, planet):
-                return FakeLocation(x=x, y=y, building=None)
         class FakeBuildingSystem:
             pass
         caller = FakeCaller(systems={
-            "tile_resolver": FakeTileResolver(),
             "building_system": FakeBuildingSystem(),
         })
         cmd = _make_cmd(CmdUpgrade, caller, "")

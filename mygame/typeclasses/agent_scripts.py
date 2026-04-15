@@ -97,22 +97,29 @@ class HarvesterScript(DefaultScript):
         # Calculate production amount
         level = _get_attr(building, "building_level", 1) or 1
         base_rate = self._get_base_rate()
-        production = base_rate * (1 + 0.25 * (level - 1))
+        from world.constants import EXTRACTOR_LEVEL_BONUS
+        production = base_rate * (1 + EXTRACTOR_LEVEL_BONUS * (level - 1))
         production_int = max(1, int(production)) if base_rate > 0 else 0
         if production_int <= 0:
             return
 
-        # Add to Extractor inventory (respects capacity)
+        # Drop resources at building coordinates in PlanetRoom
         from world.systems.resource_system import ResourceSystem
+        bx = getattr(getattr(building, "db", None), "coord_x", None)
+        by = getattr(getattr(building, "db", None), "coord_y", None)
+        drop_location = getattr(building, "location", building)
+        if bx is not None and by is not None:
+            ResourceSystem._spawn_resource_drop(
+                drop_location, resource_type, production_int, x=int(bx), y=int(by)
+            )
+        else:
+            # Legacy fallback: no coordinates on building
+            ResourceSystem._spawn_resource_drop(drop_location, resource_type, production_int)
 
-        added = ResourceSystem.add_to_extractor_inventory(
-            building, resource_type, production_int, level
-        )
-
-        if added > 0:
+        if production_int > 0:
             logger.debug(
                 "Harvester on %s produced %d %s (level %d)",
-                building, added, resource_type, level,
+                building, production_int, resource_type, level,
             )
 
     # -- internal helpers ---------------------------------------------- #
@@ -122,6 +129,7 @@ class HarvesterScript(DefaultScript):
         """Determine the resource type for an Extractor.
 
         Checks the building's stored ``resource_type`` attribute first,
+        then queries TerrainGenerator using the building's coordinates,
         then falls back to reading the terrain tile's resource node.
         """
         # Explicit attribute on the building
@@ -129,7 +137,32 @@ class HarvesterScript(DefaultScript):
         if rt:
             return rt
 
-        # Fall back to the terrain tile the building sits on
+        # Try TerrainGenerator using building's coordinates
+        bx = getattr(getattr(building, "db", None), "coord_x", None)
+        by = getattr(getattr(building, "db", None), "coord_y", None)
+        if bx is not None and by is not None:
+            try:
+                # Get planet from the building's PlanetRoom location
+                loc = getattr(building, "location", None)
+                planet = None
+                if loc is not None:
+                    planet = getattr(loc, "planet_name", None)
+                    if planet is None or planet == "unknown":
+                        planet = getattr(getattr(loc, "db", None), "planet", None)
+                if planet:
+                    from server.conf.game_init import game_systems
+                    generators = game_systems.get("_terrain_generators", {})
+                    gen = generators.get(planet)
+                    if gen:
+                        _terrain_type, resource_type = gen.get_terrain_and_resource(
+                            int(bx), int(by)
+                        )
+                        if resource_type:
+                            return resource_type
+            except (ImportError, AttributeError):
+                pass
+
+        # Legacy fallback: read from the terrain tile the building sits on
         tile = getattr(building, "location", None)
         if tile is None:
             return None

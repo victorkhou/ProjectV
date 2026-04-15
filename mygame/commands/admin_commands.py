@@ -239,29 +239,20 @@ class CmdSpawnBuilding(BaseCommand):
         else:
             bdef = None
 
-        # Get current tile — buildings need a real room at their coordinates
-        loc = caller.location
-        if loc is None:
+        # Get current location — must be a PlanetRoom
+        planet_room = caller.location
+        if planet_room is None:
             caller.msg("You have no location.")
             return
 
-        # For buildings, we need a real OverworldRoom at the tile coordinates
-        # (not the shared PlanetRoom)
-        building_room = loc
         cx = getattr(caller.db, "coord_x", None)
         cy = getattr(caller.db, "coord_y", None)
-        cp = getattr(caller.db, "coord_planet", None)
 
-        if cx is not None and cy is not None and cp:
-            resolver = _get_system(caller, "tile_resolver")
-            if resolver is not None:
-                try:
-                    building_room = resolver.resolve(cx, cy, cp)
-                except (ValueError, KeyError):
-                    caller.msg("Could not resolve tile for building placement.")
-                    return
+        if cx is None or cy is None:
+            caller.msg("You have no coordinates set.")
+            return
 
-        # Create the building
+        # Create the building in PlanetRoom at caller's coordinates
         try:
             from evennia.utils.create import create_object
 
@@ -271,7 +262,7 @@ class CmdSpawnBuilding(BaseCommand):
             building = create_object(
                 typeclass="typeclasses.objects.Building",
                 key=name,
-                location=building_room,
+                location=planet_room,
             )
             building.attributes.add("building_type", btype)
             building.attributes.add("owner", owner)
@@ -279,14 +270,18 @@ class CmdSpawnBuilding(BaseCommand):
             building.attributes.add("hp", hp)
             building.attributes.add("hp_max", hp)
             building.attributes.add("offline", False)
-            building.tags.add("building", category="object_type")
+            # Set coordinates on the building
+            building.db.coord_x = cx
+            building.db.coord_y = cy
+            # Tag is auto-set by Building.at_object_creation via GameEntity
 
             owner_name = getattr(owner, "key", "nobody") if owner else "nobody"
             logger.info(
-                "Admin %s spawned %s (level %d, owner=%s) at %s",
-                caller.key, btype, level, owner_name, building_room.key if hasattr(building_room, "key") else building_room,
+                "Admin %s spawned %s (level %d, owner=%s) at (%s, %s) in %s",
+                caller.key, btype, level, owner_name, cx, cy,
+                planet_room.key if hasattr(planet_room, "key") else planet_room,
             )
-            caller.msg(f"Spawned {name} ({btype}) level {level}, owned by {owner_name}.")
+            caller.msg(f"Spawned {name} ({btype}) level {level}, owned by {owner_name} at ({cx}, {cy}).")
         except Exception as e:
             caller.msg(f"Failed to create building: {e}")
 
@@ -299,7 +294,7 @@ class CmdTeleport(BaseCommand):
         teleport <x>,<y>
 
     If planet is omitted, uses your current planet.
-    Creates the room on-demand via TileResolver.
+    Updates coordinates via PlanetRoom.move_entity.
 
     Examples:
         teleport 50,50,earth_planet
@@ -360,27 +355,24 @@ class CmdTeleport(BaseCommand):
         except (ImportError, AttributeError):
             pass
 
-        # Update coordinates
-        caller.db.coord_x = tx
-        caller.db.coord_y = ty
+        if not planet_rooms:
+            caller.msg("Planet rooms not available.")
+            return
+
+        target_room = planet_rooms.get(planet)
+        if not target_room:
+            caller.msg(f"No PlanetRoom found for {planet}.")
+            return
+
+        # Update planet attribute
         caller.db.coord_planet = planet
 
-        # Only move_to if changing planets or not in a planet room
-        if planet_rooms:
-            target_room = planet_rooms.get(planet)
-            if target_room and caller.location is not target_room:
-                caller.move_to(target_room, quiet=True)
-        else:
-            # Fallback: use tile resolver if no planet rooms
-            resolver = _get_system(caller, "tile_resolver")
-            if resolver is not None:
-                try:
-                    target = resolver.resolve(tx, ty, planet)
-                    if target:
-                        caller.move_to(target, quiet=True)
-                except (ValueError, KeyError) as e:
-                    caller.msg(f"Could not resolve coordinates: {e}")
-                    return
+        # Only move_to if changing planets (different PlanetRoom)
+        if caller.location is not target_room:
+            caller.move_to(target_room, quiet=True)
+
+        # Use move_entity for coordinate update within the PlanetRoom
+        target_room.move_entity(caller, tx, ty)
 
         logger.info("Admin %s teleported to (%d, %d, %s)", caller.key, tx, ty, planet)
         caller.msg(f"Teleported to ({tx}, {ty}) on {planet}.")
@@ -422,11 +414,10 @@ class CmdClearFog(BaseCommand):
 
 
 class CmdPurgeRooms(BaseCommand):
-    """Purge empty overworld rooms from the database.
+    """Delete all legacy OverworldRoom objects from the database.
 
-    Removes all OverworldRoom objects that have no players, no
-    buildings, no custom descriptions, and no depleted resources.
-    This reclaims DB space from rooms created by exploration.
+    Removes all remaining OverworldRoom objects as migration cleanup.
+    Run @migraterooms first to move buildings and resources to PlanetRoom.
 
     Usage:
         @purgerooms
@@ -441,62 +432,23 @@ class CmdPurgeRooms(BaseCommand):
     def func(self):
         caller = self.caller
         try:
-            from typeclasses.rooms import OverworldRoom
+            from evennia.utils.search import search_tag
 
-            all_rooms = list(
-                OverworldRoom.objects.filter_family(
-                    db_tags__db_key="overworld_tile",
-                    db_tags__db_category="room_type",
-                )
-            )
+            all_rooms = list(search_tag("overworld_tile", category="room_type"))
         except Exception:
             caller.msg("Could not query overworld rooms.")
             return
 
         deleted = 0
-        kept = 0
         for room in all_rooms:
-            contents = getattr(room, "contents", [])
-
-            # Keep rooms with players
-            has_player = any(
-                hasattr(obj, "has_account") and obj.has_account
-                for obj in contents
-            )
-            if has_player:
-                kept += 1
-                continue
-
-            # Keep rooms with buildings
-            has_building = any(
-                hasattr(obj, "attributes") and obj.attributes.has("building_type")
-                for obj in contents
-            )
-            if has_building:
-                kept += 1
-                continue
-
-            # Keep rooms with depleted resources
-            rn = room.attributes.get("resource_node_data")
-            if rn and isinstance(rn, dict) and rn.get("depleted"):
-                kept += 1
-                continue
-
-            # Keep rooms with custom descriptions
-            desc = room.attributes.get("desc")
-            if desc and desc != "" and desc != "You see nothing special.":
-                kept += 1
-                continue
-
-            # Safe to delete
             room.delete()
             deleted += 1
 
         logger.info(
-            "Admin %s purged %d empty rooms (%d kept)",
-            caller.key, deleted, kept,
+            "Admin %s purged %d legacy OverworldRoom objects",
+            caller.key, deleted,
         )
-        caller.msg(f"Purged {deleted} empty rooms. {kept} rooms with state kept.")
+        caller.msg(f"Purged {deleted} legacy OverworldRoom object(s).")
 
 
 class CmdResetResources(BaseCommand):
@@ -799,8 +751,7 @@ class CmdListAgents(BaseCommand):
         next_id = getattr(getattr(target, "db", None), "next_agent_id", None)
         count = agent_system.get_agent_count(target)
 
-        lines = [f"|w=== Agents for {target.key} ({count} total, next_id={next_id}) ===|n"]
-        lines.append(f"  |c#1|n  Commander (player character)")
+        lines = [f"|w=== Agents for {target.key} ({count} agents, next_id={next_id}) ===|n"]
 
         if not agents:
             lines.append("  No trained agents.")
@@ -848,3 +799,249 @@ class CmdListAgents(BaseCommand):
             pass
 
         caller.msg("\n".join(lines))
+
+
+class CmdSetLevel(BaseCommand):
+    """Set a player's level by numeric ID (1-60).
+
+    Usage:
+        @setlevel <player> <level>
+
+    Level must be 1-60. Rank is derived automatically (every 5 levels).
+    XP is set to the threshold for that level.
+    Restricted to Admin+ permission level.
+    """
+
+    key = "@setlevel"
+    locks = "cmd:perm(Admin);view:perm(Admin)"
+    help_category = "Admin"
+
+    def func(self):
+        caller = self.caller
+
+        if not _check_perm(caller, "Admin"):
+            caller.msg("Permission denied. Admin+ required.")
+            return
+
+        args = self.args.strip().split()
+        if len(args) < 2:
+            caller.msg("Usage: @setlevel <player> <level>")
+            return
+
+        player_name = args[0]
+        try:
+            level = int(args[1])
+        except ValueError:
+            caller.msg("Level must be a number.")
+            return
+
+        from world.constants import MAX_LEVEL, NUM_RANKS
+        if level < 1 or level > MAX_LEVEL:
+            caller.msg(f"Level must be between 1 and {MAX_LEVEL}.")
+            return
+
+        target = caller.search(player_name) if hasattr(caller, "search") else None
+        if target is None:
+            caller.msg(f"Could not find player '{player_name}'.")
+            return
+
+        if not hasattr(target, "db"):
+            caller.msg(f"{player_name} is not a valid player character.")
+            return
+
+        # Compute rank and XP from level
+        from world.systems.rank_system import rank_from_level
+        rank_num = rank_from_level(level)
+
+        # Set XP to the threshold for this level
+        rank_system = _get_system(caller, "rank_system")
+        if rank_system:
+            xp = rank_system.xp_for_level(level)
+            target.db.combat_xp = xp
+        else:
+            xp = None
+
+        target.db.level = level
+        target.db.rank_level = rank_num
+
+        # Trigger rank events (unlock techs, adjust agent cap)
+        if rank_system:
+            rank_system.check_promotion(target)
+
+        # Look up rank name
+        rank_name = f"Rank {rank_num}"
+        registry = _get_registry(caller)
+        if registry and hasattr(registry, "ranks"):
+            rank_def = next((r for r in registry.ranks if r.level == rank_num), None)
+            if rank_def:
+                rank_name = rank_def.name
+
+        xp_str = f", XP={xp}" if xp is not None else ""
+        logger.info(
+            "Admin %s set %s to level %d (%s%s)",
+            caller.key, target.key, level, rank_name, xp_str,
+        )
+        caller.msg(f"Set {target.key} to level {level} ({rank_name}{xp_str}).")
+
+
+class CmdSetRank(BaseCommand):
+    """Set a player's rank by numeric rank ID (1-12).
+
+    Usage:
+        @setrank <player> <rank_id>
+
+    Sets the player to the first level of that rank.
+    Rank 1 = level 1, Rank 2 = level 6, ..., Rank 12 = level 56.
+    Restricted to Admin+ permission level.
+    """
+
+    key = "@setrank"
+    locks = "cmd:perm(Admin);view:perm(Admin)"
+    help_category = "Admin"
+
+    def func(self):
+        caller = self.caller
+
+        if not _check_perm(caller, "Admin"):
+            caller.msg("Permission denied. Admin+ required.")
+            return
+
+        args = self.args.strip().split()
+        if len(args) < 2:
+            caller.msg("Usage: @setrank <player> <rank_id>")
+            return
+
+        player_name = args[0]
+        try:
+            rank_id = int(args[1])
+        except ValueError:
+            caller.msg("Rank ID must be a number.")
+            return
+
+        from world.constants import NUM_RANKS
+        if rank_id < 1 or rank_id > NUM_RANKS:
+            caller.msg(f"Rank ID must be between 1 and {NUM_RANKS}.")
+            return
+
+        target = caller.search(player_name) if hasattr(caller, "search") else None
+        if target is None:
+            caller.msg(f"Could not find player '{player_name}'.")
+            return
+
+        if not hasattr(target, "db"):
+            caller.msg(f"{player_name} is not a valid player character.")
+            return
+
+        # Convert rank to level: first level of that rank
+        from world.systems.rank_system import level_range_for_rank
+        level, _ = level_range_for_rank(rank_id)
+
+        # Set XP to the threshold for this level
+        rank_system = _get_system(caller, "rank_system")
+        if rank_system:
+            xp = rank_system.xp_for_level(level)
+            target.db.combat_xp = xp
+        else:
+            xp = None
+
+        target.db.level = level
+        target.db.rank_level = rank_id
+
+        # Trigger rank events (unlock techs, adjust agent cap)
+        if rank_system:
+            rank_system.check_promotion(target)
+
+        # Look up rank name
+        rank_name = f"Rank {rank_id}"
+        registry = _get_registry(caller)
+        if registry and hasattr(registry, "ranks"):
+            rank_def = next((r for r in registry.ranks if r.level == rank_id), None)
+            if rank_def:
+                rank_name = rank_def.name
+
+        xp_str = f", XP={xp}" if xp is not None else ""
+        logger.info(
+            "Admin %s set %s to rank %d (%s, level=%d%s)",
+            caller.key, target.key, rank_id, rank_name, level, xp_str,
+        )
+        caller.msg(f"Set {target.key} to {rank_name} (rank {rank_id}, level {level}{xp_str}).")
+
+
+class CmdCreateAgent(BaseCommand):
+    """Instantly create a trained agent for a player, bypassing cost and timer.
+
+    Usage:
+        @createagent <player>
+        @createagent <player> <count>
+
+    Creates one or more agents owned by the target player. The agent
+    ID is derived from the player's existing roster (same logic as
+    normal training). Does not deduct resources or require an Academy.
+
+    Restricted to Admin+ permission level.
+    """
+
+    key = "@createagent"
+    locks = "cmd:perm(Admin);view:perm(Admin)"
+    help_category = "Admin"
+
+    def func(self):
+        caller = self.caller
+
+        if not _check_perm(caller, "Admin"):
+            caller.msg("Permission denied. Admin+ required.")
+            return
+
+        args = self.args.strip().split()
+        if not args:
+            caller.msg("Usage: @createagent <player> [count]")
+            return
+
+        player_name = args[0]
+        count = 1
+        if len(args) >= 2:
+            try:
+                count = int(args[1])
+            except ValueError:
+                caller.msg("Count must be a number.")
+                return
+            if count < 1:
+                caller.msg("Count must be at least 1.")
+                return
+
+        target = caller.search(player_name) if hasattr(caller, "search") else None
+        if target is None:
+            caller.msg(f"Could not find player '{player_name}'.")
+            return
+
+        agent_system = _get_system(caller, "agent_system")
+        if agent_system is None:
+            caller.msg("Agent system unavailable.")
+            return
+
+        created_ids = []
+        for _ in range(count):
+            # Derive next ID from existing roster
+            agents = agent_system.get_agents(target)
+            if agents:
+                max_id = max(getattr(a.db, "agent_id", 0) for a in agents)
+                next_id = max_id + 1
+            else:
+                next_id = 1
+
+            npc = agent_system._create_npc_func(target, next_id)
+            if npc is not None:
+                created_ids.append(next_id)
+                target.db.next_agent_id = next_id + 1
+
+        if created_ids:
+            ids_str = ", ".join(f"#{i}" for i in created_ids)
+            logger.info(
+                "Admin %s created %d agent(s) for %s: %s",
+                caller.key, len(created_ids), target.key, ids_str,
+            )
+            caller.msg(f"Created {len(created_ids)} agent(s) for {target.key}: {ids_str}.")
+            if hasattr(target, "msg") and target is not caller:
+                target.msg(f"|y[Admin] {len(created_ids)} agent(s) created for you: {ids_str}.|n")
+        else:
+            caller.msg("Failed to create agents.")

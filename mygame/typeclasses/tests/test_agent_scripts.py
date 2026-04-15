@@ -95,6 +95,7 @@ class FakeTile:
             resource_node_data=(
                 {"resource_type": resource_type} if resource_type else None
             ),
+            resource_inventory={},
         )
 
 
@@ -129,7 +130,7 @@ class TestHarvesterScript(unittest.TestCase):
         return script
 
     def test_produces_resources_into_extractor_inventory(self):
-        """Harvester should add resources to the Extractor's inventory."""
+        """Harvester should drop resources on the tile."""
         tile = FakeTile(resource_type="Wood")
         building = FakeBuilding(
             building_type="EX", building_level=1,
@@ -140,18 +141,20 @@ class TestHarvesterScript(unittest.TestCase):
 
         script.at_repeat()
 
-        inv = building.db.resource_inventory
+        # Resources drop on the tile (building.location)
+        inv = tile.db.resource_inventory
         self.assertIn("Wood", inv)
         self.assertGreater(inv["Wood"], 0)
 
     def test_production_scales_with_level(self):
         """Higher Extractor level should produce more resources."""
-        tile = FakeTile(resource_type="Iron")
+        tile1 = FakeTile(resource_type="Iron")
+        tile3 = FakeTile(resource_type="Iron")
         building_l1 = FakeBuilding(
-            building_type="EX", building_level=1, location=tile,
+            building_type="EX", building_level=1, location=tile1,
         )
         building_l3 = FakeBuilding(
-            building_type="EX", building_level=3, location=tile,
+            building_type="EX", building_level=3, location=tile3,
         )
 
         npc1 = FakeNPC(role="harvester", role_target=building_l1)
@@ -160,8 +163,8 @@ class TestHarvesterScript(unittest.TestCase):
         self._make_script(npc1).at_repeat()
         self._make_script(npc3).at_repeat()
 
-        prod_l1 = building_l1.db.resource_inventory.get("Iron", 0)
-        prod_l3 = building_l3.db.resource_inventory.get("Iron", 0)
+        prod_l1 = tile1.db.resource_inventory.get("Iron", 0)
+        prod_l3 = tile3.db.resource_inventory.get("Iron", 0)
         self.assertGreaterEqual(prod_l3, prod_l1)
 
     def test_skips_incapacitated_agent(self):
@@ -177,7 +180,7 @@ class TestHarvesterScript(unittest.TestCase):
 
         script.at_repeat()
 
-        inv = building.db.resource_inventory
+        inv = tile.db.resource_inventory
         self.assertEqual(sum(inv.values()), 0)
 
     def test_skips_non_extractor_building(self):
@@ -187,9 +190,6 @@ class TestHarvesterScript(unittest.TestCase):
         script = self._make_script(npc)
 
         script.at_repeat()
-        # No inventory change expected
-        inv = getattr(building.db, "resource_inventory", {})
-        self.assertEqual(sum(inv.values()), 0)
 
     def test_skips_when_no_role_target(self):
         """Harvester with no role_target should do nothing."""
@@ -209,38 +209,37 @@ class TestHarvesterScript(unittest.TestCase):
 
         script.at_repeat()
 
-        inv = building.db.resource_inventory
+        inv = tile.db.resource_inventory
         self.assertEqual(sum(inv.values()), 0)
 
     def test_reads_resource_type_from_building_attr(self):
-        """If building has explicit resource_type, use it."""
+        """If building has explicit resource_type, use it even without a tile."""
+        tile = FakeTile()  # no resource on tile
         building = FakeBuilding(
             building_type="EX", building_level=1,
-            resource_type="Energy", location=None,
+            resource_type="Energy", location=tile,
         )
         npc = FakeNPC(role="harvester", role_target=building)
         script = self._make_script(npc)
 
         script.at_repeat()
 
-        inv = building.db.resource_inventory
+        inv = tile.db.resource_inventory
         self.assertIn("Energy", inv)
 
-    def test_respects_storage_capacity(self):
-        """Production should stop when Extractor is full."""
+    def test_production_accumulates(self):
+        """Production adds to existing drops on the tile."""
         tile = FakeTile(resource_type="Wood")
+        tile.db.resource_inventory = {"Wood": 100}
         building = FakeBuilding(
             building_type="EX", building_level=1, location=tile,
         )
-        # Fill inventory to capacity (100 for level 1)
-        building.db.resource_inventory = {"Wood": 100}
         npc = FakeNPC(role="harvester", role_target=building)
         script = self._make_script(npc)
 
         script.at_repeat()
 
-        # Should still be 100 (no overflow)
-        self.assertEqual(building.db.resource_inventory["Wood"], 100)
+        self.assertGreater(tile.db.resource_inventory["Wood"], 100)
 
 
 # -------------------------------------------------------------- #

@@ -21,10 +21,10 @@ from commands.game_commands import (
     CmdAttack, CmdEquip, CmdUnequip, CmdResearch, CmdPowerup,
     CmdScore, CmdEquipment, CmdBuildings, CmdScan, CmdTechnology,
     CmdInventory, CmdChat, CmdMessage, CmdSay, CmdLook, CmdMap,
-    CmdLeave, CmdCloseExit, CmdOpenExit, CmdStop,
+    CmdLeave, CmdCloseExit, CmdOpenExit, CmdStop, CmdWho, CmdGet,
 )
 from commands.agent_commands import CmdAgents, CmdAssign, CmdUnassign, CmdTrain
-from commands.admin_commands import CmdReloadData, CmdGiveResource, CmdPurgeRooms, CmdTeleport, CmdSpawnBuilding, CmdClearFog, CmdResetResources, CmdMigrate, CmdDestroyAgent, CmdListAgents
+from commands.admin_commands import CmdReloadData, CmdGiveResource, CmdPurgeRooms, CmdTeleport, CmdSpawnBuilding, CmdClearFog, CmdResetResources, CmdMigrate, CmdDestroyAgent, CmdListAgents, CmdSetLevel, CmdSetRank, CmdCreateAgent
 
 
 class CharacterCmdSet(default_cmds.CharacterCmdSet):
@@ -65,6 +65,7 @@ class CharacterCmdSet(default_cmds.CharacterCmdSet):
         self.add(CmdMessage())
         self.add(CmdSay())
         self.add(CmdLook())
+        self.add(CmdGet())
         self.add(CmdMap())
         self.add(CmdLeave())
         self.add(CmdStop())
@@ -86,6 +87,11 @@ class CharacterCmdSet(default_cmds.CharacterCmdSet):
         self.add(CmdMigrate())
         self.add(CmdDestroyAgent())
         self.add(CmdListAgents())
+        self.add(CmdSetLevel())
+        self.add(CmdSetRank())
+        self.add(CmdCreateAgent())
+        # Override Evennia's default who with rank/level display
+        self.add(CmdWho())
 
 
 class AccountCmdSet(default_cmds.AccountCmdSet):

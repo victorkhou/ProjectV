@@ -17,6 +17,17 @@ from typing import Any
 from world.data_registry import DataRegistry
 from world.event_bus import RESOURCE_GATHERED, EventBus
 from world.utils import get_building_attr as _get_building_attr_shared
+from world.constants import (
+    HARVEST_COOLDOWN_TICKS,
+    HARVEST_YIELD_PER_ACTION,
+    EXTRACTOR_HARVEST_MULTIPLIER,
+    EXTRACTOR_LEVEL_BONUS,
+    EXTRACTOR_BASE_CAPACITY,
+    EXTRACTOR_CAPACITY_PER_LEVEL,
+    VAULT_BASE_CAPACITY,
+    VAULT_CAPACITY_PER_LEVEL,
+    TURRET_LEVEL_BONUS,
+)
 
 
 class ResourceSystem:
@@ -88,12 +99,7 @@ class ResourceSystem:
     #  Active-presence harvesting (Req 3.4, 6.6, 6.7)
     # ------------------------------------------------------------------ #
 
-    # Harvest cooldown in seconds (game ticks at 1 tick/s)
-    HARVEST_COOLDOWN_TICKS = 4
-    # Units yielded per harvest action on raw terrain
-    HARVEST_YIELD_PER_ACTION = 1
-    # Multiplier when harvesting at an Extractor (scales with level)
-    EXTRACTOR_HARVEST_MULTIPLIER = 6
+    # Harvest cooldown, yield, and multiplier imported from world.constants
 
     def start_harvest(self, player: Any, tile: Any) -> tuple[bool, str]:
         """Begin active-presence harvesting on a resource tile.
@@ -101,6 +107,10 @@ class ResourceSystem:
         Sets the player's ``activity_state`` to ``"harvesting"`` and
         ``activity_target`` to the tile.  The player must remain on the
         tile for :meth:`process_harvest_tick` to yield resources.
+
+        Supports both legacy OverworldRoom tiles (with resource_node_data)
+        and PlanetRoom-based harvesting (where the tile IS a PlanetRoom
+        and coordinates come from the player).
 
         Returns:
             (success, message) tuple.
@@ -112,16 +122,35 @@ class ResourceSystem:
             if under_construction:
                 return False, "This building is still under construction."
 
-        node = self._get_resource_node(tile)
-        if node is None:
-            return False, "No resource node on this tile."
+        # Determine resource info — PlanetRoom path or legacy path
+        resource_type = None
+        is_depleted = False
 
-        resource_type = node.get("resource_type")
-        if not resource_type:
-            return False, "This tile has no harvestable resource."
+        if hasattr(tile, "is_node_depleted") and hasattr(player, "db"):
+            # PlanetRoom path: use player coordinates + TerrainGenerator
+            px = getattr(player.db, "coord_x", None)
+            py = getattr(player.db, "coord_y", None)
+            if px is not None and py is not None:
+                is_depleted = tile.is_node_depleted(px, py)
+                if not is_depleted:
+                    # Get resource type from TerrainGenerator
+                    resource_type = self._get_terrain_resource(player, px, py)
 
-        if node.get("depleted", False):
+        if resource_type is None:
+            # Legacy OverworldRoom path
+            node = self._get_resource_node(tile)
+            if node is None:
+                return False, "No resource node on this tile."
+            resource_type = node.get("resource_type")
+            if not resource_type:
+                return False, "This tile has no harvestable resource."
+            is_depleted = node.get("depleted", False)
+
+        if is_depleted:
             return False, "This resource node is depleted."
+
+        if not resource_type:
+            return False, "No resource node on this tile."
 
         if not hasattr(player, "db"):
             return False, "Player has no attribute storage."
@@ -131,19 +160,21 @@ class ResourceSystem:
         player.db.activity_progress = 0
 
         # Tell the player what rate they'll get
-        extractor = self._get_tile_extractor(tile)
+        hx = getattr(player.db, "coord_x", None)
+        hy = getattr(player.db, "coord_y", None)
+        extractor = self._get_tile_extractor(tile, px=hx, py=hy)
         if extractor is not None:
             level = self._get_building_level(extractor)
-            amount = int(self.HARVEST_YIELD_PER_ACTION * self.EXTRACTOR_HARVEST_MULTIPLIER
-                         * (1 + 0.25 * (level - 1)))
+            amount = int(HARVEST_YIELD_PER_ACTION * EXTRACTOR_HARVEST_MULTIPLIER
+                         * (1 + EXTRACTOR_LEVEL_BONUS * (level - 1)))
             return True, (
                 f"You begin harvesting {resource_type} at the Extractor. "
-                f"({amount} per {self.HARVEST_COOLDOWN_TICKS}s)"
+                f"({amount} per {HARVEST_COOLDOWN_TICKS}s)"
             )
 
         return True, (
             f"You begin harvesting {resource_type}. "
-            f"({self.HARVEST_YIELD_PER_ACTION} per {self.HARVEST_COOLDOWN_TICKS}s)"
+            f"({HARVEST_YIELD_PER_ACTION} per {HARVEST_COOLDOWN_TICKS}s)"
         )
 
     def process_harvest_tick(self, player: Any) -> bool:
@@ -157,6 +188,9 @@ class ResourceSystem:
         to the player and publishes a ``resource_gathered`` event.
 
         If the node becomes depleted, the player returns to ``"idle"``.
+
+        Supports both legacy OverworldRoom tiles and PlanetRoom-based
+        harvesting where coordinates come from the player.
 
         Returns:
             ``True`` if resources were yielded this tick.
@@ -176,16 +210,29 @@ class ResourceSystem:
         if not self._player_on_tile(player, tile):
             return False  # paused — don't reset, just skip
 
-        node = self._get_resource_node(tile)
-        if node is None or node.get("depleted", False):
+        # Determine resource info — PlanetRoom path or legacy path
+        resource_type = None
+        is_depleted = False
+        px = getattr(player.db, "coord_x", None)
+        py = getattr(player.db, "coord_y", None)
+
+        if hasattr(tile, "is_node_depleted") and px is not None and py is not None:
+            # PlanetRoom path
+            is_depleted = tile.is_node_depleted(px, py)
+            if not is_depleted:
+                resource_type = self._get_terrain_resource(player, px, py)
+        else:
+            # Legacy OverworldRoom path
+            node = self._get_resource_node(tile)
+            if node is None or node.get("depleted", False):
+                is_depleted = True
+            else:
+                resource_type = node.get("resource_type")
+
+        if is_depleted or not resource_type:
             player.db.activity_state = "idle"
             player.db.activity_target = None
             player.db.activity_progress = 0
-            return False
-
-        resource_type = node.get("resource_type")
-        if not resource_type:
-            player.db.activity_state = "idle"
             return False
 
         # Increment progress
@@ -193,26 +240,35 @@ class ResourceSystem:
         player.db.activity_progress = progress
 
         # Yield resources on cooldown boundary
-        if progress % self.HARVEST_COOLDOWN_TICKS == 0:
-            amount = self.HARVEST_YIELD_PER_ACTION
+        if progress % HARVEST_COOLDOWN_TICKS == 0:
+            amount = HARVEST_YIELD_PER_ACTION
 
             # Extractor bonus: if the tile has an Extractor building,
             # multiply yield by EXTRACTOR_HARVEST_MULTIPLIER scaled by level.
-            # This is the core incentive to build Extractors on resource tiles.
-            extractor = self._get_tile_extractor(tile)
+            extractor = self._get_tile_extractor(tile, px=px, py=py)
             if extractor is not None:
                 level = self._get_building_level(extractor)
-                amount = int(amount * self.EXTRACTOR_HARVEST_MULTIPLIER
-                             * (1 + 0.25 * (level - 1)))
+                amount = int(amount * EXTRACTOR_HARVEST_MULTIPLIER
+                             * (1 + EXTRACTOR_LEVEL_BONUS * (level - 1)))
 
-            player.add_resource(resource_type, amount)
+            # Determine drop location and coordinates
+            if hasattr(tile, "is_node_depleted") and px is not None and py is not None:
+                # PlanetRoom path: spawn drop at player coordinates
+                self._spawn_resource_drop(tile, resource_type, amount, x=px, y=py)
+            else:
+                # Legacy path: drop in OverworldRoom
+                building = getattr(tile, "building", None)
+                if building is not None and self._get_building_type(building) is not None:
+                    drop_location = getattr(building, "location", None) or tile
+                else:
+                    drop_location = tile
+                self._spawn_resource_drop(drop_location, resource_type, amount)
 
-            # Notify player of resource gain
-            total_held = 0
-            if hasattr(player, "get_resource"):
-                total_held = player.get_resource(resource_type)
             if hasattr(player, "msg"):
-                player.msg(f"|y[Harvest] +{amount} {resource_type} (total: {total_held})|n")
+                player.msg(
+                    f"|y[Harvest] +{amount} {resource_type} dropped. "
+                    f"Use 'get' to pick up.|n"
+                )
 
             self.event_bus.publish(
                 RESOURCE_GATHERED,
@@ -231,19 +287,13 @@ class ResourceSystem:
 
     @staticmethod
     def get_extractor_capacity(level: int) -> int:
-        """Return the storage capacity for an Extractor at *level*.
-
-        Formula: ``100 + 50 × (level - 1)``
-        """
-        return 100 + 50 * (level - 1)
+        """Return the storage capacity for an Extractor at *level*."""
+        return EXTRACTOR_BASE_CAPACITY + EXTRACTOR_CAPACITY_PER_LEVEL * (level - 1)
 
     @staticmethod
     def get_vault_capacity(level: int) -> int:
-        """Return the storage capacity for a Vault at *level*.
-
-        Formula: ``100 + 20 × (level - 1)``
-        """
-        return 100 + 20 * (level - 1)
+        """Return the storage capacity for a Vault at *level*."""
+        return VAULT_BASE_CAPACITY + VAULT_CAPACITY_PER_LEVEL * (level - 1)
 
     @staticmethod
     def get_turret_damage(base_damage: int, level: int) -> float:
@@ -251,7 +301,7 @@ class ResourceSystem:
 
         Formula: ``base × (1 + 0.20 × (level - 1))``
         """
-        return base_damage * (1 + 0.20 * (level - 1))
+        return base_damage * (1 + TURRET_LEVEL_BONUS * (level - 1))
 
     @staticmethod
     def get_harvester_production(base_rate: int, level: int) -> float:
@@ -259,7 +309,7 @@ class ResourceSystem:
 
         Formula: ``base_rate × (1 + 0.25 × (level - 1))``
         """
-        return base_rate * (1 + 0.25 * (level - 1))
+        return base_rate * (1 + EXTRACTOR_LEVEL_BONUS * (level - 1))
 
     @staticmethod
     def get_extractor_inventory(building: Any) -> dict[str, int]:
@@ -373,25 +423,24 @@ class ResourceSystem:
 
             # Calculate production amount scaled by level
             level = self._get_building_level(building)
-            production = base_rate * (1 + 0.25 * (level - 1))
+            production = base_rate * (1 + EXTRACTOR_LEVEL_BONUS * (level - 1))
             # Round to nearest integer (at least 1 if base_rate > 0)
             production_int = max(1, int(production)) if base_rate > 0 else 0
 
             if production_int <= 0:
                 continue
 
-            # Add to Extractor inventory (respects capacity)
-            added = self.add_to_extractor_inventory(
-                building, resource_type, production_int, level
-            )
+            # Drop resources as objects in the building's room
+            drop_location = getattr(building, "location", building)
+            self._spawn_resource_drop(drop_location, resource_type, production_int)
 
-            if added > 0:
+            if production_int > 0:
                 owner = self._get_building_attr(building, "owner")
                 self.event_bus.publish(
                     RESOURCE_GATHERED,
                     player=owner,
                     resource_type=resource_type,
-                    amount=added,
+                    amount=production_int,
                     tile=building,
                 )
 
@@ -442,14 +491,51 @@ class ResourceSystem:
     def process_respawns(self, tiles: list) -> None:
         """Process respawn counters for depleted resource nodes.
 
-        For each tile with a depleted resource node:
-            - Decrement respawn_counter
-            - If counter reaches 0, set depleted=False
+        Supports both PlanetRoom objects (with get_depleted_nodes/
+        clear_node_depletion) and legacy OverworldRoom tiles (with
+        resource_node_data attribute).
+
+        For PlanetRoom:
+            - Iterate get_depleted_nodes(), decrement counters
+            - Call clear_node_depletion when counter reaches 0
+
+        For legacy OverworldRoom tiles:
+            - Decrement respawn_counter on resource_node_data
+            - Set depleted=False when counter reaches 0
 
         Args:
-            tiles: List of OverworldRoom tiles to process.
+            tiles: List of PlanetRoom or OverworldRoom tiles to process.
         """
         for tile in tiles:
+            # PlanetRoom path: iterate depletion dict
+            if hasattr(tile, "get_depleted_nodes") and hasattr(tile, "clear_node_depletion"):
+                depleted = tile.get_depleted_nodes()
+                if not depleted:
+                    continue
+                # Collect keys to clear (can't modify dict during iteration)
+                to_clear = []
+                for key, entry in list(depleted.items()):
+                    counter = entry.get("respawn_counter", 0)
+                    counter -= 1
+                    if counter <= 0:
+                        to_clear.append(key)
+                    else:
+                        entry["respawn_counter"] = counter
+                # Update the dict on the room
+                for key in to_clear:
+                    depleted.pop(key, None)
+                tile.db.depleted_nodes = depleted
+                # Also call clear_node_depletion for each cleared key
+                for key in to_clear:
+                    parts = key.split(",")
+                    if len(parts) == 2:
+                        try:
+                            tile.clear_node_depletion(int(parts[0]), int(parts[1]))
+                        except (ValueError, TypeError):
+                            pass
+                continue
+
+            # Legacy OverworldRoom path
             node = self._get_resource_node(tile)
             if node is None:
                 continue
@@ -527,15 +613,47 @@ class ResourceSystem:
 
         return False
 
-    @staticmethod
-    def _get_tile_extractor(tile: Any) -> Any | None:
-        """Return the Extractor building on *tile*, or None.
+    def _get_terrain_resource(self, player: Any, x: int, y: int) -> str | None:
+        """Look up the resource type at (x, y) from TerrainGenerator.
 
-        Checks the tile's ``building`` attribute and verifies it's an
-        Extractor (building_type == "EX") that is not offline and not
-        under construction.
+        Uses the player's coord_planet to find the right generator.
+        Returns None if no resource exists at the coordinate.
         """
-        building = getattr(tile, "building", None)
+        planet = getattr(getattr(player, "db", None), "coord_planet", None)
+        if not planet:
+            return None
+        try:
+            # Try to get terrain generators from game_systems
+            from server.conf.game_init import game_systems
+            generators = game_systems.get("_terrain_generators", {})
+            gen = generators.get(planet)
+            if gen:
+                _terrain_type, resource_type = gen.get_terrain_and_resource(x, y)
+                return resource_type
+        except (ImportError, AttributeError):
+            pass
+        return None
+
+    @staticmethod
+    def _get_tile_extractor(tile: Any, px: int = None, py: int = None) -> Any | None:
+        """Return the Extractor building on *tile* at player coords, or None.
+
+        For PlanetRoom tiles, queries get_buildings_at(px, py).
+        For legacy tiles, checks the tile's ``building`` attribute.
+        Verifies it's an Extractor (building_type == "EX") that is
+        not offline and not under construction.
+        """
+        building = None
+
+        # PlanetRoom path: query by coordinates
+        if px is not None and py is not None and hasattr(tile, "get_buildings_at"):
+            buildings = tile.get_buildings_at(int(px), int(py))
+            if buildings:
+                building = buildings[0]
+        else:
+            # Legacy path
+            building = getattr(tile, "building", None)
+
         if building is None:
             return None
 
@@ -600,3 +718,66 @@ class ResourceSystem:
     def _get_building_attr(building: Any, key: str, default: Any = None) -> Any:
         """Read an attribute from a building object."""
         return _get_building_attr_shared(building, key, default)
+
+    @staticmethod
+    def _spawn_resource_drop(location: Any, resource_type: str, amount: int,
+                             x: int | None = None, y: int | None = None) -> Any:
+        """Spawn or merge a ResourceDrop object at *location*.
+
+        When x/y are provided, passes them through to spawn_resource_drop
+        for coordinate-aware merge and placement in PlanetRoom.
+
+        In test environments without Evennia, falls back to the old
+        dict-based resource_inventory pattern.
+        """
+        if amount <= 0:
+            return None
+        try:
+            from typeclasses.objects import spawn_resource_drop
+            return spawn_resource_drop(location, resource_type, amount, x=x, y=y)
+        except Exception:
+            # Fallback for test environments: use dict inventory
+            if hasattr(location, "attributes") and hasattr(location.attributes, "add"):
+                inv = location.attributes.get("resource_inventory", default=None) or {}
+                inv[resource_type] = inv.get(resource_type, 0) + amount
+                location.attributes.add("resource_inventory", inv)
+            elif hasattr(location, "db"):
+                inv = getattr(location.db, "resource_inventory", None) or {}
+                inv[resource_type] = inv.get(resource_type, 0) + amount
+                location.db.resource_inventory = inv
+            return None
+
+    # ------------------------------------------------------------------ #
+    #  Tile inventory (resources on the ground)
+    # ------------------------------------------------------------------ #
+
+    @staticmethod
+    def _get_tile_inventory(tile: Any) -> dict[str, int]:
+        """Read the resource inventory dict from a tile (ground drops)."""
+        if hasattr(tile, "attributes") and hasattr(tile.attributes, "get"):
+            inv = tile.attributes.get("resource_inventory", default=None)
+            if inv is not None:
+                return inv
+        if hasattr(tile, "db"):
+            inv = getattr(tile.db, "resource_inventory", None)
+            if inv is not None:
+                return inv
+        return {}
+
+    @staticmethod
+    def _set_tile_inventory(tile: Any, inventory: dict[str, int]) -> None:
+        """Write the resource inventory dict to a tile."""
+        if hasattr(tile, "attributes") and hasattr(tile.attributes, "add"):
+            tile.attributes.add("resource_inventory", inventory)
+        elif hasattr(tile, "db"):
+            tile.db.resource_inventory = inventory
+
+    @staticmethod
+    def get_tile_inventory(tile: Any) -> dict[str, int]:
+        """Public: return the resource inventory on a tile (ground drops)."""
+        return ResourceSystem._get_tile_inventory(tile)
+
+    @staticmethod
+    def set_tile_inventory(tile: Any, inventory: dict[str, int]) -> None:
+        """Public: write the resource inventory on a tile."""
+        ResourceSystem._set_tile_inventory(tile, inventory)

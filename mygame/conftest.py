@@ -4,7 +4,7 @@ Shared Evennia stub setup for all mygame tests.
 This conftest.py runs before any test collection, ensuring that
 Evennia module stubs are installed in sys.modules with rich enough
 implementations to support all typeclasses (Building, CombatCharacter,
-OverworldRoom, GameItem, etc.).
+PlanetRoom, GameItem, etc.).
 
 This prevents stub conflicts caused by test collection order.
 """

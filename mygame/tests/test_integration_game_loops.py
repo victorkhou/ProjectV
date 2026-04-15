@@ -189,14 +189,17 @@ class FakeTile:
 class FakePlayer:
     """Lightweight stand-in for CombatCharacter."""
     def __init__(self, name="Player1", x=50, y=50, planet="terra",
-                 combat_xp=0, rank_level=1, next_agent_id=2,
+                 combat_xp=0, rank_level=1, level=None, next_agent_id=1,
                  resources=None):
         self.id = 1
         self.key = name
         self.has_account = True
+        if level is None:
+            level = rank_level  # backward compat
         self.db = FakeDB(
             coord_x=x, coord_y=y, coord_planet=planet,
             combat_xp=combat_xp, rank_level=rank_level,
+            level=level,
             next_agent_id=next_agent_id,
             activity_state="idle",
             activity_target=None,
@@ -319,12 +322,12 @@ def _make_planet_registry():
         "forge": CoordinateSpaceDef(
             planet_key="forge", planet_type="industrial",
             width=400, height=400, terrain_seed=7,
-            rank_requirement=3,
+            rank_requirement=11,  # level 11 = Corporal
         ),
         "tundra": CoordinateSpaceDef(
             planet_key="tundra", planet_type="ice",
             width=400, height=400, terrain_seed=13,
-            rank_requirement=4,
+            rank_requirement=16,  # level 16 = Sergeant
         ),
     }
     return pr
@@ -421,7 +424,7 @@ class TestFullGameTickCycle(unittest.TestCase):
     def test_tick_cycle_harvester_produces_resources(self):
         """Harvester agent assigned to Extractor produces resources each tick."""
         sys = _make_all_systems()
-        player = FakePlayer(combat_xp=120000, rank_level=12, resources={
+        player = FakePlayer(combat_xp=120000, rank_level=12, level=56, resources={
             "Wood": 9999, "Stone": 9999, "Iron": 9999,
             "Energy": 0, "Circuits": 0, "Nexium": 0,
         })
@@ -463,10 +466,10 @@ class TestFullGameTickCycle(unittest.TestCase):
         # Simulate one game tick: process extractor production
         sys["resource_system"].process_extractor_production([extractor])
 
-        # Verify resources were produced into extractor inventory
-        inv = ResourceSystem.get_extractor_inventory(extractor)
+        # Verify resources were produced (dropped on the tile)
+        inv = ResourceSystem.get_tile_inventory(ex_tile)
         total = sum(inv.values())
-        self.assertGreater(total, 0, "Extractor should have produced resources")
+        self.assertGreater(total, 0, "Extractor tile should have resource drops")
         self.assertIn("Wood", inv)
 
 
@@ -531,7 +534,7 @@ class TestAgentTrainAssignProduceCollect(unittest.TestCase):
     def test_train_assign_produce_collect(self):
         """Train agent → assign to Extractor → produce → verify inventory."""
         sys = _make_all_systems()
-        player = FakePlayer(combat_xp=120000, rank_level=12, resources={
+        player = FakePlayer(combat_xp=120000, rank_level=12, level=56, resources={
             "Wood": 9999, "Stone": 9999, "Iron": 9999,
             "Energy": 0, "Circuits": 0, "Nexium": 0,
         })
@@ -575,8 +578,8 @@ class TestAgentTrainAssignProduceCollect(unittest.TestCase):
         for _ in range(5):
             sys["resource_system"].process_extractor_production([extractor])
 
-        # Step 6: Verify resources accumulated in extractor inventory
-        inv = ResourceSystem.get_extractor_inventory(extractor)
+        # Step 6: Verify resources accumulated on the tile
+        inv = ResourceSystem.get_tile_inventory(ex_tile)
         total = sum(inv.values())
         self.assertGreater(total, 0)
 
@@ -598,32 +601,34 @@ class TestRankUpPlanetAccess(unittest.TestCase):
     """
 
     def test_rank_up_unlocks_planet_travel(self):
-        """Player ranks up and gains access to a previously locked planet."""
+        """Player levels up and gains access to a previously locked planet."""
         sys = _make_all_systems()
-        player = FakePlayer(combat_xp=0, rank_level=1)
+        player = FakePlayer(combat_xp=0, rank_level=1, level=1)
 
         rank_sys = sys["rank_system"]
 
-        # Initially at Recruit (rank 1) — can access terra, not forge
+        # Initially at level 1 (Recruit) — can access terra, not forge
         self.assertTrue(rank_sys.can_access_planet(player, "terra"))
         self.assertFalse(rank_sys.can_access_planet(player, "forge"))
 
-        # Award enough XP to reach Corporal (rank 3, xp_threshold=600)
-        # Forge requires rank 3
+        # Award enough XP to reach level 11+ (Corporal, rank 3)
+        # Forge requires level 11
         rank_sys.award_xp(player, 700, reason="combat")
 
         # Verify promotion happened
         self.assertEqual(player.db.rank_level, 3)
+        self.assertGreaterEqual(player.db.level, 11)
 
         # Now player can access forge
         self.assertTrue(rank_sys.can_access_planet(player, "forge"))
 
-        # But not tundra (requires rank 4)
+        # But not tundra (requires level 16)
         self.assertFalse(rank_sys.can_access_planet(player, "tundra"))
 
-        # Award more XP to reach Sergeant (rank 4, xp_threshold=1500)
+        # Award more XP to reach level 16+ (Sergeant, rank 4)
         rank_sys.award_xp(player, 900, reason="combat")
         self.assertEqual(player.db.rank_level, 4)
+        self.assertGreaterEqual(player.db.level, 16)
         self.assertTrue(rank_sys.can_access_planet(player, "tundra"))
 
 
@@ -645,8 +650,8 @@ class TestDemotionReserveRestore(unittest.TestCase):
 
         # Start at Corporal (rank 3, agent_cap=4) with enough XP
         player = FakePlayer(
-            combat_xp=600, rank_level=3,
-            next_agent_id=2,
+            combat_xp=600, rank_level=3, level=11,
+            next_agent_id=1,
             resources={
                 "Wood": 99999, "Stone": 99999, "Iron": 99999,
                 "Energy": 0, "Circuits": 0, "Nexium": 0,
@@ -663,8 +668,8 @@ class TestDemotionReserveRestore(unittest.TestCase):
             self.assertIsNotNone(npc)
             trained_npcs.append(npc)
 
-        # Verify 3 NPCs + 1 commander = 4 total
-        self.assertEqual(agent_sys.get_agent_count(player), 4)
+        # Verify 3 NPCs trained
+        self.assertEqual(agent_sys.get_agent_count(player), 3)
 
         # Assign all agents to soldier role
         for npc in trained_npcs:
@@ -716,7 +721,7 @@ class TestYAMLHotReload(unittest.TestCase):
     def test_hot_reload_preserves_game_state(self):
         """Reload registry data while game objects retain their state."""
         sys = _make_all_systems()
-        player = FakePlayer(combat_xp=120000, rank_level=12, resources={
+        player = FakePlayer(combat_xp=120000, rank_level=12, level=56, resources={
             "Wood": 9999, "Stone": 9999, "Iron": 9999,
             "Energy": 0, "Circuits": 0, "Nexium": 0,
         })
@@ -780,7 +785,7 @@ class TestYAMLHotReload(unittest.TestCase):
         extractor.attributes.add("assigned_agent", npc)
         sys["resource_system"].process_extractor_production([extractor])
 
-        inv = ResourceSystem.get_extractor_inventory(extractor)
+        inv = ResourceSystem.get_tile_inventory(ex_tile)
         total = sum(inv.values())
         # With gather_amount=10 at level 1, production should be 10
         self.assertGreater(total, 0,

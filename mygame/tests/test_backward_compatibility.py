@@ -288,7 +288,9 @@ class TestBuildingSystemBackwardCompat(unittest.TestCase):
     def test_construct_signature(self):
         sig = inspect.signature(self.bs.construct)
         params = list(sig.parameters.keys())
-        self.assertEqual(params, ["player", "tile", "building_abbr"])
+        # Core params must be present; x/y are optional kwargs added for PlanetRoom support
+        self.assertTrue(params[:3] == ["player", "tile", "building_abbr"],
+                        f"Expected first 3 params to be [player, tile, building_abbr], got {params}")
 
     def test_upgrade_exists_and_callable(self):
         self.assertTrue(callable(getattr(self.bs, "upgrade", None)))

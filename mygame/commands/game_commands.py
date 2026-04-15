@@ -46,15 +46,17 @@ def _send_map_update(caller):
             data["discovered_count"] = len(fog.get_discovered_tile_set(caller))
         # Add current terrain info for the webclient header
         try:
-            tile_resolver = _get_system(caller, "tile_resolver")
             x = getattr(caller.db, "coord_x", None)
             y = getattr(caller.db, "coord_y", None)
             planet = getattr(caller.db, "coord_planet", None)
-            if tile_resolver and x is not None and y is not None and planet:
-                tt, res = tile_resolver.get_or_generate_terrain(int(x), int(y), planet)
-                data["player"]["terrain"] = tt
-                if res:
-                    data["player"]["resource"] = res
+            if x is not None and y is not None and planet:
+                terrain_generators = get_game_systems().get("_terrain_generators", {})
+                gen = terrain_generators.get(planet)
+                if gen:
+                    tt, res = gen.get_terrain_and_resource(int(x), int(y))
+                    data["player"]["terrain"] = tt
+                    if res:
+                        data["player"]["resource"] = res
         except Exception:
             pass
         caller.msg(map_update=data)
@@ -104,14 +106,15 @@ def _render_and_send_map(caller):
 
         terrain_info = ""
         try:
-            tile_resolver = _get_system(caller, "tile_resolver")
-            if tile_resolver and x != "?" and y != "?":
-                terrain_type, resource = tile_resolver.get_or_generate_terrain(
-                    int(x), int(y), planet
-                )
-                terrain_info = f" | {terrain_type}"
-                if resource:
-                    terrain_info += f" ({resource})"
+            if x != "?" and y != "?":
+                terrain_generators = get_game_systems().get("_terrain_generators", {})
+                gen = terrain_generators.get(planet)
+                if gen:
+                    terrain_type = gen.get_terrain(int(x), int(y))
+                    terrain_info = f" | {terrain_type}"
+                    _, resource = gen.get_terrain_and_resource(int(x), int(y))
+                    if resource:
+                        terrain_info += f" ({resource})"
         except Exception:
             pass
 
@@ -165,37 +168,16 @@ class GameCommand(BaseCommand):
         return None, None
 
     def _resolve_player_tile(self):
-        """Resolve the OverworldRoom at the caller's coordinates, creating on demand.
-
-        Used by commands that need to modify tile state (build, harvest).
-        """
-        return self._get_player_tile(create=True)
+        """Deprecated — returns None. Use PlanetRoom queries instead."""
+        return None
 
     def _find_player_tile(self):
-        """Find the OverworldRoom at the caller's coordinates without creating.
-
-        Used by commands that only read tile state (scan, upgrade, demolish, exits).
-        Returns None if no room exists at those coordinates.
-        """
-        return self._get_player_tile(create=False)
+        """Deprecated — returns None. Use PlanetRoom queries instead."""
+        return None
 
     def _get_player_tile(self, create=False):
-        """Internal: get tile room at caller's coordinates."""
-        caller = self.caller
-        tile_resolver = _get_system(caller, "tile_resolver")
-        if tile_resolver is None:
-            return None
-        x = getattr(caller.db, "coord_x", None)
-        y = getattr(caller.db, "coord_y", None)
-        planet = getattr(caller.db, "coord_planet", None)
-        if x is None or y is None or not planet:
-            return None
-        try:
-            if create:
-                return tile_resolver.resolve(x, y, planet)
-            return tile_resolver.get_if_exists(x, y, planet)
-        except (ValueError, KeyError):
-            return None
+        """Deprecated — returns None. Use PlanetRoom queries instead."""
+        return None
 
 
 class CmdMove(GameCommand):
@@ -233,6 +215,7 @@ class CmdMove(GameCommand):
             return
 
         caller = self.caller
+        planet_room = caller.location  # Always a PlanetRoom
 
         # Exit building if inside one
         if not self._try_leave_building(caller, direction):
@@ -255,25 +238,21 @@ class CmdMove(GameCommand):
             caller.msg("You have reached the edge of the map.")
             return
 
-        # Check for blocked tiles
-        tile_resolver = _get_system(caller, "tile_resolver")
-        if tile_resolver is not None:
-            target_room = tile_resolver.get_if_exists(tx, ty, planet)
-            if target_room is not None:
-                building = getattr(target_room, "building", None)
-                if building is not None and getattr(building, "is_offline", False):
-                    caller.msg("That tile is blocked by an offline building.")
+        # Check for blocked tiles via coordinate index
+        buildings_at_target = planet_room.get_buildings_at(tx, ty) if hasattr(planet_room, "get_buildings_at") else []
+        for building in buildings_at_target:
+            if getattr(building, "is_offline", False):
+                caller.msg("That tile is blocked by an offline building.")
+                return
+            # Wall passage check: block owner during combat timer (Req 6.24, 17.1-17.5)
+            btype = get_building_attr(building, "building_type")
+            if btype == "WL" and is_owner(caller, get_building_attr(building, "owner")):
+                combat_expires = getattr(caller.db, "combat_timer_expires", 0) or 0
+                if combat_expires > 0:
+                    caller.msg(
+                        "You cannot pass through your own Wall during combat."
+                    )
                     return
-                # Wall passage check: block owner during combat timer (Req 6.24, 17.1-17.5)
-                if building is not None:
-                    btype = get_building_attr(building, "building_type")
-                    if btype == "WL" and is_owner(caller, get_building_attr(building, "owner")):
-                        combat_expires = getattr(caller.db, "combat_timer_expires", 0) or 0
-                        if combat_expires > 0:
-                            caller.msg(
-                                "You cannot pass through your own Wall during combat."
-                            )
-                            return
 
         # Reset active-presence state on movement (Req 6.6, 6.7)
         if hasattr(caller, "db"):
@@ -289,30 +268,41 @@ class CmdMove(GameCommand):
                 caller.db.activity_target = None
                 caller.db.activity_progress = 0
 
-        # Update coordinates
-        caller.db.coord_x = tx
-        caller.db.coord_y = ty
-        self._ensure_planet_room(caller, planet)
+        # Atomic coordinate update via move_entity
+        planet_room.move_entity(caller, tx, ty)
 
         # Show terrain at new position
         terrain_label = ""
-        if tile_resolver is not None:
-            try:
-                tt, res = tile_resolver.get_or_generate_terrain(tx, ty, planet)
+        try:
+            terrain_generators = get_game_systems().get("_terrain_generators", {})
+            gen = terrain_generators.get(planet)
+            if gen:
+                tt = gen.get_terrain(tx, ty)
                 terrain_label = f" — {tt}"
+                _, res = gen.get_terrain_and_resource(tx, ty)
                 if res:
                     terrain_label += f" ({res})"
-            except Exception:
-                pass
+        except Exception:
+            pass
         caller.msg(f"You move {direction} to ({tx}, {ty}){terrain_label}.")
 
         # Auto-enter building if present
-        if self._try_enter_building(caller, direction, tile_resolver, tx, ty, planet):
-            return
+        if buildings_at_target:
+            building = buildings_at_target[0]
+            if not getattr(building, "is_offline", False):
+                opposite = _OPPOSITE_DIR.get(direction, direction)
+                if is_admin(caller) or not is_exit_closed(building, opposite):
+                    caller.db.inside_building = True
+                    # Update fog before showing interior
+                    self._update_fog_and_render(caller, show_map=False)
+                    _show_building_interior(caller, building)
+                    _send_map_update(caller)
+                    return
 
         # Normal overworld display
         caller.db.inside_building = False
-        self._update_fog_and_render(caller, tile_resolver)
+        self._update_fog_and_render(caller)
+        _show_tile_summary(caller, planet_room)
 
     def _parse_direction(self):
         """Parse direction from command string or args."""
@@ -330,18 +320,15 @@ class CmdMove(GameCommand):
         if not getattr(caller.db, "inside_building", False):
             return True
         if not is_admin(caller):
-            tile_resolver = _get_system(caller, "tile_resolver")
-            if tile_resolver is not None:
-                cx = getattr(caller.db, "coord_x", None)
-                cy = getattr(caller.db, "coord_y", None)
-                cp = getattr(caller.db, "coord_planet", None)
-                if cx is not None and cy is not None and cp:
-                    cur_room = tile_resolver.get_if_exists(cx, cy, cp)
-                    if cur_room is not None:
-                        bld = getattr(cur_room, "building", None)
-                        if bld is not None and is_exit_closed(bld, direction):
-                            caller.msg(f"The {direction} exit is closed.")
-                            return False
+            planet_room = caller.location
+            cx = getattr(caller.db, "coord_x", None)
+            cy = getattr(caller.db, "coord_y", None)
+            if cx is not None and cy is not None and hasattr(planet_room, "get_buildings_at"):
+                buildings = planet_room.get_buildings_at(int(cx), int(cy))
+                for bld in buildings:
+                    if is_exit_closed(bld, direction):
+                        caller.msg(f"The {direction} exit is closed.")
+                        return False
         caller.db.inside_building = False
         caller.msg("You step outside.")
         return True
@@ -350,62 +337,30 @@ class CmdMove(GameCommand):
         """Resolve caller's current coordinates, syncing from room if needed."""
         return ensure_coords(caller)
 
-    def _ensure_planet_room(self, caller, planet):
-        """Move caller to the shared PlanetRoom if not already there."""
-        planet_rooms = get_game_systems().get("planet_rooms", {})
-        target_planet_room = planet_rooms.get(planet)
-        if target_planet_room and caller.location is not target_planet_room:
-            caller.move_to(target_planet_room, quiet=True)
-
-    def _try_enter_building(self, caller, direction, tile_resolver, tx, ty, planet):
-        """Auto-enter building at target tile. Returns True if entered."""
-        if tile_resolver is None:
-            return False
-        target_room = tile_resolver.get_if_exists(tx, ty, planet)
-        if target_room is None:
-            return False
-        building = getattr(target_room, "building", None)
-        if building is None or getattr(building, "is_offline", False):
-            return False
-        opposite = _OPPOSITE_DIR.get(direction, direction)
-        if not is_admin(caller) and is_exit_closed(building, opposite):
-            return False
-        caller.db.inside_building = True
-        # Update fog before showing interior
-        fog_system = _get_system(caller, "fog_system")
-        if fog_system is not None:
-            try:
-                player_buildings = caller.get_buildings() if hasattr(caller, "get_buildings") else []
-                visible = fog_system.get_visible_tiles(caller, player_buildings)
-                fog_system.update_discovery(caller, visible, tile_resolver)
-            except Exception:
-                pass
-        _show_building_interior(caller, building)
-        _send_map_update(caller)
-        return True
-
-    def _update_fog_and_render(self, caller, tile_resolver):
+    def _update_fog_and_render(self, caller, show_map=True):
         """Update fog of war discovery and render the map."""
         fog_system = _get_system(caller, "fog_system")
-        if fog_system is not None and tile_resolver is not None:
+        planet_room = caller.location
+        if fog_system is not None:
             try:
                 buildings = caller.get_buildings() if hasattr(caller, "get_buildings") else []
                 visible = fog_system.get_visible_tiles(caller, buildings)
-                fog_system.update_discovery(caller, visible, tile_resolver)
+                fog_system.update_discovery(caller, visible, planet_room)
             except Exception:
                 import logging
                 logging.getLogger("evennia.commands").exception("Fog of war update failed")
 
-        renderer = _get_system(caller, "procedural_map_renderer")
-        if renderer is not None:
-            try:
-                buildings = caller.get_buildings() if hasattr(caller, "get_buildings") else []
-                map_str = renderer.render(caller, buildings)
-                if map_str:
-                    _send_ascii_map(caller, map_str)
-            except Exception:
-                import logging
-                logging.getLogger("evennia.commands").exception("Map render failed")
+        if show_map:
+            renderer = _get_system(caller, "procedural_map_renderer")
+            if renderer is not None:
+                try:
+                    buildings = caller.get_buildings() if hasattr(caller, "get_buildings") else []
+                    map_str = renderer.render(caller, buildings)
+                    if map_str:
+                        _send_ascii_map(caller, map_str)
+                except Exception:
+                    import logging
+                    logging.getLogger("evennia.commands").exception("Map render failed")
 
         _send_map_update(caller)
 
@@ -427,14 +382,15 @@ class CmdHarvest(GameCommand):
             self.caller.msg("Resource system unavailable.")
             return
 
-        # Resolve the actual tile room at player's coordinates
-        tile = self._resolve_player_tile()
-        if tile is None:
+        planet_room = self.caller.location
+        if planet_room is None:
             self.caller.msg("Cannot determine your position.")
             return
 
         # Use active-presence harvesting (Req 3.4, 6.6, 6.7)
-        success, msg = resource_system.start_harvest(self.caller, tile)
+        # Pass PlanetRoom as the tile — start_harvest already supports
+        # PlanetRoom path (reads player coords + TerrainGenerator)
+        success, msg = resource_system.start_harvest(self.caller, planet_room)
         self.caller.msg(msg)
 
 
@@ -462,17 +418,26 @@ class CmdBuild(GameCommand):
             caller.msg("Building system unavailable.")
             return
 
-        # Resolve the actual tile room at player's coordinates
-        tile = self._resolve_player_tile()
-        if tile is None:
+        planet_room = caller.location
+        x = getattr(caller.db, "coord_x", None)
+        y = getattr(caller.db, "coord_y", None)
+        if x is None or y is None:
             caller.msg("Cannot determine your position.")
             return
+        x, y = int(x), int(y)
 
         building_type = self.args.strip().upper()
 
         # Check for resuming construction on an incomplete building
-        existing = getattr(tile, "building", None)
-        if existing is not None:
+        if hasattr(planet_room, "get_buildings_at"):
+            existing_buildings = planet_room.get_buildings_at(x, y)
+        else:
+            existing_buildings = []
+            eb = getattr(planet_room, "building", None)
+            if eb is not None:
+                existing_buildings = [eb]
+
+        for existing in existing_buildings:
             under_construction = get_building_attr(existing, "under_construction", False)
             if under_construction and is_owner(caller, get_building_attr(existing, "owner")):
                 # If player typed a specific building type, don't auto-resume
@@ -503,7 +468,7 @@ class CmdBuild(GameCommand):
 
         # Start new construction
         success, msg = building_system.start_construction(
-            caller, tile, building_type
+            caller, planet_room, building_type, x=x, y=y
         )
         caller.msg(msg)
 
@@ -527,17 +492,19 @@ class CmdBuild(GameCommand):
             caller.msg("Usage: build <type>")
             return
 
-        rank_level = getattr(getattr(caller, "db", None), "rank_level", 1) or 1
+        player_level = getattr(getattr(caller, "db", None), "level", None)
+        if player_level is None:
+            player_level = getattr(getattr(caller, "db", None), "rank_level", 1) or 1
 
         lines = ["|wAvailable buildings:|n"]
         for abbr, bdef in sorted(registry.buildings.items(), key=lambda x: x[1].rank_requirement):
-            if bdef.rank_requirement > rank_level:
+            if bdef.rank_requirement > player_level:
                 continue
             cost_str = ", ".join(f"{amt} {res}" for res, amt in bdef.cost.items())
             lines.append(f"  |w{abbr}|n — {bdef.name} ({cost_str}) [{bdef.build_time_seconds}s]")
 
         if len(lines) == 1:
-            lines.append("  None available at your rank.")
+            lines.append("  None available at your level.")
 
         lines.append("")
         lines.append("Usage: |wbuild <type>|n  (e.g. |wbuild HQ|n)")
@@ -567,16 +534,28 @@ class CmdUpgrade(GameCommand):
             caller.msg("Building system unavailable.")
             return
 
-        tile = self._find_player_tile()
-        if tile is None:
+        planet_room = caller.location
+        x = getattr(caller.db, "coord_x", None)
+        y = getattr(caller.db, "coord_y", None)
+        if x is None or y is None:
             caller.msg("Cannot determine your position.")
             return
+        x, y = int(x), int(y)
 
-        building = getattr(tile, "building", None)
-        if building is None:
+        # Find building at player's coordinates
+        if hasattr(planet_room, "get_buildings_at"):
+            buildings = planet_room.get_buildings_at(x, y)
+        else:
+            buildings = []
+            b = getattr(planet_room, "building", None)
+            if b is not None:
+                buildings = [b]
+
+        if not buildings:
             caller.msg("No building on this tile.")
             return
 
+        building = buildings[0]
         success, msg = building_system.start_upgrade(caller, building)
         caller.msg(msg)
 
@@ -598,24 +577,27 @@ class CmdDemolish(GameCommand):
     aliases = ["demo"]
     help_category = "Game"
 
-    # Refund percentage by level: 40% at L1, scaling to 80% at L5
-    _REFUND_RATES = {1: 0.40, 2: 0.50, 3: 0.60, 4: 0.70, 5: 0.80}
-
     def func(self):
         caller = self.caller
 
-        # Resolve the actual tile room at player's coordinates
-        loc = self._find_player_tile()
-        if loc is None:
+        planet_room = caller.location
+        x = getattr(caller.db, "coord_x", None)
+        y = getattr(caller.db, "coord_y", None)
+        if x is None or y is None:
             caller.msg("Cannot determine your position.")
             return
+        x, y = int(x), int(y)
 
-        # Find building on this tile
-        building = None
-        for obj in getattr(loc, "contents", []):
-            if hasattr(obj, "attributes") and obj.attributes.has("building_type"):
-                building = obj
-                break
+        # Find building at player's coordinates
+        if hasattr(planet_room, "get_buildings_at"):
+            buildings = planet_room.get_buildings_at(x, y)
+        else:
+            buildings = []
+            for obj in getattr(planet_room, "contents", []):
+                if hasattr(obj, "tags") and obj.tags.get("building", category="object_type"):
+                    buildings.append(obj)
+
+        building = buildings[0] if buildings else None
 
         if building is None:
             caller.msg("There is no building on this tile.")
@@ -633,6 +615,7 @@ class CmdDemolish(GameCommand):
         name = info["name"]
 
         # Calculate refund
+        from world.constants import DEMOLISH_REFUND_RATES, DEMOLISH_REFUND_DEFAULT
         refund = {}
         registry = _get_system(caller, "registry")
         if registry:
@@ -640,7 +623,7 @@ class CmdDemolish(GameCommand):
                 bdef = registry.get_building(btype)
                 # Total invested = base cost × (1 + 2 + ... + level)
                 level_sum = level * (level + 1) // 2
-                rate = self._REFUND_RATES.get(level, 0.40)
+                rate = DEMOLISH_REFUND_RATES.get(level, DEMOLISH_REFUND_DEFAULT)
                 refund = {
                     res: int(amt * level_sum * rate)
                     for res, amt in bdef.cost.items()
@@ -654,24 +637,9 @@ class CmdDemolish(GameCommand):
                 if amt > 0:
                     caller.add_resource(res, amt)
 
-        # Delete the building
+        # Delete the building from PlanetRoom (no room deletion needed)
         if hasattr(building, "delete"):
             building.delete()
-
-        # Clean up the now-empty OverworldRoom (rooms only exist for buildings)
-        tile_resolver = _get_system(caller, "tile_resolver")
-        if loc is not None and not getattr(loc, "building", None):
-            # No more buildings — remove the room from cache and DB
-            if tile_resolver is not None:
-                cache = getattr(tile_resolver, "_cache", None)
-                if cache is not None:
-                    lx = getattr(loc, "x", None)
-                    ly = getattr(loc, "y", None)
-                    lp = getattr(loc, "planet_name", None)
-                    if lx is not None and ly is not None and lp:
-                        cache.remove(lx, ly, lp)
-            if hasattr(loc, "delete"):
-                loc.delete()
 
         # Exit building state
         caller.db.inside_building = False
@@ -857,9 +825,9 @@ class CmdScore(GameCommand):
         hp = status.get("hp", "?")
         hp_max = status.get("hp_max", "?")
 
-        # Rank name and sub-level lookup (Req 4b.5)
+        # Level and rank lookup
+        level = getattr(getattr(caller, "db", None), "level", None) or rank
         rank_name = f"Rank {rank}"
-        sub_level = None
         xp_to_next_level = None
         rank_system = _get_system(caller, "rank_system")
         registry = _get_system(caller, "registry")
@@ -867,7 +835,7 @@ class CmdScore(GameCommand):
             try:
                 rank_info = rank_system.get_status(caller)
                 rank_name = rank_info.get("rank_name", rank_name)
-                sub_level = rank_info.get("sub_level")
+                level = rank_info.get("level", level)
                 xp_to_next_level = rank_info.get("xp_to_next_level")
             except Exception:
                 pass
@@ -883,16 +851,12 @@ class CmdScore(GameCommand):
         y = getattr(caller.db, "coord_y", "?")
         planet = getattr(caller.db, "coord_planet", "?")
 
-        # Build rank display line with sub-level (Req 4b.5)
+        # Build display line
         rank_display = rank_name.replace("_", " ")
-        if sub_level is not None:
-            rank_display = f"{rank_display} Level {sub_level}"
-        xp_line = f"  {rank_display} | XP: {xp}"
+        xp_line = f"  Level {level} — {rank_display} | XP: {xp}"
         if xp_to_next_level is not None and xp_to_next_level > 0:
-            next_level_xp = xp + xp_to_next_level
-            xp_line += f"/{next_level_xp}"
-            if sub_level is not None and sub_level < 5:
-                xp_line += f" to Level {sub_level + 1}"
+            next_xp = xp + xp_to_next_level
+            xp_line += f"/{next_xp} to Level {level + 1}"
 
         lines = [
             f"|w=== {name} ===|n",
@@ -906,15 +870,8 @@ class CmdScore(GameCommand):
         if agent_system:
             try:
                 agent_count = agent_system.get_agent_count(caller)
-                # Get agent cap from rank
-                agent_cap = "?"
-                if rank_system:
-                    try:
-                        current_rank = rank_system.get_rank(caller)
-                        agent_cap = getattr(current_rank, "agent_cap", "?")
-                    except Exception:
-                        pass
-                lines.append(f"  Agents: {agent_count}/{agent_cap}")
+                max_agents = agent_system.get_max_agents(caller)
+                lines.append(f"  Agents: {agent_count}/{max_agents}")
             except Exception:
                 pass
 
@@ -1036,12 +993,15 @@ class CmdBuildings(GameCommand):
         lines = ["|wYour Buildings:|n"]
         for b in buildings:
             info = get_building_info(b)
-            loc = getattr(b, "location", None)
+            # Read coordinates from the building's own attributes
+            bx = getattr(getattr(b, "db", None), "coord_x", None)
+            by = getattr(getattr(b, "db", None), "coord_y", None)
+            if bx is None and hasattr(b, "attributes"):
+                bx = b.attributes.get("coord_x", default=None)
+                by = b.attributes.get("coord_y", default=None)
             loc_str = ""
-            if loc:
-                lx = getattr(loc, "x", "?")
-                ly = getattr(loc, "y", "?")
-                loc_str = f" at ({lx}, {ly})"
+            if bx is not None and by is not None:
+                loc_str = f" at ({bx}, {by})"
             status = ""
             if get_building_attr(b, "under_construction", False):
                 progress = get_building_attr(b, "construction_progress", 0) or 0
@@ -1072,36 +1032,44 @@ class CmdScan(GameCommand):
         caller_x = getattr(self.caller.db, "coord_x", None)
         caller_y = getattr(self.caller.db, "coord_y", None)
 
-        # Gather players from PlanetRoom, filtered by matching coordinates
-        contents = getattr(loc, "contents", [])
+        # Gather players at the same coordinates
         players = []
-        for obj in contents:
-            if obj is self.caller:
-                continue
-            if hasattr(obj, "db") and hasattr(obj.db, "combat_xp"):
-                # Filter by coordinate match when in a PlanetRoom
-                if caller_x is not None and caller_y is not None:
-                    ox = getattr(obj.db, "coord_x", None)
-                    oy = getattr(obj.db, "coord_y", None)
-                    if ox is None or oy is None:
-                        continue
-                    if int(ox) != int(caller_x) or int(oy) != int(caller_y):
-                        continue
+        if caller_x is not None and caller_y is not None and hasattr(loc, "get_players_at"):
+            for obj in loc.get_players_at(int(caller_x), int(caller_y)):
+                if obj is self.caller:
+                    continue
                 players.append(obj)
+        else:
+            # Legacy fallback: filter contents by coordinates
+            for obj in getattr(loc, "contents", []):
+                if obj is self.caller:
+                    continue
+                if hasattr(obj, "db") and hasattr(obj.db, "combat_xp"):
+                    if caller_x is not None and caller_y is not None:
+                        ox = getattr(obj.db, "coord_x", None)
+                        oy = getattr(obj.db, "coord_y", None)
+                        if ox is None or oy is None:
+                            continue
+                        if int(ox) != int(caller_x) or int(oy) != int(caller_y):
+                            continue
+                    players.append(obj)
 
-        # Check the resolved tile room for buildings
+        # Get buildings at player's coordinates from PlanetRoom
         buildings = []
-        tile = self._find_player_tile()
-        if tile is not None:
-            for obj in getattr(tile, "contents", []):
-                if hasattr(obj, "building_type") or (
-                    hasattr(obj, "db") and hasattr(obj.db, "building_type")
-                ):
-                    buildings.append(obj)
-            # Also check tile.building attribute
-            tile_building = getattr(tile, "building", None)
-            if tile_building is not None and tile_building not in buildings:
-                buildings.append(tile_building)
+        if caller_x is not None and caller_y is not None and hasattr(loc, "get_buildings_at"):
+            buildings = loc.get_buildings_at(int(caller_x), int(caller_y))
+        else:
+            # Legacy fallback
+            tile = self._find_player_tile()
+            if tile is not None:
+                for obj in getattr(tile, "contents", []):
+                    if hasattr(obj, "building_type") or (
+                        hasattr(obj, "db") and hasattr(obj.db, "building_type")
+                    ):
+                        buildings.append(obj)
+                tile_building = getattr(tile, "building", None)
+                if tile_building is not None and tile_building not in buildings:
+                    buildings.append(tile_building)
 
         lines = ["|wScan Results:|n"]
         if players:
@@ -1333,6 +1301,12 @@ class CmdLook(GameCommand):
         if not self.args:
             _render_and_send_map(caller)
 
+        # Show tile summary (objects at player's coordinates) after the map
+        if not self.args and hasattr(target, "get_objects_at"):
+            _show_tile_summary(caller, target)
+
+    # _show_tile_summary is now a module-level function
+
 
 class CmdMap(GameCommand):
     """Display the procedural ASCII map centered on your position.
@@ -1365,6 +1339,35 @@ _OPPOSITE_DIR = {
 }
 
 _CARDINAL_DIRS = ("north", "south", "east", "west")
+
+
+def _show_tile_summary(caller, planet_room):
+    """Show resource drops and other players at the caller's tile."""
+    if not hasattr(planet_room, "get_objects_at"):
+        return
+    x = getattr(caller.db, "coord_x", None)
+    y = getattr(caller.db, "coord_y", None)
+    if x is None or y is None:
+        return
+    x, y = int(x), int(y)
+    parts = []
+    drops = planet_room.get_objects_at(x, y, type_tag="resource_drop")
+    drop_strs = []
+    for d in drops:
+        amt = getattr(getattr(d, "db", None), "amount", 0) or 0
+        rtype = getattr(getattr(d, "db", None), "resource_type", "?")
+        if amt > 0:
+            drop_strs.append(f"{amt} {rtype}")
+    if drop_strs:
+        parts.append(f"Resources: {', '.join(drop_strs)}")
+    others = []
+    for p in planet_room.get_players_at(x, y):
+        if p is not caller:
+            others.append(getattr(p, "key", "?"))
+    if others:
+        parts.append(f"Players: {', '.join(others)}")
+    if parts:
+        caller.msg(" | ".join(parts))
 
 
 def _show_building_interior(caller, building):
@@ -1555,14 +1558,15 @@ class CmdLeave(GameCommand):
                     planet = getattr(caller.db, "coord_planet", "?")
                     terrain_info = ""
                     try:
-                        tile_resolver = _get_system(caller, "tile_resolver")
-                        if tile_resolver and x != "?" and y != "?":
-                            tt, res = tile_resolver.get_or_generate_terrain(
-                                int(x), int(y), str(planet)
-                            )
-                            terrain_info = f" | {tt}"
-                            if res:
-                                terrain_info += f" ({res})"
+                        if x != "?" and y != "?":
+                            terrain_generators = get_game_systems().get("_terrain_generators", {})
+                            gen = terrain_generators.get(str(planet))
+                            if gen:
+                                tt = gen.get_terrain(int(x), int(y))
+                                terrain_info = f" | {tt}"
+                                _, res = gen.get_terrain_and_resource(int(x), int(y))
+                                if res:
+                                    terrain_info += f" ({res})"
                     except Exception:
                         pass
                     _send_ascii_map(caller, f"|wMap — ({x}, {y}) on {planet}{terrain_info}|n\n{map_str}")
@@ -1571,8 +1575,217 @@ class CmdLeave(GameCommand):
         _send_map_update(caller)
 
 
+class CmdGet(GameCommand):
+    """Pick up an object at your current tile.
+
+    Usage:
+        get <object>
+
+    Only picks up objects at your coordinates. Objects at other
+    tiles in the same PlanetRoom are not accessible.
+    """
+
+    key = "get"
+    aliases = ["grab", "take"]
+    locks = "cmd:all()"
+    arg_regex = r"\s|$"
+    help_category = "General"
+
+    def func(self):
+        caller = self.caller
+        if not self.args:
+            caller.msg("Get what?")
+            return
+
+        obj_name = self.args.strip()
+        loc = caller.location
+        if loc is None:
+            caller.msg("You have no location.")
+            return
+
+        cx = getattr(caller.db, "coord_x", None)
+        cy = getattr(caller.db, "coord_y", None)
+
+        # Handle "get all" — pick up everything at the player's tile
+        if obj_name.lower() == "all":
+            self._get_all(caller, loc, cx, cy)
+            return
+
+        # Search only objects at the player's coordinates
+        if cx is not None and cy is not None and hasattr(loc, "get_objects_at"):
+            candidates = loc.get_objects_at(int(cx), int(cy))
+            # Filter by name match (case-insensitive prefix)
+            target = None
+            search = obj_name.lower()
+            for obj in candidates:
+                if obj is caller:
+                    continue
+                obj_key = getattr(obj, "key", "").lower()
+                if obj_key == search or obj_key.startswith(search):
+                    target = obj
+                    break
+            if target is None:
+                caller.msg(f"Could not find '{obj_name}' here.")
+                return
+        else:
+            # Fallback: use Evennia's default search
+            target = caller.search(obj_name)
+            if not target:
+                return
+
+        self._pickup(caller, target)
+
+    def _pickup(self, caller, target):
+        """Attempt to pick up a single object."""
+        if hasattr(target, "at_pre_get"):
+            if not target.at_pre_get(caller):
+                return
+
+        if hasattr(target, "move_to"):
+            target.move_to(caller, quiet=True)
+
+        if hasattr(target, "at_get"):
+            target.at_get(caller)
+
+    def _get_all(self, caller, loc, cx, cy):
+        """Pick up all gettable objects at the player's coordinates."""
+        if cx is None or cy is None or not hasattr(loc, "get_objects_at"):
+            caller.msg("Nothing to pick up.")
+            return
+
+        candidates = list(loc.get_objects_at(int(cx), int(cy)))
+        picked = 0
+        for obj in candidates:
+            if obj is caller:
+                continue
+            # Skip players and buildings
+            if hasattr(obj, "has_account") and obj.has_account:
+                continue
+            if hasattr(obj, "tags") and obj.tags.get("building", category="object_type"):
+                continue
+            if hasattr(obj, "at_pre_get") and not obj.at_pre_get(caller):
+                continue
+            if hasattr(obj, "move_to"):
+                obj.move_to(caller, quiet=True)
+            if hasattr(obj, "at_get"):
+                obj.at_get(caller)
+            picked += 1
+
+        if picked == 0:
+            caller.msg("Nothing to pick up.")
+
+
 # ------------------------------------------------------------------ #
 #  Helper: retrieve a game system from the caller's ndb or global
 # ------------------------------------------------------------------ #
 
 # _get_system is imported from world.utils at the top of this file
+
+
+# ------------------------------------------------------------------ #
+#  CmdWho — override Evennia's default to show rank and level
+# ------------------------------------------------------------------ #
+
+class CmdWho(GameCommand):
+    """List who is currently online.
+
+    Usage:
+        who
+
+    Shows online players with their rank and level.
+    """
+
+    key = "who"
+    aliases = ["doing"]
+    locks = "cmd:all()"
+    account_caller = True
+
+    def func(self):
+        import time
+        import evennia
+        from evennia import utils
+
+        account = self.account
+        session_list = evennia.SESSION_HANDLER.get_sessions()
+        session_list = sorted(session_list, key=lambda o: o.account.key)
+
+        naccounts = evennia.SESSION_HANDLER.account_count()
+
+        show_admin = (
+            account.check_permstring("Developer")
+            or account.check_permstring("Admins")
+        )
+
+        # Resolve rank names from registry
+        registry = None
+        try:
+            from server.conf.game_init import game_systems
+            registry = game_systems.get("registry")
+        except Exception:
+            pass
+
+        rank_map = {}
+        if registry and hasattr(registry, "ranks"):
+            for r in registry.ranks:
+                rank_map[r.level] = r.name
+
+        if show_admin:
+            table = self.styled_table(
+                "|wName", "|wRank", "|wLvl",
+                "|wOn for", "|wIdle", "|wPuppeting",
+            )
+        else:
+            table = self.styled_table(
+                "|wName", "|wRank", "|wLvl", "|wOn for", "|wIdle",
+            )
+
+        for session in session_list:
+            if not session.logged_in:
+                continue
+            delta_cmd = time.time() - session.cmd_last_visible
+            delta_conn = time.time() - session.conn_time
+            session_account = session.get_account()
+            puppet = session.get_puppet()
+
+            name = utils.crop(
+                session_account.get_display_name(account), width=25
+            )
+
+            # Extract rank and level from the puppet
+            player_level = 1
+            rank_name = "Recruit"
+            if puppet and hasattr(puppet, "db"):
+                player_level = getattr(puppet.db, "level", None)
+                if player_level is None:
+                    player_level = getattr(puppet.db, "rank_level", 1) or 1
+                from world.systems.rank_system import rank_from_level
+                rank_num = rank_from_level(player_level)
+                rank_name = rank_map.get(rank_num, f"Rank {rank_num}")
+
+            if show_admin:
+                puppet_name = (
+                    utils.crop(puppet.get_display_name(account), width=25)
+                    if puppet else "None"
+                )
+                table.add_row(
+                    name,
+                    rank_name,
+                    str(player_level),
+                    utils.time_format(delta_conn, 0),
+                    utils.time_format(delta_cmd, 1),
+                    puppet_name,
+                )
+            else:
+                table.add_row(
+                    name,
+                    rank_name,
+                    str(player_level),
+                    utils.time_format(delta_conn, 0),
+                    utils.time_format(delta_cmd, 1),
+                )
+
+        is_one = naccounts == 1
+        self.msg(
+            "|wOnline:|n\n%s\n%s player%s online."
+            % (table, "One" if is_one else naccounts, "" if is_one else "s")
+        )

@@ -122,10 +122,18 @@ def _load_planet_registry() -> PlanetRegistry:
 
 
 def _make_player(rank_level: int = 1, combat_xp: int = 0) -> CombatCharacter:
-    """Create a stubbed CombatCharacter with given rank and XP."""
+    """Create a stubbed CombatCharacter with given rank and XP.
+
+    Sets db.level to the first level of the given rank for consistency
+    with the level-based rank system.
+    """
+    from mygame.world.systems.rank_system import level_range_for_rank
     char = CombatCharacter(key="TestPlayer")
     char.at_object_creation()
     char.db.rank_level = rank_level
+    # Set level to first level of this rank
+    level, _ = level_range_for_rank(rank_level)
+    char.db.level = level
     char.db.combat_xp = combat_xp
     return char
 
@@ -195,6 +203,11 @@ class TestProperty9SubLevelXPDistribution(unittest.TestCase):
         assume(boundary_xp < t2)
 
         player = _make_player(rank_level=rank_low.level, combat_xp=boundary_xp)
+        # Set the level to match the sub-level within this rank
+        from mygame.world.systems.rank_system import level_range_for_rank
+        base_level, _ = level_range_for_rank(rank_low.level)
+        player.db.level = base_level + (sub_level - 1)
+
         result = self.rank_system.get_sub_level(player)
 
         self.assertEqual(
@@ -225,6 +238,10 @@ class TestProperty9SubLevelXPDistribution(unittest.TestCase):
         expected_level = min(int(xp_into_rank // interval) + 1, 5)
 
         player = _make_player(rank_level=rank_low.level, combat_xp=xp)
+        # Compute the actual player level from XP using the rank system
+        computed_level = self.rank_system.level_for_xp(xp)
+        player.db.level = computed_level
+
         result = self.rank_system.get_sub_level(player)
 
         self.assertEqual(
@@ -274,7 +291,7 @@ class TestProperty3PlanetRankGating(unittest.TestCase):
     @given(rank_level=rank_level_st, planet_key=planet_key_st)
     @settings(max_examples=100)
     def test_access_iff_rank_meets_requirement(self, rank_level, planet_key):
-        """Player can access planet iff rank_level >= planet's rank_requirement."""
+        """Player can access planet iff level >= planet's rank_requirement."""
         planet_req = _PLANET_RANK_REQS[planet_key]
 
         # Find a valid XP for this rank level
@@ -288,58 +305,70 @@ class TestProperty3PlanetRankGating(unittest.TestCase):
         player = _make_player(rank_level=rank_level, combat_xp=rank_def.xp_threshold)
         result = self.rank_system.can_access_planet(player, planet_key)
 
-        expected = rank_level >= planet_req
+        # Player level is the first level of this rank
+        from mygame.world.systems.rank_system import level_range_for_rank
+        player_level, _ = level_range_for_rank(rank_level)
+        expected = player_level >= planet_req
         self.assertEqual(
             result, expected,
-            f"Player rank {rank_level} vs planet '{planet_key}' "
+            f"Player level {player_level} (rank {rank_level}) vs planet '{planet_key}' "
             f"(req={planet_req}): expected {expected}, got {result}"
         )
 
     @given(planet_key=planet_key_st)
     @settings(max_examples=100)
     def test_exact_requirement_rank_grants_access(self, planet_key):
-        """A player at exactly the planet's required rank can access it."""
+        """A player at exactly the planet's required level can access it."""
         planet_req = _PLANET_RANK_REQS[planet_key]
 
-        # Find the rank def for the requirement level
+        # planet_req is now a level requirement — find which rank that maps to
+        from mygame.world.systems.rank_system import rank_from_level
+        req_rank = rank_from_level(planet_req)
+
         rank_def = None
         for r in _RANKS:
-            if r.level == planet_req:
+            if r.level == req_rank:
                 rank_def = r
                 break
-        # If no rank matches the requirement exactly, skip
         assume(rank_def is not None)
 
-        player = _make_player(rank_level=planet_req, combat_xp=rank_def.xp_threshold)
+        player = _make_player(rank_level=req_rank, combat_xp=rank_def.xp_threshold)
+        # Override level to exactly the requirement
+        player.db.level = planet_req
         result = self.rank_system.can_access_planet(player, planet_key)
 
         self.assertTrue(
             result,
-            f"Player at exact requirement rank {planet_req} should access "
+            f"Player at exact requirement level {planet_req} should access "
             f"planet '{planet_key}'"
         )
 
     @given(planet_key=planet_key_st)
     @settings(max_examples=100)
     def test_below_requirement_rank_denies_access(self, planet_key):
-        """A player below the planet's required rank cannot access it."""
+        """A player below the planet's required level cannot access it."""
         planet_req = _PLANET_RANK_REQS[planet_key]
-        assume(planet_req > 1)  # Skip if requirement is 1 (no one can be below)
+        assume(planet_req > 1)  # Skip if requirement is 1
 
+        # Set player level to one below the requirement
         below_level = planet_req - 1
+        from mygame.world.systems.rank_system import rank_from_level
+        below_rank = rank_from_level(below_level)
+
         rank_def = None
         for r in _RANKS:
-            if r.level == below_level:
+            if r.level == below_rank:
                 rank_def = r
                 break
         assume(rank_def is not None)
 
-        player = _make_player(rank_level=below_level, combat_xp=rank_def.xp_threshold)
+        player = _make_player(rank_level=below_rank, combat_xp=rank_def.xp_threshold)
+        player.db.level = below_level
         result = self.rank_system.can_access_planet(player, planet_key)
 
         self.assertFalse(
             result,
-            f"Player at rank {below_level} should NOT access planet "
+            f"Player at level {below_level} should NOT access planet "
             f"'{planet_key}' (req={planet_req})"
         )
 

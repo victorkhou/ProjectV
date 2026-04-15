@@ -5,9 +5,13 @@ Rooms are simple containers that has no location of their own.
 
 """
 
+import logging
+
 from evennia.objects.objects import DefaultRoom
 
 from .objects import ObjectParent
+
+_log = logging.getLogger("mygame.rooms")
 
 
 class Room(ObjectParent, DefaultRoom):
@@ -33,13 +37,99 @@ class PlanetRoom(DefaultRoom):
 
     This eliminates DB writes during movement: no room creation or
     deletion when a player moves between tiles.
-
-    Buildings still get their own OverworldRoom at their coordinates.
     """
 
     @property
     def planet_name(self) -> str:
         return self.attributes.get("planet", default="unknown")
+
+    # -------------------------------------------------------------- #
+    #  Lifecycle
+    # -------------------------------------------------------------- #
+
+    def at_init(self):
+        """Called on every typeclass cache load (restart/reload).
+
+        Clear the ndb index so it's lazily rebuilt on first access.
+        """
+        self.ndb._coord_index = None
+
+    # -------------------------------------------------------------- #
+    #  Coordinate Index (ndb, non-persistent)
+    # -------------------------------------------------------------- #
+
+    @property
+    def coord_index(self):
+        """Lazy-init coordinate index. Rebuilt from contents on first access."""
+        idx = self.ndb._coord_index
+        if idx is None:
+            idx = self._rebuild_index()
+        return idx
+
+    def _rebuild_index(self):
+        from world.coordinate.coordinate_index import CoordinateIndex
+
+        idx = CoordinateIndex.build_from_contents(self.contents)
+        self.ndb._coord_index = idx
+        _log.info(
+            "PlanetRoom %s: rebuilt coordinate index (%d objects)",
+            self.key,
+            len(idx),
+        )
+        return idx
+
+    # -------------------------------------------------------------- #
+    #  Query Methods
+    # -------------------------------------------------------------- #
+
+    def get_objects_at(self, x: int, y: int, type_tag: str | None = None) -> list:
+        """Return objects at (x, y), optionally filtered by object_type tag.
+
+        Args:
+            x, y: Tile coordinates.
+            type_tag: If provided, only return objects with this tag in
+                      the ``object_type`` category.
+        """
+        objs = self.coord_index.get_at(x, y)
+        if type_tag is None:
+            return objs
+        return [
+            o for o in objs
+            if hasattr(o, "tags") and o.tags.get(type_tag, category="object_type")
+        ]
+
+    def get_buildings_at(self, x: int, y: int) -> list:
+        """Return Building objects at (x, y)."""
+        return self.get_objects_at(x, y, type_tag="building")
+
+    def get_players_at(self, x: int, y: int) -> list:
+        """Return player characters at (x, y)."""
+        return [
+            o for o in self.coord_index.get_at(x, y)
+            if hasattr(o, "has_account") and o.has_account
+        ]
+
+    def get_objects_in_area(self, x1: int, y1: int, x2: int, y2: int) -> list:
+        """Return all objects within the bounding box (inclusive)."""
+        return self.coord_index.get_in_area(x1, y1, x2, y2)
+
+    # -------------------------------------------------------------- #
+    #  Mutation — coordinate changes
+    # -------------------------------------------------------------- #
+
+    def move_entity(self, obj, new_x: int, new_y: int) -> None:
+        """Atomically update an object's coordinates and the index.
+
+        Fires ``at_coord_change(old_x, old_y, new_x, new_y)`` on the
+        object if the hook exists, for game systems that need to react.
+        """
+        old_x = getattr(getattr(obj, "db", None), "coord_x", None)
+        old_y = getattr(getattr(obj, "db", None), "coord_y", None)
+        self.coord_index.move(obj, old_x, old_y, new_x, new_y)
+        obj.db.coord_x = new_x
+        obj.db.coord_y = new_y
+        if hasattr(obj, "at_coord_change"):
+            obj.at_coord_change(old_x, old_y, new_x, new_y)
 
     # -------------------------------------------------------------- #
     #  Appearance — show map when looked at
@@ -78,17 +168,14 @@ class PlanetRoom(DefaultRoom):
         # If inside a building, show building interior first
         if getattr(looker.db, "inside_building", False):
             try:
-                tile_resolver = systems.get("tile_resolver")
-                if tile_resolver:
-                    x = getattr(looker.db, "coord_x", None)
-                    y = getattr(looker.db, "coord_y", None)
-                    if x is not None and y is not None:
-                        tile = tile_resolver.get_if_exists(x, y, planet)
-                        if tile:
-                            building = getattr(tile, "building", None)
-                            if building:
-                                registry = systems.get("registry")
-                                parts.append(_format_building_interior(looker, building, registry=registry))
+                x = getattr(looker.db, "coord_x", None)
+                y = getattr(looker.db, "coord_y", None)
+                if x is not None and y is not None:
+                    buildings = self.get_buildings_at(int(x), int(y))
+                    if buildings:
+                        building = buildings[0]
+                        registry = systems.get("registry")
+                        parts.append(_format_building_interior(looker, building, registry=registry))
             except Exception:
                 pass
 
@@ -166,8 +253,18 @@ class PlanetRoom(DefaultRoom):
     # -------------------------------------------------------------- #
 
     def at_object_receive(self, moved_obj, source_location, **kwargs):
-        """Show tile info when a player arrives, based on their coordinates."""
+        """Show tile info when a player arrives, based on their coordinates.
+
+        Also adds the arriving object to the coordinate index if it has
+        valid coordinates.
+        """
         super().at_object_receive(moved_obj, source_location, **kwargs)
+
+        # Update coordinate index for any object with coordinates
+        cx = getattr(getattr(moved_obj, "db", None), "coord_x", None)
+        cy = getattr(getattr(moved_obj, "db", None), "coord_y", None)
+        if cx is not None and cy is not None:
+            self.coord_index.add(moved_obj, int(cx), int(cy))
 
         if not (hasattr(moved_obj, "has_account") and moved_obj.has_account):
             return
@@ -212,231 +309,47 @@ class PlanetRoom(DefaultRoom):
 
         moved_obj.msg(" | ".join(parts))
 
-
-class OverworldRoom(DefaultRoom):
-    """A single tile on the overworld map.
-
-    Extends DefaultRoom (not XYZRoom). Coordinates stored as Attributes.
-
-    In the one-room-per-planet architecture, OverworldRoom is used only
-    for tiles that contain buildings. Players live in PlanetRoom.
-
-    Requirements: 7.1, 7.2, 8.1
-    """
+    def at_object_leave(self, moved_obj, target_location, **kwargs):
+        """Remove departing object from the coordinate index."""
+        super().at_object_leave(moved_obj, target_location, **kwargs)
+        cx = getattr(getattr(moved_obj, "db", None), "coord_x", None)
+        cy = getattr(getattr(moved_obj, "db", None), "coord_y", None)
+        if cx is not None and cy is not None:
+            idx = self.ndb._coord_index
+            if idx is not None:
+                idx.remove(moved_obj, int(cx), int(cy))
 
     # -------------------------------------------------------------- #
-    #  Coordinate properties (read from Attributes)
+    #  Resource Node Depletion (string keys for JSON compat)
     # -------------------------------------------------------------- #
 
-    @property
-    def x(self) -> int:
-        return self.attributes.get("x", default=0)
+    @staticmethod
+    def _node_key(x: int, y: int) -> str:
+        return f"{x},{y}"
 
-    @property
-    def y(self) -> int:
-        return self.attributes.get("y", default=0)
+    def get_depleted_nodes(self) -> dict:
+        """Return the sparse depletion dict: ``{"x,y": {resource_type, respawn_counter}}``."""
+        return self.db.depleted_nodes or {}
 
-    @property
-    def planet_name(self) -> str:
-        return self.attributes.get("planet", default="unknown")
-
-    # -------------------------------------------------------------- #
-    #  Properties
-    # -------------------------------------------------------------- #
-
-    @property
-    def terrain_type(self) -> str:
-        """Return the terrain type string from the room's Tag."""
-        tag = self.tags.get(category="terrain", return_list=False)
-        return tag or "unknown"
-
-    @property
-    def resource_node(self) -> dict | None:
-        """Return the resource node data dict, or ``None``.
-
-        Resource node state is stored as an Attribute
-        ``resource_node_data`` with keys:
-            resource_type (str), depleted (bool), respawn_counter (int)
-        """
-        data = self.attributes.get("resource_node_data", default=None)
-        return data if data else None
-
-    @property
-    def building(self):
-        """Return the first Building object in this room, or ``None``.
-
-        Detects buildings by checking for a ``building_type`` Attribute
-        (set by the BuildingSystem on all building objects).
-        """
-        for obj in self.contents:
-            if hasattr(obj, "attributes") and obj.attributes.has("building_type"):
-                return obj
-        return None
-
-    # -------------------------------------------------------------- #
-    #  Display
-    # -------------------------------------------------------------- #
-
-    def get_display_symbol(self, looker) -> str:
-        """Return a 2-char symbol for this tile with priority logic.
-
-        Priority (Requirement 1.8):
-            1. ``@@`` if *looker* is on this tile
-            2. ``**`` if another player character is on this tile
-            3. Building abbreviation (e.g. ``HQ``) if a building is present
-            4. Terrain symbol from the terrain tag
-        """
-        # Check for player characters on this tile
-        for obj in self.contents:
-            # A "player character" is any object with an associated account
-            if hasattr(obj, "has_account") and obj.has_account:
-                if obj is looker:
-                    return "@@"
-                return "**"
-
-        # Check for a building
-        bld = self.building
-        if bld is not None:
-            # Try to get the building's display abbreviation
-            if hasattr(bld, "get_display_abbreviation"):
-                return bld.get_display_abbreviation()
-            # Fallback: read building_type attribute
-            abbr = bld.attributes.get("building_type", default=None)
-            if abbr:
-                return str(abbr)[:2]
-
-        # Fallback to terrain symbol
-        return self._terrain_symbol()
-
-    def _terrain_symbol(self) -> str:
-        """Return the 2-char terrain map symbol.
-
-        Tries to look up the symbol from the DataRegistry; falls back
-        to the first two characters of the terrain_type string.
-        """
-        terrain = self.terrain_type
-        try:
-            from world.data_registry import registry
-
-            terrain_def = registry.get_terrain(terrain)
-            return terrain_def.map_symbol
-        except Exception:
-            # DataRegistry not available or terrain not found — use
-            # first two chars of the terrain type as a safe fallback.
-            return terrain[:2] if len(terrain) >= 2 else terrain.ljust(2, "?")
-
-    # -------------------------------------------------------------- #
-    #  Hooks
-    # -------------------------------------------------------------- #
-
-    def at_object_receive(self, moved_obj, source_location, **kwargs):
-        """Called when an object arrives in this room.
-
-        When a player character enters, display tile information.
-        """
-        super().at_object_receive(moved_obj, source_location, **kwargs)
-
-        # Only show tile info to player characters
-        if not (hasattr(moved_obj, "has_account") and moved_obj.has_account):
-            return
-
-        state = self.get_structured_state()
-        parts = [f"Terrain: {state['terrain_type']}"]
-
-        if state.get("resource_node"):
-            rn = state["resource_node"]
-            if rn.get("depleted"):
-                parts.append(f"Resource: {rn['resource_type']} (depleted)")
-            else:
-                parts.append(f"Resource: {rn['resource_type']}")
-
-        if state.get("building"):
-            bld_info = state["building"]
-            parts.append(f"Building: {bld_info.get('name', bld_info.get('type', 'unknown'))}")
-
-        if state.get("players"):
-            other_names = [
-                p for p in state["players"] if p != moved_obj.key
-            ]
-            if other_names:
-                parts.append(f"Players: {', '.join(other_names)}")
-
-        moved_obj.msg(" | ".join(parts))
-
-    # -------------------------------------------------------------- #
-    #  msg_contents override — coordinate-aware proximity filter
-    # -------------------------------------------------------------- #
-
-    def msg_contents(self, text, exclude=None, from_obj=None, **kwargs):
-        """Only message players at the same coordinates as the sender.
-
-        OverworldRoom tiles have fixed coordinates. If from_obj has
-        coordinates matching this room, broadcast to all contents.
-        Otherwise fall back to default behavior.
-        """
-        exclude = exclude or []
-        for obj in self.contents:
-            if obj in exclude:
-                continue
-            if hasattr(obj, "msg"):
-                obj.msg(text, **kwargs)
-
-    # -------------------------------------------------------------- #
-    #  Structured state (Requirement 27.1)
-    # -------------------------------------------------------------- #
-
-    def get_structured_state(self) -> dict:
-        """Return a presentation-agnostic dict of this tile's state.
-
-        Keys:
-            terrain_type (str): The terrain type string.
-            resource_node (dict | None): Resource node info or None.
-            building (dict | None): Building info or None.
-            players (list[str]): Names of player characters on this tile.
-        """
-        # Terrain
-        terrain = self.terrain_type
-
-        # Resource node
-        rn = self.resource_node
-        rn_info = None
-        if rn:
-            rn_info = {
-                "resource_type": rn.get("resource_type", "unknown"),
-                "depleted": rn.get("depleted", False),
-                "respawn_counter": rn.get("respawn_counter", 0),
-            }
-
-        # Building
-        bld = self.building
-        bld_info = None
-        if bld is not None:
-            bld_info = {
-                "type": bld.attributes.get("building_type", default="unknown"),
-                "name": bld.key if hasattr(bld, "key") else "unknown",
-            }
-            # Include optional fields if available
-            if hasattr(bld, "building_level"):
-                bld_info["level"] = bld.building_level
-            elif bld.attributes.has("building_level"):
-                bld_info["level"] = bld.attributes.get("building_level")
-            owner = bld.attributes.get("owner", default=None)
-            if owner is not None:
-                bld_info["owner"] = str(owner)
-
-        # Players
-        players = [
-            obj.key
-            for obj in self.contents
-            if hasattr(obj, "has_account") and obj.has_account
-        ]
-
-        return {
-            "terrain_type": terrain,
-            "resource_node": rn_info,
-            "building": bld_info,
-            "players": players,
+    def set_node_depleted(self, x: int, y: int, resource_type: str, respawn_counter: int):
+        """Mark the resource node at (x, y) as depleted."""
+        nodes = self.db.depleted_nodes or {}
+        nodes[self._node_key(x, y)] = {
+            "resource_type": resource_type,
+            "respawn_counter": respawn_counter,
         }
+        self.db.depleted_nodes = nodes
+
+    def clear_node_depletion(self, x: int, y: int):
+        """Remove the depletion entry for (x, y), marking it available."""
+        nodes = self.db.depleted_nodes or {}
+        nodes.pop(self._node_key(x, y), None)
+        self.db.depleted_nodes = nodes
+
+    def is_node_depleted(self, x: int, y: int) -> bool:
+        """Return True if the node at (x, y) is currently depleted."""
+        nodes = self.db.depleted_nodes or {}
+        return self._node_key(x, y) in nodes
 
 
 # ------------------------------------------------------------------ #
@@ -518,15 +431,59 @@ def _format_building_interior(looker, building, registry=None):
         role = getattr(getattr(assigned, "db", None), "role", "") or "idle"
         lines.append(f"  |gAgent #{aid}|n assigned as |w{role}|n")
 
-    # Show other agents on this tile (in the room contents)
+    # Show resource drops at the building's coordinates
+    bx = getattr(getattr(building, "db", None), "coord_x", None)
+    by = getattr(getattr(building, "db", None), "coord_y", None)
     tile = getattr(building, "location", None)
-    if tile is not None:
+    if tile is not None and bx is not None and by is not None and hasattr(tile, "get_objects_at"):
+        drops = []
+        for obj in tile.get_objects_at(int(bx), int(by), type_tag="resource_drop"):
+            rtype = getattr(getattr(obj, "db", None), "resource_type", "?")
+            amt = getattr(getattr(obj, "db", None), "amount", 0)
+            if amt > 0:
+                drops.append(f"{amt} {rtype}")
+        if drops:
+            lines.append("")
+            lines.append(f"  |yResources: {', '.join(drops)}|n")
+            lines.append(f"  Use |wget|n to pick them up.")
+    elif tile is not None:
+        # Legacy fallback: iterate contents
+        drops = []
+        for obj in getattr(tile, "contents", []):
+            if hasattr(obj, "tags") and obj.tags.get("resource_drop", category="object_type"):
+                rtype = getattr(getattr(obj, "db", None), "resource_type", "?")
+                amt = getattr(getattr(obj, "db", None), "amount", 0)
+                if amt > 0:
+                    drops.append(f"{amt} {rtype}")
+        if drops:
+            lines.append("")
+            lines.append(f"  |yResources: {', '.join(drops)}|n")
+            lines.append(f"  Use |wget|n to pick them up.")
+
+    # Show other agents at the building's coordinates
+    if tile is not None and bx is not None and by is not None and hasattr(tile, "get_objects_at"):
+        tile_agents = []
+        for obj in tile.get_objects_at(int(bx), int(by)):
+            if obj is building:
+                continue
+            if obj is assigned:
+                continue  # already shown above
+            if hasattr(obj, "tags") and obj.tags.get(category="npc_type"):
+                npc_owner = getattr(getattr(obj, "db", None), "owner", None)
+                if npc_owner is looker:
+                    aid = getattr(obj.db, "agent_id", "?")
+                    role = getattr(obj.db, "role", "") or "idle"
+                    tile_agents.append(f"Agent #{aid} ({role})")
+        if tile_agents:
+            lines.append(f"  Agents here: {', '.join(tile_agents)}")
+    elif tile is not None:
+        # Legacy fallback
         tile_agents = []
         for obj in getattr(tile, "contents", []):
             if obj is building:
                 continue
             if obj is assigned:
-                continue  # already shown above
+                continue
             if hasattr(obj, "tags") and obj.tags.get(category="npc_type"):
                 npc_owner = getattr(getattr(obj, "db", None), "owner", None)
                 if npc_owner is looker:

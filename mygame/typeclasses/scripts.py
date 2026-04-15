@@ -151,29 +151,11 @@ class GameTickScript(DefaultScript):
         except Exception:
             return []
 
-    def _get_all_tiles(self):
-        """Return all OverworldRoom tiles in the game world.
-
-        Uses Evennia's tag-based search to find rooms tagged as
-        overworld tiles. Falls back to an empty list if unavailable.
-
-        Returns:
-            list of OverworldRoom objects.
-        """
-        try:
-            from evennia.utils.search import search_object_by_tag
-
-            return list(search_object_by_tag(
-                key="overworld_tile", category="room_type"
-            ))
-        except Exception:
-            return []
-
     def _compute_active_data(self, chunking, online_players):
-        """Compute active buildings and tiles from chunk filtering.
+        """Compute active buildings from chunk filtering.
 
         Determines which chunks are active based on online player
-        positions, then filters all buildings and tiles to only those
+        positions, then filters all buildings to only those
         within active chunks.
 
         Args:
@@ -181,13 +163,12 @@ class GameTickScript(DefaultScript):
             online_players: list of online player characters.
 
         Returns:
-            (active_buildings, active_tiles) tuple.
+            list of active buildings.
         """
         all_buildings = self._get_all_buildings()
-        all_tiles = self._get_all_tiles()
 
         if not online_players:
-            return [], []
+            return []
 
         # Collect active chunks across all planets
         all_active_chunks = set()
@@ -200,7 +181,6 @@ class GameTickScript(DefaultScript):
                     planets.add(str(planet))
 
         active_buildings = []
-        active_tiles = []
 
         for planet in planets:
             chunks = chunking.get_active_chunks(planet, online_players)
@@ -208,11 +188,8 @@ class GameTickScript(DefaultScript):
             active_buildings.extend(
                 chunking.get_buildings_in_chunks(planet, chunks, all_buildings)
             )
-            active_tiles.extend(
-                chunking.get_tiles_in_chunks(planet, chunks, all_tiles)
-            )
 
-        return active_buildings, active_tiles
+        return active_buildings
 
     def _build_tick_steps(self, systems, tick_number):
         """Build the ordered list of (name, callable) tick steps.
@@ -241,19 +218,20 @@ class GameTickScript(DefaultScript):
         # Compute active data once, shared across steps.
         # Mutable container so the active_chunks step can populate it
         # and subsequent steps use the result.
-        tick_data = {"buildings": [], "tiles": [], "online_players": []}
+        tick_data = {"buildings": [], "online_players": []}
 
         def compute_active_chunks():
             """Step 1: determine active chunks and filter world data."""
             online_players = self._get_online_players()
             tick_data["online_players"] = online_players
             if not chunking:
+                # No chunk manager — use all buildings
+                tick_data["buildings"] = self._get_all_buildings()
                 return
-            buildings, tiles = self._compute_active_data(
+            buildings = self._compute_active_data(
                 chunking, online_players
             )
             tick_data["buildings"] = buildings
-            tick_data["tiles"] = tiles
 
         steps = []
 
@@ -359,11 +337,17 @@ class GameTickScript(DefaultScript):
 
         # 11. Resource node respawn counter decrements
         if resource_system:
+            def _process_respawns():
+                """Pass PlanetRoom objects to process_respawns."""
+                try:
+                    planet_rooms_dict = systems.get("planet_rooms", {})
+                    planet_rooms_list = list(planet_rooms_dict.values())
+                except Exception:
+                    planet_rooms_list = []
+                resource_system.process_respawns(planet_rooms_list)
             steps.append((
                 "resource_respawns",
-                lambda: resource_system.process_respawns(
-                    tick_data["tiles"]
-                ),
+                _process_respawns,
             ))
 
         # 12. Publish tick_completed event
@@ -373,18 +357,6 @@ class GameTickScript(DefaultScript):
                 lambda: event_bus.publish(
                     "tick_completed",
                     tick_number=tick_number,
-                ),
-            ))
-
-        # 13. Garbage collection for dynamic rooms (runs every gc_interval_ticks)
-        garbage_collector = systems.get("garbage_collector")
-        if garbage_collector:
-            gc_interval = getattr(garbage_collector, "interval_ticks", 100)
-            # Capture gc_interval in closure to avoid late-binding issues
-            steps.append((
-                "garbage_collection",
-                lambda _gc=garbage_collector, _interval=gc_interval: (
-                    _gc.run() if tick_number % _interval == 0 else None
                 ),
             ))
 

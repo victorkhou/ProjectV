@@ -16,6 +16,12 @@ from world.data_registry import DataRegistry
 from world.event_bus import EventBus
 from world.utils import get_building_attr as _get_building_attr_shared
 from world.utils import set_building_attr as _set_building_attr_shared
+from world.constants import (
+    BASE_TRAINING_COST,
+    BASE_TRAINING_TICKS,
+    ACADEMY_TRAINING_REDUCTION_PER_LEVEL,
+    TRAINING_PROGRESS_INTERVAL,
+)
 
 logger = logging.getLogger("mygame.agent_system")
 
@@ -37,16 +43,6 @@ BUILDING_ROLE_MAP: dict[str, str] = {
 
 # Roles that belong to the army and do NOT require a target building
 ARMY_ROLES = ("soldier", "medic")
-
-# Base training cost for agent #N is base_cost × N
-BASE_TRAINING_COST: dict[str, int] = {
-    "Wood": 15,
-    "Stone": 10,
-    "Iron": 5,
-}
-
-# Base training time in ticks (5 minutes at 1 tick/s = 300 ticks)
-BASE_TRAINING_TICKS = 300
 
 
 class AgentSystem:
@@ -114,10 +110,9 @@ class AgentSystem:
         """
         # --- cap check ---
         current_count = self.get_agent_count(player)
-        rank_def = self.registry.get_rank_for_xp(player.db.combat_xp)
-        agent_cap = rank_def.agent_cap
-        if current_count >= agent_cap:
-            return False, "Agent cap reached. Promote to a higher rank for more agents."
+        max_agents = self.get_max_agents(player)
+        if current_count >= max_agents:
+            return False, f"Agent cap reached ({current_count}/{max_agents}). Promote to a higher rank for more agents."
 
         # --- determine next ID ---
         # Derive from existing agents to stay in sync after deletions
@@ -126,12 +121,11 @@ class AgentSystem:
             max_id = max(getattr(a.db, "agent_id", 0) for a in agents)
             next_id = max_id + 1
         else:
-            next_id = 2  # commander is #1
+            next_id = 1  # first agent
 
         # --- cost calculation ---
-        # Cost scales with total agent count (including commander),
-        # not the ID number. This keeps costs fair after agent losses.
-        n = current_count + 1  # what the count will be after training
+        # Cost scales with how many agents you'll have after training
+        n = current_count + 1
         cost = {res: base * n for res, base in BASE_TRAINING_COST.items()}
 
         if not player.has_resources(cost):
@@ -143,7 +137,7 @@ class AgentSystem:
 
         # --- compute training time ---
         academy_level = getattr(academy_building.db, "building_level", 1) if academy_building else 1
-        reduction = 0.15 * academy_level
+        reduction = ACADEMY_TRAINING_REDUCTION_PER_LEVEL * academy_level
         training_ticks = max(1, int(BASE_TRAINING_TICKS * (1 - reduction)))
 
         # Store training state on the academy building using explicit
@@ -294,10 +288,23 @@ class AgentSystem:
         # Attach the behavior script for this role
         self._attach_behavior_script(agent, role)
 
-        # Move agent to building tile or keep in army pool
-        if target_building is not None and hasattr(agent, "move_to"):
-            loc = getattr(target_building, "location", target_building)
-            agent.move_to(loc, quiet=True)
+        # Move agent to building coordinates via PlanetRoom.move_entity
+        if target_building is not None:
+            bx = getattr(getattr(target_building, "db", None), "coord_x", None)
+            by = getattr(getattr(target_building, "db", None), "coord_y", None)
+            if bx is not None and by is not None:
+                # Agent is already in the PlanetRoom — just update coordinates
+                planet_room = getattr(agent, "location", None)
+                if planet_room is not None and hasattr(planet_room, "move_entity"):
+                    planet_room.move_entity(agent, int(bx), int(by))
+                else:
+                    # Fallback: set coordinates directly
+                    agent.db.coord_x = int(bx)
+                    agent.db.coord_y = int(by)
+            elif hasattr(agent, "move_to"):
+                # Legacy fallback: building doesn't have coordinates yet
+                loc = getattr(target_building, "location", target_building)
+                agent.move_to(loc, quiet=True)
 
         return True, f"Agent #{agent_id} assigned as {role}."
 
@@ -332,11 +339,22 @@ class AgentSystem:
         agent.db.role = ""
         agent.db.role_target = None
 
-        # Attempt to move agent to player's HQ
+        # Attempt to move agent to player's HQ coordinates
         hq = self._find_hq(player)
-        if hq is not None and hasattr(agent, "move_to"):
-            loc = getattr(hq, "location", hq)
-            agent.move_to(loc, quiet=True)
+        if hq is not None:
+            hx = getattr(getattr(hq, "db", None), "coord_x", None)
+            hy = getattr(getattr(hq, "db", None), "coord_y", None)
+            if hx is not None and hy is not None:
+                planet_room = getattr(agent, "location", None)
+                if planet_room is not None and hasattr(planet_room, "move_entity"):
+                    planet_room.move_entity(agent, int(hx), int(hy))
+                else:
+                    agent.db.coord_x = int(hx)
+                    agent.db.coord_y = int(hy)
+            elif hasattr(agent, "move_to"):
+                # Legacy fallback: HQ doesn't have coordinates yet
+                loc = getattr(hq, "location", hq)
+                agent.move_to(loc, quiet=True)
 
         return True, f"Agent #{agent_id} unassigned and returned to HQ."
 
@@ -375,26 +393,32 @@ class AgentSystem:
         return None
 
     def get_agent_count(self, player: Any) -> int:
-        """Total agent count including the commander (ID 1)."""
-        # Commander is always counted as 1
-        return 1 + len(self.get_agents(player))
+        """Total number of trained agent NPCs owned by the player."""
+        return len(self.get_agents(player))
+
+    def get_max_agents(self, player: Any) -> int:
+        """Return the max agent slots for the player's current rank.
+
+        agent_cap in YAML includes the commander slot, so the usable
+        agent-only cap is ``agent_cap - 1``.
+        """
+        rank_def = self.registry.get_rank_for_xp(player.db.combat_xp)
+        return rank_def.agent_cap - 1
 
     # ------------------------------------------------------------------ #
     #  Demotion / Promotion  (Req 7b.13, 4.6)
     # ------------------------------------------------------------------ #
 
     def handle_demotion(self, player: Any, new_agent_cap: int) -> None:
-        """Reserve highest-ID agents that exceed *new_agent_cap*.
+        """Reserve highest-ID agents that exceed the new cap.
 
-        Reserved agents keep their role but cannot be reassigned.
+        new_agent_cap includes the commander slot, so agent-only max = cap - 1.
         """
         agents = self.get_agents(player)
-        # Sort by agent_id descending so highest IDs are first
         agents.sort(key=lambda a: getattr(a.db, "agent_id", 0), reverse=True)
 
-        # Current total including commander
-        total = 1 + len(agents)
-        excess = total - new_agent_cap
+        max_agents = new_agent_cap - 1
+        excess = len(agents) - max_agents
         if excess <= 0:
             return
 
@@ -406,17 +430,17 @@ class AgentSystem:
                 excess -= 1
 
     def handle_promotion(self, player: Any, new_agent_cap: int) -> None:
-        """Restore reserved agents up to *new_agent_cap* (lowest IDs first)."""
+        """Restore reserved agents up to the new cap (lowest IDs first).
+
+        new_agent_cap includes the commander slot, so agent-only max = cap - 1.
+        """
         agents = self.get_agents(player)
-        # Sort by agent_id ascending so lowest IDs are restored first
         agents.sort(key=lambda a: getattr(a.db, "agent_id", 0))
 
-        total = 1 + len(agents)
+        max_agents = new_agent_cap - 1
         reserved = [a for a in agents if getattr(a.db, "reserve", False)]
-
-        # How many slots are available?
-        non_reserved = total - len(reserved)
-        slots_available = new_agent_cap - non_reserved
+        active = len(agents) - len(reserved)
+        slots_available = max_agents - active
 
         for agent in reserved:
             if slots_available <= 0:
@@ -429,7 +453,7 @@ class AgentSystem:
     # ------------------------------------------------------------------ #
 
     # How often to send training progress updates (in ticks/seconds)
-    TRAINING_PROGRESS_INTERVAL = 5
+    # (imported from world.constants)
 
     def process_training_tick(self, buildings: list) -> None:
         """Decrement training timers on Academy buildings and spawn agents.
@@ -461,7 +485,7 @@ class AgentSystem:
                 continue
 
             # Periodic progress update — only if player is inside the Academy
-            if remaining % self.TRAINING_PROGRESS_INTERVAL == 0:
+            if remaining % TRAINING_PROGRESS_INTERVAL == 0:
                 player = self._get_building_attr(building, "training_owner")
                 if player is not None and hasattr(player, "msg"):
                     if self._player_inside_building(player, building):

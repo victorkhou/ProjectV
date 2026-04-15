@@ -92,11 +92,10 @@ def initialize_game() -> dict:
     #  3b. Initialize Procedural Coordinate World systems
     # ---------------------------------------------------------- #
     planet_registry = None
-    tile_resolver = None
     fog_system = None
     procedural_map_renderer = None
-    garbage_collector = None
     terrain_generators = None
+    map_data_provider = None
     planet_rooms: dict[str, Any] = {}
 
     try:
@@ -104,11 +103,8 @@ def initialize_game() -> dict:
 
         from world.coordinate.planet_registry import PlanetRegistry
         from world.coordinate.terrain_generator import TerrainGenerator
-        from world.coordinate.room_cache import RoomCache
-        from world.coordinate.tile_resolver import TileResolver
         from world.coordinate.fog_of_war import FogOfWarSystem
         from world.coordinate.procedural_map_renderer import ProceduralMapRenderer
-        from world.coordinate.garbage_collector import RoomGarbageCollector
 
         # 1. PlanetRegistry — load planets.yaml
         planet_registry = PlanetRegistry()
@@ -128,21 +124,10 @@ def initialize_game() -> dict:
             "TerrainGenerators created for %d planet(s).", len(terrain_generators)
         )
 
-        # 3. RoomCache
+        # 3. Balance config for fog system
         balance = getattr(registry, "balance", None)
-        cache_max = getattr(balance, "room_cache_max_size", 1000) if balance else 1000
-        room_cache = RoomCache(max_size=cache_max)
-        logger.info("RoomCache initialized (max_size=%d).", cache_max)
 
-        # 4. TileResolver
-        tile_resolver = TileResolver(
-            planet_registry=planet_registry,
-            terrain_generators=terrain_generators,
-            room_cache=room_cache,
-        )
-        logger.info("TileResolver initialized.")
-
-        # 5. FogOfWarSystem
+        # 4. FogOfWarSystem
         if balance:
             fog_system = FogOfWarSystem(balance)
         else:
@@ -150,35 +135,23 @@ def initialize_game() -> dict:
             fog_system = FogOfWarSystem(BalanceConfig())
         logger.info("FogOfWarSystem initialized.")
 
-        # 6. ProceduralMapRenderer
+        # 5. ProceduralMapRenderer
         procedural_map_renderer = ProceduralMapRenderer(
-            tile_resolver=tile_resolver,
             fog_system=fog_system,
             terrain_generators=terrain_generators,
             data_registry=registry,
         )
         logger.info("ProceduralMapRenderer initialized.")
 
-        # 6b. MapDataProvider (graphical webclient)
+        # 5b. MapDataProvider (graphical webclient)
         from world.coordinate.map_data_provider import MapDataProvider
         map_data_provider = MapDataProvider(
-            tile_resolver=tile_resolver,
             fog_system=fog_system,
             terrain_generators=terrain_generators,
         )
         logger.info("MapDataProvider initialized.")
 
-        # 7. RoomGarbageCollector
-        gc_interval = getattr(balance, "gc_interval_ticks", 100) if balance else 100
-        gc_min_age = getattr(balance, "gc_min_age_ticks", 50) if balance else 50
-        garbage_collector = RoomGarbageCollector(
-            room_cache=room_cache,
-            interval_ticks=gc_interval,
-            min_age_ticks=gc_min_age,
-        )
-        logger.info("RoomGarbageCollector initialized.")
-
-        # 8. Shared PlanetRooms — one room per planet
+        # 6. Shared PlanetRooms — one room per planet
         planet_rooms: dict[str, Any] = {}
         try:
             from typeclasses.rooms import PlanetRoom
@@ -265,11 +238,9 @@ def initialize_game() -> dict:
         "notification_system": notification_system,
         "metrics": metrics,
         "planet_registry": planet_registry,
-        "tile_resolver": tile_resolver,
         "fog_system": fog_system,
         "procedural_map_renderer": procedural_map_renderer,
         "map_data_provider": map_data_provider,
-        "garbage_collector": garbage_collector,
         "_terrain_generators": terrain_generators,
         "planet_rooms": planet_rooms,
     })

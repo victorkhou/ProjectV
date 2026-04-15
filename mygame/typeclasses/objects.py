@@ -28,200 +28,89 @@ class ObjectParent:
 
 
 class Object(ObjectParent, DefaultObject):
-    """
-    This is the root Object typeclass, representing all entities that
-    have an actual presence in-game. DefaultObjects generally have a
-    location. They can also be manipulated and looked at. Game
-    entities you define should inherit from DefaultObject at some distance.
-
-    It is recommended to create children of this class using the
-    `evennia.create_object()` function rather than to initialize the class
-    directly - this will both set things up and efficiently save the object
-    without `obj.save()` having to be called explicitly.
-
-    Note: Check the autodocs for complete class members, this may not always
-    be up-to date.
-
-    * Base properties defined/available on all Objects
-
-     key (string) - name of object
-     name (string)- same as key
-     dbref (int, read-only) - unique #id-number. Also "id" can be used.
-     date_created (string) - time stamp of object creation
-
-     account (Account) - controlling account (if any, only set together with
-                       sessid below)
-     sessid (int, read-only) - session id (if any, only set together with
-                       account above). Use `sessions` handler to get the
-                       Sessions directly.
-     location (Object) - current location. Is None if this is a room
-     home (Object) - safety start-location
-     has_account (bool, read-only)- will only return *connected* accounts
-     contents (list, read only) - returns all objects inside this object
-     exits (list of Objects, read-only) - returns all exits from this
-                       object, if any
-     destination (Object) - only set if this object is an exit.
-     is_superuser (bool, read-only) - True/False if this user is a superuser
-     is_connected (bool, read-only) - True if this object is associated with
-                            an Account with any connected sessions.
-     has_account (bool, read-only) - True is this object has an associated account.
-     is_superuser (bool, read-only): True if this object has an account and that
-                        account is a superuser.
-
-    * Handlers available
-
-     aliases - alias-handler: use aliases.add/remove/get() to use.
-     permissions - permission-handler: use permissions.add/remove() to
-                   add/remove new perms.
-     locks - lock-handler: use locks.add() to add new lock strings
-     scripts - script-handler. Add new scripts to object with scripts.add()
-     cmdset - cmdset-handler. Use cmdset.add() to add new cmdsets to object
-     nicks - nick-handler. New nicks with nicks.add().
-     sessions - sessions-handler. Get Sessions connected to this
-                object with sessions.get()
-     attributes - attribute-handler. Use attributes.add/remove/get.
-     db - attribute-handler: Shortcut for attribute-handler. Store/retrieve
-            database attributes using self.db.myattr=val, val=self.db.myattr
-     ndb - non-persistent attribute handler: same as db but does not create
-            a database entry when storing data
-
-    * Helper methods (see src.objects.objects.py for full headers)
-
-     get_search_query_replacement(searchdata, **kwargs)
-     get_search_direct_match(searchdata, **kwargs)
-     get_search_candidates(searchdata, **kwargs)
-     get_search_result(searchdata, attribute_name=None, typeclass=None,
-                       candidates=None, exact=False, use_dbref=None, tags=None, **kwargs)
-     get_stacked_result(results, **kwargs)
-     handle_search_results(searchdata, results, **kwargs)
-     search(searchdata, global_search=False, use_nicks=True, typeclass=None,
-            location=None, attribute_name=None, quiet=False, exact=False,
-            candidates=None, use_locks=True, nofound_string=None,
-            multimatch_string=None, use_dbref=None, tags=None, stacked=0)
-     search_account(searchdata, quiet=False)
-     execute_cmd(raw_string, session=None, **kwargs))
-     msg(text=None, from_obj=None, session=None, options=None, **kwargs)
-     for_contents(func, exclude=None, **kwargs)
-     msg_contents(message, exclude=None, from_obj=None, mapping=None,
-                  raise_funcparse_errors=False, **kwargs)
-     move_to(destination, quiet=False, emit_to_obj=None, use_destination=True)
-     clear_contents()
-     create(key, account, caller, method, **kwargs)
-     copy(new_key=None)
-     at_object_post_copy(new_obj, **kwargs)
-     delete()
-     is_typeclass(typeclass, exact=False)
-     swap_typeclass(new_typeclass, clean_attributes=False, no_default=True)
-     access(accessing_obj, access_type='read', default=False,
-            no_superuser_bypass=False, **kwargs)
-     filter_visible(obj_list, looker, **kwargs)
-     get_default_lockstring()
-     get_cmdsets(caller, current, **kwargs)
-     check_permstring(permstring)
-     get_cmdset_providers()
-     get_display_name(looker=None, **kwargs)
-     get_extra_display_name_info(looker=None, **kwargs)
-     get_numbered_name(count, looker, **kwargs)
-     get_display_header(looker, **kwargs)
-     get_display_desc(looker, **kwargs)
-     get_display_exits(looker, **kwargs)
-     get_display_characters(looker, **kwargs)
-     get_display_things(looker, **kwargs)
-     get_display_footer(looker, **kwargs)
-     format_appearance(appearance, looker, **kwargs)
-     return_apperance(looker, **kwargs)
-
-    * Hooks (these are class methods, so args should start with self):
-
-     basetype_setup()     - only called once, used for behind-the-scenes
-                            setup. Normally not modified.
-     basetype_posthook_setup() - customization in basetype, after the object
-                            has been created; Normally not modified.
-
-     at_object_creation() - only called once, when object is first created.
-                            Object customizations go here.
-     at_object_delete() - called just before deleting an object. If returning
-                            False, deletion is aborted. Note that all objects
-                            inside a deleted object are automatically moved
-                            to their <home>, they don't need to be removed here.
-
-     at_init()            - called whenever typeclass is cached from memory,
-                            at least once every server restart/reload
-     at_first_save()
-     at_cmdset_get(**kwargs) - this is called just before the command handler
-                            requests a cmdset from this object. The kwargs are
-                            not normally used unless the cmdset is created
-                            dynamically (see e.g. Exits).
-     at_pre_puppet(account)- (account-controlled objects only) called just
-                            before puppeting
-     at_post_puppet()     - (account-controlled objects only) called just
-                            after completing connection account<->object
-     at_pre_unpuppet()    - (account-controlled objects only) called just
-                            before un-puppeting
-     at_post_unpuppet(account) - (account-controlled objects only) called just
-                            after disconnecting account<->object link
-     at_server_reload()   - called before server is reloaded
-     at_server_shutdown() - called just before server is fully shut down
-
-     at_access(result, accessing_obj, access_type) - called with the result
-                            of a lock access check on this object. Return value
-                            does not affect check result.
-
-     at_pre_move(destination)             - called just before moving object
-                        to the destination. If returns False, move is cancelled.
-     announce_move_from(destination)         - called in old location, just
-                        before move, if obj.move_to() has quiet=False
-     announce_move_to(source_location)       - called in new location, just
-                        after move, if obj.move_to() has quiet=False
-     at_post_move(source_location)          - always called after a move has
-                        been successfully performed.
-     at_pre_object_leave(leaving_object, destination, **kwargs)
-     at_object_leave(obj, target_location, move_type="move", **kwargs)
-     at_object_leave(obj, target_location)   - called when an object leaves
-                        this object in any fashion
-     at_pre_object_receive(obj, source_location)
-     at_object_receive(obj, source_location, move_type="move", **kwargs) - called when this object receives
-                        another object
-     at_post_move(source_location, move_type="move", **kwargs)
-
-     at_traverse(traversing_object, target_location, **kwargs) - (exit-objects only)
-                              handles all moving across the exit, including
-                              calling the other exit hooks. Use super() to retain
-                              the default functionality.
-     at_post_traverse(traversing_object, source_location) - (exit-objects only)
-                              called just after a traversal has happened.
-     at_failed_traverse(traversing_object)      - (exit-objects only) called if
-                       traversal fails and property err_traverse is not defined.
-
-     at_msg_receive(self, msg, from_obj=None, **kwargs) - called when a message
-                             (via self.msg()) is sent to this obj.
-                             If returns false, aborts send.
-     at_msg_send(self, msg, to_obj=None, **kwargs) - called when this objects
-                             sends a message to someone via self.msg().
-
-     return_appearance(looker) - describes this object. Used by "look"
-                                 command by default
-     at_desc(looker=None)      - called by 'look' whenever the
-                                 appearance is requested.
-     at_pre_get(getter, **kwargs)
-     at_get(getter)            - called after object has been picked up.
-                                 Does not stop pickup.
-     at_pre_give(giver, getter, **kwargs)
-     at_give(giver, getter, **kwargs)
-     at_pre_drop(dropper, **kwargs)
-     at_drop(dropper, **kwargs)          - called when this object has been dropped.
-     at_pre_say(speaker, message, **kwargs)
-     at_say(message, msg_self=None, msg_location=None, receivers=None, msg_receivers=None, **kwargs)
-
-     at_look(target, **kwargs)
-     at_desc(looker=None)
-
-    """
-
     pass
 
 
-class GameItem(DefaultObject):
+# ------------------------------------------------------------------ #
+#  Game object base
+# ------------------------------------------------------------------ #
+
+class GameEntity(DefaultObject):
+    """Base class for all game-world objects (buildings, items, drops, etc).
+
+    Provides a consistent pattern for:
+    - Tag-based type identification via ``object_type`` category
+    - Structured state export for UI/API
+    - Display name customization
+
+    Subclasses should:
+    1. Set ``_object_type_tag`` to a unique string (e.g. "building")
+    2. Override ``at_object_creation`` (calling super) to set attributes
+    3. Override ``get_structured_state`` for UI export
+
+    All game entities are tagged ``(tag, "object_type")`` at creation
+    for efficient DB queries and room-content filtering.
+    """
+
+    #: Override in subclasses — the tag value for this object type.
+    #: Used by at_object_creation to auto-tag, and by classmethods
+    #: to query objects of this type.
+    _object_type_tag: str = "game_entity"
+
+    def at_object_creation(self):
+        """Tag the object and initialize coordinate attributes."""
+        if self._object_type_tag:
+            self.tags.add(self._object_type_tag, category="object_type")
+        # Coordinate attributes — None means "not placed on the map"
+        self.db.coord_x = None
+        self.db.coord_y = None
+
+    def at_pre_get(self, getter, **kwargs):
+        """Block pickup if getter is not at the same coordinates."""
+        if self.db.coord_x is None:
+            return True  # not placed, allow
+        gx = getattr(getattr(getter, "db", None), "coord_x", None)
+        gy = getattr(getattr(getter, "db", None), "coord_y", None)
+        if gx is None or gy is None:
+            return False
+        if int(gx) != int(self.db.coord_x) or int(gy) != int(self.db.coord_y):
+            getter.msg("That's not here.")
+            return False
+        return True
+
+    def get_structured_state(self) -> dict:
+        """Return a presentation-agnostic dict of this object's state.
+
+        Override in subclasses to add type-specific fields.
+        """
+        return {
+            "key": self.key,
+            "type_tag": self._object_type_tag,
+        }
+
+    @classmethod
+    def get_all(cls) -> list:
+        """Query all objects of this type from the DB via tag."""
+        try:
+            from evennia.utils.search import search_object_by_tag
+            return list(search_object_by_tag(
+                key=cls._object_type_tag, category="object_type"
+            ))
+        except Exception:
+            return []
+
+    @classmethod
+    def get_in_room(cls, room) -> list:
+        """Return all objects of this type in a room's contents."""
+        tag = cls._object_type_tag
+        results = []
+        for obj in getattr(room, "contents", []):
+            if hasattr(obj, "tags") and obj.tags.get(tag, category="object_type"):
+                results.append(obj)
+        return results
+
+
+class GameItem(GameEntity):
     """A unified item object. Slot type and stats come from the item definition.
 
     All equippable/usable items use this single typeclass. Items are
@@ -238,6 +127,19 @@ class GameItem(DefaultObject):
 
     Requirements: 18.6, 18.7
     """
+
+    _object_type_tag = "item"
+
+    def at_get(self, getter, **kwargs):
+        """Clear coordinates when picked up."""
+        self.db.coord_x = None
+        self.db.coord_y = None
+
+    def at_drop(self, dropper, **kwargs):
+        """Set coordinates to dropper's position when dropped."""
+        if hasattr(dropper, "db"):
+            self.db.coord_x = getattr(dropper.db, "coord_x", None)
+            self.db.coord_y = getattr(dropper.db, "coord_y", None)
 
     @property
     def item_def(self):
@@ -305,7 +207,7 @@ class GameItem(DefaultObject):
         }
 
 
-class Building(DefaultObject):
+class Building(GameEntity):
     """A building placed on an overworld tile.
 
     Uses simple Evennia Attributes for all persistent state so the class
@@ -321,6 +223,8 @@ class Building(DefaultObject):
 
     Requirements: 3.6, 3.7, 3.8, 10.1, 10.5, 27.1
     """
+
+    _object_type_tag = "building"
 
     # ------------------------------------------------------------------ #
     #  Properties
@@ -417,3 +321,123 @@ class Building(DefaultObject):
             "hp_max": self.attributes.get("hp_max", default=0),
             "offline": self.is_offline,
         }
+
+
+class ResourceDrop(GameEntity):
+    """A stack of resources dropped on the ground or in a building.
+
+    Lightweight Evennia object representing harvestable/collectable
+    resources. Uses stacking: multiple drops of the same type on the
+    same tile merge into one object with a higher ``amount``.
+
+    Attributes:
+        resource_type (str): "Wood", "Stone", "Iron", etc.
+        amount (int): How many units in this stack.
+
+    Tags:
+        ``resource_drop`` (category ``object_type``) — for DB queries.
+    """
+
+    _object_type_tag = "resource_drop"
+
+    def at_object_creation(self):
+        """Set defaults."""
+        super().at_object_creation()
+        self.db.resource_type = ""
+        self.db.amount = 0
+        self.locks.add("get:all()")
+
+    def get_display_name(self, looker=None, **kwargs):
+        """Show as '5 Wood' instead of the object key."""
+        amt = self.db.amount or 0
+        rtype = self.db.resource_type or "Resource"
+        return f"{amt} {rtype}"
+
+    def get_numbered_name(self, count, looker, **kwargs):
+        """Support Evennia's stacking display."""
+        return self.get_display_name(looker), self.key
+
+    def at_get(self, getter, **kwargs):
+        """When picked up, add to the getter's resources and schedule deletion.
+
+        The object has already been moved to the getter's inventory by
+        Evennia's get command. We add the resources, then schedule
+        deletion on the next tick to avoid issues with the command
+        referencing the object after this hook.
+        """
+        amt = self.db.amount or 0
+        rtype = self.db.resource_type or ""
+        if amt > 0 and rtype and hasattr(getter, "add_resource"):
+            getter.add_resource(rtype, amt)
+            total = getter.get_resource(rtype) if hasattr(getter, "get_resource") else amt
+            getter.msg(f"Picked up {amt} {rtype} (total: {total}).")
+        # Zero out so it can't be double-collected
+        self.db.amount = 0
+        # Delete after the command finishes processing
+        from evennia.utils import delay
+        delay(0, self.delete)
+
+    def at_pre_get(self, getter, **kwargs):
+        """Block pickup if getter is not at the same coordinates."""
+        if self.db.coord_x is None:
+            return True  # not placed on the map, allow
+        gx = getattr(getattr(getter, "db", None), "coord_x", None)
+        gy = getattr(getattr(getter, "db", None), "coord_y", None)
+        if gx is None or gy is None:
+            return False
+        if int(gx) != int(self.db.coord_x) or int(gy) != int(self.db.coord_y):
+            getter.msg("That's not here.")
+            return False
+        return True
+
+
+def spawn_resource_drop(location, resource_type, amount, x=None, y=None):
+    """Create or merge a ResourceDrop at *location*.
+
+    If a ResourceDrop of the same type already exists at the location
+    (and at the same coordinates when x/y are provided), adds to it
+    instead of creating a new object.
+
+    Args:
+        location: Room/tile to place the drop in (PlanetRoom or legacy room).
+        resource_type: "Wood", "Stone", etc.
+        amount: Number of units.
+        x: Optional x coordinate for PlanetRoom-based placement.
+        y: Optional y coordinate for PlanetRoom-based placement.
+
+    Returns:
+        The ResourceDrop object.
+    """
+    if amount <= 0:
+        return None
+
+    # When coordinates are provided, use PlanetRoom coordinate query for merge
+    if x is not None and y is not None and hasattr(location, "get_objects_at"):
+        for obj in location.get_objects_at(x, y, type_tag="resource_drop"):
+            if getattr(obj.db, "resource_type", None) == resource_type:
+                obj.db.amount = (obj.db.amount or 0) + amount
+                return obj
+    else:
+        # Legacy path: merge with any drop of same type in the room
+        for obj in ResourceDrop.get_in_room(location):
+            if getattr(obj.db, "resource_type", None) == resource_type:
+                obj.db.amount = (obj.db.amount or 0) + amount
+                return obj
+
+    # Create new drop
+    import evennia
+    drop = evennia.create_object(
+        "typeclasses.objects.ResourceDrop",
+        key=resource_type,
+        location=location,
+    )
+    drop.db.resource_type = resource_type
+    drop.db.amount = amount
+    if x is not None and y is not None:
+        drop.db.coord_x = x
+        drop.db.coord_y = y
+        # at_object_receive saw coord_x=None during create_object,
+        # so manually register in the coordinate index now.
+        if hasattr(location, "coord_index"):
+            location.coord_index.add(drop, x, y)
+    return drop

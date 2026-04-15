@@ -2,7 +2,11 @@
 # Each entry defines a separate coordinate space with its own dimensions,
 # terrain seed, terrain weights, and room persistence type.
 # z_level provides a numeric shorthand for teleport (e.g. teleport 50,50,0)
-# Phase 1: 6 planets with rank-gated progression
+# Phase 1: 6 planets with level-gated progression
+#
+# rank_requirement is now a LEVEL requirement (1-60).
+# Old rank → level mapping: rank N → level (N-1)*5 + 1
+# Terra=1, Forge=21, Tundra=31, Space=31, Inferno=41, Citadel=51
 
 planets:
   - planet_key: "terra"
@@ -46,7 +50,7 @@ planets:
     persistence_type: "static"
     spawn_x: 200
     spawn_y: 200
-    rank_requirement: 5
+    rank_requirement: 21
 
   - planet_key: "tundra"
     planet_type: "frozen"
@@ -67,7 +71,7 @@ planets:
     persistence_type: "static"
     spawn_x: 200
     spawn_y: 200
-    rank_requirement: 7
+    rank_requirement: 31
 
   - planet_key: "inferno"
     planet_type: "volcanic"
@@ -88,7 +92,7 @@ planets:
     persistence_type: "static"
     spawn_x: 150
     spawn_y: 150
-    rank_requirement: 9
+    rank_requirement: 41
 
   - planet_key: "citadel"
     planet_type: "fortress"
@@ -109,7 +113,7 @@ planets:
     persistence_type: "static"
     spawn_x: 100
     spawn_y: 100
-    rank_requirement: 11
+    rank_requirement: 51
 
   - planet_key: "space"
     planet_type: "space"
@@ -130,4 +134,4 @@ planets:
     persistence_type: "static"
     spawn_x: 500
     spawn_y: 500
-    rank_requirement: 7
+    rank_requirement: 31

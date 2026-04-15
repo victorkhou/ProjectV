@@ -118,10 +118,14 @@ class FakeArmor:
         return float(self.stat_modifiers.get(stat_name, default))
 
 class FakeTile:
-    """Lightweight stand-in for an OverworldRoom tile."""
+    """Lightweight stand-in for a tile."""
     def __init__(self, xyz=(0, 0, "earth"), nearby_players=None):
         self.x = xyz[0]
         self.y = xyz[1]
+        self.db = type("_Db", (), {
+            "coord_x": xyz[0],
+            "coord_y": xyz[1],
+        })()
         self._nearby_players = nearby_players or []
 
     def get_nearby_players(self, radius):

@@ -1,19 +1,18 @@
 """
 NPC typeclass — base for agents, enemies, and vendors.
 
-Extends ``DefaultObject`` (not ``DefaultCharacter``) because NPCs do not
+Extends ``GameEntity`` (which extends ``DefaultObject``) because NPCs do not
 need account puppeting, command sets, or session handling.  Behavior is
 driven by Evennia Scripts attached to the NPC object.
 
 Requirements: 7.7, 7.8, 7.9, 7.10
 """
 
-from evennia.objects.objects import DefaultObject
-
 from typeclasses.combat_entity import CombatEntity
+from typeclasses.objects import GameEntity
 
 
-class NPC(CombatEntity, DefaultObject):
+class NPC(CombatEntity, GameEntity):
     """Base NPC typeclass for agents, enemies, and vendors.
 
     Attributes (``db.*``):
@@ -26,13 +25,17 @@ class NPC(CombatEntity, DefaultObject):
         reserve:     ``True`` if placed in reserve due to demotion
 
     Tags:
+        ``("npc", "object_type")``             — for coordinate index queries
         ``("agent", "npc_type")``              — for efficient NPC-type queries
         ``("player_<owner_id>", "agent_owner")`` — added when owner is set
     """
 
+    _object_type_tag = "npc"
+
     def at_object_creation(self):
         """Called once when the object is first created."""
-        self.at_combat_entity_init()
+        super().at_object_creation()  # GameEntity tags + coord init
+        self.at_combat_entity_init()  # CombatEntity HP/equipment
 
         self.db.owner = None
         self.db.npc_type = "agent"

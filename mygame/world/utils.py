@@ -46,23 +46,18 @@ def get_game_systems() -> dict:
 def get_coords(obj: Any) -> tuple[int, int] | None:
     """Extract (x, y) coordinates from an object.
 
-    Checks coord_x/coord_y first (player in PlanetRoom),
-    then x/y (OverworldRoom or building location).
+    Checks coord_x/coord_y attributes on the object.
     """
     if hasattr(obj, "db"):
         cx = getattr(obj.db, "coord_x", None)
         cy = getattr(obj.db, "coord_y", None)
         if cx is not None and cy is not None:
             return (int(cx), int(cy))
-    x = getattr(obj, "x", None)
-    y = getattr(obj, "y", None)
-    if x is not None and y is not None:
-        return (int(x), int(y))
     return None
 
 
 def ensure_coords(caller: Any) -> tuple[Any, Any, str | None]:
-    """Ensure caller has valid coordinates, syncing from room if needed.
+    """Ensure caller has valid coordinates.
 
     Returns (x, y, planet) or (None, None, None) if unresolvable.
     """
@@ -73,20 +68,13 @@ def ensure_coords(caller: Any) -> tuple[Any, Any, str | None]:
     if x is not None and y is not None and planet:
         return x, y, planet
 
+    # Try to sync planet from PlanetRoom location
     loc = getattr(caller, "location", None)
     if loc is not None and hasattr(loc, "planet_name"):
         rp = getattr(loc, "planet_name", None)
         if rp and rp != "unknown":
-            rx = getattr(loc, "x", None)
-            ry = getattr(loc, "y", None)
-            if rx is not None and ry is not None:
-                caller.db.coord_x = rx
-                caller.db.coord_y = ry
-                caller.db.coord_planet = rp
-                return rx, ry, rp
-            elif rp:
-                caller.db.coord_planet = rp
-                planet = rp
+            caller.db.coord_planet = rp
+            planet = rp
 
     if hasattr(caller, "_ensure_overworld_position"):
         caller._ensure_overworld_position()
@@ -163,9 +151,9 @@ def is_building(entity: Any) -> bool:
 def player_at_building(player: Any, building: Any) -> bool:
     """Return True if the player is at the same tile as the building.
 
-    Checks player's ``db.coord_x/coord_y`` first, then falls back to
-    the player's location object's ``x/y`` properties. Compares against
-    the building's tile location coordinates.
+    Compares player coordinates against building coordinates.
+    Reads ``db.coord_x/coord_y`` first, falls back to location
+    properties for backward compatibility with test fakes.
     """
     # Get player coordinates — try db attrs, then location object
     px = getattr(getattr(player, "db", None), "coord_x", None)
@@ -173,20 +161,26 @@ def player_at_building(player: Any, building: Any) -> bool:
     if px is None or py is None:
         player_loc = getattr(player, "location", None)
         if player_loc is not None:
-            px = getattr(player_loc, "x", None) or getattr(getattr(player_loc, "db", None), "x", None)
-            py = getattr(player_loc, "y", None) or getattr(getattr(player_loc, "db", None), "y", None)
+            px = getattr(player_loc, "x", None)
+            py = getattr(player_loc, "y", None)
+            if px is None and hasattr(player_loc, "db"):
+                px = getattr(player_loc.db, "coord_x", None)
+                py = getattr(player_loc.db, "coord_y", None)
     if px is None or py is None:
         return False
 
-    # Get building coordinates — try building.location, then building itself
-    loc = getattr(building, "location", None)
-    if loc is not None:
-        bx = getattr(loc, "x", None) or getattr(getattr(loc, "db", None), "x", None)
-        by = getattr(loc, "y", None) or getattr(getattr(loc, "db", None), "y", None)
-    else:
-        bx = getattr(building, "x", None) or getattr(getattr(building, "db", None), "x", None)
-        by = getattr(building, "y", None) or getattr(getattr(building, "db", None), "y", None)
-
+    # Get building coordinates — prefer db.coord_x/coord_y
+    bx = getattr(getattr(building, "db", None), "coord_x", None)
+    by = getattr(getattr(building, "db", None), "coord_y", None)
+    if bx is None or by is None:
+        # Fallback: try building.location for legacy rooms / test fakes
+        loc = getattr(building, "location", None)
+        if loc is not None:
+            bx = getattr(loc, "x", None)
+            by = getattr(loc, "y", None)
+            if bx is None and hasattr(loc, "db"):
+                bx = getattr(loc.db, "coord_x", None)
+                by = getattr(loc.db, "coord_y", None)
     if bx is None or by is None:
         return False
 
@@ -314,7 +308,23 @@ def _get_rank_name(player: Any) -> str:
     rank_name = getattr(player, "rank_name", None)
     if rank_name:
         return rank_name
-    rank_level = getattr(player, "rank_level", None)
-    if rank_level is not None:
-        return f"Rank {rank_level}"
+    try:
+        from world.systems.rank_system import rank_from_level
+        level = getattr(getattr(player, "db", None), "level", None)
+        if level is None:
+            level = getattr(getattr(player, "db", None), "rank_level", None)
+        if level is not None:
+            rank_num = rank_from_level(int(level))
+            try:
+                from server.conf.game_init import game_systems
+                registry = game_systems.get("registry")
+                if registry:
+                    for r in registry.ranks:
+                        if r.level == rank_num:
+                            return r.name.replace("_", " ")
+            except (ImportError, AttributeError):
+                pass
+            return f"Rank {rank_num}"
+    except (ImportError, AttributeError):
+        pass
     return "Recruit"

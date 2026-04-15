@@ -2,7 +2,7 @@
 Custom admin panel for RTS Combat Overworld.
 
 Extends the default Evennia admin with game-specific columns and
-filters for OverworldRooms, CombatCharacters, Buildings, and Scripts.
+filters for CombatCharacters, Buildings, PlanetRooms, and Scripts.
 """
 
 from django.contrib import admin
@@ -86,37 +86,27 @@ class GameObjectAdmin(ObjectAdmin):
     typeclass_short.admin_order_field = "db_typeclass_path"
 
     def game_coords(self, obj):
-        """Show coordinates for rooms and characters."""
+        """Show coordinates for rooms, characters, and buildings."""
         tc = obj.db_typeclass_path or ""
-        if "OverworldRoom" in tc:
-            x = _get_attr(obj, "x", "?")
-            y = _get_attr(obj, "y", "?")
-            planet = _get_attr(obj, "planet", "?")
-            return f"({x}, {y}) {planet}"
         if "CombatCharacter" in tc or "Character" in tc:
             x = _get_attr(obj, "coord_x", "")
             y = _get_attr(obj, "coord_y", "")
             planet = _get_attr(obj, "coord_planet", "")
             if x != "" and y != "" and planet:
                 return f"({x}, {y}) {planet}"
+        # Buildings with coordinates
+        if _get_attr(obj, "building_type"):
+            x = _get_attr(obj, "coord_x", "")
+            y = _get_attr(obj, "coord_y", "")
+            if x != "" and y != "":
+                return f"({x}, {y})"
         return ""
     game_coords.short_description = "Coords"
 
     def game_terrain(self, obj):
-        """Show terrain type and persistence for rooms."""
-        tc = obj.db_typeclass_path or ""
-        if "OverworldRoom" not in tc:
-            return ""
-        terrain = _get_tag(obj, "terrain")
-        ptype = _get_tag(obj, "persistence_type")
-        parts = []
-        if terrain:
-            parts.append(terrain)
-        if ptype:
-            color = "#6abf69" if ptype == "static" else "#c9a84c"
-            parts.append(mark_safe(f'<span style="color:{color};">{ptype}</span>'))
-        return mark_safe(" | ".join(str(p) for p in parts)) if parts else ""
-    game_terrain.short_description = "Terrain / Persist"
+        """Show terrain type for rooms (placeholder — terrain is procedural)."""
+        return ""
+    game_terrain.short_description = "Terrain"
 
     def game_hp(self, obj):
         """Show HP for characters and buildings."""

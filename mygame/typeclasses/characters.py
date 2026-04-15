@@ -73,6 +73,7 @@ PLAYER_DEFAULTS: dict[str, object] = {
     # Progression
     "combat_xp": 0,
     "rank_level": 1,
+    "level": 1,
     # Resources
     "resources": dict(STARTING_RESOURCES),
     # Powerups / tech
@@ -91,7 +92,7 @@ PLAYER_DEFAULTS: dict[str, object] = {
     # Building state
     "inside_building": False,
     # Agent system
-    "next_agent_id": 2,
+    "next_agent_id": 1,
     # Active-presence
     "activity_state": "idle",
     "activity_target": None,
@@ -129,9 +130,20 @@ class CombatCharacter(CombatEntity, DefaultCharacter):
         Called on login to auto-migrate existing players when new
         attributes are added. Only sets attributes that are missing
         or None — never overwrites existing valid data.
+
+        Special handling: if ``level`` is missing but ``rank_level``
+        exists, derives level from the old rank number (1-12) using
+        ``(rank - 1) * 5 + 1``.
         """
         for key, default in PLAYER_DEFAULTS.items():
             if self.attributes.get(key) is None:
+                if key == "level":
+                    # Migrate from old rank_level (1-12) to new level (1-60)
+                    from world.constants import NUM_RANKS, LEVELS_PER_RANK
+                    old_rank = self.attributes.get("rank_level")
+                    if old_rank is not None and isinstance(old_rank, int) and 1 <= old_rank <= NUM_RANKS:
+                        self.attributes.add("level", (old_rank - 1) * LEVELS_PER_RANK + 1)
+                        continue
                 self.attributes.add(key, copy.deepcopy(default))
 
     # ------------------------------------------------------------------ #
@@ -281,11 +293,21 @@ class CombatCharacter(CombatEntity, DefaultCharacter):
             loc = self.location
 
             # Case 2: already on a room but coords not set
-            if loc is not None and loc.id != 2:
+            from world.constants import LIMBO_ROOM_ID
+            if loc is not None and loc.id != LIMBO_ROOM_ID:
                 if not self.db.coord_planet:
                     self._sync_coords_from_room(loc)
-                # If sync succeeded or coords were already set, we're done
+                # If sync succeeded or coords were already set, ensure
+                # we're in the correct PlanetRoom for our planet
                 if self.db.coord_planet:
+                    try:
+                        from server.conf.game_init import game_systems
+                        planet_rooms = game_systems.get("planet_rooms", {})
+                        expected_room = planet_rooms.get(self.db.coord_planet)
+                        if expected_room and self.location is not expected_room:
+                            self.move_to(expected_room, quiet=True)
+                    except (ImportError, AttributeError):
+                        pass
                     return
                 # Otherwise fall through to spawn logic (room has no coords)
 
@@ -324,42 +346,10 @@ class CombatCharacter(CombatEntity, DefaultCharacter):
             spawn_y = default_space.spawn_y
             planet_key = default_space.planet_key
 
-            # Try to use the shared planet room
+            # Use the shared planet room
             target = None
             if planet_rooms:
                 target = planet_rooms.get(planet_key)
-
-            # Fallback: resolve a tile room if no planet room available
-            if target is None:
-                resolver = None
-                try:
-                    from server.conf.game_init import game_systems
-                    resolver = game_systems.get("tile_resolver")
-                except (ImportError, AttributeError):
-                    pass
-
-                if resolver is None:
-                    from world.coordinate.planet_registry import PlanetRegistry
-                    from world.coordinate.terrain_generator import TerrainGenerator
-                    from world.coordinate.room_cache import RoomCache
-                    from world.coordinate.tile_resolver import TileResolver
-
-                    if not hasattr(registry, '_spaces'):
-                        registry = PlanetRegistry()
-                        registry.load_from_yaml("data/definitions/planets.yaml")
-
-                    terrain_generators = {}
-                    for pk in registry.list_planets():
-                        space_def = registry.get_space(pk)
-                        terrain_generators[pk] = TerrainGenerator(space_def)
-
-                    resolver = TileResolver(
-                        planet_registry=registry,
-                        terrain_generators=terrain_generators,
-                        room_cache=RoomCache(),
-                    )
-
-                target = resolver.resolve(spawn_x, spawn_y, planet_key)
 
             if target:
                 self.move_to(target, quiet=True)
@@ -372,17 +362,12 @@ class CombatCharacter(CombatEntity, DefaultCharacter):
         except Exception:
             logger.debug(
                 "Could not move to overworld spawn — "
-                "planet registry or tile resolver not available yet.",
+                "planet registry not available yet.",
                 exc_info=True,
             )
 
     def _sync_coords_from_room(self, room):
-        """Sync coordinate attributes from the current OverworldRoom.
-
-        Called when a character is already on the overworld but their
-        coord_x/coord_y/coord_planet attributes are missing (e.g.
-        characters created before the coordinate system was added).
-        """
+        """Sync coordinate attributes from the current room (PlanetRoom)."""
         x = getattr(room, "x", None)
         y = getattr(room, "y", None)
         planet = getattr(room, "planet_name", None)
@@ -399,8 +384,43 @@ class CombatCharacter(CombatEntity, DefaultCharacter):
     def at_pre_disconnect(self, **kwargs):
         """Called just before the player disconnects.
 
-        Publishes ``player_logout`` event and transitions buildings offline.
+        Clears resource inventories from all owned buildings except
+        Vaults, then publishes ``player_logout`` event.
         """
+        # Clear resource drops from non-Vault buildings
+        try:
+            buildings = self.get_buildings()
+            for b in buildings:
+                btype = None
+                if hasattr(b, "attributes") and hasattr(b.attributes, "get"):
+                    btype = b.attributes.get("building_type")
+                elif hasattr(b, "db"):
+                    btype = getattr(b.db, "building_type", None)
+                if btype == "VT":
+                    continue  # Vaults preserve resources
+                # Get building coordinates and its PlanetRoom
+                bx = getattr(getattr(b, "db", None), "coord_x", None)
+                by = getattr(getattr(b, "db", None), "coord_y", None)
+                room = getattr(b, "location", None)
+                if bx is None or by is None or room is None:
+                    continue
+                # Query PlanetRoom for ResourceDrops at building coordinates
+                if hasattr(room, "get_objects_at"):
+                    for obj in list(room.get_objects_at(int(bx), int(by), type_tag="resource_drop")):
+                        if hasattr(obj, "delete"):
+                            obj.delete()
+                else:
+                    # Legacy fallback: iterate room contents
+                    for obj in list(getattr(room, "contents", [])):
+                        if hasattr(obj, "tags") and obj.tags.get("resource_drop", category="object_type"):
+                            if hasattr(obj, "delete"):
+                                obj.delete()
+        except Exception:
+            logger.debug(
+                "Failed to clear building inventories on disconnect for %s",
+                getattr(self, "key", "?"), exc_info=True,
+            )
+
         try:
             from world.event_bus import event_bus, PLAYER_LOGOUT
             event_bus.publish(PLAYER_LOGOUT, player=self)

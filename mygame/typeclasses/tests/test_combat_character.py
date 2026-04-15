@@ -305,13 +305,13 @@ class TestEnsureOverworldPosition(unittest.TestCase):
         mock_registry.get_space.return_value = space
 
         mock_room = MagicMock()
-        mock_resolver = MagicMock()
-        mock_resolver.resolve.return_value = mock_room
 
-        with patch("world.coordinate.planet_registry.PlanetRegistry", return_value=mock_registry), \
-             patch("world.coordinate.terrain_generator.TerrainGenerator"), \
-             patch("world.coordinate.room_cache.RoomCache"), \
-             patch("world.coordinate.tile_resolver.TileResolver", return_value=mock_resolver):
+        mock_systems = {
+            "planet_registry": mock_registry,
+            "planet_rooms": {"earth": mock_room},
+        }
+
+        with patch("server.conf.game_init.game_systems", mock_systems):
             char._ensure_overworld_position()
 
         char.move_to.assert_called_once_with(mock_room, quiet=True)

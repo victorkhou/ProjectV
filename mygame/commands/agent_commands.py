@@ -19,21 +19,15 @@ def _get_current_building(caller):
     """Return the building object the caller is inside, or None."""
     if not getattr(caller.db, "inside_building", False):
         return None
-    tile_resolver = _get_system(caller, "tile_resolver")
-    if tile_resolver is None:
+    planet_room = getattr(caller, "location", None)
+    if planet_room is None or not hasattr(planet_room, "get_buildings_at"):
         return None
     x = getattr(caller.db, "coord_x", None)
     y = getattr(caller.db, "coord_y", None)
-    planet = getattr(caller.db, "coord_planet", None)
-    if x is None or y is None or not planet:
+    if x is None or y is None:
         return None
-    try:
-        tile = tile_resolver.get_if_exists(x, y, planet)
-    except (ValueError, KeyError):
-        return None
-    if tile is None:
-        return None
-    return getattr(tile, "building", None)
+    buildings = planet_room.get_buildings_at(int(x), int(y))
+    return buildings[0] if buildings else None
 
 
 # ------------------------------------------------------------------ #
@@ -62,7 +56,6 @@ class CmdAgents(GameCommand):
         agents = agent_system.get_agents(caller)
 
         lines = ["|wYour Agents:|n"]
-        lines.append(f"  |c#1|n  Commander (you)  |gActive|n")
 
         if agents:
             for agent in sorted(agents, key=lambda a: getattr(a.db, "agent_id", 0)):
@@ -148,10 +141,6 @@ class CmdAssign(GameCommand):
             caller.msg("Agent ID must be a number.")
             return
 
-        if agent_id == 1:
-            caller.msg("You cannot assign the commander (yourself).")
-            return
-
         role = None
         target_building = None
 
@@ -218,10 +207,6 @@ class CmdUnassign(GameCommand):
             agent_id = int(args)
         except ValueError:
             caller.msg("Agent ID must be a number.")
-            return
-
-        if agent_id == 1:
-            caller.msg("You cannot unassign the commander (yourself).")
             return
 
         success, msg = agent_system.unassign_agent(caller, agent_id)

@@ -30,7 +30,6 @@ from world.coordinate.fog_of_war import _get_planet, _get_coord
 if TYPE_CHECKING:
     from world.coordinate.fog_of_war import FogOfWarSystem
     from world.coordinate.terrain_generator import TerrainGenerator
-    from world.coordinate.tile_resolver import TileResolver
 
 # Terrain type -> Evennia color code
 _TERRAIN_COLORS: dict[str, str] = {
@@ -99,12 +98,11 @@ class ProceduralMapRenderer:
 
     def __init__(
         self,
-        tile_resolver: TileResolver,
         fog_system: FogOfWarSystem,
         terrain_generators: dict[str, TerrainGenerator],
         data_registry: Any = None,
+        tile_resolver: Any = None,
     ) -> None:
-        self._tile_resolver = tile_resolver
         self._fog_system = fog_system
         self._terrain_generators = terrain_generators
         self._data_registry = data_registry
@@ -151,7 +149,7 @@ class ProceduralMapRenderer:
 
         # 2. Update discovery memory
         self._fog_system.update_discovery(
-            player, visible_tiles, self._tile_resolver
+            player, visible_tiles,
         )
 
         # 3. Render bounds anchored to PLAYER position only (not buildings)
@@ -173,11 +171,17 @@ class ProceduralMapRenderer:
         # Pre-fetch discovery memory once
         buildings_mem = self._fog_system.get_discovered_buildings_map(player)
 
-        # Preload all rooms in the visible area into cache (single DB query)
-        self._tile_resolver.preload_area(min_x, max_x, min_y, max_y, planet)
+        # Bulk query all objects in the viewport from PlanetRoom
+        planet_room = getattr(player, "location", None)
+        objects_by_coord: dict[tuple[int, int], list] = {}
+        if planet_room is not None and hasattr(planet_room, "get_objects_in_area"):
+            for obj in planet_room.get_objects_in_area(min_x, min_y, max_x, max_y):
+                cx = getattr(getattr(obj, "db", None), "coord_x", None)
+                cy = getattr(getattr(obj, "db", None), "coord_y", None)
+                if cx is not None and cy is not None:
+                    objects_by_coord.setdefault((int(cx), int(cy)), []).append(obj)
 
         # 4. Render — inlined visibility check for speed
-        get_cached = self._tile_resolver.get_cached
         player_coord = (px, py)
         lines: list[str] = []
         for y in range(max_y, min_y - 1, -1):
@@ -189,9 +193,9 @@ class ProceduralMapRenderer:
                     if coord == player_coord:
                         sym = "|Y@@|n"
                     else:
-                        room = get_cached(x, y, planet)
-                        if room is not None:
-                            sym = self._colored_room(room, player, x, y, planet)
+                        tile_objects = objects_by_coord.get(coord)
+                        if tile_objects:
+                            sym = self._colored_objects(tile_objects, player, x, y, planet)
                         else:
                             sym = self._colored_terrain(x, y, planet)
                 elif coord in discovered:
@@ -228,9 +232,25 @@ class ProceduralMapRenderer:
         return self._terrain_symbol(x, y, planet)
 
     def _symbol_visible(self, x: int, y: int, planet: str, player: Any) -> str:
-        room = self._tile_resolver.get_cached(x, y, planet)
-        if room is not None:
-            return _room_display_symbol(room, player)
+        # Try coordinate-based lookup first (PlanetRoom)
+        planet_room = getattr(player, "location", None)
+        if planet_room is not None and hasattr(planet_room, "get_objects_at"):
+            objs = planet_room.get_objects_at(x, y)
+            if objs:
+                for obj in objs:
+                    if hasattr(obj, "has_account") and obj.has_account:
+                        if obj is player:
+                            return "@@"
+                        return "**"
+                # Check for building
+                for obj in objs:
+                    if hasattr(obj, "tags") and obj.tags.get("building", category="object_type"):
+                        if hasattr(obj, "get_display_abbreviation"):
+                            return obj.get_display_abbreviation()
+                        abbr = obj.attributes.get("building_type", default=None) if hasattr(obj, "attributes") else None
+                        if abbr:
+                            return str(abbr)[:2]
+                        return "??"
         return self._terrain_symbol(x, y, planet)
 
     def _symbol_fog(self, x: int, y: int, planet: str, player: Any) -> str:
@@ -286,6 +306,100 @@ class ProceduralMapRenderer:
         """Get the dimmed terrain symbol for a fog/unexplored tile."""
         sym = self._terrain_symbol(x, y, planet)
         return f"{_FOG_COLOR}{sym}|n"
+
+    def _colored_objects(self, objects: list[Any], looker: Any, x: int, y: int, planet: str) -> str:
+        """Get the colored symbol for a tile from its object list.
+
+        Display priority (highest to lowest):
+        1. Player self -> |Y@@|n (yellow)
+        2. Enemy player -> |r**|n (red)
+        3. Own agent (overworld) -> |g{sym}|n (green)
+        4. Enemy agent (overworld) -> |r{sym}|n (red)
+        5. Neutral NPC -> |y{sym}|n (yellow)
+        6. Occupied building (entity inside) -> |B{abbr}|n (dark blue)
+        7. Unoccupied own building -> |c{abbr}|n (cyan)
+        8. Unoccupied enemy building -> |R{abbr}|n (dark red)
+        9. Terrain symbol
+        """
+        looker_id = getattr(looker, "id", None)
+
+        own_agent = None
+        enemy_agent = None
+        neutral_npc = None
+        building_obj = None
+
+        for obj in objects:
+            # Player characters
+            if hasattr(obj, "has_account") and obj.has_account:
+                if obj is looker:
+                    return "|Y@@|n"
+                return "|r**|n"
+
+            # NPC objects with npc_type tag
+            if hasattr(obj, "tags") and obj.tags.get(category="npc_type"):
+                npc_owner = getattr(obj.db, "owner", None) if hasattr(obj, "db") else None
+                npc_owner_id = getattr(npc_owner, "id", None) if npc_owner else None
+                if npc_owner_id is not None and npc_owner_id == looker_id:
+                    if own_agent is None:
+                        own_agent = obj
+                elif npc_owner_id is not None:
+                    if enemy_agent is None:
+                        enemy_agent = obj
+                else:
+                    if neutral_npc is None:
+                        neutral_npc = obj
+                continue
+
+            # Building objects
+            if hasattr(obj, "tags") and obj.tags.get("building", category="object_type"):
+                if building_obj is None:
+                    building_obj = obj
+
+        # Overworld NPCs — priority: own > enemy > neutral
+        if own_agent is not None:
+            role = getattr(own_agent.db, "role", "") if hasattr(own_agent, "db") else ""
+            sym = _agent_symbol(role)
+            return f"|g{sym}|n"
+        if enemy_agent is not None:
+            return f"|r{_agent_symbol('')}|n"
+        if neutral_npc is not None:
+            return f"|y{_agent_symbol('')}|n"
+
+        # Building
+        if building_obj is not None:
+            bld = building_obj
+            if hasattr(bld, "get_display_abbreviation"):
+                abbr = bld.get_display_abbreviation()
+            else:
+                abbr = "??"
+                if hasattr(bld, "attributes") and hasattr(bld.attributes, "get"):
+                    bt = bld.attributes.get("building_type", default=None)
+                    if bt:
+                        abbr = str(bt)[:2]
+
+            # Check if building has entities inside (occupied)
+            bld_contents = getattr(bld, "contents", [])
+            has_entity_inside = False
+            for obj in bld_contents:
+                if hasattr(obj, "has_account") and obj.has_account:
+                    has_entity_inside = True
+                    break
+                if hasattr(obj, "tags") and obj.tags.get(category="npc_type"):
+                    has_entity_inside = True
+                    break
+
+            if has_entity_inside:
+                return f"|B{abbr}|n"
+
+            owner = None
+            if hasattr(bld, "attributes") and hasattr(bld.attributes, "get"):
+                owner = bld.attributes.get("owner", default=None)
+            if owner is looker:
+                return f"|c{abbr}|n"
+            return f"|R{abbr}|n"
+
+        # Terrain — always from generator
+        return self._colored_terrain(x, y, planet)
 
     def _colored_room(self, room: Any, looker: Any, x: int, y: int, planet: str) -> str:
         """Get the colored symbol for a room tile.

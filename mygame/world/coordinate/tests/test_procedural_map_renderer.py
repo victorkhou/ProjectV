@@ -77,9 +77,11 @@ class _FakeBalance:
 
 
 class _FakePlayer:
-    def __init__(self, name="Player1", x=5, y=5, planet="earth"):
+    def __init__(self, name="Player1", x=5, y=5, planet="earth", location=None):
         self.key = name
         self.has_account = True
+        self.id = id(self)
+        self.location = location
         self.db = _FakeDB(
             coord_x=x,
             coord_y=y,
@@ -89,7 +91,7 @@ class _FakePlayer:
 
 
 class _FakeRoom:
-    """Lightweight room with get_display_symbol support."""
+    """Lightweight room with get_display_symbol and PlanetRoom query support."""
     def __init__(self, x=0, y=0, terrain="Plains", contents=None):
         self.x = x
         self.y = y
@@ -104,6 +106,32 @@ class _FakeRoom:
             if hasattr(obj, "_btype") or hasattr(obj, "get_display_abbreviation"):
                 return obj
         return None
+
+    def get_objects_at(self, x, y, type_tag=None):
+        """PlanetRoom-compatible coordinate query."""
+        result = []
+        for obj in self.contents:
+            cx = getattr(getattr(obj, "db", None), "coord_x", None)
+            cy = getattr(getattr(obj, "db", None), "coord_y", None)
+            if cx is not None and cy is not None and int(cx) == x and int(cy) == y:
+                if type_tag is None:
+                    result.append(obj)
+                elif hasattr(obj, "tags") and obj.tags.get(type_tag, category="object_type"):
+                    result.append(obj)
+        return result
+
+    def get_buildings_at(self, x, y):
+        return self.get_objects_at(x, y, type_tag="building")
+
+    def get_objects_in_area(self, x1, y1, x2, y2):
+        result = []
+        for obj in self.contents:
+            cx = getattr(getattr(obj, "db", None), "coord_x", None)
+            cy = getattr(getattr(obj, "db", None), "coord_y", None)
+            if cx is not None and cy is not None:
+                if x1 <= int(cx) <= x2 and y1 <= int(cy) <= y2:
+                    result.append(obj)
+        return result
 
     def get_display_symbol(self, looker):
         for obj in self.contents:
@@ -122,9 +150,82 @@ class _FakeBuilding:
         self._btype = btype
         self.owner = owner
         self.location = location
+        self.db = _FakeDB(coord_x=None, coord_y=None)
+        self.tags = _FakeTags({"building": {"object_type"}})
+        self.contents = []
 
     def get_display_abbreviation(self):
         return self._btype
+
+    @property
+    def attributes(self):
+        return self
+
+
+    def get(self, key, default=None):
+        if key == "building_type":
+            return self._btype
+        if key == "owner":
+            return self.owner
+        if key == "building_level":
+            return 1
+        return default
+
+
+class _FakeTags:
+    """Minimal tag system for testing."""
+    def __init__(self, tags=None):
+        self._tags = tags or {}  # tag_key -> set of categories
+
+    def get(self, key=None, category=None, return_list=False):
+        if key is None and category is not None:
+            # Check if any tag has this category
+            for k, cats in self._tags.items():
+                if category in cats:
+                    return k
+            return None
+        if key is not None and category is not None:
+            cats = self._tags.get(key, set())
+            return key if category in cats else None
+        if key is not None:
+            return key if key in self._tags else None
+        return None
+
+
+class _FakePlanetRoom:
+    """Fake PlanetRoom with coordinate index for testing."""
+    def __init__(self):
+        self._objects: list = []
+
+    def add_object(self, obj, x, y):
+        obj.db.coord_x = x
+        obj.db.coord_y = y
+        self._objects.append(obj)
+
+    def get_objects_in_area(self, x1, y1, x2, y2):
+        result = []
+        for obj in self._objects:
+            cx = getattr(obj.db, "coord_x", None)
+            cy = getattr(obj.db, "coord_y", None)
+            if cx is not None and cy is not None:
+                if x1 <= cx <= x2 and y1 <= cy <= y2:
+                    result.append(obj)
+        return result
+
+    def get_objects_at(self, x, y, type_tag=None):
+        result = []
+        for obj in self._objects:
+            cx = getattr(obj.db, "coord_x", None)
+            cy = getattr(obj.db, "coord_y", None)
+            if cx == x and cy == y:
+                if type_tag is None:
+                    result.append(obj)
+                elif hasattr(obj, "tags") and obj.tags.get(type_tag, category="object_type"):
+                    result.append(obj)
+        return result
+
+    def get_buildings_at(self, x, y):
+        return self.get_objects_at(x, y, type_tag="building")
 
 
 class _FakeTerrainGenerator:
@@ -319,8 +420,11 @@ class TestVisibilityStates:
 
     def test_visible_tile_shows_enemy_player(self):
         """Another player on a visible tile should show '**'."""
-        player = _FakePlayer(x=5, y=5, planet="earth")
-        enemy = _FakePlayer(name="Enemy", x=6, y=5, planet="earth")
+        planet_room = _FakePlanetRoom()
+        player = _FakePlayer(x=5, y=5, planet="earth", location=planet_room)
+        enemy = _FakePlayer(name="Enemy", x=6, y=5, planet="earth", location=planet_room)
+        planet_room.add_object(player, 5, 5)
+        planet_room.add_object(enemy, 6, 5)
         room_player = _FakeRoom(x=5, y=5, terrain="Plains", contents=[player])
         room_enemy = _FakeRoom(x=6, y=5, terrain="Plains", contents=[enemy])
         renderer, _ = _make_renderer(
@@ -336,8 +440,11 @@ class TestVisibilityStates:
 
     def test_visible_tile_shows_building(self):
         """A building on a visible tile (no players) shows abbreviation."""
-        player = _FakePlayer(x=5, y=5, planet="earth")
+        planet_room = _FakePlanetRoom()
+        player = _FakePlayer(x=5, y=5, planet="earth", location=planet_room)
         building = _FakeBuilding(btype="HQ")
+        planet_room.add_object(player, 5, 5)
+        planet_room.add_object(building, 6, 5)
         room_bld = _FakeRoom(x=6, y=5, terrain="Plains", contents=[building])
         renderer, _ = _make_renderer(
             pvr=1,
@@ -424,8 +531,11 @@ class TestVisibilityStates:
 class TestDisplayPriority:
     def test_player_self_overrides_building(self):
         """@@ takes priority over building abbreviation."""
-        player = _FakePlayer(x=5, y=5, planet="earth")
+        planet_room = _FakePlanetRoom()
+        player = _FakePlayer(x=5, y=5, planet="earth", location=planet_room)
         building = _FakeBuilding(btype="HQ")
+        planet_room.add_object(player, 5, 5)
+        planet_room.add_object(building, 5, 5)
         room = _FakeRoom(
             x=5, y=5, terrain="Plains",
             contents=[player, building],
@@ -444,9 +554,13 @@ class TestDisplayPriority:
 
     def test_enemy_player_overrides_building(self):
         """** takes priority over building abbreviation."""
-        player = _FakePlayer(x=5, y=5, planet="earth")
-        enemy = _FakePlayer(name="Enemy", x=6, y=5, planet="earth")
+        planet_room = _FakePlanetRoom()
+        player = _FakePlayer(x=5, y=5, planet="earth", location=planet_room)
+        enemy = _FakePlayer(name="Enemy", x=6, y=5, planet="earth", location=planet_room)
         building = _FakeBuilding(btype="HQ")
+        planet_room.add_object(player, 5, 5)
+        planet_room.add_object(enemy, 6, 5)
+        planet_room.add_object(building, 6, 5)
         room = _FakeRoom(
             x=6, y=5, terrain="Plains",
             contents=[enemy, building],
@@ -501,8 +615,9 @@ class TestGetTileSymbol:
         assert sym == "Ro"
 
     def test_visible_with_room_delegates_to_room(self):
-        player = _FakePlayer(x=5, y=5, planet="earth")
-        room = _FakeRoom(x=5, y=5, terrain="Plains", contents=[player])
+        room = _FakeRoom(x=5, y=5, terrain="Plains")
+        player = _FakePlayer(x=5, y=5, planet="earth", location=room)
+        room.contents.append(player)
         renderer, _ = _make_renderer(rooms={(5, 5, "earth"): room})
         sym = renderer._get_tile_symbol(5, 5, "earth", "visible", player, set())
         assert sym == "@@"

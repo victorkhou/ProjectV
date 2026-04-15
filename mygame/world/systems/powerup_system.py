@@ -71,16 +71,18 @@ class PowerupSystem:
         if pdef is None:
             return False, f"Unknown powerup: {powerup_key}"
 
-        # 2. Rank check
-        player_rank_level = self._get_rank_level(player)
+        # 2. Rank check — compare player's derived rank against required rank
+        player_level = self._get_player_level(player)
         try:
             required_rank = self.registry.get_rank_by_name(pdef.required_rank)
-            if player_rank_level < required_rank.level:
+            from world.systems.rank_system import rank_from_level
+            player_rank = rank_from_level(player_level)
+            if player_rank < required_rank.level:
                 return False, (
                     f"Requires rank {pdef.required_rank} "
-                    f"(you are rank level {player_rank_level})."
+                    f"(you are level {player_level})."
                 )
-        except KeyError:
+        except (KeyError, ImportError):
             pass  # If rank not found, allow activation
 
         current_tick = self._current_tick_func()
@@ -226,10 +228,18 @@ class PowerupSystem:
     # ------------------------------------------------------------------ #
 
     @staticmethod
-    def _get_rank_level(player: Any) -> int:
-        """Read the player's rank level."""
+    def _get_player_level(player: Any) -> int:
+        """Read the player's level (1-60)."""
         if hasattr(player, "db"):
-            return getattr(player.db, "rank_level", 0) or 0
+            lvl = getattr(player.db, "level", None)
+            if lvl is not None:
+                return int(lvl)
+            # Backward compat: old rank_level (1-NUM_RANKS) → first level of rank
+            from world.constants import NUM_RANKS, LEVELS_PER_RANK
+            rl = getattr(player.db, "rank_level", 0) or 0
+            if 1 <= rl <= NUM_RANKS:
+                return (rl - 1) * LEVELS_PER_RANK + 1
+            return rl
         return 0
 
     @staticmethod

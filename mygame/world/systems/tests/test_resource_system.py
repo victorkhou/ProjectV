@@ -521,21 +521,21 @@ class TestProcessHarvestTick(unittest.TestCase):
         return player, tile
 
     def test_yields_on_cooldown(self):
-        """Resources yielded every HARVEST_COOLDOWN_TICKS ticks."""
+        """Resources yielded every HARVEST_COOLDOWN_TICKS ticks, dropped on tile."""
         player, tile = self._setup_harvesting_player()
         system, _ = _make_system()
 
         # Ticks 1-3: no yield (cooldown is 4)
         for _ in range(3):
             self.assertFalse(system.process_harvest_tick(player))
-        self.assertEqual(player.get_resource("Wood"), 0)
 
-        # Tick 4: yield (1 unit per 4 ticks on raw terrain)
+        # Tick 4: yield (1 unit per 4 ticks on raw terrain, dropped on tile)
         self.assertTrue(system.process_harvest_tick(player))
-        self.assertEqual(player.get_resource("Wood"), 1)
+        inv = ResourceSystem.get_tile_inventory(tile)
+        self.assertEqual(inv.get("Wood", 0), 1)
 
     def test_multiple_cycles(self):
-        """Resources accumulate over multiple cooldown cycles."""
+        """Resources accumulate on tile over multiple cooldown cycles."""
         player, tile = self._setup_harvesting_player()
         system, _ = _make_system()
 
@@ -543,7 +543,8 @@ class TestProcessHarvestTick(unittest.TestCase):
             system.process_harvest_tick(player)
 
         # 2 full cycles × 1 unit = 2
-        self.assertEqual(player.get_resource("Wood"), 2)
+        inv = ResourceSystem.get_tile_inventory(tile)
+        self.assertEqual(inv.get("Wood", 0), 2)
 
     def test_not_harvesting_state(self):
         player = FakePlayerWithDB()
@@ -707,6 +708,7 @@ class TestProcessExtractorProduction(unittest.TestCase):
         self.assertEqual(sum(inv.values()), 0)
 
     def test_production_pauses_at_capacity(self):
+        """Resources now accumulate without capacity limit (floor drops)."""
         player = FakePlayer()
         agent = FakeAgent(role="harvester")
         building = FakeExtractor(
@@ -717,7 +719,7 @@ class TestProcessExtractorProduction(unittest.TestCase):
         system, _ = _make_system(registry=registry)
         system.process_extractor_production([building])
         inv = ResourceSystem.get_extractor_inventory(building)
-        self.assertEqual(inv["Wood"], 100)  # unchanged
+        self.assertGreater(inv["Wood"], 100)  # resources accumulate freely
 
     def test_production_skips_offline(self):
         player = FakePlayer()

@@ -21,7 +21,6 @@ from world.coordinate.discovery_bitfield import DiscoveryBitfield
 
 if TYPE_CHECKING:
     from world.definitions import BalanceConfig
-    from world.coordinate.tile_resolver import TileResolver
 
 
 @dataclass
@@ -95,9 +94,13 @@ class FogOfWarSystem:
         self,
         player: Any,
         visible_tiles: set[tuple[int, int]],
-        tile_resolver: TileResolver,
+        planet_room: Any = None,
+        tile_resolver: Any = None,
     ) -> None:
-        """Update the player's discovery memory for all currently visible tiles."""
+        """Update the player's discovery memory for all currently visible tiles.
+
+        Uses planet_room.get_buildings_at for building discovery.
+        """
         bitfield, buildings_mem = self._get_discovery_data(player)
 
         player_key = player.key if hasattr(player, "key") else ""
@@ -106,12 +109,26 @@ class FogOfWarSystem:
         # Batch-add all visible tiles to the bitfield
         tiles_changed = bitfield.add_many(visible_tiles)
 
-        # Check for buildings on cached tiles
+        # Resolve planet_room from player if not provided
+        # Handle case where a PlanetRoom was passed as tile_resolver (positional arg)
+        if planet_room is None and tile_resolver is not None and hasattr(tile_resolver, "get_buildings_at"):
+            planet_room = tile_resolver
+            tile_resolver = None
+        if planet_room is None:
+            loc = getattr(player, "location", None)
+            if loc is not None and hasattr(loc, "get_buildings_at"):
+                planet_room = loc
+
+        # Check for buildings on visible tiles
         buildings_changed = False
         for coord in visible_tiles:
             x, y = coord
-            room = tile_resolver.get_cached(x, y, planet)
-            building = _get_room_building(room) if room is not None else None
+            building = None
+
+            # Use PlanetRoom coordinate query
+            if planet_room is not None and hasattr(planet_room, "get_buildings_at"):
+                buildings_at = planet_room.get_buildings_at(x, y)
+                building = buildings_at[0] if buildings_at else None
 
             if building is not None:
                 owner = _get_building_owner(building)
@@ -246,14 +263,14 @@ def _get_planet(player: Any) -> str:
 
 
 def _get_building_coords(building: Any) -> tuple[int, int]:
-    """Extract (x, y) from a building's location."""
-    loc = getattr(building, "location", None)
-    if loc is not None:
-        x = getattr(loc, "x", None)
-        if x is not None:
-            y = getattr(loc, "y", 0)
-            return (int(x), int(y))
-    # Fallback: building might store coords directly
+    """Extract (x, y) from a building's coordinate attributes."""
+    # Read coord_x/coord_y directly from the building
+    if hasattr(building, "db"):
+        bx = getattr(building.db, "coord_x", None)
+        by = getattr(building.db, "coord_y", None)
+        if bx is not None and by is not None:
+            return (int(bx), int(by))
+    # Last resort
     x = getattr(building, "x", 0) or 0
     y = getattr(building, "y", 0) or 0
     return (int(x), int(y))

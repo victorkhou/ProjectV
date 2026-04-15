@@ -66,19 +66,22 @@ from mygame.world.event_bus import EventBus  # noqa: E402
 
 class FakeDB:
     """Simulates Evennia's db attribute handler."""
-    def __init__(self, combat_xp=0, rank_level=1, researched_techs=None):
+    def __init__(self, combat_xp=0, rank_level=1, level=None, researched_techs=None):
         self.combat_xp = combat_xp
         self.rank_level = rank_level
+        # Compute level from rank: first level of that rank
+        self.level = level if level is not None else ((rank_level - 1) * 5 + 1)
         self.researched_techs = researched_techs if researched_techs is not None else set()
 
 class FakePlayer:
     """Lightweight stand-in for CombatCharacter."""
     def __init__(self, name="TestPlayer", combat_xp=0, rank_level=1,
-                 researched_techs=None):
+                 level=None, researched_techs=None):
         self.key = name
         self.db = FakeDB(
             combat_xp=combat_xp,
             rank_level=rank_level,
+            level=level,
             researched_techs=researched_techs,
         )
 
@@ -186,19 +189,19 @@ class TestProperty17RankAssignmentFromXP(unittest.TestCase):
     )
     @settings(max_examples=200)
     def test_promotion_sets_correct_rank(self, ranks, data):
-        """After awarding XP, player rank matches get_rank_for_xp."""
+        """After awarding XP, player rank_level matches rank_from_level(level)."""
+        from mygame.world.systems.rank_system import rank_from_level
         registry = _make_registry(ranks)
         event_bus = EventBus()
         system = RankSystem(registry=registry, event_bus=event_bus)
 
-        # Start at rank 1 with 0 XP
-        player = FakePlayer(combat_xp=0, rank_level=1)
+        player = FakePlayer(combat_xp=0, rank_level=1, level=1)
         xp_award = data.draw(st.integers(min_value=0, max_value=50000))
 
         system.award_xp(player, xp_award, "test")
 
-        expected_rank = registry.get_rank_for_xp(player.db.combat_xp)
-        self.assertEqual(player.db.rank_level, expected_rank.level)
+        # rank_level should be derived from level
+        self.assertEqual(player.db.rank_level, rank_from_level(player.db.level))
 
     @given(
         ranks=rank_list_strategy(),
@@ -206,16 +209,18 @@ class TestProperty17RankAssignmentFromXP(unittest.TestCase):
     )
     @settings(max_examples=200)
     def test_demotion_sets_correct_rank(self, ranks, data):
-        """After deducting XP, player rank matches get_rank_for_xp."""
+        """After deducting XP, player rank_level matches rank_from_level(level)."""
+        from mygame.world.systems.rank_system import rank_from_level
         registry = _make_registry(ranks)
         event_bus = EventBus()
         system = RankSystem(registry=registry, event_bus=event_bus)
 
-        # Start at a random rank with XP at that rank's threshold
         start_rank = data.draw(st.sampled_from(ranks))
+        start_level = (start_rank.level - 1) * 5 + 1
         player = FakePlayer(
             combat_xp=start_rank.xp_threshold,
             rank_level=start_rank.level,
+            level=start_level,
         )
         xp_deduction = data.draw(
             st.integers(min_value=0, max_value=start_rank.xp_threshold + 100)
@@ -223,8 +228,7 @@ class TestProperty17RankAssignmentFromXP(unittest.TestCase):
 
         system.deduct_xp(player, xp_deduction)
 
-        expected_rank = registry.get_rank_for_xp(player.db.combat_xp)
-        self.assertEqual(player.db.rank_level, expected_rank.level)
+        self.assertEqual(player.db.rank_level, rank_from_level(player.db.level))
 
 # -------------------------------------------------------------- #
 #  Property 18: Rank-gated access consistency
