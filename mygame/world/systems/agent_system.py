@@ -21,6 +21,9 @@ from world.constants import (
     BASE_TRAINING_TICKS,
     ACADEMY_TRAINING_REDUCTION_PER_LEVEL,
     TRAINING_PROGRESS_INTERVAL,
+    DEFAULT_CARRY_CAPACITY,
+    MIN_PATROL_WAYPOINTS,
+    MAX_PATROL_WAYPOINTS,
 )
 
 logger = logging.getLogger("mygame.agent_system")
@@ -74,12 +77,21 @@ class AgentSystem:
 
     @staticmethod
     def _default_create_npc(player: Any, agent_id: int) -> Any:
-        """Create an NPC agent via Evennia's object creation API."""
+        """Create an NPC agent via Evennia's object creation API.
+
+        Places the NPC in the player's PlanetRoom at the player's HQ
+        coordinates (or the player's current position as fallback) so
+        it exists in the game world and can pathfind to its assignment.
+        """
         import evennia
+
+        # Place in the player's PlanetRoom so the NPC has a location
+        planet_room = getattr(player, "location", None)
 
         npc = evennia.create_object(
             "typeclasses.npcs.NPC",
             key=f"Agent-{agent_id}",
+            location=planet_room,
         )
         npc.db.owner = player
         npc.db.npc_type = "agent"
@@ -90,6 +102,32 @@ class AgentSystem:
         npc.tags.add("agent", category="npc_type")
         owner_id = getattr(player, "id", id(player))
         npc.tags.add(f"player_{owner_id}", category="agent_owner")
+
+        # Place at HQ coordinates so the agent walks to its assignment.
+        # Falls back to player position if no HQ exists.
+        spawn_x, spawn_y = None, None
+        try:
+            buildings = player.get_buildings() if hasattr(player, "get_buildings") else []
+            for b in buildings:
+                if getattr(b.db, "building_type", "") == "HQ":
+                    spawn_x = getattr(b.db, "coord_x", None)
+                    spawn_y = getattr(b.db, "coord_y", None)
+                    break
+        except Exception:
+            pass
+
+        if spawn_x is None or spawn_y is None:
+            spawn_x = getattr(getattr(player, "db", None), "coord_x", None)
+            spawn_y = getattr(getattr(player, "db", None), "coord_y", None)
+
+        if spawn_x is not None and spawn_y is not None:
+            npc.db.coord_x = int(spawn_x)
+            npc.db.coord_y = int(spawn_y)
+            # at_object_receive saw coord_x=None during create_object,
+            # so manually register in the coordinate index now.
+            if planet_room is not None and hasattr(planet_room, "coord_index"):
+                planet_room.coord_index.add(npc, int(spawn_x), int(spawn_y))
+
         return npc
 
     # ------------------------------------------------------------------ #
@@ -285,22 +323,63 @@ class AgentSystem:
         # Detach any existing behavior script before attaching a new one
         self._detach_behavior_script(agent)
 
+        # Clear any in-progress movement from the previous assignment
+        if hasattr(agent, "clear_movement"):
+            agent.clear_movement()
+
         # Attach the behavior script for this role
         self._attach_behavior_script(agent, role)
 
-        # Move agent to building coordinates via PlanetRoom.move_entity
+        # Clear stale state from previous role
+        agent.db.patrol_route = None
+        agent.db.patrol_waypoint_index = 0
+        agent.db.delivery_state = None
+        agent.db.carried_resources = {}
+        agent.db.delivery_target = None
+
+        # Path agent to building coordinates instead of teleporting (Req 2.6)
         if target_building is not None:
             bx = getattr(getattr(target_building, "db", None), "coord_x", None)
             by = getattr(getattr(target_building, "db", None), "coord_y", None)
             if bx is not None and by is not None:
-                # Agent is already in the PlanetRoom — just update coordinates
-                planet_room = getattr(agent, "location", None)
-                if planet_room is not None and hasattr(planet_room, "move_entity"):
-                    planet_room.move_entity(agent, int(bx), int(by))
+                bx, by = int(bx), int(by)
+
+                # Ensure agent is in the PlanetRoom (old agents may lack location)
+                if getattr(agent, "location", None) is None:
+                    planet_room = getattr(player, "location", None)
+                    if planet_room is not None:
+                        agent.location = planet_room
+                        # Set initial coords to player position
+                        px = getattr(player.db, "coord_x", None)
+                        py = getattr(player.db, "coord_y", None)
+                        if px is not None and py is not None:
+                            agent.db.coord_x = int(px)
+                            agent.db.coord_y = int(py)
+                            if hasattr(planet_room, "coord_index"):
+                                planet_room.coord_index.add(agent, int(px), int(py))
+
+                ax = getattr(agent.db, "coord_x", None)
+                ay = getattr(agent.db, "coord_y", None)
+
+                path = []
+                if ax is not None and ay is not None:
+                    path = self._compute_path_to(agent, int(ax), int(ay), bx, by)
+
+                if path and hasattr(agent, "set_movement_queue"):
+                    agent.set_movement_queue(path)
+                    agent.db.activity_status = (
+                        f"Moving to {role} assignment ({len(path)} tiles)"
+                    )
                 else:
-                    # Fallback: set coordinates directly
-                    agent.db.coord_x = int(bx)
-                    agent.db.coord_y = int(by)
+                    # Fallback: no path found or already at destination —
+                    # place agent directly at building coordinates
+                    planet_room = getattr(agent, "location", None)
+                    if planet_room is not None and hasattr(planet_room, "move_entity"):
+                        planet_room.move_entity(agent, bx, by)
+                    else:
+                        agent.db.coord_x = bx
+                        agent.db.coord_y = by
+                    agent.db.activity_status = f"Assigned as {role}"
             elif hasattr(agent, "move_to"):
                 # Legacy fallback: building doesn't have coordinates yet
                 loc = getattr(target_building, "location", target_building)
@@ -315,7 +394,11 @@ class AgentSystem:
     def unassign_agent(
         self, player: Any, agent_id: int
     ) -> tuple[bool, str]:
-        """Clear role from *agent_id* and move to HQ.
+        """Clear role from *agent_id* and path back to HQ.
+
+        Clears movement queue, patrol route, delivery state, then
+        computes a path to HQ.  Falls back to direct teleport if no
+        path is found.
 
         Returns ``(success, message)``.
         """
@@ -336,27 +419,179 @@ class AgentSystem:
         # Detach behavior script before clearing role
         self._detach_behavior_script(agent)
 
+        # Clear current movement queue (Req 11.2)
+        if hasattr(agent, "clear_movement"):
+            agent.clear_movement()
+
+        # Clear patrol-related attributes (Req 3.6)
+        agent.db.patrol_route = None
+        agent.db.patrol_waypoint_index = 0
+
+        # Clear delivery-related attributes (Req 3.6, 11.2)
+        agent.db.delivery_state = None
+        agent.db.carried_resources = {}
+        agent.db.delivery_target = None
+
         agent.db.role = ""
         agent.db.role_target = None
 
-        # Attempt to move agent to player's HQ coordinates
+        # Compute path to HQ instead of teleporting (Req 11.2)
         hq = self._find_hq(player)
         if hq is not None:
             hx = getattr(getattr(hq, "db", None), "coord_x", None)
             hy = getattr(getattr(hq, "db", None), "coord_y", None)
             if hx is not None and hy is not None:
-                planet_room = getattr(agent, "location", None)
-                if planet_room is not None and hasattr(planet_room, "move_entity"):
-                    planet_room.move_entity(agent, int(hx), int(hy))
+                hx, hy = int(hx), int(hy)
+                ax = getattr(agent.db, "coord_x", None)
+                ay = getattr(agent.db, "coord_y", None)
+
+                path = []
+                if ax is not None and ay is not None:
+                    path = self._compute_path_to(agent, int(ax), int(ay), hx, hy)
+
+                if path and hasattr(agent, "set_movement_queue"):
+                    agent.set_movement_queue(path)
+                    agent.db.activity_status = (
+                        f"Returning to HQ ({len(path)} tiles)"
+                    )
                 else:
-                    agent.db.coord_x = int(hx)
-                    agent.db.coord_y = int(hy)
+                    # Fallback: no path found or already at HQ —
+                    # place agent directly at HQ coordinates
+                    planet_room = getattr(agent, "location", None)
+                    if planet_room is not None and hasattr(planet_room, "move_entity"):
+                        planet_room.move_entity(agent, hx, hy)
+                    else:
+                        agent.db.coord_x = hx
+                        agent.db.coord_y = hy
+                    agent.db.activity_status = "Idle"
             elif hasattr(agent, "move_to"):
                 # Legacy fallback: HQ doesn't have coordinates yet
                 loc = getattr(hq, "location", hq)
                 agent.move_to(loc, quiet=True)
+                agent.db.activity_status = "Idle"
+        else:
+            agent.db.activity_status = "Idle"
 
         return True, f"Agent #{agent_id} unassigned and returned to HQ."
+
+    # ------------------------------------------------------------------ #
+    #  Patrol routes  (Req 3.1, 3.6, 3.7, 3.8)
+    # ------------------------------------------------------------------ #
+
+    def set_patrol_route(
+        self, player: Any, agent_id: int, waypoints: list
+    ) -> tuple[bool, str]:
+        """Set a patrol route on a guard or scout agent.
+
+        Validates:
+        - Agent exists and belongs to player.
+        - Agent role is guard or scout.
+        - Waypoint count is between MIN_PATROL_WAYPOINTS and MAX_PATROL_WAYPOINTS.
+        - All waypoints are within planet bounds.
+
+        Returns ``(success, message)``.
+        """
+        agent = self.get_agent_by_id(player, agent_id)
+        if agent is None:
+            return False, f"Agent #{agent_id} not found."
+
+        role = getattr(agent.db, "role", "")
+        if role not in ("guard", "scout"):
+            return False, (
+                f"Agent #{agent_id} is a {role or 'unassigned'} — "
+                f"only guards and scouts can patrol."
+            )
+
+        # Validate waypoint count
+        if len(waypoints) < MIN_PATROL_WAYPOINTS:
+            return False, (
+                f"Patrol route requires at least {MIN_PATROL_WAYPOINTS} "
+                f"waypoints (got {len(waypoints)})."
+            )
+        if len(waypoints) > MAX_PATROL_WAYPOINTS:
+            return False, (
+                f"Patrol route allows at most {MAX_PATROL_WAYPOINTS} "
+                f"waypoints (got {len(waypoints)})."
+            )
+
+        # Determine planet bounds for validation
+        width, height = self._get_planet_bounds(agent)
+
+        # Validate all waypoints are within bounds
+        for i, wp in enumerate(waypoints):
+            wx, wy = int(wp[0]), int(wp[1])
+            if wx < 0 or wx >= width or wy < 0 or wy >= height:
+                return False, (
+                    f"Waypoint {i + 1} ({wx}, {wy}) is outside planet "
+                    f"bounds (0–{width - 1}, 0–{height - 1})."
+                )
+
+        # Store patrol route as list of [x, y] pairs (Evennia-safe)
+        agent.db.patrol_route = [[int(wp[0]), int(wp[1])] for wp in waypoints]
+        agent.db.patrol_waypoint_index = 0
+
+        return True, (
+            f"Agent #{agent_id} patrol route set with "
+            f"{len(waypoints)} waypoints."
+        )
+
+    def clear_patrol_route(
+        self, player: Any, agent_id: int
+    ) -> tuple[bool, str]:
+        """Clear the patrol route on an agent and stop movement.
+
+        Clears patrol_route, patrol_waypoint_index, and movement_queue.
+
+        Returns ``(success, message)``.
+        """
+        agent = self.get_agent_by_id(player, agent_id)
+        if agent is None:
+            return False, f"Agent #{agent_id} not found."
+
+        agent.db.patrol_route = None
+        agent.db.patrol_waypoint_index = 0
+
+        if hasattr(agent, "clear_movement"):
+            agent.clear_movement()
+        else:
+            agent.db.movement_queue = []
+
+        agent.db.activity_status = "Idle"
+
+        return True, f"Agent #{agent_id} patrol route cleared."
+
+    # ------------------------------------------------------------------ #
+    #  Stop / cancel  (Req 11.1, 11.3, 11.4)
+    # ------------------------------------------------------------------ #
+
+    def stop_agent(
+        self, player: Any, agent_id: int
+    ) -> tuple[bool, str]:
+        """Stop an agent's current movement and set it to idle.
+
+        Clears the movement queue and sets activity_status to "Idle".
+        Retains carried resources if the agent is a harvester.
+
+        Returns ``(success, message)``.
+        """
+        agent = self.get_agent_by_id(player, agent_id)
+        if agent is None:
+            return False, f"Agent #{agent_id} not found."
+
+        if hasattr(agent, "clear_movement"):
+            agent.clear_movement()
+        else:
+            agent.db.movement_queue = []
+
+        agent.db.activity_status = "Idle"
+
+        # Harvesters retain carried resources (Req 11.4) — no cleanup needed.
+        # Just reset delivery_state so the behavior script can re-evaluate.
+        role = getattr(agent.db, "role", "")
+        if role == "harvester":
+            agent.db.delivery_state = "idle"
+
+        return True, f"Agent #{agent_id} stopped."
 
     # ------------------------------------------------------------------ #
     #  Queries  (Req 7b.10)
@@ -499,8 +734,35 @@ class AgentSystem:
     # ------------------------------------------------------------------ #
 
     def process_tick(self, tick_number: int) -> None:
-        """Process all agent-related per-tick work."""
-        pass
+        """Process all agent-related per-tick work.
+
+        Iterates all agents with behavior scripts (interval=0) and
+        calls ``at_repeat()`` on each script to drive polling-based
+        behaviors (harvesting, patrol, delivery).
+        """
+        try:
+            from evennia.utils.search import search_object_by_tag
+
+            agents = list(search_object_by_tag("agent", category="npc_type"))
+        except Exception:
+            return
+
+        for agent in agents:
+            if not hasattr(agent, "scripts"):
+                continue
+            try:
+                for script in agent.scripts.all():
+                    if getattr(script, "interval", None) == 0:
+                        try:
+                            script.at_repeat()
+                        except Exception:
+                            logger.exception(
+                                "Error in script %s on %s",
+                                getattr(script, "key", "?"),
+                                getattr(agent, "key", "?"),
+                            )
+            except Exception:
+                pass
 
     def restore_training_cache(self) -> int:
         """Repopulate _training_buildings from the DB after a server restart.
@@ -529,41 +791,56 @@ class AgentSystem:
 
     @staticmethod
     def _attach_behavior_script(agent: Any, role: str) -> None:
-        """Attach the Evennia Script for *role* to the agent NPC.
+        """Attach the Evennia Script(s) for *role* to the agent NPC.
 
         Uses ``ROLE_SCRIPT_MAP`` from ``agent_scripts`` to look up the
-        correct Script class, then adds it via Evennia's ``scripts.add``.
+        correct Script class (or list of classes), then adds each via
+        Evennia's ``scripts.add``.  When a role maps to a list (e.g.
+        ``"harvester": [HarvesterScript, DeliveryBehavior]``), all
+        scripts in the list are attached.
+
         Silently no-ops in test environments where Evennia isn't available.
         """
         try:
             from typeclasses.agent_scripts import ROLE_SCRIPT_MAP
 
-            script_cls = ROLE_SCRIPT_MAP.get(role)
-            if script_cls is None:
+            value = ROLE_SCRIPT_MAP.get(role)
+            if value is None:
                 return
 
-            # Evennia's scripts.add accepts a typeclass path or class
-            if hasattr(agent, "scripts"):
+            if not hasattr(agent, "scripts"):
+                return
+
+            # Normalise to a list so both single classes and lists are handled
+            script_classes = value if isinstance(value, list) else [value]
+            for script_cls in script_classes:
                 agent.scripts.add(script_cls)
         except Exception:
             pass
 
     @staticmethod
     def _detach_behavior_script(agent: Any) -> None:
-        """Remove any agent behavior script from the NPC.
+        """Remove any agent behavior script(s) from the NPC.
 
-        Searches for scripts whose key ends with ``_script`` (the
-        naming convention from ``agent_scripts.py``) and deletes them.
+        Removes all scripts whose key matches a known behavior script.
+        Uses hardcoded keys to avoid instantiating Evennia Script classes
+        outside the DB context (which silently fails).
         """
         try:
-            from typeclasses.agent_scripts import ROLE_SCRIPT_MAP
-
             if not hasattr(agent, "scripts"):
                 return
 
-            script_keys = {f"{role}_script" for role in ROLE_SCRIPT_MAP}
-            for script in agent.scripts.all():
-                if getattr(script, "key", "") in script_keys:
+            known_keys = {
+                "harvester_script",
+                "engineer_script",
+                "patrol_behavior",
+                "delivery_behavior",
+                "soldier_script",
+                "medic_script",
+            }
+
+            for script in list(agent.scripts.all()):
+                if getattr(script, "key", "") in known_keys:
                     script.delete()
         except Exception:
             pass
@@ -571,6 +848,18 @@ class AgentSystem:
     # ------------------------------------------------------------------ #
     #  Helpers
     # ------------------------------------------------------------------ #
+
+    @staticmethod
+    def _compute_path_to(
+        agent: Any, start_x: int, start_y: int, goal_x: int, goal_y: int
+    ) -> list[tuple[int, int]]:
+        """Compute a path from (start_x, start_y) to (goal_x, goal_y).
+
+        Delegates to ``compute_path_for_npc`` in the pathfinding module.
+        Returns an empty list if no path exists.
+        """
+        from world.pathfinding import compute_path_for_npc
+        return compute_path_for_npc(agent, (start_x, start_y), (goal_x, goal_y))
 
     @staticmethod
     def _find_hq(player: Any) -> Any | None:
@@ -583,6 +872,41 @@ class AgentSystem:
         except Exception:
             pass
         return None
+
+    @staticmethod
+    def _get_planet_bounds(agent: Any) -> tuple[int, int]:
+        """Return (width, height) for the planet the agent is on.
+
+        Tries to resolve via the agent's PlanetRoom and game systems.
+        Falls back to a generous default if unavailable.
+        """
+        planet_room = getattr(agent, "location", None)
+        if planet_room is not None:
+            systems = None
+            if hasattr(planet_room, "_game_systems"):
+                systems = planet_room._game_systems
+            if systems:
+                registry = systems.get("registry")
+                planet_key = getattr(
+                    getattr(planet_room, "db", None), "planet", None
+                )
+                if registry and planet_key:
+                    try:
+                        planet_def = registry.get_planet(planet_key)
+                        coord_space = registry.get_coord_space(
+                            planet_def.coord_space
+                        )
+                        return coord_space.width, coord_space.height
+                    except (KeyError, AttributeError):
+                        pass
+            # Try reading width/height directly from the room
+            w = getattr(getattr(planet_room, "db", None), "width", None)
+            h = getattr(getattr(planet_room, "db", None), "height", None)
+            if w is not None and h is not None:
+                return int(w), int(h)
+        # Generous fallback — matches no real planet, but prevents
+        # out-of-bounds rejections in edge cases.
+        return 256, 256
 
     @staticmethod
     def _player_inside_building(player: Any, building: Any) -> bool:

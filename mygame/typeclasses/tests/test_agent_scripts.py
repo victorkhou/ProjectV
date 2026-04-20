@@ -54,8 +54,8 @@ _ensure_evennia_stubs()
 from mygame.typeclasses.agent_scripts import (  # noqa: E402
     HarvesterScript,
     EngineerScript,
-    GuardScript,
-    ScoutScript,
+    PatrolBehavior,
+    DeliveryBehavior,
     SoldierScript,
     MedicScript,
     ROLE_SCRIPT_MAP,
@@ -371,15 +371,10 @@ class TestEngineerScript(unittest.TestCase):
 class TestPlaceholderScripts(unittest.TestCase):
     """Verify placeholder scripts can be instantiated and called."""
 
-    def test_guard_script_runs(self):
-        script = GuardScript()
+    def test_patrol_behavior_runs(self):
+        script = PatrolBehavior()
         script.obj = FakeNPC(role="guard")
         script.at_repeat()  # should not raise
-
-    def test_scout_script_runs(self):
-        script = ScoutScript()
-        script.obj = FakeNPC(role="scout")
-        script.at_repeat()
 
     def test_soldier_script_runs(self):
         script = SoldierScript()
@@ -405,12 +400,30 @@ class TestRoleScriptMap(unittest.TestCase):
         }
         self.assertEqual(set(ROLE_SCRIPT_MAP.keys()), expected_roles)
 
-    def test_map_values_are_classes(self):
-        for role, cls in ROLE_SCRIPT_MAP.items():
-            self.assertTrue(
-                callable(cls),
-                f"ROLE_SCRIPT_MAP['{role}'] should be a class",
-            )
+    def test_map_values_are_classes_or_lists(self):
+        for role, value in ROLE_SCRIPT_MAP.items():
+            if isinstance(value, list):
+                for cls in value:
+                    self.assertTrue(
+                        callable(cls),
+                        f"ROLE_SCRIPT_MAP['{role}'] list item should be a class",
+                    )
+            else:
+                self.assertTrue(
+                    callable(value),
+                    f"ROLE_SCRIPT_MAP['{role}'] should be a class",
+                )
+
+    def test_harvester_maps_to_list(self):
+        value = ROLE_SCRIPT_MAP["harvester"]
+        self.assertIsInstance(value, list)
+        self.assertEqual(value, [HarvesterScript, DeliveryBehavior])
+
+    def test_guard_maps_to_patrol(self):
+        self.assertIs(ROLE_SCRIPT_MAP["guard"], PatrolBehavior)
+
+    def test_scout_maps_to_patrol(self):
+        self.assertIs(ROLE_SCRIPT_MAP["scout"], PatrolBehavior)
 
 
 # -------------------------------------------------------------- #
@@ -431,11 +444,8 @@ class TestScriptKeys(unittest.TestCase):
     def test_engineer_key(self):
         self._check_key(EngineerScript, "engineer_script")
 
-    def test_guard_key(self):
-        self._check_key(GuardScript, "guard_script")
-
-    def test_scout_key(self):
-        self._check_key(ScoutScript, "scout_script")
+    def test_patrol_behavior_key(self):
+        self._check_key(PatrolBehavior, "patrol_behavior")
 
     def test_soldier_key(self):
         self._check_key(SoldierScript, "soldier_script")

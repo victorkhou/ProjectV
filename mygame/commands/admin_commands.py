@@ -273,6 +273,10 @@ class CmdSpawnBuilding(BaseCommand):
             # Set coordinates on the building
             building.db.coord_x = cx
             building.db.coord_y = cy
+            # at_object_receive saw coord_x=None during create_object,
+            # so manually register in the coordinate index now.
+            if hasattr(planet_room, "coord_index"):
+                planet_room.coord_index.add(building, int(cx), int(cy))
             # Tag is auto-set by Building.at_object_creation via GameEntity
 
             owner_name = getattr(owner, "key", "nobody") if owner else "nobody"

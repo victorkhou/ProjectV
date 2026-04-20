@@ -247,14 +247,23 @@ class GameTickScript(DefaultScript):
                         gen.advance_tick(tick_number)
             steps.append(("terrain_epochs", advance_terrain_epochs))
 
-        # 2. Agent system tick — process all agent behavior scripts
+        # 2. NPC movement — advance all moving NPCs and process pathfinding
+        movement_system = systems.get("movement_system")
+        if movement_system:
+            def process_npc_movement():
+                movement_system.reset_tick()
+                movement_system.process_movement(tick_number)
+                movement_system.process_pathfinding()
+            steps.append(("npc_movement", process_npc_movement))
+
+        # 3. Agent system tick — process all agent behavior scripts
         if agent_system:
             steps.append((
                 "agent_processing",
                 lambda: agent_system.process_tick(tick_number),
             ))
 
-        # 2b. Agent training timer — uses in-memory cache, no DB query per tick
+        # 3b. Agent training timer — uses in-memory cache, no DB query per tick
         if agent_system:
             steps.append((
                 "agent_training",
@@ -263,7 +272,7 @@ class GameTickScript(DefaultScript):
                 ),
             ))
 
-        # 3. Active-presence processing — building and harvesting for online players
+        # 4. Active-presence processing — building and harvesting for online players
         if building_system or resource_system:
             def process_active_presence():
                 for player in tick_data["online_players"]:

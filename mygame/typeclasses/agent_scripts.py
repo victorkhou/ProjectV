@@ -76,6 +76,11 @@ class HarvesterScript(DefaultScript):
         if npc is None:
             return
 
+        # Don't produce while in transit to the building
+        queue = getattr(getattr(npc, "db", None), "movement_queue", None)
+        if queue:
+            return
+
         # Agent must not be incapacitated
         if getattr(getattr(npc, "db", None), "incapacitated", False):
             return
@@ -94,14 +99,27 @@ class HarvesterScript(DefaultScript):
         if not resource_type:
             return
 
-        # Calculate production amount
-        level = _get_attr(building, "building_level", 1) or 1
-        base_rate = self._get_base_rate()
-        from world.constants import EXTRACTOR_LEVEL_BONUS
-        production = base_rate * (1 + EXTRACTOR_LEVEL_BONUS * (level - 1))
-        production_int = max(1, int(production)) if base_rate > 0 else 0
-        if production_int <= 0:
+        # Production cooldown — same rate as manual harvesting at an Extractor.
+        # Manual: HARVEST_YIELD_PER_ACTION * EXTRACTOR_HARVEST_MULTIPLIER
+        # every HARVEST_COOLDOWN_TICKS ticks, scaled by building level.
+        from world.constants import (
+            HARVEST_COOLDOWN_TICKS,
+            HARVEST_YIELD_PER_ACTION,
+            EXTRACTOR_HARVEST_MULTIPLIER,
+            EXTRACTOR_LEVEL_BONUS,
+        )
+        cooldown = getattr(getattr(npc, "db", None), "_harvest_tick_counter", 0) or 0
+        cooldown += 1
+        if cooldown < HARVEST_COOLDOWN_TICKS:
+            npc.db._harvest_tick_counter = cooldown
+            npc.db.activity_status = f"Harvesting {resource_type}"
             return
+        npc.db._harvest_tick_counter = 0
+
+        level = _get_attr(building, "building_level", 1) or 1
+        production = HARVEST_YIELD_PER_ACTION * EXTRACTOR_HARVEST_MULTIPLIER
+        production = int(production * (1 + EXTRACTOR_LEVEL_BONUS * (level - 1)))
+        production = max(1, production)
 
         # Drop resources at building coordinates in PlanetRoom
         from world.systems.resource_system import ResourceSystem
@@ -110,17 +128,17 @@ class HarvesterScript(DefaultScript):
         drop_location = getattr(building, "location", building)
         if bx is not None and by is not None:
             ResourceSystem._spawn_resource_drop(
-                drop_location, resource_type, production_int, x=int(bx), y=int(by)
+                drop_location, resource_type, production, x=int(bx), y=int(by)
             )
         else:
             # Legacy fallback: no coordinates on building
-            ResourceSystem._spawn_resource_drop(drop_location, resource_type, production_int)
+            ResourceSystem._spawn_resource_drop(drop_location, resource_type, production)
 
-        if production_int > 0:
-            logger.debug(
-                "Harvester on %s produced %d %s (level %d)",
-                building, production_int, resource_type, level,
-            )
+        npc.db.activity_status = f"Harvesting {resource_type}"
+        logger.debug(
+            "Harvester on %s produced %d %s (level %d)",
+            building, production, resource_type, level,
+        )
 
     # -- internal helpers ---------------------------------------------- #
 
@@ -260,48 +278,480 @@ class EngineerScript(DefaultScript):
         # when the technology system is integrated.
 
 
+# GuardScript and ScoutScript removed — replaced by PatrolBehavior (Req 3.1)
+
+
 # ------------------------------------------------------------------ #
-#  GuardScript  (Req 12.1)
+#  PatrolBehavior  (Req 3.2, 3.3, 3.4, 3.5, 3.6, 10.1, 10.2)
 # ------------------------------------------------------------------ #
 
-class GuardScript(DefaultScript):
-    """Activates Turret auto-attack when attached to an NPC assigned to a Turret.
+class PatrolBehavior(DefaultScript):
+    """Cycles a guard/scout through patrol waypoints.
 
-    Placeholder — full combat integration in a later phase.
+    Replaces the placeholder GuardScript and ScoutScript.
+    Uses the polling pattern: at_repeat checks if the NPC's movement
+    queue is empty and triggers the next waypoint path.
     """
 
     def at_script_creation(self) -> None:
-        self.key = "guard_script"
-        self.desc = "Guard agent turret activation loop"
-        self.interval = 0
+        self.key = "patrol_behavior"
+        self.desc = "Patrol agent waypoint cycling loop"
+        self.interval = 0  # driven by GameTickScript
         self.persistent = True
 
     def at_repeat(self) -> None:
-        # Placeholder: activate Turret auto-attack on enemies in range.
-        # Full implementation requires the CombatEngine turret logic.
-        pass
+        """If movement queue is empty, path to next waypoint."""
+        npc = self.obj
+        if npc is None:
+            return
+        if getattr(getattr(npc, "db", None), "incapacitated", False):
+            return
+        queue = getattr(npc.db, "movement_queue", None)
+        if queue:
+            return  # still moving
+        self._advance_to_next_waypoint(npc)
+
+    def _advance_to_next_waypoint(self, npc: Any) -> None:
+        """Cycle patrol_waypoint_index and request path to next waypoint."""
+        patrol_route = getattr(npc.db, "patrol_route", None)
+        if not patrol_route:
+            return
+
+        route_len = len(patrol_route)
+        if route_len == 0:
+            return
+
+        npc_x = getattr(npc.db, "coord_x", 0)
+        npc_y = getattr(npc.db, "coord_y", 0)
+        if npc_x is None:
+            npc_x = 0
+        if npc_y is None:
+            npc_y = 0
+        npc_x, npc_y = int(npc_x), int(npc_y)
+
+        target_index = getattr(npc.db, "patrol_waypoint_index", 0) or 0
+
+        # Try each waypoint starting from target_index; skip unreachable
+        for _attempt in range(route_len):
+            target_index = target_index % route_len
+            waypoint = patrol_route[target_index]
+            wx, wy = int(waypoint[0]), int(waypoint[1])
+
+            # Already at this waypoint — advance to next
+            if npc_x == wx and npc_y == wy:
+                target_index = (target_index + 1) % route_len
+                npc.db.patrol_waypoint_index = target_index
+                npc.db.activity_status = (
+                    f"Patrolling waypoint {target_index + 1}/{route_len}"
+                )
+                continue
+
+            # Compute path to this waypoint
+            path = self._compute_path(npc, (npc_x, npc_y), (wx, wy))
+            if path:
+                # Set movement queue; advance index so next cycle targets
+                # the following waypoint after arrival.
+                if hasattr(npc, "set_movement_queue"):
+                    npc.set_movement_queue(path)
+                else:
+                    npc.db.movement_queue = [[x, y] for x, y in path]
+                next_index = (target_index + 1) % route_len
+                npc.db.patrol_waypoint_index = next_index
+                npc.db.activity_status = (
+                    f"Patrolling waypoint {target_index + 1}/{route_len}"
+                )
+                return
+            else:
+                # Waypoint unreachable — skip to next
+                logger.debug(
+                    "PatrolBehavior: waypoint %d (%d,%d) unreachable for %s, skipping",
+                    target_index, wx, wy, npc,
+                )
+                target_index = (target_index + 1) % route_len
+                continue
+
+        # All waypoints unreachable — stay put, retry next tick
+        npc.db.activity_status = "Patrol blocked — retrying"
+        logger.debug("PatrolBehavior: all waypoints unreachable for %s", npc)
+
+    @staticmethod
+    def _compute_path(
+        npc: Any,
+        start: tuple[int, int],
+        goal: tuple[int, int],
+    ) -> list[tuple[int, int]]:
+        """Compute a path from start to goal using the Pathfinder.
+
+        Delegates to ``compute_path_for_npc`` in the pathfinding module,
+        which builds a passability checker from the NPC's PlanetRoom context.
+        """
+        from world.pathfinding import compute_path_for_npc
+        return compute_path_for_npc(npc, start, goal)
 
 
 # ------------------------------------------------------------------ #
-#  ScoutScript  (Req 12.3)
+#  DeliveryBehavior  (Req 4.1–4.8, 7.1–7.4, 8.4, 8.5, 9.1–9.5, 10.1, 10.2)
 # ------------------------------------------------------------------ #
 
-class ScoutScript(DefaultScript):
-    """Extends Radar vision radius when attached to an NPC assigned to a Radar.
+class DeliveryBehavior(DefaultScript):
+    """Autonomous Extractor → Storage delivery loop for harvesters.
 
-    Placeholder — vision radius extension will be wired when the
-    map rendering integration is complete.
+    Coexists with HarvesterScript on the same NPC. HarvesterScript
+    handles production (gated by delivery_state), DeliveryBehavior
+    handles pickup/transit/deposit.
+
+    Uses the polling pattern: at_repeat checks delivery_state and
+    movement_queue emptiness to drive the FSM.
+
+    State machine: idle → picking_up → delivering → returning → idle
     """
 
     def at_script_creation(self) -> None:
-        self.key = "scout_script"
-        self.desc = "Scout agent radar vision loop"
-        self.interval = 0
+        self.key = "delivery_behavior"
+        self.desc = "Harvester agent delivery loop"
+        self.interval = 0  # driven by GameTickScript
         self.persistent = True
 
     def at_repeat(self) -> None:
-        # Placeholder: extend Radar vision radius for the owning player.
-        pass
+        """State machine: check delivery_state and movement_queue."""
+        npc = self.obj
+        if npc is None:
+            return
+
+        # Skip if incapacitated — drop carried resources (Req 9.5)
+        if getattr(getattr(npc, "db", None), "incapacitated", False):
+            self._handle_incapacitated(npc)
+            return
+
+        # Still moving — wait for arrival
+        queue = getattr(npc.db, "movement_queue", None)
+        if queue:
+            return
+
+        # Queue empty — act based on delivery_state
+        state = getattr(npc.db, "delivery_state", "idle")
+        if state == "idle":
+            self._try_pick_up(npc)
+        elif state == "picking_up":
+            self._start_delivery(npc)
+        elif state == "delivering":
+            self._deposit_and_return(npc)
+        elif state == "returning":
+            self._arrived_at_extractor(npc)
+
+    # ------------------------------------------------------------------ #
+    #  FSM transitions
+    # ------------------------------------------------------------------ #
+
+    def _try_pick_up(self, npc: Any) -> None:
+        """Check for ResourceDrops at Extractor coords, load up to carry_capacity.
+
+        Transitions: idle → picking_up (if resources found), stays idle otherwise.
+        """
+        building = getattr(npc.db, "role_target", None)
+        if building is None:
+            return
+
+        bx = getattr(getattr(building, "db", None), "coord_x", None)
+        by = getattr(getattr(building, "db", None), "coord_y", None)
+        if bx is None or by is None:
+            return
+
+        bx, by = int(bx), int(by)
+
+        # Find ResourceDrops at the Extractor's coordinates
+        room = getattr(npc, "location", None)
+        if room is None or not hasattr(room, "get_objects_at"):
+            return
+
+        drops = room.get_objects_at(bx, by, type_tag="resource_drop")
+        if not drops:
+            return  # No resources to pick up — stay idle
+
+        # Load resources up to carry_capacity (Req 9.2)
+        from world.constants import DEFAULT_CARRY_CAPACITY
+        capacity = getattr(npc.db, "carry_capacity", None)
+        if capacity is None:
+            capacity = DEFAULT_CARRY_CAPACITY
+        carried = getattr(npc.db, "carried_resources", None) or {}
+        carried = dict(carried)  # ensure mutable copy
+        total_carried = sum(carried.values())
+        remaining_capacity = max(0, capacity - total_carried)
+
+        if remaining_capacity <= 0:
+            # Already full — go straight to delivery
+            npc.db.delivery_state = "picking_up"
+            npc.db.carried_resources = carried
+            npc.db.activity_status = "Loaded — selecting delivery target"
+            return
+
+        for drop in list(drops):
+            if remaining_capacity <= 0:
+                break
+            rtype = getattr(getattr(drop, "db", None), "resource_type", None)
+            amount = getattr(getattr(drop, "db", None), "amount", 0) or 0
+            if not rtype or amount <= 0:
+                continue
+
+            take = min(amount, remaining_capacity)
+            carried[rtype] = carried.get(rtype, 0) + take
+            remaining_amount = amount - take
+            remaining_capacity -= take
+
+            # Update or zero out the drop
+            if remaining_amount > 0:
+                drop.db.amount = remaining_amount
+            else:
+                drop.db.amount = 0
+                # Try to delete the empty drop
+                if hasattr(drop, "delete"):
+                    try:
+                        drop.delete()
+                    except Exception:
+                        pass
+
+        npc.db.carried_resources = carried
+        npc.db.delivery_state = "picking_up"
+
+        total_str = ", ".join(f"{v} {k}" for k, v in carried.items())
+        npc.db.activity_status = f"Picked up {total_str}"
+
+    def _start_delivery(self, npc: Any) -> None:
+        """Select nearest Storage_Building, path to it, set delivering state.
+
+        Transitions: picking_up → delivering (if storage found and path exists),
+                     picking_up → idle (if no storage building).
+        """
+        carried = getattr(npc.db, "carried_resources", None) or {}
+        if not carried or sum(carried.values()) <= 0:
+            # Nothing to deliver — go back to idle
+            npc.db.delivery_state = "idle"
+            npc.db.activity_status = "Idle"
+            return
+
+        target = self.select_delivery_target(npc)
+        if target is None:
+            # No storage building — stay idle (Req 4.6)
+            npc.db.delivery_state = "idle"
+            npc.db.activity_status = "No storage building — waiting"
+            return
+
+        npc.db.delivery_target = target
+
+        # Compute path to target
+        npc_x = int(getattr(npc.db, "coord_x", 0) or 0)
+        npc_y = int(getattr(npc.db, "coord_y", 0) or 0)
+        tx = int(getattr(getattr(target, "db", None), "coord_x", 0) or 0)
+        ty = int(getattr(getattr(target, "db", None), "coord_y", 0) or 0)
+
+        path = PatrolBehavior._compute_path(npc, (npc_x, npc_y), (tx, ty))
+        if not path:
+            # Path blocked — retry next tick (Req 4.7)
+            npc.db.activity_status = "Delivery path blocked — retrying"
+            return
+
+        # Set movement queue and state
+        if hasattr(npc, "set_movement_queue"):
+            npc.set_movement_queue(path)
+        else:
+            npc.db.movement_queue = [[x, y] for x, y in path]
+
+        npc.db.delivery_state = "delivering"
+
+        # Laden speed (Req 8.4)
+        from world.constants import HARVESTER_LADEN_DELAY
+        npc.db.movement_delay = HARVESTER_LADEN_DELAY
+
+        total_str = ", ".join(f"{v} {k}" for k, v in carried.items())
+        dist = len(path)
+        npc.db.activity_status = f"Delivering {total_str} ({dist} tiles)"
+
+    def _deposit_and_return(self, npc: Any) -> None:
+        """Transfer carried_resources to owner's resource pool, path back to Extractor.
+
+        Transitions: delivering → returning
+        """
+        # Deposit resources into owner's resource pool (Req 4.4, 9.4)
+        self.deposit_resources(npc)
+
+        # Path back to Extractor
+        building = getattr(npc.db, "role_target", None)
+        if building is None:
+            npc.db.delivery_state = "idle"
+            npc.db.activity_status = "Idle"
+            return
+
+        bx = getattr(getattr(building, "db", None), "coord_x", None)
+        by = getattr(getattr(building, "db", None), "coord_y", None)
+        if bx is None or by is None:
+            npc.db.delivery_state = "idle"
+            npc.db.activity_status = "Idle"
+            return
+
+        bx, by = int(bx), int(by)
+        npc_x = int(getattr(npc.db, "coord_x", 0) or 0)
+        npc_y = int(getattr(npc.db, "coord_y", 0) or 0)
+
+        path = PatrolBehavior._compute_path(npc, (npc_x, npc_y), (bx, by))
+        if not path:
+            # Path blocked — retry next tick (Req 4.7)
+            npc.db.activity_status = "Return path blocked — retrying"
+            return
+
+        if hasattr(npc, "set_movement_queue"):
+            npc.set_movement_queue(path)
+        else:
+            npc.db.movement_queue = [[x, y] for x, y in path]
+
+        npc.db.delivery_state = "returning"
+        npc.db.delivery_target = None
+
+        # Empty speed (Req 8.5)
+        from world.constants import HARVESTER_EMPTY_DELAY
+        npc.db.movement_delay = HARVESTER_EMPTY_DELAY
+
+        npc.db.activity_status = f"Returning to Extractor ({len(path)} tiles)"
+
+    def _arrived_at_extractor(self, npc: Any) -> None:
+        """Arrived back at Extractor, transition to idle.
+
+        Transitions: returning → idle
+        """
+        from world.constants import HARVESTER_EMPTY_DELAY
+        npc.db.delivery_state = "idle"
+        npc.db.movement_delay = HARVESTER_EMPTY_DELAY
+        npc.db.activity_status = "Idle"
+
+    # ------------------------------------------------------------------ #
+    #  Resource operations
+    # ------------------------------------------------------------------ #
+
+    @staticmethod
+    def deposit_resources(npc: Any) -> None:
+        """Transfer carried_resources to owner's resource pool (Req 4.4, 9.4)."""
+        carried = getattr(npc.db, "carried_resources", None) or {}
+        if not carried:
+            return
+
+        owner = getattr(npc.db, "owner", None)
+        if owner is not None and hasattr(owner, "add_resource"):
+            for rtype, amount in carried.items():
+                if amount > 0:
+                    owner.add_resource(rtype, amount)
+
+        npc.db.carried_resources = {}
+
+    @staticmethod
+    def select_delivery_target(npc: Any) -> Any | None:
+        """Find nearest Vault/HQ owned by same player (Req 7.1, 7.2).
+
+        Prefers nearest by Manhattan distance. On tie, prefers Vault (VT) over HQ.
+        """
+        owner = getattr(npc.db, "owner", None)
+        if owner is None:
+            return None
+
+        building = getattr(npc.db, "role_target", None)
+        if building is None:
+            return None
+
+        # Use Extractor coordinates as the reference point
+        bx = getattr(getattr(building, "db", None), "coord_x", None)
+        by = getattr(getattr(building, "db", None), "coord_y", None)
+        if bx is None or by is None:
+            return None
+        bx, by = int(bx), int(by)
+
+        # Find all storage buildings owned by the same player
+        room = getattr(npc, "location", None)
+        if room is None:
+            return None
+
+        candidates = []
+
+        # Search through all buildings in the room
+        # Use search_object_by_tag for buildings, then filter by owner and type
+        try:
+            from evennia.utils.search import search_object_by_tag
+            all_buildings = list(search_object_by_tag(
+                key="building", category="object_type"
+            ))
+        except Exception:
+            all_buildings = []
+
+        # Fallback: if search_object_by_tag fails or returns nothing,
+        # try iterating room contents
+        if not all_buildings and hasattr(room, "contents"):
+            all_buildings = [
+                obj for obj in getattr(room, "contents", [])
+                if hasattr(obj, "tags") and getattr(obj.tags, "get", lambda *a, **kw: False)(
+                    "building", category="object_type"
+                )
+            ]
+
+        for bld in all_buildings:
+            bld_type = _get_attr(bld, "building_type")
+            if bld_type not in ("VT", "HQ"):
+                continue
+
+            bld_owner = _get_attr(bld, "owner")
+            if bld_owner is None:
+                continue
+
+            # Compare owners by identity or id
+            if bld_owner is not owner:
+                # Try comparing by id as fallback
+                owner_id = getattr(owner, "id", None)
+                bld_owner_id = getattr(bld_owner, "id", None)
+                if owner_id is None or bld_owner_id is None or owner_id != bld_owner_id:
+                    continue
+
+            cx = getattr(getattr(bld, "db", None), "coord_x", None)
+            cy = getattr(getattr(bld, "db", None), "coord_y", None)
+            if cx is None or cy is None:
+                continue
+
+            cx, cy = int(cx), int(cy)
+            dist = abs(cx - bx) + abs(cy - by)
+
+            # Sort key: (distance, type_priority) where VT=0, HQ=1
+            type_priority = 0 if bld_type == "VT" else 1
+            candidates.append((dist, type_priority, bld))
+
+        if not candidates:
+            return None
+
+        # Sort by distance first, then by type priority (VT preferred on tie)
+        candidates.sort(key=lambda c: (c[0], c[1]))
+        return candidates[0][2]
+
+    # ------------------------------------------------------------------ #
+    #  Edge case handlers
+    # ------------------------------------------------------------------ #
+
+    @staticmethod
+    def _handle_incapacitated(npc: Any) -> None:
+        """Drop carried resources at current coords when incapacitated (Req 9.5)."""
+        carried = getattr(npc.db, "carried_resources", None) or {}
+        if not carried:
+            return
+
+        room = getattr(npc, "location", None)
+        npc_x = getattr(npc.db, "coord_x", None)
+        npc_y = getattr(npc.db, "coord_y", None)
+
+        if room is not None and npc_x is not None and npc_y is not None:
+            from world.systems.resource_system import ResourceSystem
+            for rtype, amount in carried.items():
+                if amount > 0:
+                    ResourceSystem._spawn_resource_drop(
+                        room, rtype, amount,
+                        x=int(npc_x), y=int(npc_y),
+                    )
+
+        npc.db.carried_resources = {}
+        npc.db.delivery_state = "idle"
+        npc.db.activity_status = "Incapacitated — dropped resources"
 
 
 # ------------------------------------------------------------------ #
@@ -353,13 +803,13 @@ class MedicScript(DefaultScript):
 #  Script class lookup
 # ------------------------------------------------------------------ #
 
-#: Maps role name → Script class for use by AgentSystem when attaching
-#: behavior scripts to NPC agents.
-ROLE_SCRIPT_MAP: dict[str, type] = {
-    "harvester": HarvesterScript,
+#: Maps role name → Script class (or list of Script classes) for use by
+#: AgentSystem when attaching behavior scripts to NPC agents.
+ROLE_SCRIPT_MAP: dict[str, type | list[type]] = {
+    "harvester": HarvesterScript,  # production only; resources stay at Extractor
     "engineer": EngineerScript,
-    "guard": GuardScript,
-    "scout": ScoutScript,
+    "guard": PatrolBehavior,      # replaces GuardScript
+    "scout": PatrolBehavior,      # replaces ScoutScript
     "soldier": SoldierScript,
     "medic": MedicScript,
 }

@@ -1342,7 +1342,7 @@ _CARDINAL_DIRS = ("north", "south", "east", "west")
 
 
 def _show_tile_summary(caller, planet_room):
-    """Show resource drops and other players at the caller's tile."""
+    """Show buildings, resource drops, and other players at the caller's tile."""
     if not hasattr(planet_room, "get_objects_at"):
         return
     x = getattr(caller.db, "coord_x", None)
@@ -1351,6 +1351,30 @@ def _show_tile_summary(caller, planet_room):
         return
     x, y = int(x), int(y)
     parts = []
+
+    # Buildings on this tile
+    buildings = planet_room.get_buildings_at(x, y)
+    for bld in buildings:
+        btype = "??"
+        if hasattr(bld, "attributes") and hasattr(bld.attributes, "get"):
+            btype = bld.attributes.get("building_type", default="??") or "??"
+        bname = getattr(bld, "key", btype)
+        owner = None
+        if hasattr(bld, "attributes") and hasattr(bld.attributes, "get"):
+            owner = bld.attributes.get("owner", default=None)
+        owner_name = getattr(owner, "key", "unowned") if owner else "unowned"
+        under_construction = False
+        if hasattr(bld, "attributes") and hasattr(bld.attributes, "get"):
+            under_construction = bld.attributes.get("under_construction", default=False)
+        if under_construction:
+            progress = bld.attributes.get("construction_progress", default=0) or 0
+            total = bld.attributes.get("construction_total", default=0) or 0
+            parts.append(f"|yBuilding:|n {bname} ({btype}) — |yunder construction|n ({progress}/{total}s) [{owner_name}]")
+        else:
+            lvl = bld.attributes.get("building_level", default=1) if hasattr(bld, "attributes") else 1
+            parts.append(f"|cBuilding:|n {bname} ({btype}) Lv{lvl} [{owner_name}]")
+
+    # Resource drops
     drops = planet_room.get_objects_at(x, y, type_tag="resource_drop")
     drop_strs = []
     for d in drops:
@@ -1360,6 +1384,8 @@ def _show_tile_summary(caller, planet_room):
             drop_strs.append(f"{amt} {rtype}")
     if drop_strs:
         parts.append(f"Resources: {', '.join(drop_strs)}")
+
+    # Other players
     others = []
     for p in planet_room.get_players_at(x, y):
         if p is not caller:
@@ -1367,7 +1393,7 @@ def _show_tile_summary(caller, planet_room):
     if others:
         parts.append(f"Players: {', '.join(others)}")
     if parts:
-        caller.msg(" | ".join(parts))
+        caller.msg("\n".join(parts))
 
 
 def _show_building_interior(caller, building):

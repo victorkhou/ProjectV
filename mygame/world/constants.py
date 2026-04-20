@@ -62,7 +62,7 @@ HARVEST_COOLDOWN_TICKS = 4
 HARVEST_YIELD_PER_ACTION = 1
 
 #: Multiplier when harvesting at an Extractor (vs raw terrain)
-EXTRACTOR_HARVEST_MULTIPLIER = 6
+EXTRACTOR_HARVEST_MULTIPLIER = 3
 
 #: Per-level bonus for Extractor production: base × (1 + BONUS × (level-1))
 EXTRACTOR_LEVEL_BONUS = 0.25
@@ -110,3 +110,39 @@ DEMOLISH_REFUND_DEFAULT = 0.40
 
 #: Per-level bonus for Turret damage: base × (1 + BONUS × (level-1))
 TURRET_LEVEL_BONUS = 0.20
+
+# ------------------------------------------------------------------ #
+#  NPC Movement & Agent AI
+# ------------------------------------------------------------------ #
+
+#: movement_delay = ticks between steps. 1 = fastest (every tick),
+#: 2 = every other tick. Higher value = slower movement.
+#: Named "delay" not "speed" to avoid the counterintuitive
+#: "higher speed = slower" confusion.
+
+#: Default movement delay for all NPCs (every tick — fastest)
+DEFAULT_MOVEMENT_DELAY = 1
+
+#: Scout movement delay (fastest)
+SCOUT_MOVEMENT_DELAY = 1
+
+#: Harvester movement delay when carrying resources (every 2 ticks)
+HARVESTER_LADEN_DELAY = 2
+
+#: Harvester movement delay when returning empty (every tick)
+HARVESTER_EMPTY_DELAY = 1
+
+#: A* node expansion limit
+MAX_PATHFINDING_NODES = 500
+
+#: Maximum pathfinding requests processed per tick
+MAX_PATHS_PER_TICK = 10
+
+#: Minimum waypoints in a patrol route
+MIN_PATROL_WAYPOINTS = 2
+
+#: Maximum waypoints in a patrol route
+MAX_PATROL_WAYPOINTS = 10
+
+#: Default resource carry capacity for harvesters (resource units)
+DEFAULT_CARRY_CAPACITY = 50

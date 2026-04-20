@@ -65,6 +65,29 @@ class GameEntity(DefaultObject):
         self.db.coord_x = None
         self.db.coord_y = None
 
+    def at_object_delete(self):
+        """Remove self from the PlanetRoom coordinate index before deletion.
+
+        Evennia's ``delete()`` does NOT call ``at_object_leave`` on the
+        location, so the coordinate index would otherwise retain a
+        reference to the deleted object. Any subsequent
+        ``get_objects_at`` would iterate over a stale reference and
+        raise a Django M2M error when touching ``.tags``.
+
+        Returns True to allow deletion to proceed.
+        """
+        room = self.location
+        cx = getattr(self.db, "coord_x", None)
+        cy = getattr(self.db, "coord_y", None)
+        if room is not None and cx is not None and cy is not None:
+            idx = getattr(getattr(room, "ndb", None), "_coord_index", None)
+            if idx is not None:
+                try:
+                    idx.remove(self, int(cx), int(cy))
+                except Exception:
+                    pass
+        return True
+
     def at_pre_get(self, getter, **kwargs):
         """Block pickup if getter is not at the same coordinates."""
         if self.db.coord_x is None:

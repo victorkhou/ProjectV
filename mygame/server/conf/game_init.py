@@ -60,6 +60,8 @@ def initialize_game() -> dict:
     from world.systems.tech_system import TechLabSystem
     from world.systems.equipment_system import EquipmentSystem
     from world.systems.agent_system import AgentSystem
+    from world.systems.movement_system import MovementSystem
+    from world.constants import MAX_PATHS_PER_TICK
     from world.chunking import WorldChunkManager
     from world.notification_system import NotificationSystem
     from world.chat_system import ChatSystem
@@ -72,6 +74,7 @@ def initialize_game() -> dict:
     tech_system = TechLabSystem(registry, event_bus)
     equipment_system = EquipmentSystem(registry, event_bus)
     agent_system = AgentSystem(registry, event_bus)
+    movement_system = MovementSystem(max_paths_per_tick=MAX_PATHS_PER_TICK)
     # Restore in-memory training cache from DB (survives server restarts)
     try:
         n = agent_system.restore_training_cache()
@@ -233,6 +236,7 @@ def initialize_game() -> dict:
         "tech_system": tech_system,
         "equipment_system": equipment_system,
         "agent_system": agent_system,
+        "movement_system": movement_system,
         "chunking": chunking,
         "chat_system": chat_system,
         "notification_system": notification_system,
@@ -268,14 +272,18 @@ def _start_scripts(systems: dict) -> None:
         existing = search_script("game_tick")
         if existing:
             tick_script = existing[0]
-            logger.info("Found existing GameTickScript.")
+            # Force-restart the timer to ensure it's actually ticking.
+            # After repeated errors, Evennia's internal Twisted task can
+            # die while db_is_active remains True.
+            tick_script.start(interval=1)
+            logger.error("GameTickScript found and force-restarted (interval=1).")
         else:
             tick_script = create_script(
                 "typeclasses.scripts.GameTickScript",
                 key="game_tick",
                 persistent=True,
             )
-            logger.info("Created new GameTickScript.")
+            logger.error("Created new GameTickScript.")
 
         # Wire systems into the tick script
         if tick_script:

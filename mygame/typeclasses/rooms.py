@@ -85,16 +85,38 @@ class PlanetRoom(DefaultRoom):
     def get_objects_at(self, x: int, y: int, type_tag: str | None = None) -> list:
         """Return objects at (x, y), optionally filtered by object_type tag.
 
+        Defensively filters out objects whose database row has been
+        deleted (``pk is None``) — these can appear in the in-memory
+        index if a delete path bypassed ``at_object_delete``. Stale
+        refs are lazily removed from the index.
+
         Args:
             x, y: Tile coordinates.
             type_tag: If provided, only return objects with this tag in
                       the ``object_type`` category.
         """
-        objs = self.coord_index.get_at(x, y)
+        raw = self.coord_index.get_at(x, y)
+        live = []
+        stale = []
+        for o in raw:
+            if getattr(o, "pk", True) is None:
+                stale.append(o)
+                continue
+            live.append(o)
+        # Lazy-clean stale entries so this doesn't recur
+        if stale:
+            idx = self.ndb._coord_index
+            if idx is not None:
+                for o in stale:
+                    try:
+                        idx.remove(o, x, y)
+                    except Exception:
+                        pass
+
         if type_tag is None:
-            return objs
+            return live
         return [
-            o for o in objs
+            o for o in live
             if hasattr(o, "tags") and o.tags.get(type_tag, category="object_type")
         ]
 
@@ -122,6 +144,9 @@ class PlanetRoom(DefaultRoom):
 
         Fires ``at_coord_change(old_x, old_y, new_x, new_y)`` on the
         object if the hook exists, for game systems that need to react.
+
+        Notifies players at the old tile that the entity left and
+        players at the new tile that the entity arrived.
         """
         old_x = getattr(getattr(obj, "db", None), "coord_x", None)
         old_y = getattr(getattr(obj, "db", None), "coord_y", None)
@@ -130,6 +155,62 @@ class PlanetRoom(DefaultRoom):
         obj.db.coord_y = new_y
         if hasattr(obj, "at_coord_change"):
             obj.at_coord_change(old_x, old_y, new_x, new_y)
+
+        # Notify players at old and new tiles
+        self._notify_tile_change(obj, old_x, old_y, new_x, new_y)
+
+    def _notify_tile_change(self, obj, old_x, old_y, new_x, new_y):
+        """Send arrival/departure messages to players at affected tiles."""
+        # Don't notify about player movement (they see the map update)
+        if hasattr(obj, "has_account") and obj.has_account:
+            return
+
+        name = self._entity_display_name(obj)
+        if not name:
+            return
+
+        # Compute cardinal direction of movement
+        dx = int(new_x) - int(old_x) if old_x is not None else 0
+        dy = int(new_y) - int(old_y) if old_y is not None else 0
+        arrive_from = ""
+        depart_toward = ""
+        if dx == 1:
+            arrive_from = " from the west"
+            depart_toward = " to the east"
+        elif dx == -1:
+            arrive_from = " from the east"
+            depart_toward = " to the west"
+        elif dy == 1:
+            arrive_from = " from the south"
+            depart_toward = " to the north"
+        elif dy == -1:
+            arrive_from = " from the north"
+            depart_toward = " to the south"
+
+        # Notify players at the old tile
+        if old_x is not None and old_y is not None:
+            for player in self.get_players_at(int(old_x), int(old_y)):
+                player.msg(f"|x{name} left{depart_toward}.|n")
+
+        # Notify players at the new tile
+        for player in self.get_players_at(int(new_x), int(new_y)):
+            player.msg(f"|g{name} arrived{arrive_from}.|n")
+
+    @staticmethod
+    def _entity_display_name(obj) -> str:
+        """Return a human-readable name for an entity, or empty string to skip."""
+        # NPC agents
+        if hasattr(obj, "tags") and obj.tags.get(category="npc_type"):
+            aid = getattr(getattr(obj, "db", None), "agent_id", None)
+            role = getattr(getattr(obj, "db", None), "role", "") or "agent"
+            if aid:
+                return f"Agent #{aid} ({role})"
+            return getattr(obj, "key", "an NPC")
+        # Buildings shouldn't notify (they don't move)
+        if hasattr(obj, "tags") and obj.tags.get("building", category="object_type"):
+            return ""
+        # Other entities
+        return getattr(obj, "key", "")
 
     # -------------------------------------------------------------- #
     #  Appearance — show map when looked at
@@ -424,17 +505,33 @@ def _format_building_interior(looker, building, registry=None):
         lines.append("")
         lines.append(f"  |c[Training] Agent #{training_agent_id} — {training_remaining}s remaining|n")
 
+    # Building coordinates (used by assigned-agent check and resource drops)
+    bx = getattr(getattr(building, "db", None), "coord_x", None)
+    by = getattr(getattr(building, "db", None), "coord_y", None)
+    tile = getattr(building, "location", None)
+
     # Show assigned agent
     assigned = get_building_attr(building, "assigned_agent")
     if assigned is not None:
         aid = getattr(getattr(assigned, "db", None), "agent_id", "?")
         role = getattr(getattr(assigned, "db", None), "role", "") or "idle"
-        lines.append(f"  |gAgent #{aid}|n assigned as |w{role}|n")
+        activity = getattr(getattr(assigned, "db", None), "activity_status", None) or "Idle"
+
+        # Check if the agent is physically at this building's tile
+        agent_x = getattr(getattr(assigned, "db", None), "coord_x", None)
+        agent_y = getattr(getattr(assigned, "db", None), "coord_y", None)
+        at_building = (
+            agent_x is not None and agent_y is not None
+            and bx is not None and by is not None
+            and int(agent_x) == int(bx) and int(agent_y) == int(by)
+        )
+
+        if at_building:
+            lines.append(f"  |gAgent #{aid}|n assigned as |w{role}|n — {activity}")
+        else:
+            lines.append(f"  |yAgent #{aid}|n assigned as |w{role}|n — |yen route|n")
 
     # Show resource drops at the building's coordinates
-    bx = getattr(getattr(building, "db", None), "coord_x", None)
-    by = getattr(getattr(building, "db", None), "coord_y", None)
-    tile = getattr(building, "location", None)
     if tile is not None and bx is not None and by is not None and hasattr(tile, "get_objects_at"):
         drops = []
         for obj in tile.get_objects_at(int(bx), int(by), type_tag="resource_drop"):

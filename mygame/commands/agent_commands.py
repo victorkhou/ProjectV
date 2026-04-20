@@ -1,7 +1,8 @@
 """
-Agent management commands — train, assign, unassign, list agents.
+Agent management commands — train, assign, unassign, list, patrol, stop agents.
 
-Requirements: 13.1, 13.2, 13.3, 13.4, 13.5, 13.6, 13.7
+Requirements: 13.1, 13.2, 13.3, 13.4, 13.5, 13.6, 13.7, 3.1, 3.6, 3.7, 3.8,
+              10.3, 11.1
 """
 
 from __future__ import annotations
@@ -80,7 +81,12 @@ class CmdAgents(GameCommand):
                 else:
                     loc_str = "HQ"
 
-                lines.append(f"  |c#{aid}|n  {role:<12s}  {loc_str:<10s}  {status}")
+                # Include activity_status (Req 10.3)
+                activity = getattr(agent.db, "activity_status", None) or "Idle"
+                lines.append(
+                    f"  |c#{aid}|n  {role:<12s}  {loc_str:<10s}  "
+                    f"{status} — {activity}"
+                )
 
         # Show agents currently in training
         try:
@@ -176,6 +182,11 @@ class CmdAssign(GameCommand):
         )
         caller.msg(msg)
 
+        # Refresh the graphical map so the agent is visible immediately
+        if success:
+            from commands.game_commands import _send_map_update
+            _send_map_update(caller)
+
 
 # ------------------------------------------------------------------ #
 #  CmdUnassign  (Req 13.4)
@@ -211,6 +222,9 @@ class CmdUnassign(GameCommand):
 
         success, msg = agent_system.unassign_agent(caller, agent_id)
         caller.msg(msg)
+        if success:
+            from commands.game_commands import _send_map_update
+            _send_map_update(caller)
 
 
 # ------------------------------------------------------------------ #
@@ -251,4 +265,116 @@ class CmdTrain(GameCommand):
             return
 
         success, msg = agent_system.train_agent(caller, building)
+        caller.msg(msg)
+
+
+# ------------------------------------------------------------------ #
+#  CmdPatrol  (Req 3.1, 3.6, 3.7, 3.8)
+# ------------------------------------------------------------------ #
+
+class CmdPatrol(GameCommand):
+    """Set or clear a patrol route for a guard or scout agent.
+
+    Usage:
+        patrol <agent_id> <x1>,<y1> <x2>,<y2> [<x3>,<y3> ...]
+        patrol <agent_id> clear
+
+    Sets a patrol route for a guard or scout agent. The agent will cycle
+    through the waypoints continuously. Use "clear" to stop patrolling.
+
+    Examples:
+        patrol 3 50,50 55,50 55,55 50,55
+        patrol 3 clear
+    """
+
+    key = "patrol"
+    help_category = "Game"
+
+    def func(self):
+        caller = self.caller
+        agent_system = _get_system(caller, "agent_system")
+        if agent_system is None:
+            caller.msg("Agent system unavailable.")
+            return
+
+        args = self.args.strip().split()
+        if len(args) < 2:
+            caller.msg(
+                "Usage: patrol <agent_id> <x1>,<y1> <x2>,<y2> ...\n"
+                "       patrol <agent_id> clear"
+            )
+            return
+
+        # Parse agent ID
+        try:
+            agent_id = int(args[0])
+        except ValueError:
+            caller.msg("Agent ID must be a number.")
+            return
+
+        # Check for "clear" subcommand
+        if args[1].lower() == "clear":
+            success, msg = agent_system.clear_patrol_route(caller, agent_id)
+            caller.msg(msg)
+            return
+
+        # Parse waypoints: each arg should be "x,y"
+        waypoints = []
+        for token in args[1:]:
+            parts = token.split(",")
+            if len(parts) != 2:
+                caller.msg(
+                    f"Invalid waypoint '{token}'. "
+                    "Use format: x,y (e.g. 50,50)"
+                )
+                return
+            try:
+                wx, wy = int(parts[0]), int(parts[1])
+            except ValueError:
+                caller.msg(
+                    f"Invalid waypoint '{token}'. "
+                    "Coordinates must be integers."
+                )
+                return
+            waypoints.append((wx, wy))
+
+        success, msg = agent_system.set_patrol_route(caller, agent_id, waypoints)
+        caller.msg(msg)
+
+
+# ------------------------------------------------------------------ #
+#  CmdStopAgent  (Req 11.1)
+# ------------------------------------------------------------------ #
+
+class CmdStopAgent(GameCommand):
+    """Cancel an agent's current movement and set it to idle.
+
+    Usage:
+        stopagent <agent_id>
+
+    Cancels the agent's current movement and sets it to idle.
+    """
+
+    key = "stopagent"
+    help_category = "Game"
+
+    def func(self):
+        caller = self.caller
+        agent_system = _get_system(caller, "agent_system")
+        if agent_system is None:
+            caller.msg("Agent system unavailable.")
+            return
+
+        args = self.args.strip()
+        if not args:
+            caller.msg("Usage: stopagent <agent_id>")
+            return
+
+        try:
+            agent_id = int(args)
+        except ValueError:
+            caller.msg("Agent ID must be a number.")
+            return
+
+        success, msg = agent_system.stop_agent(caller, agent_id)
         caller.msg(msg)
