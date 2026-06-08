@@ -474,6 +474,8 @@ class CmdBuild(GameCommand):
 
         # Refresh the map so the new building is visible immediately
         if success:
+            # Player is now inside the newly built building
+            caller.db.inside_building = True
             _send_map_update(caller)
             renderer = _get_system(caller, "procedural_map_renderer")
             if renderer:

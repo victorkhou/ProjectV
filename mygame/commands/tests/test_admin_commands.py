@@ -94,8 +94,9 @@ def _ensure_evennia_stubs():
 _ensure_evennia_stubs()
 
 from mygame.commands.admin_commands import (  # noqa: E402
-    CmdReloadData, CmdGiveResource,
+    CmdReloadData,
 )
+from mygame.commands.admin_commands import CmdAdminResource  # noqa: E402
 
 # -------------------------------------------------------------- #
 #  Helpers / Fakes
@@ -216,32 +217,40 @@ class TestCmdReloadDataPaths(unittest.TestCase):
 class TestCmdGiveResourcePermission(unittest.TestCase):
     def test_denied_without_builder(self):
         caller = FakeCaller(permissions={"Player"})
-        cmd = _make_cmd(CmdGiveResource, caller, " Player1 Iron 50")
+        # CmdAdminResource uses check_permstring; FakeCaller uses permissions set
+        # The router's _check_sub_perm calls check_permstring which FakeCaller
+        # doesn't have — add it for this test
+        caller.check_permstring = lambda perm: False
+        cmd = _make_cmd(CmdAdminResource, caller, " give Iron 50 Player1")
         cmd.func()
         self.assertTrue(any("Permission denied" in m for m in caller._messages))
 
 class TestCmdGiveResourceValidation(unittest.TestCase):
     def test_missing_args(self):
         caller = FakeCaller(permissions={"Builder"})
-        cmd = _make_cmd(CmdGiveResource, caller, " Player1")
+        caller.check_permstring = lambda perm: True
+        cmd = _make_cmd(CmdAdminResource, caller, " give Iron")
         cmd.func()
         self.assertTrue(any("Usage" in m for m in caller._messages))
 
     def test_invalid_amount(self):
         caller = FakeCaller(permissions={"Builder"})
-        cmd = _make_cmd(CmdGiveResource, caller, " Player1 Iron abc")
+        caller.check_permstring = lambda perm: True
+        cmd = _make_cmd(CmdAdminResource, caller, " give Iron abc Player1")
         cmd.func()
         self.assertTrue(any("Invalid amount" in m for m in caller._messages))
 
     def test_negative_amount(self):
         caller = FakeCaller(permissions={"Builder"})
-        cmd = _make_cmd(CmdGiveResource, caller, " Player1 Iron -5")
+        caller.check_permstring = lambda perm: True
+        cmd = _make_cmd(CmdAdminResource, caller, " give Iron -5 Player1")
         cmd.func()
         self.assertTrue(any("positive" in m.lower() for m in caller._messages))
 
     def test_target_not_found(self):
         caller = FakeCaller(permissions={"Builder"})
-        cmd = _make_cmd(CmdGiveResource, caller, " Ghost Iron 50")
+        caller.check_permstring = lambda perm: True
+        cmd = _make_cmd(CmdAdminResource, caller, " give Iron 50 Ghost")
         cmd.func()
         self.assertTrue(any("Could not find" in m for m in caller._messages))
 
@@ -249,8 +258,9 @@ class TestCmdGiveResourceSuccess(unittest.TestCase):
     def test_adds_resources(self):
         target = FakeTarget(name="Player1")
         caller = FakeCaller(permissions={"Builder"})
+        caller.check_permstring = lambda perm: True
         caller._search_results["Player1"] = target
-        cmd = _make_cmd(CmdGiveResource, caller, " Player1 Iron 50")
+        cmd = _make_cmd(CmdAdminResource, caller, " give Iron 50 Player1")
         cmd.func()
         self.assertEqual(target._resources["Iron"], 50)
         self.assertTrue(any("Gave 50 Iron" in m for m in caller._messages))
@@ -258,8 +268,9 @@ class TestCmdGiveResourceSuccess(unittest.TestCase):
     def test_target_notified(self):
         target = FakeTarget(name="Player1")
         caller = FakeCaller(permissions={"Builder"})
+        caller.check_permstring = lambda perm: True
         caller._search_results["Player1"] = target
-        cmd = _make_cmd(CmdGiveResource, caller, " Player1 Iron 25")
+        cmd = _make_cmd(CmdAdminResource, caller, " give Iron 25 Player1")
         cmd.func()
         self.assertTrue(any("received" in m.lower() for m in target._messages))
 
@@ -267,10 +278,11 @@ class TestCmdGiveResourceLogging(unittest.TestCase):
     def test_logs_execution(self):
         target = FakeTarget(name="Player1")
         caller = FakeCaller(name="AdminUser", permissions={"Builder"})
+        caller.check_permstring = lambda perm: True
         caller._search_results["Player1"] = target
 
         with self.assertLogs("mygame.admin", level="INFO") as cm:
-            cmd = _make_cmd(CmdGiveResource, caller, " Player1 Iron 10")
+            cmd = _make_cmd(CmdAdminResource, caller, " give Iron 10 Player1")
             cmd.func()
 
         log_output = "\n".join(cm.output)

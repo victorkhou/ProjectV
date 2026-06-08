@@ -7,7 +7,7 @@ Requirements: 13.1, 13.2, 13.3, 13.4, 13.5, 13.6, 13.7, 3.1, 3.6, 3.7, 3.8,
 
 from __future__ import annotations
 
-from commands.game_commands import GameCommand
+from commands.command_router import GameSubcommandRouter
 from world.utils import get_system as _get_system
 from world.systems.agent_system import BUILDING_ROLE_MAP
 
@@ -32,22 +32,30 @@ def _get_current_building(caller):
 
 
 # ------------------------------------------------------------------ #
-#  CmdAgents  (Req 13.1)
+#  CmdAgent  — Game subcommand router (Req 5.1–5.10)
 # ------------------------------------------------------------------ #
 
-class CmdAgents(GameCommand):
-    """List all your agents.
+class CmdAgent(GameSubcommandRouter):
+    """Manage your agents.
 
     Usage:
-        agents
-        list agents
+        agent <subcommand> [args]
+
+    Subcommands:
+        list                              — list your agents
+        assign <id> [role]                — assign an agent to a role
+        unassign <id>                     — unassign an agent
+        train                             — train a new agent at an Academy
+        patrol <id> <x,y> [<x,y> ...]    — set a patrol route
+        patrol <id> clear                 — clear a patrol route
+        stop <id>                         — stop an agent's current action
     """
 
-    key = "agents"
-    aliases = ["list agents"]
+    key = "agent"
     help_category = "Game"
 
-    def func(self):
+    def sub_list(self, args):
+        """List all of the caller's agents."""
         caller = self.caller
         agent_system = _get_system(caller, "agent_system")
         if agent_system is None:
@@ -81,7 +89,6 @@ class CmdAgents(GameCommand):
                 else:
                     loc_str = "HQ"
 
-                # Include activity_status (Req 10.3)
                 activity = getattr(agent.db, "activity_status", None) or "Idle"
                 lines.append(
                     f"  |c#{aid}|n  {role:<12s}  {loc_str:<10s}  "
@@ -108,41 +115,21 @@ class CmdAgents(GameCommand):
 
         caller.msg("\n".join(lines))
 
-
-# ------------------------------------------------------------------ #
-#  CmdAssign  (Req 13.2, 13.3, 13.6, 13.7)
-# ------------------------------------------------------------------ #
-
-class CmdAssign(GameCommand):
-    """Assign an agent to a role.
-
-    Usage:
-        assign <id>           — inside a building, infers role
-        assign <id> <role>    — army roles (soldier, medic)
-
-    Building role mapping:
-        Extractor → Harvester, Turret → Guard, Radar → Scout,
-        Armory → Engineer, Lab → Engineer, Medbay → Medic
-    """
-
-    key = "assign"
-    help_category = "Game"
-
-    def func(self):
+    def sub_assign(self, args):
+        """Assign an agent to a role."""
         caller = self.caller
         agent_system = _get_system(caller, "agent_system")
         if agent_system is None:
             caller.msg("Agent system unavailable.")
             return
 
-        args = self.args.strip().split()
-        if not args:
-            caller.msg("Usage: assign <id> [role]")
+        parts = args.strip().split()
+        if not parts:
+            caller.msg("Usage: agent assign <id> [role]")
             return
 
-        # Parse agent ID
         try:
-            agent_id = int(args[0])
+            agent_id = int(parts[0])
         except ValueError:
             caller.msg("Agent ID must be a number.")
             return
@@ -150,16 +137,14 @@ class CmdAssign(GameCommand):
         role = None
         target_building = None
 
-        if len(args) >= 2:
-            # Explicit role provided — army roles
-            role = args[1].lower()
+        if len(parts) >= 2:
+            role = parts[1].lower()
         else:
-            # Context-aware: infer role from current building
             building = _get_current_building(caller)
             if building is None:
                 caller.msg(
                     "You must be inside a building to auto-assign, "
-                    "or specify a role: assign <id> <role>"
+                    "or specify a role: agent assign <id> <role>"
                 )
                 return
 
@@ -169,7 +154,6 @@ class CmdAssign(GameCommand):
                 caller.msg(f"Cannot assign agents to this building type ({btype}).")
                 return
 
-            # Check if building already has an assigned agent (Req 13.7)
             existing = getattr(building.db, "assigned_agent", None) if hasattr(building, "db") else None
             if existing is not None:
                 caller.msg("This building already has an agent assigned.")
@@ -182,36 +166,21 @@ class CmdAssign(GameCommand):
         )
         caller.msg(msg)
 
-        # Refresh the graphical map so the agent is visible immediately
         if success:
             from commands.game_commands import _send_map_update
             _send_map_update(caller)
 
-
-# ------------------------------------------------------------------ #
-#  CmdUnassign  (Req 13.4)
-# ------------------------------------------------------------------ #
-
-class CmdUnassign(GameCommand):
-    """Unassign an agent from their current role.
-
-    Usage:
-        unassign <id>
-    """
-
-    key = "unassign"
-    help_category = "Game"
-
-    def func(self):
+    def sub_unassign(self, args):
+        """Unassign an agent from their current role."""
         caller = self.caller
         agent_system = _get_system(caller, "agent_system")
         if agent_system is None:
             caller.msg("Agent system unavailable.")
             return
 
-        args = self.args.strip()
+        args = args.strip()
         if not args:
-            caller.msg("Usage: unassign <id>")
+            caller.msg("Usage: agent unassign <id>")
             return
 
         try:
@@ -226,22 +195,8 @@ class CmdUnassign(GameCommand):
             from commands.game_commands import _send_map_update
             _send_map_update(caller)
 
-
-# ------------------------------------------------------------------ #
-#  CmdTrain  (Req 13.5)
-# ------------------------------------------------------------------ #
-
-class CmdTrain(GameCommand):
-    """Train a new agent at the Academy you are inside.
-
-    Usage:
-        train
-    """
-
-    key = "train"
-    help_category = "Game"
-
-    def func(self):
+    def sub_train(self, args):
+        """Train a new agent at the Academy the caller is inside."""
         caller = self.caller
         agent_system = _get_system(caller, "agent_system")
         if agent_system is None:
@@ -258,7 +213,6 @@ class CmdTrain(GameCommand):
             caller.msg("You must be inside an Academy to train agents.")
             return
 
-        # Check if academy is already training
         training_id = getattr(building.db, "training_agent_id", None) if hasattr(building, "db") else None
         if training_id is not None:
             caller.msg("This Academy is already training an agent.")
@@ -267,69 +221,51 @@ class CmdTrain(GameCommand):
         success, msg = agent_system.train_agent(caller, building)
         caller.msg(msg)
 
-
-# ------------------------------------------------------------------ #
-#  CmdPatrol  (Req 3.1, 3.6, 3.7, 3.8)
-# ------------------------------------------------------------------ #
-
-class CmdPatrol(GameCommand):
-    """Set or clear a patrol route for a guard or scout agent.
-
-    Usage:
-        patrol <agent_id> <x1>,<y1> <x2>,<y2> [<x3>,<y3> ...]
-        patrol <agent_id> clear
-
-    Sets a patrol route for a guard or scout agent. The agent will cycle
-    through the waypoints continuously. Use "clear" to stop patrolling.
-
-    Examples:
-        patrol 3 50,50 55,50 55,55 50,55
-        patrol 3 clear
-    """
-
-    key = "patrol"
-    help_category = "Game"
-
-    def func(self):
+    def sub_patrol(self, args):
+        """Set or clear a patrol route for a guard or scout agent."""
         caller = self.caller
         agent_system = _get_system(caller, "agent_system")
         if agent_system is None:
             caller.msg("Agent system unavailable.")
             return
 
-        args = self.args.strip().split()
-        if len(args) < 2:
+        parts = args.strip().split()
+        if len(parts) < 1:
             caller.msg(
-                "Usage: patrol <agent_id> <x1>,<y1> <x2>,<y2> ...\n"
-                "       patrol <agent_id> clear"
+                "Usage: agent patrol <agent_id> <x1>,<y1> <x2>,<y2> ...\n"
+                "       agent patrol <agent_id> clear"
             )
             return
 
-        # Parse agent ID
         try:
-            agent_id = int(args[0])
+            agent_id = int(parts[0])
         except ValueError:
             caller.msg("Agent ID must be a number.")
             return
 
-        # Check for "clear" subcommand
-        if args[1].lower() == "clear":
+        if len(parts) < 2:
+            caller.msg(
+                "Usage: agent patrol <agent_id> <x1>,<y1> <x2>,<y2> ...\n"
+                "       agent patrol <agent_id> clear"
+            )
+            return
+
+        if parts[1].lower() == "clear":
             success, msg = agent_system.clear_patrol_route(caller, agent_id)
             caller.msg(msg)
             return
 
-        # Parse waypoints: each arg should be "x,y"
         waypoints = []
-        for token in args[1:]:
-            parts = token.split(",")
-            if len(parts) != 2:
+        for token in parts[1:]:
+            coords = token.split(",")
+            if len(coords) != 2:
                 caller.msg(
                     f"Invalid waypoint '{token}'. "
                     "Use format: x,y (e.g. 50,50)"
                 )
                 return
             try:
-                wx, wy = int(parts[0]), int(parts[1])
+                wx, wy = int(coords[0]), int(coords[1])
             except ValueError:
                 caller.msg(
                     f"Invalid waypoint '{token}'. "
@@ -341,33 +277,17 @@ class CmdPatrol(GameCommand):
         success, msg = agent_system.set_patrol_route(caller, agent_id, waypoints)
         caller.msg(msg)
 
-
-# ------------------------------------------------------------------ #
-#  CmdStopAgent  (Req 11.1)
-# ------------------------------------------------------------------ #
-
-class CmdStopAgent(GameCommand):
-    """Cancel an agent's current movement and set it to idle.
-
-    Usage:
-        stopagent <agent_id>
-
-    Cancels the agent's current movement and sets it to idle.
-    """
-
-    key = "stopagent"
-    help_category = "Game"
-
-    def func(self):
+    def sub_stop(self, args):
+        """Cancel an agent's current movement and set it to idle."""
         caller = self.caller
         agent_system = _get_system(caller, "agent_system")
         if agent_system is None:
             caller.msg("Agent system unavailable.")
             return
 
-        args = self.args.strip()
+        args = args.strip()
         if not args:
-            caller.msg("Usage: stopagent <agent_id>")
+            caller.msg("Usage: agent stop <agent_id>")
             return
 
         try:
@@ -378,3 +298,12 @@ class CmdStopAgent(GameCommand):
 
         success, msg = agent_system.stop_agent(caller, agent_id)
         caller.msg(msg)
+
+    subcommands = {
+        "list": (sub_list, "List your agents", ""),
+        "assign": (sub_assign, "Assign an agent to a role", ""),
+        "unassign": (sub_unassign, "Unassign an agent", ""),
+        "train": (sub_train, "Train a new agent at an Academy", ""),
+        "patrol": (sub_patrol, "Set or clear a patrol route", ""),
+        "stop": (sub_stop, "Stop an agent's current action", ""),
+    }

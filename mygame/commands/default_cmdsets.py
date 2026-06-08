@@ -23,8 +23,11 @@ from commands.game_commands import (
     CmdInventory, CmdChat, CmdMessage, CmdSay, CmdLook, CmdMap,
     CmdLeave, CmdCloseExit, CmdOpenExit, CmdStop, CmdWho, CmdGet,
 )
-from commands.agent_commands import CmdAgents, CmdAssign, CmdUnassign, CmdTrain, CmdPatrol, CmdStopAgent
-from commands.admin_commands import CmdReloadData, CmdGiveResource, CmdPurgeRooms, CmdTeleport, CmdSpawnBuilding, CmdClearFog, CmdResetResources, CmdMigrate, CmdDestroyAgent, CmdListAgents, CmdSetLevel, CmdSetRank, CmdCreateAgent
+from commands.agent_commands import CmdAgent
+from commands.admin_commands import (
+    CmdReloadData, CmdPurgeRooms, CmdTeleport, CmdClearFog, CmdMigrate,
+    CmdAdminBuilding, CmdAdminAgent, CmdAdminResource, CmdAdminPlayer,
+)
 
 
 class CharacterCmdSet(default_cmds.CharacterCmdSet):
@@ -72,26 +75,18 @@ class CharacterCmdSet(default_cmds.CharacterCmdSet):
         self.add(CmdCloseExit())
         self.add(CmdOpenExit())
         # Agent commands
-        self.add(CmdAgents())
-        self.add(CmdAssign())
-        self.add(CmdUnassign())
-        self.add(CmdTrain())
-        self.add(CmdPatrol())
-        self.add(CmdStopAgent())
+        self.add(CmdAgent())
         # Admin commands (lock-gated to Builder+)
         self.add(CmdReloadData())
-        self.add(CmdGiveResource())
         self.add(CmdPurgeRooms())
         self.add(CmdTeleport())
-        self.add(CmdSpawnBuilding())
         self.add(CmdClearFog())
-        self.add(CmdResetResources())
         self.add(CmdMigrate())
-        self.add(CmdDestroyAgent())
-        self.add(CmdListAgents())
-        self.add(CmdSetLevel())
-        self.add(CmdSetRank())
-        self.add(CmdCreateAgent())
+        # Admin routers (replace old standalone admin commands)
+        self.add(CmdAdminBuilding())
+        self.add(CmdAdminAgent())
+        self.add(CmdAdminResource())
+        self.add(CmdAdminPlayer())
         # Override Evennia's default who with rank/level display
         self.add(CmdWho())
 

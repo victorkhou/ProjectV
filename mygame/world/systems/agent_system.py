@@ -569,7 +569,9 @@ class AgentSystem:
     ) -> tuple[bool, str]:
         """Stop an agent's current movement and set it to idle.
 
-        Clears the movement queue and sets activity_status to "Idle".
+        Clears the movement queue, detaches behavior scripts, clears
+        the building's ``assigned_agent`` reference, and sets
+        activity_status to "Idle".
         Retains carried resources if the agent is a harvester.
 
         Returns ``(success, message)``.
@@ -590,6 +592,22 @@ class AgentSystem:
         role = getattr(agent.db, "role", "")
         if role == "harvester":
             agent.db.delivery_state = "idle"
+
+        # Clear the building's assigned_agent reference so it can accept
+        # a new assignment.
+        old_target = getattr(agent.db, "role_target", None)
+        if old_target is not None:
+            if hasattr(old_target, "attributes") and hasattr(old_target.attributes, "add"):
+                if old_target.attributes.get("assigned_agent") is agent:
+                    old_target.attributes.add("assigned_agent", None)
+            elif hasattr(old_target, "db"):
+                if getattr(old_target.db, "assigned_agent", None) is agent:
+                    old_target.db.assigned_agent = None
+
+        # Detach behavior scripts and clear role assignment
+        self._detach_behavior_script(agent)
+        agent.db.role = ""
+        agent.db.role_target = None
 
         return True, f"Agent #{agent_id} stopped."
 
