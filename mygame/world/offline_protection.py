@@ -21,7 +21,7 @@ logger = logging.getLogger("mygame.offline_protection")
 def on_player_logout(player: Any, buildings: list | None = None) -> list:
     """Transition all player buildings to offline state.
 
-    Called from CombatCharacter.at_pre_disconnect.
+    Called from CombatCharacter.at_pre_unpuppet.
 
     Args:
         player: The player logging out.

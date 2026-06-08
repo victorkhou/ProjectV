@@ -85,6 +85,13 @@ class HarvesterScript(DefaultScript):
         if getattr(getattr(npc, "db", None), "incapacitated", False):
             return
 
+        # Don't produce while owner is offline — resources would just
+        # accumulate unprotected and get cleaned on next disconnect anyway.
+        owner = getattr(getattr(npc, "db", None), "owner", None)
+        if owner is not None and hasattr(owner, "has_account"):
+            if not getattr(owner, "has_account", False):
+                return
+
         building = getattr(getattr(npc, "db", None), "role_target", None)
         if building is None:
             return
@@ -97,6 +104,7 @@ class HarvesterScript(DefaultScript):
         # Determine resource type from the terrain tile the Extractor sits on
         resource_type = self._resolve_resource_type(building)
         if not resource_type:
+            npc.db.activity_status = "Harvesting — no resource on tile"
             return
 
         # Production cooldown — same rate as manual harvesting at an Extractor.

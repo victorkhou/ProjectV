@@ -146,3 +146,14 @@ MAX_PATROL_WAYPOINTS = 10
 
 #: Default resource carry capacity for harvesters (resource units)
 DEFAULT_CARRY_CAPACITY = 50
+
+# ------------------------------------------------------------------ #
+#  Disconnect cleanup
+# ------------------------------------------------------------------ #
+
+#: Building types whose contents survive player disconnect.
+#: Buildings with a `building_type` in this set are skipped during
+#: the quit-cleanup loop in `CombatCharacter.at_pre_unpuppet`.
+#: To protect a new storage building, add its two-letter abbreviation
+#: here (e.g. "SB" for a future Storage Bunker).
+PROTECTED_BUILDING_TYPES: set[str] = {"VT"}

@@ -21,6 +21,85 @@ from .objects import ObjectParent
 logger = logging.getLogger("mygame.characters")
 
 
+# ------------------------------------------------------------------ #
+#  Module-level helpers (used by at_pre_unpuppet)
+# ------------------------------------------------------------------ #
+
+# Lazy import cache — populated on first use.
+_DefaultCharacter = None
+
+
+def _get_building_type(building) -> str | None:
+    """Return the building_type attribute, or None if missing."""
+    if hasattr(building, "attributes") and hasattr(building.attributes, "get"):
+        return building.attributes.get("building_type")
+    if hasattr(building, "db"):
+        return getattr(building.db, "building_type", None)
+    return None
+
+
+def _clear_extractor_inventory(building) -> None:
+    """Reset ``resource_inventory`` to ``{}`` on an Extractor building.
+
+    Mirrors the accessor pattern of ``ResourceSystem._set_extractor_inventory``.
+    No-op if the building has no ``resource_inventory`` attribute.
+    """
+    if hasattr(building, "attributes") and hasattr(building.attributes, "add"):
+        building.attributes.add("resource_inventory", {})
+    elif hasattr(building, "db"):
+        building.db.resource_inventory = {}
+
+
+def _is_preserved(obj, building) -> bool:
+    """Return True if *obj* must NOT be deleted during tile cleanup."""
+    if obj is building:
+        return True
+    # Player characters (even disconnected ones) must survive.
+    global _DefaultCharacter
+    if _DefaultCharacter is None:
+        from evennia.objects.objects import DefaultCharacter
+        _DefaultCharacter = DefaultCharacter
+    if isinstance(obj, _DefaultCharacter):
+        return True
+    # NPCs and other buildings are tagged in the object_type category.
+    if hasattr(obj, "tags"):
+        if obj.tags.get("npc", category="object_type"):
+            return True
+        if obj.tags.get("building", category="object_type"):
+            return True
+    return False
+
+
+def _delete_objects_at_building(building) -> None:
+    """Delete all non-preserved objects at a building's tile.
+
+    Preserved: the building itself, player characters, NPCs, and
+    other buildings.  Everything else (resource drops, items) is deleted.
+
+    Silently skips buildings with no valid coordinates or location.
+    """
+    bx = getattr(getattr(building, "db", None), "coord_x", None)
+    by = getattr(getattr(building, "db", None), "coord_y", None)
+    room = getattr(building, "location", None)
+
+    if bx is None or by is None or room is None:
+        return
+
+    if hasattr(room, "get_objects_at"):
+        objs = list(room.get_objects_at(int(bx), int(by)))
+    else:
+        # Fallback: match coordinates from room.contents.
+        objs = [
+            o for o in list(getattr(room, "contents", []))
+            if getattr(getattr(o, "db", None), "coord_x", None) == bx
+            and getattr(getattr(o, "db", None), "coord_y", None) == by
+        ]
+
+    for obj in objs:
+        if not _is_preserved(obj, building) and hasattr(obj, "delete"):
+            obj.delete()
+
+
 class Character(ObjectParent, DefaultCharacter):
     """
     The Character just re-implements some of the Object's methods and hooks
@@ -381,46 +460,53 @@ class CombatCharacter(CombatEntity, DefaultCharacter):
                 self.key, x, y, planet,
             )
 
-    def at_pre_disconnect(self, **kwargs):
-        """Called just before the player disconnects.
+    def at_pre_unpuppet(self, **kwargs):
+        """Called just before the Account un-puppets this character.
 
-        Clears resource inventories from all owned buildings except
-        Vaults, then publishes ``player_logout`` event.
+        Evennia calls this hook automatically on disconnect. Destroys
+        all contents of unprotected buildings owned by this character
+        (clears extractor inventories, deletes all objects on building
+        tiles) and publishes the ``player_logout`` event.
+
+        Protected building types (defined in
+        ``world.constants.PROTECTED_BUILDING_TYPES``) are skipped
+        entirely — their contents survive disconnect.
         """
-        # Clear resource drops from non-Vault buildings
+        from world.constants import PROTECTED_BUILDING_TYPES
+
         try:
             buildings = self.get_buildings()
+            logger.debug(
+                "Disconnect cleanup for %s: found %d buildings",
+                getattr(self, "key", "?"), len(buildings),
+            )
             for b in buildings:
-                btype = None
-                if hasattr(b, "attributes") and hasattr(b.attributes, "get"):
-                    btype = b.attributes.get("building_type")
-                elif hasattr(b, "db"):
-                    btype = getattr(b.db, "building_type", None)
-                if btype == "VT":
-                    continue  # Vaults preserve resources
-                # Get building coordinates and its PlanetRoom
-                bx = getattr(getattr(b, "db", None), "coord_x", None)
-                by = getattr(getattr(b, "db", None), "coord_y", None)
-                room = getattr(b, "location", None)
-                if bx is None or by is None or room is None:
-                    continue
-                # Query PlanetRoom for ResourceDrops at building coordinates
-                if hasattr(room, "get_objects_at"):
-                    for obj in list(room.get_objects_at(int(bx), int(by), type_tag="resource_drop")):
-                        if hasattr(obj, "delete"):
-                            obj.delete()
-                else:
-                    # Legacy fallback: iterate room contents
-                    for obj in list(getattr(room, "contents", [])):
-                        if hasattr(obj, "tags") and obj.tags.get("resource_drop", category="object_type"):
-                            if hasattr(obj, "delete"):
-                                obj.delete()
+                try:
+                    btype = _get_building_type(b)
+                    if btype in PROTECTED_BUILDING_TYPES:
+                        continue
+
+                    # 1. Clear extractor resource_inventory
+                    if btype == "EX":
+                        _clear_extractor_inventory(b)
+                        logger.debug("Cleared inventory on %s", getattr(b, "key", "?"))
+
+                    # 2. Delete all objects at building tile (except building)
+                    _delete_objects_at_building(b)
+                except Exception:
+                    logger.debug(
+                        "Cleanup error for building %s",
+                        getattr(b, "key", "?"),
+                        exc_info=True,
+                    )
         except Exception:
             logger.debug(
-                "Failed to clear building inventories on disconnect for %s",
-                getattr(self, "key", "?"), exc_info=True,
+                "Failed cleanup on disconnect for %s",
+                getattr(self, "key", "?"),
+                exc_info=True,
             )
 
+        # Always publish logout event
         try:
             from world.event_bus import event_bus, PLAYER_LOGOUT
             event_bus.publish(PLAYER_LOGOUT, player=self)
