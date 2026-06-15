@@ -283,14 +283,14 @@ class GameTickScript(DefaultScript):
                         resource_system.process_harvest_tick(player)
             steps.append(("active_presence", process_active_presence))
 
-        # 4. Extractor production — Harvester agents produce into Extractor inventory
-        if resource_system:
-            steps.append((
-                "extractor_production",
-                lambda: resource_system.process_extractor_production(
-                    tick_data["buildings"]
-                ),
-            ))
+        # NOTE: Harvester-agent production is driven by HarvesterScript
+        # (one script per agent, run in the agent_processing step), per the
+        # agent-ai spec (Req 9.8: "THE harvester Agent SHALL continue
+        # producing resources via HarvesterScript ..."). The old
+        # process_extractor_production tick step was a second, faster driver
+        # for the same (extractor, agent) pairs and produced resources twice
+        # per tick — it has been removed. process_extractor_production remains
+        # for direct unit/integration test use but is no longer in the loop.
 
         # 5. Equipment building production
         if equipment_system:

@@ -244,20 +244,25 @@ class TestCombatTimerDecrementStep(unittest.TestCase):
 
 
 class TestExtractorProductionStep(unittest.TestCase):
-    """Extractor production step calls resource_system.process_extractor_production."""
+    """Harvester-agent production is driven by HarvesterScript, not a tick step.
 
-    def test_extractor_production_step_present(self):
+    The old ``extractor_production`` tick step was a second production driver
+    for the same (extractor, agent) pairs and double-counted yield, so it was
+    removed; HarvesterScript (run in the agent_processing step) is the single
+    canonical driver per the agent-ai spec (Req 9.8).
+    """
+
+    def test_extractor_production_step_absent(self):
         script = GameTickScript()
         rs = FakeResourceSystem()
         systems = {"resource_system": rs}
         steps = script._build_tick_steps(systems, tick_number=1)
         step_names = [name for name, _ in steps]
-        self.assertIn("extractor_production", step_names)
+        self.assertNotIn("extractor_production", step_names)
 
-    def test_extractor_production_called_with_buildings(self):
+    def test_extractor_production_not_called_from_tick_loop(self):
         script = GameTickScript()
         rs = FakeResourceSystem()
-        fake_buildings = ["b1", "b2"]
 
         # Patch to inject buildings into tick_data
         script._get_online_players = lambda: []
@@ -271,8 +276,9 @@ class TestExtractorProductionStep(unittest.TestCase):
             except Exception:
                 pass
 
-        # extractor_production should have been called (with empty buildings since no chunking)
-        self.assertEqual(len(rs.extractor_calls), 1)
+        # The tick loop must not drive extractor production any more
+        # (HarvesterScript does it per-agent in agent_processing).
+        self.assertEqual(len(rs.extractor_calls), 0)
 
 
 class TestStepOrdering(unittest.TestCase):
@@ -299,14 +305,13 @@ class TestStepOrdering(unittest.TestCase):
             step_names.index("agent_processing"),
             step_names.index("active_presence"),
         )
-        # Active presence before extractor production
-        self.assertLess(
-            step_names.index("active_presence"),
-            step_names.index("extractor_production"),
-        )
         # Passive resource_production removed — Extractors require
-        # player presence or agent, not automatic production
+        # player presence or a Harvester agent, not automatic production.
         self.assertNotIn("resource_production", step_names)
+        # The extractor_production tick step was removed to stop double
+        # production; HarvesterScript (in agent_processing) is the single
+        # canonical harvester-agent production driver.
+        self.assertNotIn("extractor_production", step_names)
         # Combat timer decrement exists
         self.assertIn("combat_timer_decrement", step_names)
 
