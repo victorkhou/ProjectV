@@ -16,6 +16,9 @@ from typing import Any
 
 logger = logging.getLogger("evennia")
 
+#: Names of the gauge metrics that ``set_gauge`` is allowed to write.
+_GAUGE_METRICS = frozenset({"connected_players"})
+
 
 class MetricsCollector:
     """Tracks server health metrics.
@@ -85,7 +88,9 @@ class MetricsCollector:
         """
         if not self.enabled:
             return
-        if hasattr(self, metric):
+        # Only allow declared gauge metrics, so a stray call can never
+        # overwrite control attributes (enabled, log_interval, etc.).
+        if metric in _GAUGE_METRICS:
             setattr(self, metric, value)
 
     def log_summary(self) -> None:
@@ -107,11 +112,13 @@ class MetricsCollector:
             f"max_tick_ms={max_tick:.2f}, "
             f"ticks={len(self._tick_durations)}"
         )
-        logger.log_info(summary)
-
-        # Reset per-interval data
-        self._tick_durations.clear()
-        self._last_summary_time = time.time()
+        try:
+            logger.info(summary)
+        finally:
+            # Reset per-interval data regardless of logging outcome so the
+            # per-interval buffer cannot grow without bound.
+            self._tick_durations.clear()
+            self._last_summary_time = time.time()
 
     def get_summary(self) -> dict:
         """Get a dict summary of all metrics.
