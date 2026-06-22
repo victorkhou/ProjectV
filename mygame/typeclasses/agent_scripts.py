@@ -14,6 +14,8 @@ from __future__ import annotations
 import logging
 from typing import Any
 
+from world.constants import ACTIVITY_IDLE, DeliveryState
+
 try:
     from evennia.scripts.scripts import DefaultScript
 except ImportError:
@@ -437,14 +439,14 @@ class DeliveryBehavior(DefaultScript):
             return
 
         # Queue empty — act based on delivery_state
-        state = getattr(npc.db, "delivery_state", "idle")
-        if state == "idle":
+        state = getattr(npc.db, "delivery_state", DeliveryState.IDLE)
+        if state == DeliveryState.IDLE:
             self._try_pick_up(npc)
-        elif state == "picking_up":
+        elif state == DeliveryState.PICKING_UP:
             self._start_delivery(npc)
-        elif state == "delivering":
+        elif state == DeliveryState.DELIVERING:
             self._deposit_and_return(npc)
-        elif state == "returning":
+        elif state == DeliveryState.RETURNING:
             self._arrived_at_extractor(npc)
 
     # ------------------------------------------------------------------ #
@@ -488,7 +490,7 @@ class DeliveryBehavior(DefaultScript):
 
         if remaining_capacity <= 0:
             # Already full — go straight to delivery
-            npc.db.delivery_state = "picking_up"
+            npc.db.delivery_state = DeliveryState.PICKING_UP
             npc.db.carried_resources = carried
             npc.db.activity_status = "Loaded — selecting delivery target"
             return
@@ -519,7 +521,7 @@ class DeliveryBehavior(DefaultScript):
                         pass
 
         npc.db.carried_resources = carried
-        npc.db.delivery_state = "picking_up"
+        npc.db.delivery_state = DeliveryState.PICKING_UP
 
         total_str = ", ".join(f"{v} {k}" for k, v in carried.items())
         npc.db.activity_status = f"Picked up {total_str}"
@@ -533,14 +535,14 @@ class DeliveryBehavior(DefaultScript):
         carried = getattr(npc.db, "carried_resources", None) or {}
         if not carried or sum(carried.values()) <= 0:
             # Nothing to deliver — go back to idle
-            npc.db.delivery_state = "idle"
-            npc.db.activity_status = "Idle"
+            npc.db.delivery_state = DeliveryState.IDLE
+            npc.db.activity_status = ACTIVITY_IDLE
             return
 
         target = self.select_delivery_target(npc)
         if target is None:
             # No storage building — stay idle (Req 4.6)
-            npc.db.delivery_state = "idle"
+            npc.db.delivery_state = DeliveryState.IDLE
             npc.db.activity_status = "No storage building — waiting"
             return
 
@@ -564,7 +566,7 @@ class DeliveryBehavior(DefaultScript):
         else:
             npc.db.movement_queue = [[x, y] for x, y in path]
 
-        npc.db.delivery_state = "delivering"
+        npc.db.delivery_state = DeliveryState.DELIVERING
 
         # Laden speed (Req 8.4)
         from world.constants import HARVESTER_LADEN_DELAY
@@ -585,15 +587,15 @@ class DeliveryBehavior(DefaultScript):
         # Path back to Extractor
         building = getattr(npc.db, "role_target", None)
         if building is None:
-            npc.db.delivery_state = "idle"
-            npc.db.activity_status = "Idle"
+            npc.db.delivery_state = DeliveryState.IDLE
+            npc.db.activity_status = ACTIVITY_IDLE
             return
 
         bx = getattr(getattr(building, "db", None), "coord_x", None)
         by = getattr(getattr(building, "db", None), "coord_y", None)
         if bx is None or by is None:
-            npc.db.delivery_state = "idle"
-            npc.db.activity_status = "Idle"
+            npc.db.delivery_state = DeliveryState.IDLE
+            npc.db.activity_status = ACTIVITY_IDLE
             return
 
         bx, by = int(bx), int(by)
@@ -611,7 +613,7 @@ class DeliveryBehavior(DefaultScript):
         else:
             npc.db.movement_queue = [[x, y] for x, y in path]
 
-        npc.db.delivery_state = "returning"
+        npc.db.delivery_state = DeliveryState.RETURNING
         npc.db.delivery_target = None
 
         # Empty speed (Req 8.5)
@@ -626,9 +628,9 @@ class DeliveryBehavior(DefaultScript):
         Transitions: returning → idle
         """
         from world.constants import HARVESTER_EMPTY_DELAY
-        npc.db.delivery_state = "idle"
+        npc.db.delivery_state = DeliveryState.IDLE
         npc.db.movement_delay = HARVESTER_EMPTY_DELAY
-        npc.db.activity_status = "Idle"
+        npc.db.activity_status = ACTIVITY_IDLE
 
     # ------------------------------------------------------------------ #
     #  Resource operations
@@ -758,7 +760,7 @@ class DeliveryBehavior(DefaultScript):
                     )
 
         npc.db.carried_resources = {}
-        npc.db.delivery_state = "idle"
+        npc.db.delivery_state = DeliveryState.IDLE
         npc.db.activity_status = "Incapacitated — dropped resources"
 
 

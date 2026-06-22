@@ -14,6 +14,7 @@ import logging
 
 from typeclasses.combat_entity import CombatEntity
 from typeclasses.objects import GameEntity
+from world.constants import ACTIVITY_IDLE, compute_effective_delay
 
 logger = logging.getLogger("evennia.typeclasses.npcs")
 
@@ -54,10 +55,10 @@ class NPC(CombatEntity, GameEntity):
         self.db.reserve = False
 
         # Movement engine attributes (Req 2.1, 5.1, 8.1, 8.7)
-        from world.constants import DEFAULT_MOVEMENT_DELAY
+        from world.constants import ACTIVITY_IDLE, DEFAULT_MOVEMENT_DELAY
         self.db.movement_queue = []
         self.db.movement_delay = DEFAULT_MOVEMENT_DELAY
-        self.db.activity_status = "Idle"
+        self.db.activity_status = ACTIVITY_IDLE
 
         # Tag for efficient querying by npc_type.
         # The owner tag ("player_<id>", "agent_owner") is added later
@@ -85,8 +86,11 @@ class NPC(CombatEntity, GameEntity):
         if not queue:
             return False
 
-        # Movement delay gating (Req 8.1, 8.6)
-        delay = getattr(self.db, "movement_delay", 1) or 1
+        # Movement delay gating (Req 8.1, 8.6, 8.8)
+        # Equipment may provide a "move_speed" modifier that reduces the
+        # effective delay (positive modifier = faster). Clamped to >= 1.
+        base_delay = getattr(self.db, "movement_delay", 1) or 1
+        delay = compute_effective_delay(base_delay, self._get_move_speed_modifier())
         if tick_number % delay != 0:
             return False
 
@@ -115,7 +119,7 @@ class NPC(CombatEntity, GameEntity):
 
         # Check if queue is now empty → movement complete (Req 2.2)
         if not queue:
-            self.db.activity_status = "Idle"
+            self.db.activity_status = ACTIVITY_IDLE
             self.at_movement_complete()
 
         return True
@@ -170,6 +174,27 @@ class NPC(CombatEntity, GameEntity):
             return game_systems.get("movement_system")
         except (ImportError, AttributeError):
             return None
+
+    def _get_move_speed_modifier(self) -> int:
+        """Return the total ``move_speed`` bonus from equipped items.
+
+        A positive value speeds the NPC up (reduces its effective delay).
+        Returns ``0`` when the NPC has no equipment handler or no items
+        provide a ``move_speed`` stat (the common case), so movement is
+        unaffected by default.
+        """
+        equipment = getattr(self, "equipment", None)
+        if equipment is None or not hasattr(equipment, "get_stat_total"):
+            return 0
+        try:
+            return int(equipment.get_stat_total("move_speed"))
+        except Exception:
+            logger.debug(
+                "move_speed lookup failed for NPC %s; defaulting modifier to 0",
+                getattr(self, "id", "?"),
+                exc_info=True,
+            )
+            return 0
 
     def _is_tile_passable(self, x: int, y: int) -> bool:
         """Check if a tile is passable for dynamic obstacle detection.

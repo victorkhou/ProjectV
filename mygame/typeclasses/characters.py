@@ -226,18 +226,6 @@ class CombatCharacter(CombatEntity, DefaultCharacter):
                 self.attributes.add(key, copy.deepcopy(default))
 
     # ------------------------------------------------------------------ #
-    #  Equipment handler (lazy property)
-    # ------------------------------------------------------------------ #
-
-    @property
-    def equipment(self):
-        """Return the EquipmentHandler for this character."""
-        if not hasattr(self, "_equipment_handler"):
-            from world.systems.equipment_handler import EquipmentHandler
-            self._equipment_handler = EquipmentHandler(self)
-        return self._equipment_handler
-
-    # ------------------------------------------------------------------ #
     #  Resource helpers
     # ------------------------------------------------------------------ #
 

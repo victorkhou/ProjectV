@@ -63,6 +63,23 @@ class CombatEntity:
         return actual
 
     # ------------------------------------------------------------------ #
+    #  Equipment
+    # ------------------------------------------------------------------ #
+
+    @property
+    def equipment(self):
+        """Return a cached EquipmentHandler for this entity.
+
+        Shared by players and NPCs so both can carry stat-modifying items
+        (e.g. a ``move_speed`` bonus on an NPC). ``CombatCharacter`` may
+        override this with its own handler.
+        """
+        if not hasattr(self, "_equipment_handler") or self._equipment_handler is None:
+            from world.systems.equipment_handler import EquipmentHandler
+            self._equipment_handler = EquipmentHandler(self)
+        return self._equipment_handler
+
+    # ------------------------------------------------------------------ #
     #  Status queries
     # ------------------------------------------------------------------ #
 

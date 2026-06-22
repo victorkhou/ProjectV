@@ -24,6 +24,8 @@ from world.constants import (
     DEFAULT_CARRY_CAPACITY,
     MIN_PATROL_WAYPOINTS,
     MAX_PATROL_WAYPOINTS,
+    ACTIVITY_IDLE,
+    DeliveryState,
 )
 
 logger = logging.getLogger("mygame.agent_system")
@@ -463,14 +465,14 @@ class AgentSystem:
                     else:
                         agent.db.coord_x = hx
                         agent.db.coord_y = hy
-                    agent.db.activity_status = "Idle"
+                    agent.db.activity_status = ACTIVITY_IDLE
             elif hasattr(agent, "move_to"):
                 # Legacy fallback: HQ doesn't have coordinates yet
                 loc = getattr(hq, "location", hq)
                 agent.move_to(loc, quiet=True)
-                agent.db.activity_status = "Idle"
+                agent.db.activity_status = ACTIVITY_IDLE
         else:
-            agent.db.activity_status = "Idle"
+            agent.db.activity_status = ACTIVITY_IDLE
 
         return True, f"Agent #{agent_id} unassigned and returned to HQ."
 
@@ -556,7 +558,7 @@ class AgentSystem:
         else:
             agent.db.movement_queue = []
 
-        agent.db.activity_status = "Idle"
+        agent.db.activity_status = ACTIVITY_IDLE
 
         return True, f"Agent #{agent_id} patrol route cleared."
 
@@ -585,13 +587,13 @@ class AgentSystem:
         else:
             agent.db.movement_queue = []
 
-        agent.db.activity_status = "Idle"
+        agent.db.activity_status = ACTIVITY_IDLE
 
         # Harvesters retain carried resources (Req 11.4) — no cleanup needed.
         # Just reset delivery_state so the behavior script can re-evaluate.
         role = getattr(agent.db, "role", "")
         if role == "harvester":
-            agent.db.delivery_state = "idle"
+            agent.db.delivery_state = DeliveryState.IDLE
 
         # Clear the building's assigned_agent reference so it can accept
         # a new assignment.

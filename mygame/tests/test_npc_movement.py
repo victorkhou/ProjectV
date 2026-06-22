@@ -279,3 +279,61 @@ class TestAdvanceMovement:
                         movement_queue=[[5, 5]])
         result = npc.advance_movement(tick_number=1)
         assert result is True
+
+
+# ------------------------------------------------------------------ #
+#  Tests: Equipment speed modifier (Req 8.8)
+# ------------------------------------------------------------------ #
+
+class _FakeEquipment:
+    """Minimal EquipmentHandler stub returning a fixed move_speed total."""
+
+    def __init__(self, move_speed=0):
+        self._move_speed = move_speed
+
+    def get_stat_total(self, stat_name):
+        if stat_name == "move_speed":
+            return self._move_speed
+        return 0
+
+
+class TestAdvanceMovementEquipmentModifier:
+    """advance_movement applies a move_speed modifier via compute_effective_delay.
+
+    Validates: Requirements 8.8
+    """
+
+    def test_positive_modifier_speeds_up_movement(self):
+        """A +1 move_speed turns a base delay of 2 into an effective delay of 1,
+        so the NPC advances on an odd tick it would otherwise skip."""
+        room = FakeRoom()
+        npc = _make_npc(location=room, movement_delay=2,
+                        coord_x=5, coord_y=5, movement_queue=[[5, 6]])
+        npc._equipment_handler = _FakeEquipment(move_speed=1)
+
+        # base_delay=2 would skip tick 1; with modifier effective delay=1
+        result = npc.advance_movement(tick_number=1)
+        assert result is True
+        assert npc.db.movement_queue == []
+
+    def test_zero_modifier_preserves_base_delay(self):
+        """With no move_speed bonus, base delay gating is unchanged."""
+        room = FakeRoom()
+        npc = _make_npc(location=room, movement_delay=2,
+                        coord_x=5, coord_y=5, movement_queue=[[5, 6]])
+        npc._equipment_handler = _FakeEquipment(move_speed=0)
+
+        # delay=2 still skips tick 1
+        result = npc.advance_movement(tick_number=1)
+        assert result is False
+        assert npc.db.movement_queue == [[5, 6]]
+
+    def test_no_equipment_handler_defaults_to_base_delay(self):
+        """Missing/failed equipment lookup yields a 0 modifier (no crash)."""
+        room = FakeRoom()
+        npc = _make_npc(location=room, movement_delay=1,
+                        coord_x=5, coord_y=5, movement_queue=[[5, 6]])
+        # _get_move_speed_modifier falls back to 0 when equipment is unusable
+        npc._equipment_handler = None
+        result = npc.advance_movement(tick_number=1)
+        assert result is True

@@ -10,7 +10,11 @@ Grouped by system:
 - Resource harvesting & production
 - Building scaling
 - Combat
+- NPC movement & Agent AI
+- Agent state enums / status strings
 """
+
+from enum import StrEnum
 
 # ------------------------------------------------------------------ #
 #  Rank / Level progression
@@ -146,6 +150,50 @@ MAX_PATROL_WAYPOINTS = 10
 
 #: Default resource carry capacity for harvesters (resource units)
 DEFAULT_CARRY_CAPACITY = 50
+
+
+def compute_effective_delay(base_delay: int, speed_modifier: int) -> int:
+    """Compute effective movement delay accounting for an equipment speed modifier.
+
+    A positive ``speed_modifier`` reduces the delay (makes the NPC faster).
+    The result is clamped to a minimum of 1 (every-tick movement) so a large
+    modifier can never stop or reverse movement.
+
+    Args:
+        base_delay: The NPC's base ``movement_delay`` (>= 1).
+        speed_modifier: Sum of ``move_speed`` stat modifiers from equipped items.
+
+    Returns:
+        Effective delay: ``max(1, base_delay - speed_modifier)``.
+
+    Notes:
+        Validates agent-ai Requirement 8.8. Used by ``NPC.advance_movement``.
+    """
+    return max(1, base_delay - speed_modifier)
+
+
+# ------------------------------------------------------------------ #
+#  Agent state enums / status strings
+# ------------------------------------------------------------------ #
+
+
+class DeliveryState(StrEnum):
+    """Finite states for the harvester delivery FSM.
+
+    ``StrEnum`` members compare equal to their plain-string value
+    (``DeliveryState.IDLE == "idle"``) and serialize to that string, so
+    Evennia attribute persistence is unaffected and legacy stored values
+    remain compatible.
+    """
+
+    IDLE = "idle"
+    PICKING_UP = "picking_up"
+    DELIVERING = "delivering"
+    RETURNING = "returning"
+
+
+#: Default/idle activity status shown in agent rosters and the map view.
+ACTIVITY_IDLE = "Idle"
 
 # ------------------------------------------------------------------ #
 #  Disconnect cleanup

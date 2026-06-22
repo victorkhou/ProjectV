@@ -1476,29 +1476,12 @@ class TestProperty17CancellationRetainsCarriedResources:
 # ------------------------------------------------------------------ #
 #  Helper: compute effective movement delay with equipment modifier
 #
-#  TODO: Integrate into NPC.advance_movement — currently the NPC does
-#  not check EquipmentHandler for a "move_speed" stat modifier. When
-#  that integration is done, this helper should be called from
-#  advance_movement (or inlined) and this test updated to exercise
-#  the NPC method directly.
+#  This is now the production function from world.constants, wired into
+#  NPC.advance_movement (which queries the EquipmentHandler for a
+#  "move_speed" stat modifier). The tests below exercise it directly.
 # ------------------------------------------------------------------ #
 
-def compute_effective_delay(base_delay: int, speed_modifier: int) -> int:
-    """Compute effective movement delay accounting for equipment speed modifier.
-
-    A positive speed_modifier reduces the delay (makes the NPC faster).
-    The result is clamped to a minimum of 1 (every-tick movement).
-
-    Args:
-        base_delay: The NPC's base movement_delay (>= 1).
-        speed_modifier: Sum of move_speed stat modifiers from equipped items.
-
-    Returns:
-        Effective delay: max(1, base_delay - speed_modifier).
-
-    **Validates: Requirements 8.8**
-    """
-    return max(1, base_delay - speed_modifier)
+from mygame.world.constants import compute_effective_delay
 
 
 # ------------------------------------------------------------------ #
