@@ -1,0 +1,23 @@
+# Ability gate definitions for RTS Combat Overworld
+#
+# Each entry maps a named gated ability to the minimum Effective_Level an
+# entity must reach before that ability becomes available. Gates are
+# data-driven: new abilities can be added here without touching progression
+# code, and existing required levels are tuned by editing this file.
+#
+# Schema (validated by SchemaValidator.validate_ability_gates):
+#   - key:            non-empty, unique string ability identifier
+#     required_level: integer in 1..MAX_LEVEL
+#
+# delivery required_level derivation:
+#   The delivery ability unlocks at the first level of rank 5.
+#   first_level_of_rank(r) = (r - 1) * LEVELS_PER_RANK + 1
+#                          = (5 - 1) * 5 + 1 = 21
+#   (LEVELS_PER_RANK = 5, MAX_LEVEL = NUM_RANKS * LEVELS_PER_RANK = 60,
+#    see mygame/world/constants.py). The value is clamped to MAX_LEVEL; 21
+#    is well below 60, so no clamping applies here. To retune when the
+#    rank/level constants change, recompute (5 - 1) * LEVELS_PER_RANK + 1
+#    and clamp to MAX_LEVEL.
+
+- key: delivery
+  required_level: 21

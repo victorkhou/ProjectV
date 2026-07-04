@@ -411,6 +411,98 @@ class TestPermissionDenied(unittest.TestCase):
 # -------------------------------------------------------------- #
 
 
+class _Ndb:
+    """Minimal ndb holder so world.utils.get_system can read .systems."""
+
+    def __init__(self, systems=None):
+        self.systems = systems
+
+
+class TestRequireSystemHelper(unittest.TestCase):
+    """SubcommandDispatchMixin.require_system resolves a system or msgs+None.
+
+    Consolidates the guard boilerplate that every sub_* handler used to
+    repeat inline.
+    """
+
+    def _make_with_systems(self, systems):
+        cmd = _make_router("")
+        cmd.caller.ndb = _Ndb(systems)
+        return cmd
+
+    def test_returns_system_when_present(self):
+        """require_system returns the instance and sends no message."""
+        sentinel = object()
+        cmd = self._make_with_systems({"agent_system": sentinel})
+
+        result = cmd.require_system("agent_system")
+
+        self.assertIs(result, sentinel)
+        self.assertEqual(cmd.caller._messages, [])
+
+    def test_returns_none_and_msgs_when_absent(self):
+        """require_system msgs the caller and returns None when missing."""
+        cmd = self._make_with_systems({})
+
+        result = cmd.require_system("agent_system")
+
+        self.assertIsNone(result)
+        self.assertEqual(len(cmd.caller._messages), 1)
+        self.assertIn("unavailable", cmd.caller._messages[0].lower())
+
+    def test_default_label_humanizes_system_name(self):
+        """The default failure message spaces + capitalizes the system name."""
+        cmd = self._make_with_systems({})
+
+        cmd.require_system("agent_system")
+
+        self.assertEqual(cmd.caller._messages[0], "Agent system unavailable.")
+
+    def test_custom_label_used_in_message(self):
+        """An explicit label overrides the derived name in the message."""
+        cmd = self._make_with_systems({})
+
+        cmd.require_system("registry", label="Data Registry")
+
+        self.assertEqual(cmd.caller._messages[0], "Data Registry unavailable.")
+
+
+class TestParseIntHelper(unittest.TestCase):
+    """SubcommandDispatchMixin.parse_int parses an int or msgs+None."""
+
+    def test_parses_valid_int(self):
+        """A numeric string returns the int with no message."""
+        cmd = _make_router("")
+
+        self.assertEqual(cmd.parse_int("42"), 42)
+        self.assertEqual(cmd.caller._messages, [])
+
+    def test_invalid_int_msgs_and_returns_none(self):
+        """A non-numeric string returns None and messages the caller."""
+        cmd = _make_router("")
+
+        result = cmd.parse_int("abc")
+
+        self.assertIsNone(result)
+        self.assertEqual(len(cmd.caller._messages), 1)
+        self.assertIn("must be a number", cmd.caller._messages[0])
+
+    def test_none_input_handled(self):
+        """A None value is treated as invalid rather than raising."""
+        cmd = _make_router("")
+
+        self.assertIsNone(cmd.parse_int(None))
+        self.assertIn("must be a number", cmd.caller._messages[0])
+
+    def test_custom_label_in_message(self):
+        """The label parameter is used as the subject of the error."""
+        cmd = _make_router("")
+
+        cmd.parse_int("nope", label="Count")
+
+        self.assertEqual(cmd.caller._messages[0], "Count must be a number.")
+
+
 class TestLogAdmin(unittest.TestCase):
     """_log_admin writes an INFO record to the mygame.admin logger.
 

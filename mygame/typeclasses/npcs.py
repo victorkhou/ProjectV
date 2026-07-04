@@ -45,7 +45,17 @@ class NPC(CombatEntity, GameEntity):
     def at_object_creation(self):
         """Called once when the object is first created."""
         super().at_object_creation()  # GameEntity tags + coord init
-        self.at_combat_entity_init()  # CombatEntity HP/equipment
+        self.at_combat_entity_init()  # CombatEntity HP/equipment + progression
+
+        # Progression state (Req 12.1). ``at_combat_entity_init`` already
+        # sets these, but we default them explicitly here for clarity and
+        # to keep the agent's initialization contract self-documenting.
+        self.db.combat_xp = 0
+        self.db.level = 1
+        self.db.rank_level = 1
+
+        # Enabled Gated_Ability keys — empty on creation (Req 12.1, 12.4).
+        self.db.enabled_abilities = []
 
         self.db.owner = None
         self.db.npc_type = "agent"

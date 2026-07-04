@@ -59,6 +59,7 @@ from mygame.world.definitions import (  # noqa: E402
     RankDef, TechnologyDef, PowerupDef,
 )
 from mygame.world.event_bus import EventBus  # noqa: E402
+from mygame.typeclasses.combat_entity import CombatEntity  # noqa: E402
 
 # -------------------------------------------------------------- #
 #  Helpers / Fakes
@@ -73,8 +74,12 @@ class FakeDB:
         self.level = level if level is not None else ((rank_level - 1) * 5 + 1)
         self.researched_techs = researched_techs if researched_techs is not None else set()
 
-class FakePlayer:
-    """Lightweight stand-in for CombatCharacter."""
+class FakePlayer(CombatEntity):
+    """Lightweight stand-in for CombatCharacter.
+
+    Mixes in the real CombatEntity so it exposes ``award_xp`` / ``deduct_xp``,
+    matching the contract the refactored RankSystem delegates to.
+    """
     def __init__(self, name="TestPlayer", combat_xp=0, rank_level=1,
                  level=None, researched_techs=None):
         self.key = name
@@ -296,6 +301,9 @@ class TestProperty18RankGatedAccess(unittest.TestCase):
         registry = _make_registry(ranks, techs, powerups)
         event_bus = EventBus()
         system = RankSystem(registry=registry, event_bus=event_bus)
+        # Activate this registry's curve on the shared progression helper
+        # (the threshold table is process-global since the refactor).
+        system._rebuild_thresholds()
 
         # Start at rank 1, promote to max rank
         max_rank = ranks[-1]
@@ -316,6 +324,9 @@ class TestProperty18RankGatedAccess(unittest.TestCase):
         registry = _make_registry(ranks, techs, powerups)
         event_bus = EventBus()
         system = RankSystem(registry=registry, event_bus=event_bus)
+        # Activate this registry's curve on the shared progression helper
+        # (the threshold table is process-global since the refactor).
+        system._rebuild_thresholds()
 
         # Start at max rank with all techs unlocked
         max_rank = ranks[-1]

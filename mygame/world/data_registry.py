@@ -15,6 +15,7 @@ from typing import Any
 import yaml
 
 from world.definitions import (
+    AbilityGateDef,
     BalanceConfig,
     BuildingDef,
     ItemDef,
@@ -36,6 +37,7 @@ _REQUIRED_FILES = {
     "technologies": "definitions/technologies.yaml",
     "powerups": "definitions/powerups.yaml",
     "terrain": "definitions/terrain.yaml",
+    "ability_gates": "definitions/ability_gates.yaml",
 }
 
 # Optional config files
@@ -51,6 +53,31 @@ class DataRegistryError(Exception):
 class DataRegistry:
     """Centralized registry holding all game definitions loaded from YAML."""
 
+    #: Process-wide singleton, registered once at server start via
+    #: ``set_instance``. Lets owner-agnostic helpers (e.g. ``world.progression``,
+    #: ``chat_system``, ``agent_scripts``) resolve the live registry without a
+    #: reference being threaded through. ``None`` until registered (e.g. in the
+    #: fast unit-test suite), which every caller treats as "unavailable".
+    _instance: "DataRegistry | None" = None
+
+    @classmethod
+    def get_instance(cls) -> "DataRegistry | None":
+        """Return the process-wide DataRegistry singleton, or ``None`` if unset.
+
+        Set by ``set_instance`` at server start. Callers must tolerate ``None``
+        (uninitialized state / test suites) and apply their own fallback.
+        """
+        return cls._instance
+
+    @classmethod
+    def set_instance(cls, instance: "DataRegistry | None") -> None:
+        """Register the process-wide singleton (called once at server start).
+
+        Intentionally NOT called from ``__init__`` so the throwaway temp
+        registry built inside ``reload_all`` never usurps the live singleton.
+        """
+        cls._instance = instance
+
     def __init__(self) -> None:
         self.buildings: dict[str, BuildingDef] = {}
         self.items: dict[str, ItemDef] = {}
@@ -59,6 +86,7 @@ class DataRegistry:
         self.technologies: dict[str, TechnologyDef] = {}
         self.powerups: dict[str, PowerupDef] = {}
         self.terrain: dict[str, TerrainDef] = {}
+        self.ability_gates: dict[str, AbilityGateDef] = {}
         self.planets: dict[str, PlanetDef] = {}
         self.balance: BalanceConfig = BalanceConfig()
         self._base_path: str = "data"
@@ -113,6 +141,7 @@ class DataRegistry:
         errors.extend(self._validator.validate_technologies(raw["technologies"]))
         errors.extend(self._validator.validate_powerups(raw["powerups"]))
         errors.extend(self._validator.validate_terrain(raw["terrain"]))
+        errors.extend(self._validator.validate_ability_gates(raw["ability_gates"]))
 
         if errors:
             msg = "Definition validation failed:\n" + "\n".join(errors)
@@ -126,6 +155,7 @@ class DataRegistry:
         self._populate_technologies(raw["technologies"])
         self._populate_powerups(raw["powerups"])
         self._populate_terrain(raw["terrain"])
+        self._populate_ability_gates(raw["ability_gates"])
 
         # --- Cross-validate references ---
         cross_errors = self._validator.cross_validate(self)
@@ -165,8 +195,25 @@ class DataRegistry:
         self.technologies = temp.technologies
         self.powerups = temp.powerups
         self.terrain = temp.terrain
+        self.ability_gates = temp.ability_gates
         self.planets = temp.planets
         self.balance = temp.balance
+
+        # Rebuild the shared level<->XP threshold curve from the newly-swapped
+        # ranks. The module-level table in ``world.progression`` is only built
+        # at server start otherwise, so a ranks.yaml hot-reload that retunes
+        # xp_thresholds would leave the derived-level curve stale until the next
+        # restart. Guarded so a rebuild hiccup never invalidates the successful
+        # data swap above.
+        try:
+            from world import progression
+
+            progression.build_thresholds(self.ranks)
+        except Exception:
+            logger.exception(
+                "Hot-reload: failed to rebuild progression thresholds; "
+                "level<->XP curve may be stale until restart."
+            )
 
         logger.info("Hot-reload completed successfully")
         return True, []
@@ -275,6 +322,15 @@ class DataRegistry:
             )
             self.planets[pdef.name] = pdef
 
+    def _populate_ability_gates(self, data: list[dict]) -> None:
+        self.ability_gates = {}
+        for entry in data:
+            adef = AbilityGateDef(
+                key=entry["key"],
+                required_level=entry["required_level"],
+            )
+            self.ability_gates[adef.key] = adef
+
     def _load_balance(self, base_path: str) -> None:
         """Load balance config. Uses hardcoded defaults if file is missing."""
         balance_path = os.path.join(base_path, _OPTIONAL_FILES["balance"])
@@ -303,38 +359,54 @@ class DataRegistry:
             logger.error(msg)
             raise DataRegistryError(msg)
 
-        # Build BalanceConfig from raw data, falling back to defaults for missing keys
-        defaults = BalanceConfig()
-        ps_raw = raw.get("production_scaling")
-        if ps_raw is not None:
-            production_scaling = {int(k): v for k, v in ps_raw.items()}
-        else:
-            production_scaling = defaults.production_scaling
+        self.balance = self._build_balance(raw)
 
-        self.balance = BalanceConfig(
-            production_scaling=production_scaling,
-            turret_damage=raw.get("turret_damage", defaults.turret_damage),
-            turret_radius=raw.get("turret_radius", defaults.turret_radius),
-            xp_kill=raw.get("xp_kill", defaults.xp_kill),
-            xp_building_destroy=raw.get("xp_building_destroy", defaults.xp_building_destroy),
-            xp_damage=raw.get("xp_damage", defaults.xp_damage),
-            xp_death_loss=raw.get("xp_death_loss", defaults.xp_death_loss),
-            gather_amount=raw.get("gather_amount", defaults.gather_amount),
-            player_default_health=raw.get(
-                "player_default_health", defaults.player_default_health
-            ),
-            resource_respawn_ticks=raw.get(
-                "resource_respawn_ticks", defaults.resource_respawn_ticks
-            ),
-            combat_lockout_ticks=raw.get(
-                "combat_lockout_ticks", defaults.combat_lockout_ticks
-            ),
-            tick_interval=raw.get("tick_interval", defaults.tick_interval),
-            chunk_size=raw.get("chunk_size", defaults.chunk_size),
-            save_interval=raw.get("save_interval", defaults.save_interval),
-            metrics_enabled=raw.get("metrics_enabled", defaults.metrics_enabled),
-            metrics_interval=raw.get("metrics_interval", defaults.metrics_interval),
+    def _build_balance(self, raw: dict) -> BalanceConfig:
+        """Construct a BalanceConfig from raw YAML, defaulting missing keys.
+
+        Scalar fields are pulled generically from the dataclass field list so
+        a newly-added scalar tunable only needs a field on ``BalanceConfig``
+        (plus a validator entry) — no change here.  The two nested-dict fields
+        (``production_scaling`` with int keys, and the balance maps) need
+        light key coercion and are handled explicitly.
+        """
+        from dataclasses import fields
+
+        defaults = BalanceConfig()
+
+        # Fields needing custom key/type handling — excluded from the generic
+        # scalar copy below and rebuilt explicitly.
+        special = {"production_scaling", "demolish_refund_rates", "base_training_cost"}
+
+        kwargs: dict[str, Any] = {}
+        for f in fields(BalanceConfig):
+            if f.name in special:
+                continue
+            kwargs[f.name] = raw.get(f.name, getattr(defaults, f.name))
+
+        # production_scaling: YAML keys may be strings → coerce to int levels.
+        ps_raw = raw.get("production_scaling")
+        kwargs["production_scaling"] = (
+            {int(k): v for k, v in ps_raw.items()}
+            if ps_raw is not None
+            else defaults.production_scaling
         )
+
+        # demolish_refund_rates: level keys may be strings → coerce to int.
+        dr_raw = raw.get("demolish_refund_rates")
+        kwargs["demolish_refund_rates"] = (
+            {int(k): v for k, v in dr_raw.items()}
+            if dr_raw is not None
+            else defaults.demolish_refund_rates
+        )
+
+        # base_training_cost: resource-name keys stay as strings.
+        btc_raw = raw.get("base_training_cost")
+        kwargs["base_training_cost"] = (
+            dict(btc_raw) if btc_raw is not None else defaults.base_training_cost
+        )
+
+        return BalanceConfig(**kwargs)
 
     # ------------------------------------------------------------------ #
     #  Getter methods
@@ -401,28 +473,30 @@ class DataRegistry:
                 return rank
         raise KeyError(f"Rank '{name}' not found")
 
+    def _rank_names_at_or_below(self, rank_level: int) -> set[str]:
+        """Return the set of rank names whose level is <= ``rank_level``.
+
+        Shared by the ``get_*_for_rank`` filters so the "which ranks has the
+        player reached" logic lives in one place.
+        """
+        return {rank.name for rank in self.ranks if rank.level <= rank_level}
+
     def get_technologies_for_rank(self, rank_level: int) -> list[TechnologyDef]:
         """Get all technologies available at or below the given rank level."""
-        rank_names_at_or_below: set[str] = set()
-        for rank in self.ranks:
-            if rank.level <= rank_level:
-                rank_names_at_or_below.add(rank.name)
+        available = self._rank_names_at_or_below(rank_level)
         return [
             tdef
             for tdef in self.technologies.values()
-            if tdef.required_rank in rank_names_at_or_below
+            if tdef.required_rank in available
         ]
 
     def get_powerups_for_rank(self, rank_level: int) -> list[PowerupDef]:
         """Get all powerups available at or below the given rank level."""
-        rank_names_at_or_below: set[str] = set()
-        for rank in self.ranks:
-            if rank.level <= rank_level:
-                rank_names_at_or_below.add(rank.name)
+        available = self._rank_names_at_or_below(rank_level)
         return [
             pdef
             for pdef in self.powerups.values()
-            if pdef.required_rank in rank_names_at_or_below
+            if pdef.required_rank in available
         ]
 
     def get_terrain(self, terrain_type: str) -> TerrainDef:
@@ -440,3 +514,15 @@ class DataRegistry:
             KeyError: If planet name not found.
         """
         return self.planets[name]
+
+    def get_ability_gate(self, key: str) -> AbilityGateDef:
+        """Get an ability-gate definition by key.
+
+        Raises:
+            KeyError: If ability-gate key not found.
+        """
+        return self.ability_gates[key]
+
+    def get_ability_gates(self) -> list[AbilityGateDef]:
+        """Get all ability-gate definitions."""
+        return list(self.ability_gates.values())

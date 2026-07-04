@@ -36,9 +36,17 @@ def initialize_game() -> dict:
     from world.data_registry import DataRegistry
 
     registry = DataRegistry()
+    # Register the process-wide singleton so owner-agnostic helpers
+    # (world.progression, chat_system, agent_scripts) can resolve the live
+    # registry via DataRegistry.get_instance() without a threaded reference.
+    DataRegistry.set_instance(registry)
     try:
         registry.load_all()
         logger.info("DataRegistry loaded successfully.")
+        # Build the shared level->XP threshold curve once at server start
+        from world import progression
+        progression.build_thresholds(registry.ranks)
+        logger.info("Progression thresholds built.")
     except Exception:
         logger.exception("DataRegistry load failed — using empty registry.")
 
@@ -199,6 +207,10 @@ def initialize_game() -> dict:
     from world.event_bus import RANK_DEMOTED, RANK_PROMOTED
     event_bus.subscribe(RANK_DEMOTED, lambda **kw: agent_system.handle_demotion(kw.get("player"), kw.get("new_agent_cap", 2)))
     event_bus.subscribe(RANK_PROMOTED, lambda **kw: agent_system.handle_promotion(kw.get("player"), kw.get("new_agent_cap", 2)))
+
+    # Owner level change: re-evaluate gated abilities on every owned Agent (Req 15.5)
+    from world.event_bus import LEVEL_CHANGED
+    event_bus.subscribe(LEVEL_CHANGED, lambda **kw: agent_system.on_owner_level_changed(kw.get("player"), kw.get("old_level"), kw.get("new_level")))
 
     logger.info("Event subscribers wired.")
 

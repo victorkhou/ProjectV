@@ -29,6 +29,9 @@ CONSTRUCTION_COMPLETED = "construction_completed"
 RANK_PROMOTED = "rank_promoted"
 RANK_DEMOTED = "rank_demoted"
 
+# Payload: player, old_level, new_level
+LEVEL_CHANGED = "level_changed"
+
 COMBAT_ACTION = "combat_action"
 COMBAT_TIMER_STARTED = "combat_timer_started"
 
@@ -53,6 +56,7 @@ ALL_EVENTS = (
     CONSTRUCTION_COMPLETED,
     RANK_PROMOTED,
     RANK_DEMOTED,
+    LEVEL_CHANGED,
     COMBAT_ACTION,
     COMBAT_TIMER_STARTED,
     POWERUP_ACTIVATED,

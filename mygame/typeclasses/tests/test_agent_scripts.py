@@ -11,6 +11,7 @@ Requirements: 9.1, 10.1, 10.5, 10.6, 11.1, 11.3, 12.1, 12.3
 import sys
 import types
 import unittest
+from contextlib import contextmanager
 
 # -------------------------------------------------------------- #
 #  Bootstrap: stub out Evennia modules before importing scripts
@@ -44,7 +45,18 @@ def _ensure_evennia_stubs():
     _mod("evennia.objects")
     _mod("evennia.objects.objects", {
         "DefaultObject": type("DefaultObject", (), {}),
+        "DefaultRoom": type("DefaultRoom", (), {}),
+        "DefaultCharacter": type("DefaultCharacter", (), {}),
     })
+    # Extra modules required by the AgentSystem import chain (mirrors the
+    # bootstrap in world/systems/tests/test_agent_system.py) so the gate-driven
+    # delivery tests below can import AgentSystem.
+    _mod("evennia.objects.models")
+    _mod("evennia.commands")
+    _mod("evennia.commands.cmdset")
+    _mod("evennia.utils")
+    _mod("evennia.utils.utils")
+    _mod("evennia.utils.logger")
 
     for name, mod in stubs.items():
         sys.modules.setdefault(name, mod)
@@ -59,6 +71,7 @@ from mygame.typeclasses.agent_scripts import (  # noqa: E402
     SoldierScript,
     MedicScript,
     ROLE_SCRIPT_MAP,
+    ABILITY_SCRIPT_MAP,
 )
 
 
@@ -129,8 +142,46 @@ class TestHarvesterScript(unittest.TestCase):
         script.obj = npc
         return script
 
-    def test_produces_resources_into_extractor_inventory(self):
-        """Harvester should drop resources on the tile."""
+    @contextmanager
+    def _capture_drops(self):
+        """Patch ResourceSystem._spawn_resource_drop and capture spawned drops.
+
+        HarvesterScript.at_repeat does ``from world.systems.resource_system
+        import ResourceSystem`` then calls ``ResourceSystem._spawn_resource_drop``.
+        We inject a fake module into sys.modules so the call is captured without
+        a live DB.
+        """
+        spawned = []
+
+        mock_module = types.ModuleType("world.systems.resource_system")
+
+        class MockResourceSystem:
+            @staticmethod
+            def _spawn_resource_drop(room, rtype, amount, x=None, y=None):
+                spawned.append({
+                    "room": room, "resource_type": rtype,
+                    "amount": amount, "x": x, "y": y,
+                })
+
+        mock_module.ResourceSystem = MockResourceSystem
+        saved = sys.modules.get("world.systems.resource_system")
+        sys.modules["world.systems.resource_system"] = mock_module
+        try:
+            yield spawned
+        finally:
+            if saved is not None:
+                sys.modules["world.systems.resource_system"] = saved
+            else:
+                sys.modules.pop("world.systems.resource_system", None)
+
+    def _run_until_production(self, script):
+        """Drive at_repeat through the harvest cooldown until production fires."""
+        from mygame.world.definitions import BalanceConfig
+        for _ in range(BalanceConfig().harvest_cooldown_ticks):
+            script.at_repeat()
+
+    def test_produces_resource_drops(self):
+        """Harvester should spawn a ResourceDrop for the tile's resource type."""
         tile = FakeTile(resource_type="Wood")
         building = FakeBuilding(
             building_type="EX", building_level=1,
@@ -139,15 +190,19 @@ class TestHarvesterScript(unittest.TestCase):
         npc = FakeNPC(role="harvester", role_target=building)
         script = self._make_script(npc)
 
-        script.at_repeat()
+        with self._capture_drops() as spawned:
+            self._run_until_production(script)
 
-        # Resources drop on the tile (building.location)
-        inv = tile.db.resource_inventory
-        self.assertIn("Wood", inv)
-        self.assertGreater(inv["Wood"], 0)
+        # A drop was spawned with the right resource type and positive amount.
+        self.assertEqual(len(spawned), 1)
+        self.assertEqual(spawned[0]["resource_type"], "Wood")
+        self.assertGreater(spawned[0]["amount"], 0)
+
+        # Production only — no delivery state is set (Req 8.3).
+        self.assertIsNone(npc.db.delivery_state)
 
     def test_production_scales_with_level(self):
-        """Higher Extractor level should produce more resources."""
+        """Higher Extractor level should produce a larger drop amount."""
         tile1 = FakeTile(resource_type="Iron")
         tile3 = FakeTile(resource_type="Iron")
         building_l1 = FakeBuilding(
@@ -160,11 +215,13 @@ class TestHarvesterScript(unittest.TestCase):
         npc1 = FakeNPC(role="harvester", role_target=building_l1)
         npc3 = FakeNPC(role="harvester", role_target=building_l3)
 
-        self._make_script(npc1).at_repeat()
-        self._make_script(npc3).at_repeat()
+        with self._capture_drops() as spawned1:
+            self._run_until_production(self._make_script(npc1))
+        with self._capture_drops() as spawned3:
+            self._run_until_production(self._make_script(npc3))
 
-        prod_l1 = tile1.db.resource_inventory.get("Iron", 0)
-        prod_l3 = tile3.db.resource_inventory.get("Iron", 0)
+        prod_l1 = spawned1[0]["amount"]
+        prod_l3 = spawned3[0]["amount"]
         self.assertGreaterEqual(prod_l3, prod_l1)
 
     def test_skips_incapacitated_agent(self):
@@ -178,10 +235,10 @@ class TestHarvesterScript(unittest.TestCase):
         )
         script = self._make_script(npc)
 
-        script.at_repeat()
+        with self._capture_drops() as spawned:
+            self._run_until_production(script)
 
-        inv = tile.db.resource_inventory
-        self.assertEqual(sum(inv.values()), 0)
+        self.assertEqual(len(spawned), 0)
 
     def test_skips_non_extractor_building(self):
         """Harvester assigned to a non-Extractor should not produce."""
@@ -207,13 +264,13 @@ class TestHarvesterScript(unittest.TestCase):
         npc = FakeNPC(role="harvester", role_target=building)
         script = self._make_script(npc)
 
-        script.at_repeat()
+        with self._capture_drops() as spawned:
+            self._run_until_production(script)
 
-        inv = tile.db.resource_inventory
-        self.assertEqual(sum(inv.values()), 0)
+        self.assertEqual(len(spawned), 0)
 
     def test_reads_resource_type_from_building_attr(self):
-        """If building has explicit resource_type, use it even without a tile."""
+        """If building has explicit resource_type, spawn a drop with that type."""
         tile = FakeTile()  # no resource on tile
         building = FakeBuilding(
             building_type="EX", building_level=1,
@@ -222,24 +279,37 @@ class TestHarvesterScript(unittest.TestCase):
         npc = FakeNPC(role="harvester", role_target=building)
         script = self._make_script(npc)
 
-        script.at_repeat()
+        with self._capture_drops() as spawned:
+            self._run_until_production(script)
 
-        inv = tile.db.resource_inventory
-        self.assertIn("Energy", inv)
+        self.assertEqual(len(spawned), 1)
+        self.assertEqual(spawned[0]["resource_type"], "Energy")
+        self.assertGreater(spawned[0]["amount"], 0)
+
+        # Production only — no delivery state is set (Req 8.3).
+        self.assertIsNone(npc.db.delivery_state)
 
     def test_production_accumulates(self):
-        """Production adds to existing drops on the tile."""
+        """Repeated production cycles spawn multiple drops (production-only)."""
         tile = FakeTile(resource_type="Wood")
-        tile.db.resource_inventory = {"Wood": 100}
         building = FakeBuilding(
             building_type="EX", building_level=1, location=tile,
         )
         npc = FakeNPC(role="harvester", role_target=building)
         script = self._make_script(npc)
 
-        script.at_repeat()
+        with self._capture_drops() as spawned:
+            # Two full cooldown cycles → two production events.
+            self._run_until_production(script)
+            self._run_until_production(script)
 
-        self.assertGreater(tile.db.resource_inventory["Wood"], 100)
+        self.assertEqual(len(spawned), 2)
+        for drop in spawned:
+            self.assertEqual(drop["resource_type"], "Wood")
+            self.assertGreater(drop["amount"], 0)
+
+        # Production only — no delivery state involvement (Req 8.3, 8.4).
+        self.assertIsNone(npc.db.delivery_state)
 
 
 # -------------------------------------------------------------- #
@@ -414,10 +484,41 @@ class TestRoleScriptMap(unittest.TestCase):
                     f"ROLE_SCRIPT_MAP['{role}'] should be a class",
                 )
 
-    def test_harvester_maps_to_list(self):
-        value = ROLE_SCRIPT_MAP["harvester"]
-        self.assertIsInstance(value, list)
-        self.assertEqual(value, [HarvesterScript, DeliveryBehavior])
+    def test_harvester_maps_to_harvester_script(self):
+        """Harvester role maps to a single HarvesterScript (production only).
+
+        Task 8.1 reverted the harvester role to attach HarvesterScript only;
+        delivery is now a gated ability rather than part of the role.
+        """
+        self.assertIs(ROLE_SCRIPT_MAP["harvester"], HarvesterScript)
+
+    def test_delivery_is_gated_ability_not_role_script(self):
+        """DeliveryBehavior is a gated ability, not part of the harvester role.
+
+        Role application alone (via ROLE_SCRIPT_MAP) must NOT include
+        DeliveryBehavior; it lives in ABILITY_SCRIPT_MAP and is only attached
+        by AgentSystem.evaluate_gated_abilities when the agent is at/above the
+        ability's gate level AND the player has explicitly enabled it. The full
+        attach-via-gate behavior is covered by the AgentSystem property/unit
+        tests (Req 8.5/8.6) and the gate-aware _attach_behavior_script tests;
+        here we assert only the map wiring that those behaviors rely on.
+        """
+        self.assertIs(ABILITY_SCRIPT_MAP["delivery"], DeliveryBehavior)
+
+        # DeliveryBehavior must not be reachable via the harvester role entry.
+        harvester_value = ROLE_SCRIPT_MAP["harvester"]
+        if isinstance(harvester_value, list):
+            self.assertNotIn(DeliveryBehavior, harvester_value)
+        else:
+            self.assertIsNot(harvester_value, DeliveryBehavior)
+
+        # DeliveryBehavior must not appear in any role's script entry.
+        for role, value in ROLE_SCRIPT_MAP.items():
+            classes = value if isinstance(value, list) else [value]
+            self.assertNotIn(
+                DeliveryBehavior, classes,
+                f"DeliveryBehavior should not be a role script for '{role}'",
+            )
 
     def test_guard_maps_to_patrol(self):
         self.assertIs(ROLE_SCRIPT_MAP["guard"], PatrolBehavior)
@@ -452,6 +553,164 @@ class TestScriptKeys(unittest.TestCase):
 
     def test_medic_key(self):
         self._check_key(MedicScript, "medic_script")
+
+
+# -------------------------------------------------------------- #
+#  Gate-driven DeliveryBehavior attach (Req 8.2, 8.3, 9.1)
+# -------------------------------------------------------------- #
+#
+# The harvester-production tests above operate at the
+# HarvesterScript.at_repeat level and never drive AgentSystem gate
+# evaluation, so none of them attach DeliveryBehavior. This class adds the
+# gate-driven coverage required by task 14.3: with a delivery gate at level
+# 21, applying the harvester role attaches DeliveryBehavior *only* when the
+# ability is enabled, and an at/above-gate-but-not-enabled harvester stays
+# production-only while its owner is notified the ability is available.
+#
+# The AgentSystem fakes (script manager, scripted agent, notifying player)
+# mirror world/systems/tests/test_agent_system.py.
+
+from mygame.world.systems.agent_system import (  # noqa: E402
+    AgentSystem,
+    ABILITY_SCRIPT_KEYS,
+)
+from mygame.world.data_registry import DataRegistry  # noqa: E402
+from mygame.world.definitions import AbilityGateDef  # noqa: E402
+from mygame.world.event_bus import EventBus  # noqa: E402
+from mygame.world.constants import DeliveryState  # noqa: E402
+
+
+class _FakeScript:
+    """Minimal stand-in for an attached Evennia Script."""
+
+    def __init__(self, key):
+        self.key = key
+        self._deleted = False
+
+    def delete(self):
+        self._deleted = True
+
+
+class _FakeScriptManager:
+    """Minimal scripts manager supporting .all()/.add()/delete semantics."""
+
+    def __init__(self):
+        self._scripts = []
+
+    def all(self):
+        return [s for s in self._scripts if not s._deleted]
+
+    def add(self, script_cls):
+        # Resolve the script key the same way AgentSystem does (by class name).
+        key = ABILITY_SCRIPT_KEYS.get(
+            getattr(script_cls, "__name__", ""),
+            getattr(script_cls, "key", "") or script_cls.__name__,
+        )
+        self._scripts.append(_FakeScript(key))
+
+
+class _NotifyingPlayer:
+    """Stand-in for an owning player that captures msg(...) notifications."""
+
+    def __init__(self, level=30):
+        self.db = FakeDB(level=level)
+        self.messages = []
+
+    def msg(self, text, **kwargs):
+        self.messages.append(text)
+
+
+class _GateHarvesterAgent:
+    """Harvester agent with a scripts manager and a controllable raw level."""
+
+    def __init__(self, agent_id, owner, raw_level, enabled=None,
+                 script_keys=None):
+        self.db = FakeDB(
+            agent_id=agent_id,
+            owner=owner,
+            role="harvester",
+            enabled_abilities=list(enabled) if enabled is not None else None,
+        )
+        self._raw_level = raw_level
+        self.scripts = _FakeScriptManager()
+        for key in (script_keys or []):
+            self.scripts._scripts.append(_FakeScript(key))
+
+    def get_raw_level(self):
+        return self._raw_level
+
+
+class TestHarvesterGateDrivenDelivery(unittest.TestCase):
+    """Gate-driven DeliveryBehavior attach behavior (Req 8.2, 8.3, 9.1).
+
+    Builds a real AgentSystem with a ``delivery`` gate at level 21 and drives
+    ``_attach_behavior_script(agent, "harvester")`` — the AgentSystem path that
+    combines the role-to-script map with the ability-gate registry.
+    """
+
+    DELIVERY_KEY = "delivery_behavior"
+
+    def setUp(self):
+        registry = DataRegistry()
+        # delivery gate at level 21 (first level of rank 5)
+        registry.ability_gates = {
+            "delivery": AbilityGateDef(key="delivery", required_level=21),
+        }
+        self.system = AgentSystem(
+            registry=registry,
+            event_bus=EventBus(),
+            create_npc_func=lambda player, agent_id: None,
+        )
+
+    def _script_keys(self, agent):
+        return [s.key for s in agent.scripts.all()]
+
+    def test_delivery_attaches_when_at_gate_and_enabled(self):
+        """At/above gate AND enabled → both HarvesterScript and DeliveryBehavior.
+
+        Enablement path: confirms DeliveryBehavior attaches and its delivery
+        FSM is initialized to idle (Req 8.3, inverse of 8.2).
+        """
+        owner = _NotifyingPlayer(level=30)  # ceiling 29
+        agent = _GateHarvesterAgent(
+            agent_id=1, owner=owner, raw_level=25, enabled=["delivery"],
+        )  # effective 25 >= 21
+
+        self.system._attach_behavior_script(agent, "harvester")
+
+        keys = self._script_keys(agent)
+        self.assertIn("HarvesterScript", keys)
+        self.assertIn(self.DELIVERY_KEY, keys)
+        # Delivery FSM initialized to idle on attach (Req 9.3).
+        self.assertEqual(agent.db.delivery_state, DeliveryState.IDLE)
+
+    def test_at_gate_but_not_enabled_is_production_only_and_notifies(self):
+        """At/above gate but NOT enabled → production-only + available notice.
+
+        The harvester produces (HarvesterScript attaches) but delivery does not
+        attach because the player has not enabled it (Req 8.2). The owner is
+        notified that the ability is available and how to enable it (Req 9.1),
+        and no delivery state is initialized (Req 8.3).
+        """
+        owner = _NotifyingPlayer(level=30)  # ceiling 29
+        agent = _GateHarvesterAgent(
+            agent_id=2, owner=owner, raw_level=25, enabled=[],
+        )  # effective 25 >= 21 but delivery not enabled
+
+        self.system._attach_behavior_script(agent, "harvester")
+
+        keys = self._script_keys(agent)
+        # Production-only: HarvesterScript attaches, DeliveryBehavior does not.
+        self.assertIn("HarvesterScript", keys)
+        self.assertNotIn(self.DELIVERY_KEY, keys)
+        # No delivery FSM state set while delivery is unattached (Req 8.3).
+        self.assertIsNone(agent.db.delivery_state)
+
+        # Player is notified the ability is available + how to enable it.
+        available_msgs = [m for m in owner.messages if "available" in m]
+        self.assertEqual(len(available_msgs), 1)
+        self.assertIn("delivery", available_msgs[0])
+        self.assertIn("agent ability 2 delivery on", available_msgs[0])
 
 
 if __name__ == "__main__":

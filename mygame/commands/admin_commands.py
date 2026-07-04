@@ -318,9 +318,8 @@ class CmdAdminAgent(AdminSubcommandRouter):
             caller.msg(f"Could not find player '{player_name}'.")
             return
 
-        agent_system = _get_system(caller, "agent_system")
+        agent_system = self.require_system("agent_system")
         if agent_system is None:
-            caller.msg("Agent system unavailable.")
             return
 
         created_ids = []
@@ -425,9 +424,8 @@ class CmdAdminAgent(AdminSubcommandRouter):
 
     def _destroy_agent(self, caller, target, agent_id):
         """Destroy a specific agent NPC, or clear its stuck training state."""
-        agent_system = _get_system(caller, "agent_system")
+        agent_system = self.require_system("agent_system")
         if agent_system is None:
-            caller.msg("Agent system unavailable.")
             return
 
         agent = agent_system.get_agent_by_id(target, agent_id)
@@ -492,9 +490,8 @@ class CmdAdminAgent(AdminSubcommandRouter):
             caller.msg(f"Could not find player '{player_name}'.")
             return
 
-        agent_system = _get_system(caller, "agent_system")
+        agent_system = self.require_system("agent_system")
         if agent_system is None:
-            caller.msg("Agent system unavailable.")
             return
 
         agents = agent_system.get_agents(target)

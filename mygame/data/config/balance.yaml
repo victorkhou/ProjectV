@@ -34,3 +34,33 @@ building_vision_radius: 7        # tiles visible around each owned building
 room_cache_max_size: 1000        # max rooms held in the LRU cache
 gc_interval_ticks: 100           # how often garbage collection runs
 gc_min_age_ticks: 50             # minimum age before a dynamic room is eligible for GC
+
+# --- Agent training (migrated from world.constants) ---
+base_training_cost:              # per-resource base cost; agent #N costs base × N
+  Wood: 15
+  Stone: 10
+  Iron: 5
+base_training_ticks: 300         # base training time (5 min at 1 tick/s)
+academy_training_reduction_per_level: 0.15   # training time cut per Academy level
+
+# --- Resource harvesting & production (migrated) ---
+harvest_cooldown_ticks: 4        # ticks between harvest yields (active-presence)
+harvest_yield_per_action: 1      # units per harvest action on raw terrain
+extractor_harvest_multiplier: 3  # yield multiplier at an Extractor vs raw terrain
+extractor_level_bonus: 0.25      # per-level Extractor production bonus
+extractor_base_capacity: 100     # Extractor storage at level 1
+extractor_capacity_per_level: 50 # extra Extractor storage per level above 1
+vault_base_capacity: 100         # Vault storage at level 1
+vault_capacity_per_level: 20     # extra Vault storage per level above 1
+
+# --- Building scaling (migrated) ---
+upgrade_cost_base: 2             # upgrade cost = base_cost × COST_BASE^(level-1)
+upgrade_time_base: 3             # upgrade time = build_time × TIME_BASE^(level-1)
+turret_level_bonus: 0.20         # per-level Turret damage bonus
+demolish_refund_default: 0.40    # refund rate for levels not in the table below
+demolish_refund_rates:           # refund fraction of invested cost by level
+  1: 0.40
+  2: 0.50
+  3: 0.60
+  4: 0.70
+  5: 0.80

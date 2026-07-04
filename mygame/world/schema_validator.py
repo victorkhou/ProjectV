@@ -10,6 +10,8 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
+from world.constants import MAX_LEVEL
+
 if TYPE_CHECKING:
     pass  # DataRegistry imported only for type hints in cross_validate
 
@@ -305,6 +307,57 @@ class SchemaValidator:
         return errors
 
     # ------------------------------------------------------------------ #
+    #  Ability gates
+    # ------------------------------------------------------------------ #
+    def validate_ability_gates(self, data: list[dict]) -> list[str]:
+        """Validate a list of ability-gate definition dicts."""
+        errors: list[str] = []
+        if not isinstance(data, list):
+            return [f"ability_gates: expected a list, got {type(data).__name__}"]
+
+        required = {"key", "required_level"}
+        keys_seen: set[str] = set()
+
+        for idx, entry in enumerate(data):
+            prefix = f"ability_gates[{idx}]"
+            if not isinstance(entry, dict):
+                errors.append(f"{prefix}: expected dict, got {type(entry).__name__}")
+                continue
+
+            missing = required - entry.keys()
+            if missing:
+                errors.append(f"{prefix}: missing required fields: {sorted(missing)}")
+
+            # key must be a non-empty string; duplicates reported by name
+            key = entry.get("key")
+            if "key" in entry:
+                if not isinstance(key, str) or not key:
+                    errors.append(
+                        f"{prefix}: key must be a non-empty string, got {key!r}"
+                    )
+                elif key in keys_seen:
+                    errors.append(f"{prefix}: duplicate key '{key}'")
+                else:
+                    keys_seen.add(key)
+
+            # required_level must be an int in range 1..MAX_LEVEL
+            # (bool is a subclass of int, so reject it explicitly)
+            rl = entry.get("required_level")
+            if "required_level" in entry:
+                if not isinstance(rl, int) or isinstance(rl, bool):
+                    errors.append(
+                        f"{prefix}: required_level must be an integer, "
+                        f"got {type(rl).__name__}"
+                    )
+                elif rl < 1 or rl > MAX_LEVEL:
+                    errors.append(
+                        f"{prefix}: required_level must be between 1 and "
+                        f"{MAX_LEVEL}, got {rl}"
+                    )
+
+        return errors
+
+    # ------------------------------------------------------------------ #
     #  Terrain
     # ------------------------------------------------------------------ #
     def validate_terrain(self, data: dict) -> list[str]:
@@ -371,9 +424,30 @@ class SchemaValidator:
             "xp_death_loss", "gather_amount", "player_default_health",
             "resource_respawn_ticks", "combat_lockout_ticks", "chunk_size",
             "save_interval", "metrics_interval",
+            "agent_xp_harvest", "agent_xp_delivery", "agent_xp_construction",
+            "agent_xp_combat", "agent_xp_time_served", "agent_xp_death_loss",
+            # Migrated economy tuning (formerly world.constants literals)
+            "base_training_ticks",
+            "harvest_cooldown_ticks", "harvest_yield_per_action",
+            "extractor_harvest_multiplier", "extractor_base_capacity",
+            "extractor_capacity_per_level", "vault_base_capacity",
+            "vault_capacity_per_level", "upgrade_cost_base", "upgrade_time_base",
+            # Coordinate-world / GC knobs. Present in balance.yaml and now read
+            # generically by DataRegistry._build_balance, so validate their type
+            # here too (previously the explicit constructor silently dropped them).
+            "player_vision_radius", "building_vision_radius", "room_cache_max_size",
+            "gc_interval_ticks", "gc_min_age_ticks", "map_border_tiles",
         ]
-        float_fields = ["xp_damage", "tick_interval"]
+        float_fields = [
+            "xp_damage", "tick_interval",
+            "academy_training_reduction_per_level", "extractor_level_bonus",
+            "turret_level_bonus", "demolish_refund_default",
+        ]
         bool_fields = ["metrics_enabled"]
+        # Resource->int maps: keys are resource names, values positive ints
+        resource_map_fields = ["base_training_cost"]
+        # Level->float maps: keys are building levels (1-5), values fractions
+        level_rate_map_fields = ["demolish_refund_rates"]
 
         for field in int_fields:
             val = data.get(field)
@@ -395,6 +469,45 @@ class SchemaValidator:
                 errors.append(
                     f"balance.{field}: expected bool, got {type(val).__name__}"
                 )
+
+        # Resource->positive-int maps (e.g. base_training_cost)
+        for field in resource_map_fields:
+            val = data.get(field)
+            if val is None:
+                continue
+            if not isinstance(val, dict):
+                errors.append(
+                    f"balance.{field}: expected dict, got {type(val).__name__}"
+                )
+                continue
+            for res, amount in val.items():
+                if not isinstance(amount, int) or isinstance(amount, bool) or amount <= 0:
+                    errors.append(
+                        f"balance.{field}['{res}']: must be a positive integer, "
+                        f"got {amount!r}"
+                    )
+
+        # Level(1-5)->fraction maps (e.g. demolish_refund_rates)
+        for field in level_rate_map_fields:
+            val = data.get(field)
+            if val is None:
+                continue
+            if not isinstance(val, dict):
+                errors.append(
+                    f"balance.{field}: expected dict, got {type(val).__name__}"
+                )
+                continue
+            for lvl, rate in val.items():
+                k = int(lvl) if isinstance(lvl, str) and lvl.isdigit() else lvl
+                if not isinstance(k, int) or k < 1 or k > 5:
+                    errors.append(
+                        f"balance.{field}: key must be 1-5, got {lvl!r}"
+                    )
+                if not isinstance(rate, (int, float)) or isinstance(rate, bool):
+                    errors.append(
+                        f"balance.{field}[{lvl}]: expected number, "
+                        f"got {type(rate).__name__}"
+                    )
 
         # production_scaling keys must be 1-5
         ps = data.get("production_scaling")
@@ -490,6 +603,72 @@ class SchemaValidator:
                     errors.append(
                         f"planet '{pname}': terrain_weight type '{tt}' "
                         f"not found in terrain definitions"
+                    )
+
+        # Resource-name references → the canonical RESOURCE_TYPES set.
+        # 'Resource' has no definition file (it's just string keys), so a
+        # typo in any cost/ammo/tech-cost/terrain-yield previously loaded
+        # silently and only surfaced at runtime. Validate them here.
+        from world.constants import RESOURCE_TYPES
+
+        valid_resources = set(RESOURCE_TYPES)
+
+        for abbr, bdef in registry.buildings.items():
+            for res in (bdef.cost or {}):
+                if res not in valid_resources:
+                    errors.append(
+                        f"building '{abbr}': cost resource '{res}' "
+                        f"not a known resource {sorted(valid_resources)}"
+                    )
+            if bdef.produces and bdef.produces not in valid_resources:
+                errors.append(
+                    f"building '{abbr}': produces '{bdef.produces}' "
+                    f"not a known resource {sorted(valid_resources)}"
+                )
+
+        for key, idef in registry.items.items():
+            for res in (idef.ammo_cost or {}):
+                if res not in valid_resources:
+                    errors.append(
+                        f"item '{key}': ammo_cost resource '{res}' "
+                        f"not a known resource {sorted(valid_resources)}"
+                    )
+
+        for key, tdef in registry.technologies.items():
+            rcost = tdef.resource_cost
+            if rcost and not isinstance(rcost, dict):
+                errors.append(
+                    f"technology '{key}': resource_cost must be a mapping, "
+                    f"got {type(rcost).__name__}"
+                )
+                rcost = {}
+            for res in (rcost or {}):
+                if res not in valid_resources:
+                    errors.append(
+                        f"technology '{key}': resource_cost resource '{res}' "
+                        f"not a known resource {sorted(valid_resources)}"
+                    )
+
+        for ttype, tdef in registry.terrain.items():
+            if tdef.resource_type and tdef.resource_type not in valid_resources:
+                errors.append(
+                    f"terrain '{ttype}': resource_type '{tdef.resource_type}' "
+                    f"not a known resource {sorted(valid_resources)}"
+                )
+
+        # Building unlocks → valid building abbreviations. This is the
+        # runtime-consumed unlocks field (typeclasses.rooms reads it), keyed
+        # by abbreviation like registry.buildings. NOTE: RankDef.unlocks is a
+        # separate, cosmetic-only field keyed by building *name* and carrying
+        # non-building tokens ('All', 'Barracks_L2'); it is intentionally NOT
+        # validated here.
+        for abbr, bdef in registry.buildings.items():
+            for unlocked in (bdef.unlocks or []):
+                if unlocked not in building_abbrs:
+                    errors.append(
+                        f"building '{abbr}': unlocks '{unlocked}' "
+                        f"not found in building definitions (expects an "
+                        f"abbreviation)"
                     )
 
         return errors

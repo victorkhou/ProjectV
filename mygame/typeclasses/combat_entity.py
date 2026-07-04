@@ -31,6 +31,73 @@ class CombatEntity:
         self.db.incapacitated = False
         self.db.respawn_timer = 0          # ticks remaining
         self.db.respawn_location = None    # room ref or None
+        # Progression state (owner-agnostic; derived from combat_xp).
+        self.db.combat_xp = 0
+        self.db.level = 1
+        self.db.rank_level = 1
+
+    # ------------------------------------------------------------------ #
+    #  Progression (Entity_Progression) — owner-agnostic, pure Python
+    # ------------------------------------------------------------------ #
+
+    def award_xp(self, amount: int) -> int:
+        """Add positive XP to ``db.combat_xp`` and recompute level/rank.
+
+        A non-positive *amount* is a no-op. Reads ``self.db.combat_xp or 0``
+        so legacy entities without the attribute start from 0. Returns the
+        resulting ``combat_xp``.
+        """
+        current = self.db.combat_xp or 0
+        if amount <= 0:
+            return current
+        self.db.combat_xp = current + amount
+        self.recompute_progression()
+        return self.db.combat_xp
+
+    def deduct_xp(self, amount: int) -> int:
+        """Subtract XP from ``db.combat_xp``, floored at 0, recompute level/rank.
+
+        A non-positive *amount* is a no-op. Reads ``self.db.combat_xp or 0``
+        so legacy entities without the attribute start from 0. Returns the
+        resulting ``combat_xp``.
+        """
+        current = self.db.combat_xp or 0
+        if amount <= 0:
+            return current
+        self.db.combat_xp = max(0, current - amount)
+        self.recompute_progression()
+        return self.db.combat_xp
+
+    def recompute_progression(self) -> None:
+        """Recompute ``db.level`` and ``db.rank_level`` from ``db.combat_xp``.
+
+        Called on every XP change, regardless of whether the values differ.
+        ``db.level`` is the raw level derived from the XP curve and
+        ``db.rank_level`` is the rank for that level. Uses the shared
+        ``world.progression`` helper (imported lazily to keep this mixin free
+        of import-order coupling).
+        """
+        from world import progression
+
+        level = progression.level_for_xp(self.db.combat_xp or 0)
+        self.db.level = level
+        self.db.rank_level = progression.rank_for_level(level)
+
+    def get_raw_level(self) -> int:
+        """Return the raw level derived from ``combat_xp`` (owner-agnostic)."""
+        from world import progression
+
+        return progression.level_for_xp(self.get_combat_xp())
+
+    def get_raw_rank(self) -> int:
+        """Return the rank for this entity's raw level."""
+        from world import progression
+
+        return progression.rank_for_level(self.get_raw_level())
+
+    def get_combat_xp(self) -> int:
+        """Return ``db.combat_xp`` with a 0 fallback for legacy entities."""
+        return self.db.combat_xp or 0
 
     # ------------------------------------------------------------------ #
     #  Damage / Healing

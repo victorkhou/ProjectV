@@ -23,12 +23,12 @@ from __future__ import annotations
 import logging
 from typing import TYPE_CHECKING, Any
 
-from world.event_bus import RANK_PROMOTED, RANK_DEMOTED
+from world import progression
+from world.event_bus import RANK_PROMOTED, RANK_DEMOTED, LEVEL_CHANGED
 from world.constants import (
     MAX_LEVEL,
     LEVELS_PER_RANK,
     NUM_RANKS,
-    FINAL_RANK_XP_PER_LEVEL,
 )
 
 if TYPE_CHECKING:
@@ -66,64 +66,49 @@ class RankSystem:
         self.registry = registry
         self.event_bus = event_bus
         self.planet_registry = planet_registry
-        # Pre-compute XP thresholds for all 60 levels
-        self._level_thresholds: list[int] = []
-        self._rebuild_thresholds()
+        # The level->XP curve lives in ``world.progression`` (the single
+        # source of truth shared with ``CombatEntity``). Build the table
+        # from this registry's ranks if it has not been initialized yet.
+        if not progression.is_initialized():
+            self._rebuild_thresholds()
 
     def _rebuild_thresholds(self) -> None:
-        """Build the XP threshold table for levels 1-60.
+        """(Re)build the shared ``world.progression`` threshold table.
 
-        Uses the rank xp_thresholds from the registry and linearly
-        interpolates 5 levels between consecutive rank thresholds.
+        Thin wrapper over ``world.progression.build_thresholds``. The curve
+        computation (linear interpolation of 5 levels between consecutive
+        rank thresholds) lives in the shared helper so ``CombatEntity`` and
+        ``RankSystem`` derive levels from one place rather than duplicating
+        it. Calling this rebuilds the table from this system's registry.
         """
-        ranks = sorted(self.registry.ranks, key=lambda r: r.level)
-        thresholds = [0] * (MAX_LEVEL + 1)  # index 0 unused, 1-60
-
-        for i, rank_def in enumerate(ranks):
-            base_xp = rank_def.xp_threshold
-            if i + 1 < len(ranks):
-                next_xp = ranks[i + 1].xp_threshold
-            else:
-                # Final rank: use a fixed interval per level
-                next_xp = base_xp + LEVELS_PER_RANK * FINAL_RANK_XP_PER_LEVEL
-
-            interval = (next_xp - base_xp) / LEVELS_PER_RANK
-            for sub in range(LEVELS_PER_RANK):
-                lvl = (rank_def.level - 1) * LEVELS_PER_RANK + sub + 1
-                if 1 <= lvl <= MAX_LEVEL:
-                    thresholds[lvl] = int(base_xp + sub * interval)
-
-        self._level_thresholds = thresholds
+        progression.build_thresholds(self.registry.ranks)
 
     # ------------------------------------------------------------------ #
     #  XP threshold queries
     # ------------------------------------------------------------------ #
 
     def xp_for_level(self, level: int) -> int:
-        """Return the XP threshold to reach *level*."""
-        level = max(1, min(level, MAX_LEVEL))
-        return self._level_thresholds[level]
+        """Return the XP threshold to reach *level* (delegates to progression)."""
+        return progression.xp_for_level(level)
 
     def level_for_xp(self, xp: int) -> int:
-        """Return the highest level whose threshold is <= *xp*."""
-        best = 1
-        for lvl in range(1, MAX_LEVEL + 1):
-            if self._level_thresholds[lvl] <= xp:
-                best = lvl
-            else:
-                break
-        return best
+        """Return the highest level whose threshold is <= *xp* (delegates)."""
+        return progression.level_for_xp(xp)
 
     # ------------------------------------------------------------------ #
     #  Public API
     # ------------------------------------------------------------------ #
 
     def award_xp(self, player: Any, amount: int, reason: str = "") -> None:
-        """Award Combat XP and check for level-up / promotion."""
+        """Award Combat XP and check for level-up / promotion.
+
+        Delegates the XP mutation to the entity's ``CombatEntity.award_xp``
+        method, then syncs player-facing level/rank state and fires events.
+        """
         if amount <= 0:
             return
         old_level = self._get_level(player)
-        player.db.combat_xp = (player.db.combat_xp or 0) + amount
+        player.award_xp(amount)
         logger.info(
             "Awarded %d XP to %s (reason: %s). Total: %d",
             amount, getattr(player, "key", "?"), reason, player.db.combat_xp,
@@ -131,11 +116,15 @@ class RankSystem:
         self._sync_level(player, old_level)
 
     def deduct_xp(self, player: Any, amount: int) -> None:
-        """Deduct Combat XP (floor at 0) and check for level-down / demotion."""
+        """Deduct Combat XP (floor at 0) and check for level-down / demotion.
+
+        Delegates the XP mutation to the entity's ``CombatEntity.deduct_xp``
+        method, then syncs player-facing level/rank state and fires events.
+        """
         if amount <= 0:
             return
         old_level = self._get_level(player)
-        player.db.combat_xp = max(0, (player.db.combat_xp or 0) - amount)
+        player.deduct_xp(amount)
         logger.info(
             "Deducted %d XP from %s. Total: %d",
             amount, getattr(player, "key", "?"), player.db.combat_xp,
@@ -314,6 +303,17 @@ class RankSystem:
                     new_rank=new_rank_def,
                     new_agent_cap=new_rank_def.agent_cap,
                 )
+
+        # Publish LEVEL_CHANGED for any level change (after rank-event
+        # handling so reserve/restore is applied first). Owned-agent gate
+        # re-evaluation is driven by this event regardless of rank boundary.
+        if new_level != old_level:
+            self.event_bus.publish(
+                LEVEL_CHANGED,
+                player=player,
+                old_level=old_level,
+                new_level=new_level,
+            )
 
     def _get_rank_by_level(self, rank_num: int) -> "RankDef | None":
         """Find a RankDef by its rank number (1-12)."""

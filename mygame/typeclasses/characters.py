@@ -15,6 +15,7 @@ import logging
 
 from evennia.objects.objects import DefaultCharacter
 
+from world.constants import RESOURCE_TYPES
 from .combat_entity import CombatEntity
 from .objects import ObjectParent
 
@@ -117,10 +118,8 @@ class Character(ObjectParent, DefaultCharacter):
 #  Resource type constants
 # ------------------------------------------------------------------ #
 
-RESOURCE_TYPES = (
-    "Wood", "Stone", "Iron",
-    "Energy", "Circuits", "Nexium",
-)
+# RESOURCE_TYPES is imported from world.constants (single source of truth) at
+# the top of this module and re-exported here for existing importers.
 
 DEFAULT_HEALTH = 100
 

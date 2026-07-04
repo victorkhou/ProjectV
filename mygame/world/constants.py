@@ -1,14 +1,20 @@
 """
 Central game constants for the RTS Combat Overworld.
 
-All tuning knobs, scaling factors, and magic numbers live here.
-Import from this module instead of hardcoding values in system files.
+This module holds *structural* constants — values that define code contracts,
+validation bounds, enums, and identities rather than pure game balance.
+Import from here instead of hardcoding values in system files.
+
+Hot-tunable *balance* numbers (training/harvest/capacity/upgrade/turret/
+demolish scaling, XP awards, vision radii, …) live in
+``world.definitions.BalanceConfig`` and ``data/config/balance.yaml`` so they
+can be retuned via ``@reload`` without a restart. When adding a new value, ask:
+does changing it alter validation/logic (→ here) or just tuning (→ balance)?
 
 Grouped by system:
 - Rank / Level progression
-- Agent training
-- Resource harvesting & production
-- Building scaling
+- Agent training (message cadence only)
+- Building scaling (message cadence only)
 - Combat
 - NPC movement & Agent AI
 - Agent state enums / status strings
@@ -36,84 +42,48 @@ FINAL_RANK_XP_PER_LEVEL = 10_000
 LIMBO_ROOM_ID = 2
 
 # ------------------------------------------------------------------ #
-#  Agent training
+#  Resources
 # ------------------------------------------------------------------ #
 
-#: Base training cost per resource for agent #N (cost = base × N)
-BASE_TRAINING_COST: dict[str, int] = {
-    "Wood": 15,
-    "Stone": 10,
-    "Iron": 5,
-}
+#: Canonical set of resource identifiers. Single source of truth, shared by
+#: player defaults (``typeclasses.characters`` re-exports this) and the data
+#: registry's cross-validation (which rejects any building/item/tech/terrain
+#: reference to a resource name outside this set). Structural, not balance:
+#: adding a resource here changes what the schema accepts.
+RESOURCE_TYPES: tuple[str, ...] = (
+    "Wood", "Stone", "Iron",
+    "Energy", "Circuits", "Nexium",
+)
 
-#: Base training time in ticks (5 minutes at 1 tick/s)
-BASE_TRAINING_TICKS = 300
-
-#: Training time reduction per Academy level (15% per level)
-ACADEMY_TRAINING_REDUCTION_PER_LEVEL = 0.15
+# ------------------------------------------------------------------ #
+#  Agent training
+# ------------------------------------------------------------------ #
 
 #: Seconds between training progress messages
 TRAINING_PROGRESS_INTERVAL = 5
 
-# ------------------------------------------------------------------ #
-#  Resource harvesting & production
-# ------------------------------------------------------------------ #
-
-#: Ticks between harvest yields (player active-presence)
-HARVEST_COOLDOWN_TICKS = 4
-
-#: Units yielded per harvest action on raw terrain
-HARVEST_YIELD_PER_ACTION = 1
-
-#: Multiplier when harvesting at an Extractor (vs raw terrain)
-EXTRACTOR_HARVEST_MULTIPLIER = 3
-
-#: Per-level bonus for Extractor production: base × (1 + BONUS × (level-1))
-EXTRACTOR_LEVEL_BONUS = 0.25
-
-#: Base Extractor storage capacity at level 1
-EXTRACTOR_BASE_CAPACITY = 100
-
-#: Additional Extractor storage per level above 1
-EXTRACTOR_CAPACITY_PER_LEVEL = 50
-
-#: Base Vault storage capacity at level 1
-VAULT_BASE_CAPACITY = 100
-
-#: Additional Vault storage per level above 1
-VAULT_CAPACITY_PER_LEVEL = 20
+# NOTE: Training *balance* (base cost, base ticks, per-level reduction) now
+# lives in ``BalanceConfig`` (data/config/balance.yaml) so it is hot-tunable
+# via @reload. See ``world.definitions.BalanceConfig``.
 
 # ------------------------------------------------------------------ #
 #  Building scaling
 # ------------------------------------------------------------------ #
 
-#: Upgrade cost multiplier base: cost = base_cost × COST_BASE^(level-1)
-UPGRADE_COST_BASE = 2
-
-#: Upgrade time multiplier base: time = build_time × TIME_BASE^(level-1)
-UPGRADE_TIME_BASE = 3
-
 #: Seconds between construction progress messages
 CONSTRUCTION_PROGRESS_INTERVAL = 5
 
-#: Demolish refund rates by building level (fraction of invested cost)
-DEMOLISH_REFUND_RATES: dict[int, float] = {
-    1: 0.40,
-    2: 0.50,
-    3: 0.60,
-    4: 0.70,
-    5: 0.80,
-}
-
-#: Default refund rate for levels not in the table
-DEMOLISH_REFUND_DEFAULT = 0.40
+# NOTE: Resource/harvest, storage-capacity, upgrade-scaling, turret-bonus and
+# demolish-refund balance now live in ``BalanceConfig``
+# (data/config/balance.yaml), hot-tunable via @reload.
 
 # ------------------------------------------------------------------ #
 #  Combat
 # ------------------------------------------------------------------ #
 
-#: Per-level bonus for Turret damage: base × (1 + BONUS × (level-1))
-TURRET_LEVEL_BONUS = 0.20
+#: Ticks a player's combat timer runs after a COMBAT_ACTION event. While
+#: active, the player cannot pass through Walls (set by world.combat_timer).
+COMBAT_TIMER_DURATION = 60
 
 # ------------------------------------------------------------------ #
 #  NPC Movement & Agent AI
