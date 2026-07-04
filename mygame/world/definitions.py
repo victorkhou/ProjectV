@@ -122,8 +122,28 @@ class CoordinateSpaceDef:
 
 
 @dataclass
+class AbilityGateDef:
+    """Definition for a data-driven ability gate.
+
+    Maps a named gated ability to the entity level required to unlock it.
+    """
+
+    key: str
+    required_level: int  # 1..MAX_LEVEL inclusive
+
+
+@dataclass
 class BalanceConfig:
-    """Game balance configuration values."""
+    """Game balance configuration values.
+
+    This dataclass is the single source of truth for every hot-tunable
+    balance number: the field defaults below are the canonical values, and
+    ``data/config/balance.yaml`` overrides any subset of them at load (and on
+    ``@reload``).  Values that change *validation bounds* or *code contracts*
+    (rank/level counts, the ``DeliveryState`` enum, pathfinding node caps)
+    intentionally stay in ``world.constants`` instead — those are structural,
+    not balance.
+    """
 
     production_scaling: dict[int, int] = field(default_factory=lambda: {
         1: 10, 2: 50, 3: 150, 4: 400, 5: 1000
@@ -149,3 +169,72 @@ class BalanceConfig:
     gc_interval_ticks: int = 100
     gc_min_age_ticks: int = 50
     map_border_tiles: int = 5
+    agent_xp_harvest: int = 5
+    agent_xp_delivery: int = 15
+    agent_xp_construction: int = 20
+    agent_xp_combat: int = 50
+    agent_xp_time_served: int = 0
+    agent_xp_death_loss: int = 25
+
+    # --- Agent training (migrated from world.constants) --------------- #
+    #: Base training cost per resource for agent #N (cost = base × N).
+    base_training_cost: dict[str, int] = field(default_factory=lambda: {
+        "Wood": 15, "Stone": 10, "Iron": 5,
+    })
+    #: Base training time in ticks (5 minutes at 1 tick/s).
+    base_training_ticks: int = 300
+    #: Training time reduction per Academy level (fraction, 0.15 = 15%).
+    academy_training_reduction_per_level: float = 0.15
+
+    # --- Resource harvesting & production (migrated) ------------------ #
+    #: Ticks between harvest yields (player active-presence).
+    harvest_cooldown_ticks: int = 4
+    #: Units yielded per harvest action on raw terrain.
+    harvest_yield_per_action: int = 1
+    #: Multiplier when harvesting at an Extractor (vs raw terrain).
+    extractor_harvest_multiplier: int = 3
+    #: Per-level Extractor production bonus: base × (1 + BONUS × (level-1)).
+    extractor_level_bonus: float = 0.25
+    #: Base Extractor storage capacity at level 1.
+    extractor_base_capacity: int = 100
+    #: Additional Extractor storage per level above 1.
+    extractor_capacity_per_level: int = 50
+    #: Base Vault storage capacity at level 1.
+    vault_base_capacity: int = 100
+    #: Additional Vault storage per level above 1.
+    vault_capacity_per_level: int = 20
+
+    # --- Building scaling (migrated) ---------------------------------- #
+    #: Upgrade cost multiplier base: cost = base_cost × COST_BASE^(level-1).
+    upgrade_cost_base: int = 2
+    #: Upgrade time multiplier base: time = build_time × TIME_BASE^(level-1).
+    upgrade_time_base: int = 3
+    #: Per-level Turret damage bonus: base × (1 + BONUS × (level-1)).
+    turret_level_bonus: float = 0.20
+    #: Demolish refund rate by building level (fraction of invested cost).
+    demolish_refund_rates: dict[int, float] = field(default_factory=lambda: {
+        1: 0.40, 2: 0.50, 3: 0.60, 4: 0.70, 5: 0.80,
+    })
+    #: Default demolish refund rate for levels not in the table.
+    demolish_refund_default: float = 0.40
+
+    @classmethod
+    def current(cls) -> "BalanceConfig":
+        """Return the live balance config, or defaults when none is registered.
+
+        The single accessor for hot-tunable balance from code paths that lack
+        a ``DataRegistry`` reference (e.g. Evennia scripts and the class-level
+        ``ResourceSystem`` helpers). Returns the registered singleton's balance
+        when a server is running, and a default ``BalanceConfig()`` otherwise
+        (e.g. the fast unit-test suite, which registers no singleton). The
+        ``DataRegistry`` import is lazy to avoid a definitions→registry cycle.
+        """
+        try:
+            from world.data_registry import DataRegistry
+
+            registry = DataRegistry.get_instance()
+            if registry is not None:
+                return registry.balance
+        except Exception:
+            pass
+        return cls()

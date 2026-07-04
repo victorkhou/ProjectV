@@ -17,12 +17,12 @@ from __future__ import annotations
 import logging
 from typing import Any, TYPE_CHECKING
 
+from world.constants import COMBAT_TIMER_DURATION
+
 if TYPE_CHECKING:
     from world.event_bus import EventBus
 
 logger = logging.getLogger("mygame.combat_timer")
-
-COMBAT_TIMER_DURATION = 60  # ticks
 
 
 def _get_current_tick() -> int:

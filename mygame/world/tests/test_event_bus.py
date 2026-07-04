@@ -31,7 +31,7 @@ class TestEventConstants:
     """Verify all event name constants are defined."""
 
     def test_all_events_has_correct_count(self):
-        assert len(ALL_EVENTS) == 18
+        assert len(ALL_EVENTS) == 19
 
     def test_all_event_names_are_unique(self):
         assert len(set(ALL_EVENTS)) == len(ALL_EVENTS)
@@ -49,6 +49,7 @@ class TestEventConstants:
             "construction_completed",
             "rank_promoted",
             "rank_demoted",
+            "level_changed",
             "combat_action",
             "combat_timer_started",
             "powerup_activated",

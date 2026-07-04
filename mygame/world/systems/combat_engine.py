@@ -286,29 +286,46 @@ class CombatEngine:
     # ------------------------------------------------------------------ #
 
     def _handle_player_defeat(self, victim: Any, attacker: Any) -> None:
-        """Handle a player being defeated (HP <= 0).
+        """Handle a player or agent being defeated (HP <= 0).
 
-        - Award XP to attacker
-        - Deduct XP from victim
-        - Respawn victim
-        - Publish player_eliminated event
+        Agents are ``CombatEntity`` NPCs that also carry ``db.combat_xp``, so
+        they reach this handler through the same ``_is_player`` gate as players.
+        Their XP, however, is routed through the freeze-aware ``AgentSystem``
+        rather than the player XP balance:
+
+        - When the attacker is an agent, award ``"combat"`` XP through
+          ``AgentSystem.award_agent_xp`` (freeze-aware, Req 5.4); when the
+          attacker is a (non-agent) player, award the player ``xp_kill`` balance.
+        - When the victim is an agent, apply death loss through
+          ``AgentSystem.apply_agent_death_loss`` (Req 6.1) instead of the player
+          ``xp_death_loss`` deduction, so death loss is never double-applied.
+        - Respawn victim (reset HP).
+        - Publish player_eliminated event.
 
         Args:
-            victim: The defeated player.
-            attacker: The player/entity that defeated them.
+            victim: The defeated player or agent.
+            attacker: The player/agent/entity that defeated them.
         """
         xp_kill = self.registry.balance.xp_kill
         xp_death_loss = self.registry.balance.xp_death_loss
 
-        # Award XP to attacker (if it's a player)
-        if self._is_player(attacker):
+        # Award XP to attacker.
+        if self._is_agent(attacker):
+            # Agent combat kill XP via the freeze-aware AgentSystem (Req 5.4).
+            self._award_agent_combat_xp(attacker)
+        elif self._is_player(attacker):
             attacker_xp = self._get_combat_xp(attacker)
             self._set_combat_xp(attacker, attacker_xp + xp_kill)
 
-        # Deduct XP from victim (min 0)
-        victim_xp = self._get_combat_xp(victim)
-        new_xp = max(0, victim_xp - xp_death_loss)
-        self._set_combat_xp(victim, new_xp)
+        # Deduct XP from victim.
+        if self._is_agent(victim):
+            # Agents use the agent death-loss balance, not the player one
+            # (Req 6.1). Routed through AgentSystem to avoid double-deducting.
+            self._apply_agent_death_loss(victim)
+        else:
+            victim_xp = self._get_combat_xp(victim)
+            new_xp = max(0, victim_xp - xp_death_loss)
+            self._set_combat_xp(victim, new_xp)
 
         # Respawn victim (reset HP)
         hp_max = self._get_hp_max(victim)
@@ -522,6 +539,62 @@ class CombatEngine:
         """Check if an entity is a building."""
         from world.utils import is_building
         return is_building(entity)
+
+    @staticmethod
+    def _is_agent(entity: Any) -> bool:
+        """Check if an entity is a player-owned NPC agent.
+
+        An agent is an NPC with ``db.npc_type == "agent"`` (mirrors the
+        convention used by AgentSystem and the agent scripts).
+        """
+        if entity is None or not hasattr(entity, "db"):
+            return False
+        return getattr(entity.db, "npc_type", None) == "agent"
+
+    @staticmethod
+    def _get_agent_system() -> Any | None:
+        """Lazily resolve the AgentSystem from the global game_systems dict.
+
+        Mirrors the lookup pattern used by ``agent_scripts._award_agent_xp`` so
+        the CombatEngine stays decoupled from system construction/ordering. The
+        lookup is guarded so combat never breaks if the agent system is
+        unavailable (e.g. in tests or before initialization).
+        """
+        try:
+            from server.conf.game_init import game_systems
+
+            return game_systems.get("agent_system")
+        except Exception:  # noqa: BLE001 - never let a missing system break combat
+            return None
+
+    def _award_agent_combat_xp(self, agent: Any) -> None:
+        """Award combat-kill XP to an agent via the freeze-aware AgentSystem.
+
+        No-op (guarded) when the agent system is unavailable, so combat
+        resolution never breaks (Req 5.4).
+        """
+        agent_system = self._get_agent_system()
+        if agent_system is None:
+            return
+        try:
+            agent_system.award_agent_xp(agent, "combat")
+        except Exception:  # noqa: BLE001 - never let XP award break combat
+            pass
+
+    def _apply_agent_death_loss(self, agent: Any) -> None:
+        """Apply agent death-loss XP via the AgentSystem (Req 6.1).
+
+        Routes an agent victim's death penalty through the agent death-loss
+        balance instead of the player ``xp_death_loss`` path, avoiding a double
+        deduction. Guarded so combat never breaks if the system is unavailable.
+        """
+        agent_system = self._get_agent_system()
+        if agent_system is None:
+            return
+        try:
+            agent_system.apply_agent_death_loss(agent)
+        except Exception:  # noqa: BLE001 - never let death loss break combat
+            pass
 
     @staticmethod
     def _get_building_type(building: Any) -> str | None:

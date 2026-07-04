@@ -30,7 +30,7 @@ VALID_BUILDINGS = [
     {
         "name": "Headquarters",
         "abbreviation": "HQ",
-        "cost": {"wood": 100, "stone": 100},
+        "cost": {"Wood": 100, "Stone": 100},
         "max_health": 500,
         "requires_hq": False,
         "required_terrain": None,
@@ -47,12 +47,12 @@ VALID_BUILDINGS = [
     {
         "name": "Mill",
         "abbreviation": "MM",
-        "cost": {"straw": 50},
+        "cost": {"Wood": 50},
         "max_health": 200,
         "requires_hq": True,
         "required_terrain": "Plains",
         "category": "resource",
-        "produces": "Straw",
+        "produces": "Wood",
         "unlocks": [],
         "map_symbol": "MM",
         "build_time_seconds": 120,
@@ -64,7 +64,7 @@ VALID_BUILDINGS = [
     {
         "name": "Armory",
         "abbreviation": "AA",
-        "cost": {"iron": 80},
+        "cost": {"Iron": 80},
         "max_health": 300,
         "requires_hq": True,
         "required_terrain": None,
@@ -122,7 +122,7 @@ VALID_TECHNOLOGIES = [
         "name": "Reinforced Walls",
         "key": "reinforced_walls",
         "required_rank": "Sergeant",
-        "resource_cost": {"stone": 200},
+        "resource_cost": {"Stone": 200},
         "research_ticks": 60,
         "effect_type": "stat_bonus",
         "effect_value": {"stat": "max_hp", "bonus": 50},
@@ -143,13 +143,17 @@ VALID_POWERUPS = [
 
 VALID_TERRAIN = {
     "terrain": [
-        {"terrain_type": "Plains", "map_symbol": "PP", "resource_type": "Straw", "passable": True},
+        {"terrain_type": "Plains", "map_symbol": "PP", "resource_type": "Stone", "passable": True},
         {"terrain_type": "Forest", "map_symbol": "FF", "resource_type": "Wood", "passable": True},
     ],
     "planets": [
         {"name": "Earth", "planet_type": "Earth_Planet", "terrain_types": ["Plains", "Forest"]},
     ],
 }
+
+VALID_ABILITY_GATES = [
+    {"key": "delivery", "required_level": 21},
+]
 
 VALID_BALANCE = {
     "production_scaling": {1: 10, 2: 50, 3: 150, 4: 400, 5: 1000},
@@ -197,6 +201,7 @@ def _create_data_dir(balance_overrides: dict | None = None) -> str:
     _write_yaml(os.path.join(defs, "technologies.yaml"), VALID_TECHNOLOGIES)
     _write_yaml(os.path.join(defs, "powerups.yaml"), VALID_POWERUPS)
     _write_yaml(os.path.join(defs, "terrain.yaml"), VALID_TERRAIN)
+    _write_yaml(os.path.join(defs, "ability_gates.yaml"), VALID_ABILITY_GATES)
 
     balance = dict(VALID_BALANCE)
     if balance_overrides:
@@ -216,6 +221,7 @@ def _snapshot_registry(reg: DataRegistry) -> dict:
         "tech_keys": sorted(reg.technologies.keys()),
         "powerup_keys": sorted(reg.powerups.keys()),
         "terrain_keys": sorted(reg.terrain.keys()),
+        "ability_gate_keys": sorted(reg.ability_gates.keys()),
         "planet_keys": sorted(reg.planets.keys()),
         "turret_damage": reg.balance.turret_damage,
         "turret_radius": reg.balance.turret_radius,

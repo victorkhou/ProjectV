@@ -26,8 +26,6 @@ from world.event_bus import (
 from world.utils import get_building_attr as _get_building_attr_shared
 from world.utils import set_building_attr as _set_building_attr_shared
 from world.constants import (
-    UPGRADE_COST_BASE,
-    UPGRADE_TIME_BASE,
     CONSTRUCTION_PROGRESS_INTERVAL,
 )
 
@@ -160,24 +158,25 @@ class BuildingSystem:
     #  Upgrade
     # ------------------------------------------------------------------ #
 
-    @staticmethod
-    def get_upgrade_cost(building_def: BuildingDef, target_level: int) -> dict[str, int]:
-        """Calculate upgrade cost: base_cost × 2^(target_level - 1).
+    def get_upgrade_cost(self, building_def: BuildingDef, target_level: int) -> dict[str, int]:
+        """Calculate upgrade cost: base_cost × COST_BASE^(target_level - 1).
 
         Exponential scaling makes higher levels increasingly expensive,
-        creating the resource sink that drives agent utilization.
+        creating the resource sink that drives agent utilization. The base is
+        the hot-tunable ``balance.upgrade_cost_base``.
         """
-        multiplier = UPGRADE_COST_BASE ** (target_level - 1)
+        multiplier = self.registry.balance.upgrade_cost_base ** (target_level - 1)
         return {res: amt * multiplier for res, amt in building_def.cost.items()}
 
-    @staticmethod
-    def get_upgrade_time(building_def: BuildingDef, target_level: int) -> int:
+    def get_upgrade_time(self, building_def: BuildingDef, target_level: int) -> int:
         """Calculate upgrade time: build_time × TIME_BASE^(target_level - 1).
 
         Exponential scaling makes higher levels take significantly longer,
-        making Engineer agents essential for mid/late-game upgrades.
+        making Engineer agents essential for mid/late-game upgrades. The base
+        is the hot-tunable ``balance.upgrade_time_base``.
         """
-        return int(building_def.build_time_seconds * (UPGRADE_TIME_BASE ** (target_level - 1)))
+        base = self.registry.balance.upgrade_time_base
+        return int(building_def.build_time_seconds * (base ** (target_level - 1)))
 
     def start_upgrade(
         self, player: Any, building: Any

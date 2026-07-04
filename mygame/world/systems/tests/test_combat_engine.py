@@ -204,6 +204,71 @@ class FakeBuilding:
     def delete(self):
         self._deleted = True
 
+class FakeAgent:
+    """Lightweight stand-in for an NPC agent (CombatEntity NPC).
+
+    Agents carry ``db.combat_xp`` (so ``_is_player`` recognizes them) plus
+    ``db.npc_type == "agent"`` (so ``_is_agent`` recognizes them).
+    """
+    def __init__(self, name="Agent", hp=100, hp_max=100, combat_xp=0,
+                 location=None, weapon=None):
+        self.key = name
+        self.db = FakeDB(hp=hp, hp_max=hp_max, combat_xp=combat_xp)
+        self.db.npc_type = "agent"
+        self.location = location or FakeTile()
+        self.equipment = FakeEquipmentHandler()
+        self._messages = []
+        if weapon:
+            self.equipment.equip(weapon)
+
+    def msg(self, text):
+        self._messages.append(text)
+
+
+class FakeAgentSystem:
+    """Records award_agent_xp / apply_agent_death_loss calls for assertions."""
+    def __init__(self):
+        self.awarded = []          # list of (agent, source)
+        self.death_losses = []     # list of agent
+
+    def award_agent_xp(self, agent, source):
+        self.awarded.append((agent, source))
+
+    def apply_agent_death_loss(self, agent):
+        self.death_losses.append(agent)
+
+
+def _install_fake_agent_system(agent_system):
+    """Install a fake agent system into a stub server.conf.game_init module.
+
+    Returns a cleanup callable that restores the previous module state.
+    """
+    prev_modules = {
+        name: sys.modules.get(name)
+        for name in ("server", "server.conf", "server.conf.game_init")
+    }
+
+    server_mod = sys.modules.get("server") or types.ModuleType("server")
+    conf_mod = sys.modules.get("server.conf") or types.ModuleType("server.conf")
+    init_mod = types.ModuleType("server.conf.game_init")
+    init_mod.game_systems = {"agent_system": agent_system}
+
+    server_mod.conf = conf_mod
+    conf_mod.game_init = init_mod
+    sys.modules["server"] = server_mod
+    sys.modules["server.conf"] = conf_mod
+    sys.modules["server.conf.game_init"] = init_mod
+
+    def _cleanup():
+        for name, mod in prev_modules.items():
+            if mod is None:
+                sys.modules.pop(name, None)
+            else:
+                sys.modules[name] = mod
+
+    return _cleanup
+
+
 def _make_registry() -> DataRegistry:
     """Create a DataRegistry with default balance config."""
     registry = DataRegistry()
@@ -643,6 +708,94 @@ class TestBuildingDamage(unittest.TestCase):
         engine.resolve_tick()
         self.assertTrue(len(other_player._messages) > 0)
         self.assertIn("Attacker", other_player._messages[0])
+
+# -------------------------------------------------------------- #
+#  Agent Combat XP / Death Loss Tests (Req 5.4, 6.1)
+# -------------------------------------------------------------- #
+
+class TestAgentDefeatXP(unittest.TestCase):
+    """Test agent combat XP award and agent death-loss routing."""
+
+    def setUp(self):
+        self.agent_system = FakeAgentSystem()
+        self._cleanup = _install_fake_agent_system(self.agent_system)
+
+    def tearDown(self):
+        self._cleanup()
+
+    def test_agent_attacker_awarded_combat_xp_on_kill(self):
+        """An agent attacker that kills a victim is awarded "combat" XP."""
+        weapon = FakeWeapon(damage=200, weapon_range=5)
+        engine, _ = _make_engine()
+        attacker = FakeAgent(name="AgentAttacker", weapon=weapon,
+                             location=FakeTile(xyz=(0, 0, "earth")))
+        target = FakePlayer(name="Target", hp=100, combat_xp=200,
+                            location=FakeTile(xyz=(1, 0, "earth")))
+        engine.queue_attack(attacker, target)
+        engine.resolve_tick()
+
+        self.assertEqual(self.agent_system.awarded, [(attacker, "combat")])
+        # Agent attacker XP is NOT mutated via the player xp_kill path.
+        self.assertEqual(attacker.db.combat_xp, 0)
+
+    def test_agent_victim_gets_death_loss_applied(self):
+        """A defeated agent victim has agent death loss applied via AgentSystem."""
+        weapon = FakeWeapon(damage=200, weapon_range=5)
+        engine, _ = _make_engine()
+        attacker = FakePlayer(name="Attacker", weapon=weapon, combat_xp=0,
+                              location=FakeTile(xyz=(0, 0, "earth")))
+        victim = FakeAgent(name="AgentVictim", hp=100, combat_xp=200,
+                           location=FakeTile(xyz=(1, 0, "earth")))
+        engine.queue_attack(attacker, victim)
+        engine.resolve_tick()
+
+        self.assertEqual(self.agent_system.death_losses, [victim])
+        # Agent victim XP is NOT deducted via the player xp_death_loss path;
+        # the agent death-loss balance (applied by AgentSystem) governs it.
+        self.assertEqual(victim.db.combat_xp, 200)
+
+    def test_agent_victim_not_double_deducted(self):
+        """Agent victim defeat does not also run the player xp_death_loss path."""
+        weapon = FakeWeapon(damage=200, weapon_range=5)
+        engine, _ = _make_engine()
+        attacker = FakePlayer(name="Attacker", weapon=weapon,
+                              location=FakeTile(xyz=(0, 0, "earth")))
+        victim = FakeAgent(name="AgentVictim", hp=100, combat_xp=200,
+                           location=FakeTile(xyz=(1, 0, "earth")))
+        engine.queue_attack(attacker, victim)
+        engine.resolve_tick()
+
+        # combat_xp untouched by the engine (only AgentSystem would change it).
+        self.assertEqual(victim.db.combat_xp, 200)
+        self.assertEqual(len(self.agent_system.death_losses), 1)
+
+    def test_player_attacker_still_uses_player_xp_path(self):
+        """A non-agent player attacker still earns xp_kill, not agent XP."""
+        weapon = FakeWeapon(damage=200, weapon_range=5)
+        engine, _ = _make_engine()
+        attacker = FakePlayer(name="Attacker", weapon=weapon, combat_xp=50,
+                              location=FakeTile(xyz=(0, 0, "earth")))
+        target = FakePlayer(name="Target", hp=100, combat_xp=200,
+                            location=FakeTile(xyz=(1, 0, "earth")))
+        engine.queue_attack(attacker, target)
+        engine.resolve_tick()
+
+        # xp_kill = 100 (player path), no agent XP awarded.
+        self.assertEqual(attacker.db.combat_xp, 150)
+        self.assertEqual(self.agent_system.awarded, [])
+
+    def test_agent_victim_respawned(self):
+        """An agent victim's HP is restored to max after defeat."""
+        weapon = FakeWeapon(damage=200, weapon_range=5)
+        engine, _ = _make_engine()
+        attacker = FakePlayer(name="Attacker", weapon=weapon,
+                              location=FakeTile(xyz=(0, 0, "earth")))
+        victim = FakeAgent(name="AgentVictim", hp=100, hp_max=100,
+                           location=FakeTile(xyz=(1, 0, "earth")))
+        engine.queue_attack(attacker, victim)
+        engine.resolve_tick()
+        self.assertEqual(victim.db.hp, 100)
+
 
 if __name__ == "__main__":
     unittest.main()

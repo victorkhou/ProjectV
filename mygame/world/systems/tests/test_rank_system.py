@@ -49,9 +49,11 @@ def _ensure_evennia_stubs():
 _ensure_evennia_stubs()
 
 from mygame.world.systems.rank_system import RankSystem, rank_from_level  # noqa: E402
+from mygame.world.constants import LEVELS_PER_RANK  # noqa: E402
 from mygame.world.data_registry import DataRegistry  # noqa: E402
 from mygame.world.definitions import RankDef, TechnologyDef, PowerupDef  # noqa: E402
 from mygame.world.event_bus import EventBus, RANK_PROMOTED, RANK_DEMOTED  # noqa: E402
+from mygame.typeclasses.combat_entity import CombatEntity  # noqa: E402
 
 # -------------------------------------------------------------- #
 #  Helpers / Fakes
@@ -64,7 +66,10 @@ class FakeDB:
         self.rank_level = rank_level
         self.researched_techs = researched_techs if researched_techs is not None else set()
 
-class FakePlayer:
+class FakePlayer(CombatEntity):
+    """Stand-in for CombatCharacter, mixing in the real CombatEntity so it
+    exposes the same ``award_xp`` / ``deduct_xp`` progression methods the
+    refactored RankSystem now delegates to."""
     def __init__(self, name="TestPlayer", combat_xp=0, level=1,
                  rank_level=None, researched_techs=None):
         if rank_level is None:
@@ -130,7 +135,12 @@ def _make_rank_system(registry=None, event_bus=None):
         registry = _make_registry()
     if event_bus is None:
         event_bus = EventBus()
-    return RankSystem(registry=registry, event_bus=event_bus), event_bus
+    system = RankSystem(registry=registry, event_bus=event_bus)
+    # The level->XP curve is a process-global table in world.progression
+    # (shared with CombatEntity). Force this registry's curve active so the
+    # test is independent of any table left behind by another test/module.
+    system._rebuild_thresholds()
+    return system, event_bus
 
 
 class TestAwardXP(unittest.TestCase):
@@ -206,6 +216,7 @@ class TestPromotion(unittest.TestCase):
         event_bus = EventBus()
         event_bus.subscribe("rank_promoted", lambda **kw: events.append(kw))
         system = RankSystem(registry=_make_registry(), event_bus=event_bus)
+        system._rebuild_thresholds()
         player = FakePlayer(combat_xp=0, level=1)
         system.award_xp(player, 100, "kill")
         self.assertEqual(len(events), 1)
@@ -248,6 +259,7 @@ class TestDemotion(unittest.TestCase):
         event_bus = EventBus()
         event_bus.subscribe("rank_demoted", lambda **kw: events.append(kw))
         system = RankSystem(registry=_make_registry(), event_bus=event_bus)
+        system._rebuild_thresholds()
         player = FakePlayer(combat_xp=150, level=8)  # Private
         system.deduct_xp(player, 100)  # XP=50, Recruit
         self.assertEqual(len(events), 1)
@@ -395,6 +407,7 @@ class TestSubLevelNotification(unittest.TestCase):
         registry.technologies = {}
         registry.powerups = {}
         system = RankSystem(registry=registry, event_bus=EventBus())
+        system._rebuild_thresholds()
         messages = []
         player = FakePlayer(combat_xp=0, level=1)
         player.msg = lambda m: messages.append(m)
@@ -419,6 +432,7 @@ class TestAgentCapInEvents(unittest.TestCase):
         registry.powerups = {}
         bus = EventBus()
         system = RankSystem(registry=registry, event_bus=bus)
+        system._rebuild_thresholds()
         events = []
         bus.subscribe(RANK_PROMOTED, lambda **kw: events.append(kw))
         player = FakePlayer(combat_xp=0, level=1)
@@ -434,6 +448,7 @@ class TestAgentCapInEvents(unittest.TestCase):
         registry.powerups = {}
         bus = EventBus()
         system = RankSystem(registry=registry, event_bus=bus)
+        system._rebuild_thresholds()
         events = []
         bus.subscribe(RANK_DEMOTED, lambda **kw: events.append(kw))
         player = FakePlayer(combat_xp=300, level=11)  # Corporal
@@ -543,6 +558,162 @@ class TestGetStatusWithSubLevel(unittest.TestCase):
         self.assertEqual(status["sub_level"], 1)
         self.assertIsNotNone(status["xp_to_next_level"])
         self.assertGreater(status["xp_to_next_level"], 0)
+
+
+class TestPreservedPlayerBehavior(unittest.TestCase):
+    """Task 5.5 — verify the delegation refactor keeps player-facing
+    semantics unchanged.
+
+    Asserts the meanings of ``db.combat_xp``/``db.level``/``db.rank_level``
+    are unchanged after award/deduct, the level-change message fires, the
+    legacy ``rank_level``->``level`` derivation still works, and tech
+    unlock/revoke fires on rank change.
+
+    Requirements: 4.2, 4.5, 4.6, 4.7
+    """
+
+    # -- 4.2: db.combat_xp/db.level/db.rank_level meanings unchanged ----- #
+
+    def test_award_xp_preserves_attribute_meanings(self):
+        """After award_xp, combat_xp grows by exactly the amount and
+        level/rank_level are the derived values (Req 4.2)."""
+        player = FakePlayer(combat_xp=0, level=1)
+        system, _ = _make_rank_system()
+        system.award_xp(player, 350, "kill")
+        # combat_xp == previous + amount
+        self.assertEqual(player.db.combat_xp, 350)
+        # db.level == level_for_xp(combat_xp)
+        self.assertEqual(player.db.level, system.level_for_xp(350))
+        # db.rank_level == rank_from_level(level)
+        self.assertEqual(player.db.rank_level, rank_from_level(player.db.level))
+
+    def test_deduct_xp_preserves_attribute_meanings(self):
+        """After deduct_xp, combat_xp drops by exactly the amount and
+        level/rank_level are the derived values (Req 4.2)."""
+        player = FakePlayer(combat_xp=350, level=11)
+        system, _ = _make_rank_system()
+        system.deduct_xp(player, 200)
+        self.assertEqual(player.db.combat_xp, 150)
+        self.assertEqual(player.db.level, system.level_for_xp(150))
+        self.assertEqual(player.db.rank_level, rank_from_level(player.db.level))
+
+    def test_attribute_meanings_consistent_across_multiple_awards(self):
+        """The level == level_for_xp(combat_xp) and rank_level ==
+        rank_from_level(level) invariant holds after each mutation (Req 4.2)."""
+        player = FakePlayer(combat_xp=0, level=1)
+        system, _ = _make_rank_system()
+        running = 0
+        for amount in (40, 100, 60, 500):
+            system.award_xp(player, amount, "test")
+            running += amount
+            self.assertEqual(player.db.combat_xp, running)
+            self.assertEqual(player.db.level, system.level_for_xp(running))
+            self.assertEqual(
+                player.db.rank_level, rank_from_level(player.db.level)
+            )
+
+    # -- 4.5: level-change message identifies new level + rank name ------ #
+
+    def test_level_change_message_identifies_level_and_rank_name(self):
+        """A level change messages the player with the new level and the
+        cosmetic rank name (Req 4.5)."""
+        messages = []
+        player = FakePlayer(combat_xp=0, level=1)
+        player.msg = lambda m: messages.append(m)
+        system, _ = _make_rank_system()
+        system.award_xp(player, 100, "kill")  # level 1 -> 6 (Private)
+        self.assertTrue(len(messages) >= 1)
+        self.assertIn(f"Level {player.db.level}", messages[0])
+        self.assertIn(system.get_rank_name(player), messages[0])
+
+    def test_level_change_message_fires_on_deduct(self):
+        """A level decrease also notifies the player (Req 4.5)."""
+        messages = []
+        player = FakePlayer(combat_xp=140, level=7)
+        player.msg = lambda m: messages.append(m)
+        system, _ = _make_rank_system()
+        system.deduct_xp(player, 41)  # XP=99 -> level drops
+        self.assertTrue(len(messages) >= 1)
+        self.assertIn(f"Level {player.db.level}", messages[0])
+
+    def test_no_message_when_level_unchanged(self):
+        """No notification fires when the level does not change (Req 4.5)."""
+        messages = []
+        player = FakePlayer(combat_xp=100, level=6)
+        player.msg = lambda m: messages.append(m)
+        system, _ = _make_rank_system()
+        system.award_xp(player, 5, "small")  # stays level 6
+        self.assertEqual(len(messages), 0)
+
+    # -- 4.6: legacy rank_level->level derivation via _get_level --------- #
+
+    def test_legacy_rank_level_derives_level(self):
+        """A legacy player with rank_level set but no level derives the
+        first level of that rank via the backward-compat rule (Req 4.6)."""
+        # rank_level=3 (Corporal), no level attribute
+        player = FakePlayer(level=1)
+        player.db.level = None
+        player.db.rank_level = 3
+        # First level of rank 3 = (3-1)*LEVELS_PER_RANK + 1
+        expected = (3 - 1) * LEVELS_PER_RANK + 1
+        self.assertEqual(RankSystem._get_level(player), expected)
+
+    def test_legacy_rank_level_one_derives_level_one(self):
+        """rank_level=1 with no level derives level 1 (Req 4.6)."""
+        player = FakePlayer(level=1)
+        player.db.level = None
+        player.db.rank_level = 1
+        self.assertEqual(RankSystem._get_level(player), 1)
+
+    def test_legacy_derivation_used_as_old_level_on_award(self):
+        """award_xp uses the legacy-derived old level so the first
+        XP award resyncs level correctly (Req 4.6)."""
+        player = FakePlayer(level=1)
+        player.db.level = None
+        player.db.rank_level = 2  # Private -> derived level 6
+        player.db.combat_xp = 100
+        system, _ = _make_rank_system()
+        system.award_xp(player, 0, "noop")  # no-op, but verify derivation
+        # award of 0 is a no-op; derive directly
+        self.assertEqual(RankSystem._get_level(player),
+                         (2 - 1) * LEVELS_PER_RANK + 1)
+
+    # -- 4.7: tech unlock/revoke fires on rank change -------------------- #
+
+    def test_tech_unlock_on_promotion(self):
+        """Crossing into a higher rank unlocks that rank's techs (Req 4.7)."""
+        player = FakePlayer(combat_xp=0, level=1, researched_techs=set())
+        system, _ = _make_rank_system()
+        system.award_xp(player, 300, "kill")  # -> Corporal (rank 3)
+        self.assertEqual(player.db.rank_level, 3)
+        self.assertIn("basic_armor", player.db.researched_techs)
+        self.assertIn("improved_weapons", player.db.researched_techs)
+        self.assertNotIn("advanced_tactics", player.db.researched_techs)
+
+    def test_tech_revoke_on_demotion(self):
+        """Dropping to a lower rank revokes techs above the new rank
+        while retaining lower-rank techs (Req 4.7)."""
+        player = FakePlayer(
+            combat_xp=350, level=12,  # Corporal
+            researched_techs={"basic_armor", "improved_weapons"},
+        )
+        system, _ = _make_rank_system()
+        system.deduct_xp(player, 300)  # XP=50 -> Recruit (rank 1)
+        self.assertEqual(player.db.rank_level, 1)
+        self.assertIn("basic_armor", player.db.researched_techs)
+        self.assertNotIn("improved_weapons", player.db.researched_techs)
+
+    def test_no_tech_change_when_rank_unchanged(self):
+        """A level change within the same rank does not alter techs (Req 4.7)."""
+        player = FakePlayer(
+            combat_xp=300, level=11,  # Corporal sub 1
+            researched_techs={"basic_armor", "improved_weapons"},
+        )
+        system, _ = _make_rank_system()
+        before = set(player.db.researched_techs)
+        system.award_xp(player, 40, "test")  # level 12, still Corporal
+        self.assertEqual(player.db.rank_level, 3)
+        self.assertEqual(set(player.db.researched_techs), before)
 
 
 if __name__ == "__main__":

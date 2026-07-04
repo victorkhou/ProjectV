@@ -15,19 +15,20 @@ from __future__ import annotations
 from typing import Any
 
 from world.data_registry import DataRegistry
+from world.definitions import BalanceConfig
 from world.event_bus import RESOURCE_GATHERED, EventBus
 from world.utils import get_building_attr as _get_building_attr_shared
-from world.constants import (
-    HARVEST_COOLDOWN_TICKS,
-    HARVEST_YIELD_PER_ACTION,
-    EXTRACTOR_HARVEST_MULTIPLIER,
-    EXTRACTOR_LEVEL_BONUS,
-    EXTRACTOR_BASE_CAPACITY,
-    EXTRACTOR_CAPACITY_PER_LEVEL,
-    VAULT_BASE_CAPACITY,
-    VAULT_CAPACITY_PER_LEVEL,
-    TURRET_LEVEL_BONUS,
-)
+
+
+def _current_balance() -> BalanceConfig:
+    """Live balance config for the class-level capacity/damage helpers.
+
+    Thin alias for :meth:`BalanceConfig.current` so the ``@staticmethod``
+    helpers (which have no ``self.registry``) read the same hot-tunable values
+    as the instance methods, and still get ``BalanceConfig`` defaults in the
+    fast unit-test suite (which registers no ``DataRegistry`` singleton).
+    """
+    return BalanceConfig.current()
 
 
 class ResourceSystem:
@@ -162,19 +163,20 @@ class ResourceSystem:
         # Tell the player what rate they'll get
         hx = getattr(player.db, "coord_x", None)
         hy = getattr(player.db, "coord_y", None)
+        bal = self.registry.balance
         extractor = self._get_tile_extractor(tile, px=hx, py=hy)
         if extractor is not None:
             level = self._get_building_level(extractor)
-            amount = int(HARVEST_YIELD_PER_ACTION * EXTRACTOR_HARVEST_MULTIPLIER
-                         * (1 + EXTRACTOR_LEVEL_BONUS * (level - 1)))
+            amount = int(bal.harvest_yield_per_action * bal.extractor_harvest_multiplier
+                         * (1 + bal.extractor_level_bonus * (level - 1)))
             return True, (
                 f"You begin harvesting {resource_type} at the Extractor. "
-                f"({amount} per {HARVEST_COOLDOWN_TICKS}s)"
+                f"({amount} per {bal.harvest_cooldown_ticks}s)"
             )
 
         return True, (
             f"You begin harvesting {resource_type}. "
-            f"({HARVEST_YIELD_PER_ACTION} per {HARVEST_COOLDOWN_TICKS}s)"
+            f"({bal.harvest_yield_per_action} per {bal.harvest_cooldown_ticks}s)"
         )
 
     def process_harvest_tick(self, player: Any) -> bool:
@@ -183,8 +185,8 @@ class ResourceSystem:
         Called once per tick for each online player.  If the player is
         in the ``"harvesting"`` state and still on the target tile,
         increments ``activity_progress``.  Every
-        :attr:`HARVEST_COOLDOWN_TICKS` ticks, yields
-        :attr:`HARVEST_YIELD_PER_ACTION` units of the tile's resource
+        ``balance.harvest_cooldown_ticks`` ticks, yields
+        ``balance.harvest_yield_per_action`` units of the tile's resource
         to the player and publishes a ``resource_gathered`` event.
 
         If the node becomes depleted, the player returns to ``"idle"``.
@@ -240,16 +242,17 @@ class ResourceSystem:
         player.db.activity_progress = progress
 
         # Yield resources on cooldown boundary
-        if progress % HARVEST_COOLDOWN_TICKS == 0:
-            amount = HARVEST_YIELD_PER_ACTION
+        bal = self.registry.balance
+        if progress % bal.harvest_cooldown_ticks == 0:
+            amount = bal.harvest_yield_per_action
 
             # Extractor bonus: if the tile has an Extractor building,
-            # multiply yield by EXTRACTOR_HARVEST_MULTIPLIER scaled by level.
+            # multiply yield by extractor_harvest_multiplier scaled by level.
             extractor = self._get_tile_extractor(tile, px=px, py=py)
             if extractor is not None:
                 level = self._get_building_level(extractor)
-                amount = int(amount * EXTRACTOR_HARVEST_MULTIPLIER
-                             * (1 + EXTRACTOR_LEVEL_BONUS * (level - 1)))
+                amount = int(amount * bal.extractor_harvest_multiplier
+                             * (1 + bal.extractor_level_bonus * (level - 1)))
 
             # Determine drop location and coordinates
             if hasattr(tile, "is_node_depleted") and px is not None and py is not None:
@@ -288,28 +291,30 @@ class ResourceSystem:
     @staticmethod
     def get_extractor_capacity(level: int) -> int:
         """Return the storage capacity for an Extractor at *level*."""
-        return EXTRACTOR_BASE_CAPACITY + EXTRACTOR_CAPACITY_PER_LEVEL * (level - 1)
+        bal = _current_balance()
+        return bal.extractor_base_capacity + bal.extractor_capacity_per_level * (level - 1)
 
     @staticmethod
     def get_vault_capacity(level: int) -> int:
         """Return the storage capacity for a Vault at *level*."""
-        return VAULT_BASE_CAPACITY + VAULT_CAPACITY_PER_LEVEL * (level - 1)
+        bal = _current_balance()
+        return bal.vault_base_capacity + bal.vault_capacity_per_level * (level - 1)
 
     @staticmethod
     def get_turret_damage(base_damage: int, level: int) -> float:
         """Return the turret damage at *level*.
 
-        Formula: ``base × (1 + 0.20 × (level - 1))``
+        Formula: ``base × (1 + turret_level_bonus × (level - 1))``
         """
-        return base_damage * (1 + TURRET_LEVEL_BONUS * (level - 1))
+        return base_damage * (1 + _current_balance().turret_level_bonus * (level - 1))
 
     @staticmethod
     def get_harvester_production(base_rate: int, level: int) -> float:
         """Return the Harvester production rate at *level*.
 
-        Formula: ``base_rate × (1 + 0.25 × (level - 1))``
+        Formula: ``base_rate × (1 + extractor_level_bonus × (level - 1))``
         """
-        return base_rate * (1 + EXTRACTOR_LEVEL_BONUS * (level - 1))
+        return base_rate * (1 + _current_balance().extractor_level_bonus * (level - 1))
 
     @staticmethod
     def get_extractor_inventory(building: Any) -> dict[str, int]:
@@ -423,7 +428,9 @@ class ResourceSystem:
 
             # Calculate production amount scaled by level
             level = self._get_building_level(building)
-            production = base_rate * (1 + EXTRACTOR_LEVEL_BONUS * (level - 1))
+            production = base_rate * (
+                1 + self.registry.balance.extractor_level_bonus * (level - 1)
+            )
             # Round to nearest integer (at least 1 if base_rate > 0)
             production_int = max(1, int(production)) if base_rate > 0 else 0
 

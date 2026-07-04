@@ -135,9 +135,10 @@ class ChatSystem:
             if level is not None:
                 rank_num = rank_from_level(int(level))
                 registry = DataRegistry.get_instance()
-                for r in registry.ranks:
-                    if r.level == rank_num:
-                        return r.name.replace("_", " ")
+                if registry is not None:
+                    for r in registry.ranks:
+                        if r.level == rank_num:
+                            return r.name.replace("_", " ")
                 return f"Rank {rank_num}"
         except Exception:
             pass

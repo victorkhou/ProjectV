@@ -17,17 +17,49 @@ startup, so most content tuning needs no code changes.
 
 ---
 
+## Requirements
+
+- **Python 3.12** (the framework pins `>=3.12, <3.13`).
+- A single, consistent **Evennia 6.0** install. This repo vendors the Evennia
+  framework at the repository root (`evennia/`), so install it from there in
+  editable mode rather than pulling a separate copy from PyPI — running with
+  both a vendored and a pip-installed Evennia on the path leads to a split
+  install where command sets can fail to load. A virtualenv is strongly
+  recommended.
+
+## First-time setup
+
+Run these once, from the **repository root**:
+
+```bash
+python3 -m venv .venv && source .venv/bin/activate   # recommended
+pip install -e .                                     # install vendored Evennia + deps
+```
+
+This makes the `evennia` command available and ensures `import evennia` resolves
+to the vendored copy. Verify with `evennia --version` (should report `6.0.0`).
+
 ## Running the game
 
-From the `mygame/` directory:
+All `evennia` commands run from the **`mygame/` directory**:
 
 ```bash
 cd mygame
+evennia --initmissing    # first time only — creates secret_settings.py + logs dir
 evennia migrate          # first time only — initialise the database
 evennia start            # start the server (asks to create a superuser first time)
 evennia reload           # hot-reload code without dropping connections
 evennia stop
 ```
+
+> **Important — import paths.** The live server runs with `mygame/` as its
+> Python root, so all imports *inside* `mygame/` must be written relative to it
+> (e.g. `from world.constants import MAX_LEVEL`, `from commands... import ...`).
+> Do **not** prefix game imports with `mygame.` in production modules — that
+> prefix only resolves when running the test suite from the repo root, and will
+> crash the server with `ModuleNotFoundError: No module named 'mygame'` (which
+> in turn breaks command-set loading, so no in-game commands work). The
+> `mygame.` prefix belongs only in test files.
 
 Connect with a MUD client on `localhost:4000`, or open the web client at
 `http://localhost:4001`. The web client includes a custom graphical map
@@ -36,7 +68,23 @@ telnet clients get an ASCII map of the same data.
 
 The main configuration is [`mygame/server/conf/settings.py`](mygame/server/conf/settings.py).
 Local-only overrides (e.g. the Django `SECRET_KEY`) belong in
-`mygame/server/conf/secret_settings.py`, which is git-ignored.
+`mygame/server/conf/secret_settings.py`, which is git-ignored and created
+automatically by `evennia --initmissing`.
+
+### Troubleshooting
+
+- **`secret_settings.py file not found or failed to import.`** — Harmless on its
+  own (it's just a notice), but to silence it and get a generated `SECRET_KEY`,
+  run `evennia --initmissing` from `mygame/`.
+- **In-game commands all report `Command '<x>' is not available`** — The
+  character/account command set failed to load or build. Check
+  `mygame/server/logs/server.log` for an import traceback at startup (a common
+  cause is a bad `mygame.`-prefixed import — see the import-paths note above),
+  fix it, then fully restart: `evennia stop && evennia start`. A plain `reload`
+  does not always rebuild a command set that failed at boot.
+- **`ModuleNotFoundError: No module named 'evennia'` when running from `mygame/`**
+  — Evennia isn't installed in the active environment. Activate your virtualenv
+  and run `pip install -e .` from the repository root.
 
 ---
 

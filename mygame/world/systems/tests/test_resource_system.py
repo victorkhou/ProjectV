@@ -521,7 +521,7 @@ class TestProcessHarvestTick(unittest.TestCase):
         return player, tile
 
     def test_yields_on_cooldown(self):
-        """Resources yielded every HARVEST_COOLDOWN_TICKS ticks, dropped on tile."""
+        """Resources yielded every balance.harvest_cooldown_ticks ticks, dropped on tile."""
         player, tile = self._setup_harvesting_player()
         system, _ = _make_system()
 

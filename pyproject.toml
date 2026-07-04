@@ -2,6 +2,16 @@
 requires = ["setuptools>=61.0"]
 build-backend = "setuptools.build_meta"
 
+# This is a flat-layout repo containing BOTH the distributable ``evennia``
+# package and a ``mygame`` game instance (which is not part of the published
+# package). Newer setuptools treats multiple top-level packages under
+# flat-layout auto-discovery as a hard error, so scope discovery explicitly to
+# the ``evennia`` package. Without this, ``pip install .`` fails with
+# "Multiple top-level packages discovered in a flat-layout: ['mygame', 'evennia']".
+[tool.setuptools.packages.find]
+include = ["evennia*"]
+namespaces = false
+
 [project]
 name = "evennia"
 version = "6.0.0"

@@ -51,6 +51,24 @@ def _set_attr(obj: Any, key: str, value: Any) -> None:
     set_obj_attr(obj, key, value)
 
 
+def _award_agent_xp(npc: Any, source: str) -> None:
+    """Award agent XP for an earning *source* via the AgentSystem.
+
+    Looks up the agent system lazily from the global ``game_systems`` dict so
+    the script stays decoupled from system construction/ordering. The lookup
+    and award are wrapped defensively so a missing system, an uninitialised
+    game state, or any award-side error never breaks the per-tick agent loop.
+    """
+    try:
+        from server.conf.game_init import game_systems
+        agent_system = game_systems.get("agent_system")
+        if agent_system is None:
+            return
+        agent_system.award_agent_xp(npc, source)
+    except Exception:  # noqa: BLE001 - never let XP award break the tick loop
+        logger.debug("Agent XP award failed for source %r", source, exc_info=True)
+
+
 # ------------------------------------------------------------------ #
 #  HarvesterScript  (Req 9.1, 9.2, 9.3, 9.4)
 # ------------------------------------------------------------------ #
@@ -110,25 +128,23 @@ class HarvesterScript(DefaultScript):
             return
 
         # Production cooldown — same rate as manual harvesting at an Extractor.
-        # Manual: HARVEST_YIELD_PER_ACTION * EXTRACTOR_HARVEST_MULTIPLIER
-        # every HARVEST_COOLDOWN_TICKS ticks, scaled by building level.
-        from world.constants import (
-            HARVEST_COOLDOWN_TICKS,
-            HARVEST_YIELD_PER_ACTION,
-            EXTRACTOR_HARVEST_MULTIPLIER,
-            EXTRACTOR_LEVEL_BONUS,
-        )
+        # Read the live balance config (falling back to defaults outside a
+        # running server) so autonomous harvesting and manual harvesting always
+        # use the SAME hot-tunable rate and can't desync on @reload.
+        from world.definitions import BalanceConfig
+
+        bal = BalanceConfig.current()
         cooldown = getattr(getattr(npc, "db", None), "_harvest_tick_counter", 0) or 0
         cooldown += 1
-        if cooldown < HARVEST_COOLDOWN_TICKS:
+        if cooldown < bal.harvest_cooldown_ticks:
             npc.db._harvest_tick_counter = cooldown
             npc.db.activity_status = f"Harvesting {resource_type}"
             return
         npc.db._harvest_tick_counter = 0
 
         level = _get_attr(building, "building_level", 1) or 1
-        production = HARVEST_YIELD_PER_ACTION * EXTRACTOR_HARVEST_MULTIPLIER
-        production = int(production * (1 + EXTRACTOR_LEVEL_BONUS * (level - 1)))
+        production = bal.harvest_yield_per_action * bal.extractor_harvest_multiplier
+        production = int(production * (1 + bal.extractor_level_bonus * (level - 1)))
         production = max(1, production)
 
         # Drop resources at building coordinates in PlanetRoom
@@ -149,6 +165,11 @@ class HarvesterScript(DefaultScript):
             "Harvester on %s produced %d %s (level %d)",
             building, production, resource_type, level,
         )
+
+        # Award harvest-production XP (Req 5.1). Routed through the freeze-aware
+        # AgentSystem.award_agent_xp via the module helper so the script stays
+        # decoupled and a missing system never breaks the harvest loop.
+        _award_agent_xp(npc, "harvest")
 
     # -- internal helpers ---------------------------------------------- #
 
@@ -205,18 +226,16 @@ class HarvesterScript(DefaultScript):
 
     @staticmethod
     def _get_base_rate() -> int:
-        """Return the base harvest rate from the DataRegistry balance config.
+        """Return the base harvest rate from the live balance config.
 
-        Falls back to a sensible default (5) if the registry is
-        unavailable.
+        Uses ``BalanceConfig.current()`` so the value tracks the single source
+        of truth (and falls back to ``BalanceConfig`` defaults when no registry
+        is registered, e.g. the fast unit-test suite) rather than a hardcoded
+        literal that can silently drift out of sync.
         """
-        try:
-            from world.data_registry import DataRegistry
+        from world.definitions import BalanceConfig
 
-            registry = DataRegistry.get_instance()
-            return registry.balance.gather_amount
-        except Exception:
-            return 5
+        return BalanceConfig.current().gather_amount
 
 
 # ------------------------------------------------------------------ #
@@ -259,6 +278,11 @@ class EngineerScript(DefaultScript):
                 _set_attr(building, "construction_progress", progress)
                 if progress >= construction_total:
                     self._complete_construction(building)
+                    # Award construction-completion XP (Req 5.3). Routed
+                    # through the freeze-aware AgentSystem.award_agent_xp via
+                    # the module helper so the script stays decoupled and a
+                    # missing system never breaks the construction loop.
+                    _award_agent_xp(npc, "construction")
                 return
 
         # Try research progress (Lab)
@@ -270,6 +294,10 @@ class EngineerScript(DefaultScript):
                 _set_attr(building, "research_progress", research_progress)
                 if research_progress >= research_total:
                     self._complete_research(building)
+                    # Award construction-completion XP for research, too
+                    # (Req 5.3). Routed through the freeze-aware
+                    # AgentSystem.award_agent_xp via the module helper.
+                    _award_agent_xp(npc, "construction")
                 return
 
     @staticmethod
@@ -584,6 +612,11 @@ class DeliveryBehavior(DefaultScript):
         # Deposit resources into owner's resource pool (Req 4.4, 9.4)
         self.deposit_resources(npc)
 
+        # Award delivery-completion XP (Req 5.2). Routed through the freeze-aware
+        # AgentSystem.award_agent_xp via the module helper so the script stays
+        # decoupled and a missing system never breaks the delivery loop.
+        _award_agent_xp(npc, "delivery")
+
         # Path back to Extractor
         building = getattr(npc.db, "role_target", None)
         if building is None:
@@ -822,4 +855,12 @@ ROLE_SCRIPT_MAP: dict[str, type | list[type]] = {
     "scout": PatrolBehavior,      # replaces ScoutScript
     "soldier": SoldierScript,
     "medic": MedicScript,
+}
+
+#: Maps ability name → Script class for gated, enablement-driven abilities.
+#: Unlike ROLE_SCRIPT_MAP, these scripts are not attached based on role; they
+#: are attached by AgentSystem.evaluate_gated_abilities when the agent is at or
+#: above the ability's gate level AND the player has explicitly enabled it.
+ABILITY_SCRIPT_MAP: dict[str, type] = {
+    "delivery": DeliveryBehavior,
 }

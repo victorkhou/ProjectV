@@ -617,7 +617,6 @@ class CmdDemolish(GameCommand):
         name = info["name"]
 
         # Calculate refund
-        from world.constants import DEMOLISH_REFUND_RATES, DEMOLISH_REFUND_DEFAULT
         refund = {}
         registry = _get_system(caller, "registry")
         if registry:
@@ -625,7 +624,8 @@ class CmdDemolish(GameCommand):
                 bdef = registry.get_building(btype)
                 # Total invested = base cost × (1 + 2 + ... + level)
                 level_sum = level * (level + 1) // 2
-                rate = DEMOLISH_REFUND_RATES.get(level, DEMOLISH_REFUND_DEFAULT)
+                bal = registry.balance
+                rate = bal.demolish_refund_rates.get(level, bal.demolish_refund_default)
                 refund = {
                     res: int(amt * level_sum * rate)
                     for res, amt in bdef.cost.items()

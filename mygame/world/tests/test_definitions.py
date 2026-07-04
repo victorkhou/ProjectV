@@ -253,7 +253,10 @@ class TestDataclassContracts:
         assert len(fields(PlanetDef)) == 3
 
     def test_balance_config_field_count(self):
-        assert len(fields(BalanceConfig)) == 22
+        # 28 original balance fields + 16 migrated from world.constants
+        # (training ×3, harvest/production ×6, upgrade/turret/demolish ×5,
+        #  plus vault ×2). Bump this when adding a balance tunable.
+        assert len(fields(BalanceConfig)) == 44
 
     def test_coordinate_space_def_field_count(self):
         assert len(fields(CoordinateSpaceDef)) == 14

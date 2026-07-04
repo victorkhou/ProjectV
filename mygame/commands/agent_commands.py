@@ -8,7 +8,6 @@ Requirements: 13.1, 13.2, 13.3, 13.4, 13.5, 13.6, 13.7, 3.1, 3.6, 3.7, 3.8,
 from __future__ import annotations
 
 from commands.command_router import GameSubcommandRouter
-from world.utils import get_system as _get_system
 from world.systems.agent_system import BUILDING_ROLE_MAP
 
 
@@ -46,9 +45,10 @@ class CmdAgent(GameSubcommandRouter):
         assign <id> [role]                — assign an agent to a role
         unassign <id>                     — unassign an agent
         train                             — train a new agent at an Academy
-        patrol <id> <x,y> [<x,y> ...]    — set a patrol route
+        patrol <id> <x,y> [<x,y> ...]     — set a patrol route
         patrol <id> clear                 — clear a patrol route
         stop <id>                         — stop an agent's current action
+        ability <id> [<key> on|off]       — view or toggle a gated ability
     """
 
     key = "agent"
@@ -57,9 +57,8 @@ class CmdAgent(GameSubcommandRouter):
     def sub_list(self, args):
         """List all of the caller's agents."""
         caller = self.caller
-        agent_system = _get_system(caller, "agent_system")
+        agent_system = self.require_system("agent_system")
         if agent_system is None:
-            caller.msg("Agent system unavailable.")
             return
 
         agents = agent_system.get_agents(caller)
@@ -90,9 +89,46 @@ class CmdAgent(GameSubcommandRouter):
                     loc_str = "HQ"
 
                 activity = getattr(agent.db, "activity_status", None) or "Idle"
+
+                # Progression segment (Req 11.1-11.4). Defensive: a missing or
+                # raising get_agent_progression_view must never break the roster.
+                prog_segment = ""
+                try:
+                    view = agent_system.get_agent_progression_view(agent)
+                    eff = view.get("effective_level")
+                    rank_name = view.get("rank_name", "") or ""
+                    ability_status = view.get("ability_status") or {}
+                    capped = view.get("capped_by_commander", False)
+
+                    # Per-ability status: decode each gate's wire status via the
+                    # AgentSystem helper (the inverse of its encoder) rather than
+                    # hand-parsing the string here. Per Req 11.3, show
+                    # "no abilities" when the agent qualifies for none (every
+                    # gate locked, or no gates at all); otherwise list each
+                    # gate and its state.
+                    from world.systems.agent_system import AgentSystem
+                    ability_parts = []
+                    qualifies = False
+                    for key, state in ability_status.items():
+                        decoded_state, readable = AgentSystem.decode_ability_status(state)
+                        if decoded_state != "locked":
+                            qualifies = True
+                        ability_parts.append(f"{key}: {readable}")
+
+                    if not ability_status or not qualifies:
+                        ability_text = "no abilities"
+                    else:
+                        ability_text = ", ".join(ability_parts)
+
+                    prog_segment = f"  Lv {eff} {rank_name}  [{ability_text}]"
+                    if capped:
+                        prog_segment += "  |y[capped]|n"
+                except Exception:
+                    prog_segment = ""
+
                 lines.append(
                     f"  |c#{aid}|n  {role:<12s}  {loc_str:<10s}  "
-                    f"{status} — {activity}"
+                    f"{status} — {activity}{prog_segment}"
                 )
 
         # Show agents currently in training
@@ -118,9 +154,8 @@ class CmdAgent(GameSubcommandRouter):
     def sub_assign(self, args):
         """Assign an agent to a role."""
         caller = self.caller
-        agent_system = _get_system(caller, "agent_system")
+        agent_system = self.require_system("agent_system")
         if agent_system is None:
-            caller.msg("Agent system unavailable.")
             return
 
         parts = args.strip().split()
@@ -128,10 +163,8 @@ class CmdAgent(GameSubcommandRouter):
             caller.msg("Usage: agent assign <id> [role]")
             return
 
-        try:
-            agent_id = int(parts[0])
-        except ValueError:
-            caller.msg("Agent ID must be a number.")
+        agent_id = self.parse_int(parts[0])
+        if agent_id is None:
             return
 
         role = None
@@ -173,9 +206,8 @@ class CmdAgent(GameSubcommandRouter):
     def sub_unassign(self, args):
         """Unassign an agent from their current role."""
         caller = self.caller
-        agent_system = _get_system(caller, "agent_system")
+        agent_system = self.require_system("agent_system")
         if agent_system is None:
-            caller.msg("Agent system unavailable.")
             return
 
         args = args.strip()
@@ -183,10 +215,8 @@ class CmdAgent(GameSubcommandRouter):
             caller.msg("Usage: agent unassign <id>")
             return
 
-        try:
-            agent_id = int(args)
-        except ValueError:
-            caller.msg("Agent ID must be a number.")
+        agent_id = self.parse_int(args)
+        if agent_id is None:
             return
 
         success, msg = agent_system.unassign_agent(caller, agent_id)
@@ -198,9 +228,8 @@ class CmdAgent(GameSubcommandRouter):
     def sub_train(self, args):
         """Train a new agent at the Academy the caller is inside."""
         caller = self.caller
-        agent_system = _get_system(caller, "agent_system")
+        agent_system = self.require_system("agent_system")
         if agent_system is None:
-            caller.msg("Agent system unavailable.")
             return
 
         building = _get_current_building(caller)
@@ -224,9 +253,8 @@ class CmdAgent(GameSubcommandRouter):
     def sub_patrol(self, args):
         """Set or clear a patrol route for a guard or scout agent."""
         caller = self.caller
-        agent_system = _get_system(caller, "agent_system")
+        agent_system = self.require_system("agent_system")
         if agent_system is None:
-            caller.msg("Agent system unavailable.")
             return
 
         parts = args.strip().split()
@@ -237,10 +265,8 @@ class CmdAgent(GameSubcommandRouter):
             )
             return
 
-        try:
-            agent_id = int(parts[0])
-        except ValueError:
-            caller.msg("Agent ID must be a number.")
+        agent_id = self.parse_int(parts[0])
+        if agent_id is None:
             return
 
         if len(parts) < 2:
@@ -280,9 +306,8 @@ class CmdAgent(GameSubcommandRouter):
     def sub_stop(self, args):
         """Cancel an agent's current movement and set it to idle."""
         caller = self.caller
-        agent_system = _get_system(caller, "agent_system")
+        agent_system = self.require_system("agent_system")
         if agent_system is None:
-            caller.msg("Agent system unavailable.")
             return
 
         args = args.strip()
@@ -290,14 +315,49 @@ class CmdAgent(GameSubcommandRouter):
             caller.msg("Usage: agent stop <agent_id>")
             return
 
-        try:
-            agent_id = int(args)
-        except ValueError:
-            caller.msg("Agent ID must be a number.")
+        agent_id = self.parse_int(args)
+        if agent_id is None:
             return
 
         success, msg = agent_system.stop_agent(caller, agent_id)
         caller.msg(msg)
+
+    def sub_ability(self, args):
+        """Enable/disable or view a gated ability for an agent.
+
+        Usage:
+            agent ability <id> <key> on|off   — enable/disable a gated ability
+            agent ability <id>                 — show per-ability status
+
+        All rules live in AgentSystem; this handler only parses and delegates.
+        """
+        caller = self.caller
+        agent_system = self.require_system("agent_system")
+        if agent_system is None:
+            return
+
+        parts = args.strip().split()
+        if not parts:
+            caller.msg("Usage: agent ability <id> [<key> on|off]")
+            return
+
+        agent_id = self.parse_int(parts[0])
+        if agent_id is None:
+            return
+
+        if len(parts) == 1:                         # status form (Req 16.5)
+            caller.msg(agent_system.get_ability_status(caller, agent_id))
+            return
+
+        if len(parts) == 3 and parts[2].lower() in ("on", "off"):
+            key, toggle = parts[1], parts[2].lower()
+            if toggle == "on":                      # Req 16.2 / 16.3
+                caller.msg(agent_system.enable_ability(caller, agent_id, key))
+            else:                                   # Req 16.4
+                caller.msg(agent_system.disable_ability(caller, agent_id, key))
+            return
+
+        caller.msg("Usage: agent ability <id> [<key> on|off]")
 
     subcommands = {
         "list": (sub_list, "List your agents", ""),
@@ -306,4 +366,5 @@ class CmdAgent(GameSubcommandRouter):
         "train": (sub_train, "Train a new agent at an Academy", ""),
         "patrol": (sub_patrol, "Set or clear a patrol route", ""),
         "stop": (sub_stop, "Stop an agent's current action", ""),
+        "ability": (sub_ability, "Enable/disable or view a gated ability", ""),
     }

@@ -79,6 +79,7 @@ from mygame.world.systems.resource_system import ResourceSystem  # noqa: E402
 from mygame.world.systems.rank_system import RankSystem  # noqa: E402
 from mygame.world.systems.agent_system import AgentSystem  # noqa: E402
 from mygame.world.coordinate.planet_registry import PlanetRegistry  # noqa: E402
+from mygame.typeclasses.combat_entity import CombatEntity  # noqa: E402
 
 
 # ------------------------------------------------------------------ #
@@ -186,8 +187,12 @@ class FakeTile:
         return data if data else None
 
 
-class FakePlayer:
-    """Lightweight stand-in for CombatCharacter."""
+class FakePlayer(CombatEntity):
+    """Lightweight stand-in for CombatCharacter.
+
+    Mixes in the real CombatEntity so it exposes ``award_xp`` / ``deduct_xp``,
+    matching the contract the refactored RankSystem delegates to.
+    """
     def __init__(self, name="Player1", x=50, y=50, planet="terra",
                  combat_xp=0, rank_level=1, level=None, next_agent_id=1,
                  resources=None):
@@ -375,6 +380,11 @@ def _make_all_systems(registry=None, event_bus=None, planet_registry=None):
         event_bus=event_bus,
         planet_registry=planet_registry,
     )
+    # RankSystem delegates its level->XP curve to the process-global
+    # world.progression table. Force this registry's curve active so the
+    # integration harness is independent of any table another test module
+    # left behind (the __init__ build is skipped when already initialized).
+    rank_system._rebuild_thresholds()
     agent_system = AgentSystem(
         registry=registry,
         event_bus=event_bus,
