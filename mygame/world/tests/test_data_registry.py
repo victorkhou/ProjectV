@@ -358,6 +358,25 @@ class TestGetters:
         with pytest.raises(KeyError):
             self.reg.get_building("ZZ")
 
+    def test_resolve_building_by_abbreviation(self):
+        assert self.reg.resolve_building("HQ").abbreviation == "HQ"
+
+    def test_resolve_building_by_abbreviation_case_insensitive(self):
+        assert self.reg.resolve_building("hq").abbreviation == "HQ"
+
+    def test_resolve_building_by_full_name(self):
+        # The reported bug: "build extractor" (the full name) must resolve.
+        assert self.reg.resolve_building("Headquarters").abbreviation == "HQ"
+
+    def test_resolve_building_by_name_case_insensitive(self):
+        assert self.reg.resolve_building("headquarters").abbreviation == "HQ"
+
+    def test_resolve_building_unknown_returns_none(self):
+        assert self.reg.resolve_building("nonsense") is None
+
+    def test_resolve_building_empty_returns_none(self):
+        assert self.reg.resolve_building("") is None
+
     def test_get_item(self):
         i = self.reg.get_item("combat_knife")
         assert i.name == "Combat Knife"

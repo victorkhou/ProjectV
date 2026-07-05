@@ -599,6 +599,10 @@ def _setup_default_cmds_stubs():
     comms_mod.CmdPage = type("CmdPage", (), {"key": "page"})
     sys.modules["evennia.commands.default.comms"] = comms_mod
 
+    building_mod = types.ModuleType("evennia.commands.default.building")
+    building_mod.CmdOpen = type("CmdOpen", (), {"key": "@open"})
+    sys.modules["evennia.commands.default.building"] = building_mod
+
 
 _setup_default_cmds_stubs()
 
@@ -646,6 +650,23 @@ class TestCharacterCmdSetRegistration(unittest.TestCase):
     def test_game_agent_router_registered(self):
         """CmdAgent (agent) game router is registered."""
         self.assertIn("agent", self.registered_keys)
+
+    # --- open/close aliases for the exit commands ---
+
+    def test_openexit_has_open_alias(self):
+        """CmdOpenExit exposes 'open' as an alias."""
+        openexit = next(c for c in self.cmdset._added if c.key == "openexit")
+        self.assertIn("open", openexit.aliases)
+
+    def test_closeexit_has_close_alias(self):
+        """CmdCloseExit exposes 'close' as an alias."""
+        closeexit = next(c for c in self.cmdset._added if c.key == "closeexit")
+        self.assertIn("close", closeexit.aliases)
+
+    def test_builtin_room_open_removed(self):
+        """Evennia's room-exit CmdOpen is removed so 'open' hits CmdOpenExit."""
+        from evennia.commands.default.building import CmdOpen
+        self.assertIn(CmdOpen, self.cmdset._removed)
 
     # --- Requirement 7.3: Unchanged standalone commands still registered ---
 

@@ -99,6 +99,7 @@ from mygame.commands.game_commands import (  # noqa: E402
     CmdAttack, CmdEquip, CmdUnequip, CmdResearch, CmdPowerup,
     CmdScore, CmdEquipment, CmdBuildings, CmdScan, CmdTechnology,
     CmdInventory, CmdMessage, CmdSay, CmdMap,
+    CmdCloseExit, CmdOpenExit, CmdGet,
 )
 
 # -------------------------------------------------------------- #
@@ -823,6 +824,147 @@ class TestCmdMap(unittest.TestCase):
         cmd = _make_cmd(CmdMap, caller, "")
         cmd.func()
         # No error — just no map output
+
+
+class TestExitCommands(unittest.TestCase):
+    """closeexit / openexit resolve the building via coordinates.
+
+    Regression: both commands previously called the deprecated
+    _find_player_tile() stub (always None) and always failed with
+    "Cannot determine your position" even when inside an owned building.
+    """
+
+    def _make_owned_building(self, owner):
+        class _AttrStore:
+            def __init__(self):
+                self._data = {}
+            def get(self, key, default=None, **kw):
+                return self._data.get(key, default)
+            def add(self, key, value, **kw):
+                self._data[key] = value
+
+        class Building:
+            def __init__(self, owner):
+                self.attributes = _AttrStore()
+                self.attributes.add("building_type", "HQ")
+                self.attributes.add("owner", owner)
+                self.attributes.add("closed_exits", set())
+        return Building(owner)
+
+    def _setup(self, cmd_class, args):
+        owner = type("Owner", (), {"id": 7})()
+        building = self._make_owned_building(owner)
+        loc = FakeLocation()
+        loc._buildings_by_coord[(5, 5)] = [building]  # caller default coords
+        caller = FakeCaller(location=loc)
+        caller.id = 7                       # matches building owner
+        caller.db.inside_building = True
+        cmd = _make_cmd(cmd_class, caller, args)
+        return cmd, caller, building
+
+    def test_closeexit_closes_when_inside_owned_building(self):
+        cmd, caller, building = self._setup(CmdCloseExit, "north")
+        cmd.func()
+        msgs = " ".join(caller._messages)
+        self.assertNotIn("Cannot determine your position", msgs)
+        self.assertIn("Closed the north exit", msgs)
+        self.assertIn("north", building.attributes.get("closed_exits"))
+
+    def test_openexit_opens_a_closed_exit(self):
+        cmd, caller, building = self._setup(CmdOpenExit, "north")
+        building.attributes.add("closed_exits", {"north"})
+        cmd.func()
+        msgs = " ".join(caller._messages)
+        self.assertNotIn("Cannot determine your position", msgs)
+        self.assertIn("Opened the north exit", msgs)
+
+    def test_closeexit_requires_inside_building(self):
+        cmd, caller, _ = self._setup(CmdCloseExit, "north")
+        caller.db.inside_building = False
+        cmd.func()
+        self.assertIn(
+            "must be inside a building", " ".join(caller._messages)
+        )
+
+    def test_closeexit_no_building_at_coords(self):
+        loc = FakeLocation()  # no building registered at (5,5)
+        caller = FakeCaller(location=loc)
+        caller.id = 7
+        caller.db.inside_building = True
+        cmd = _make_cmd(CmdCloseExit, caller, "north")
+        cmd.func()
+        self.assertIn("No building here", " ".join(caller._messages))
+
+
+class _FakeDrop:
+    """Minimal gettable object at the caller's coordinates."""
+    def __init__(self, key="Wood", x=5, y=5):
+        self.key = key
+        self._x, self._y = x, y
+        self.got = False
+    def at_pre_get(self, getter, **kw):
+        return True
+    def move_to(self, dest, **kw):
+        self.got = True
+    def at_get(self, getter, **kw):
+        pass
+
+
+class TestGetInterruptsActivity(unittest.TestCase):
+    """`get` is a physical action and interrupts active-presence work.
+
+    Requested behavior: picking things up should stop harvesting/building
+    (matching movement); info-only commands must not.
+    """
+
+    def _harvesting_caller_with_drop(self):
+        loc = FakeLocation()
+        drop = _FakeDrop(key="Wood", x=5, y=5)
+        loc._objects_by_coord[(5, 5)] = [drop]
+        caller = FakeCaller(location=loc)
+        caller.db.activity_state = "harvesting"
+        caller.db.activity_target = loc
+        caller.db.activity_progress = 3
+        return caller, drop
+
+    def test_get_interrupts_harvesting(self):
+        caller, drop = self._harvesting_caller_with_drop()
+        cmd = _make_cmd(CmdGet, caller, "Wood")
+        cmd.func()
+        self.assertEqual(caller.db.activity_state, "idle")
+        self.assertIsNone(caller.db.activity_target)
+        self.assertEqual(caller.db.activity_progress, 0)
+        self.assertTrue(drop.got)  # pickup still happened
+        self.assertTrue(any("interrupted" in m.lower() for m in caller._messages))
+
+    def test_get_all_interrupts_harvesting(self):
+        caller, drop = self._harvesting_caller_with_drop()
+        cmd = _make_cmd(CmdGet, caller, "all")
+        cmd.func()
+        self.assertEqual(caller.db.activity_state, "idle")
+        self.assertTrue(drop.got)
+
+    def test_get_interrupts_building(self):
+        loc = FakeLocation()
+        loc._objects_by_coord[(5, 5)] = [_FakeDrop(key="Wood")]
+        caller = FakeCaller(location=loc)
+        caller.db.activity_state = "building"
+        caller.db.activity_target = "some_building"
+        caller.db.activity_progress = 10
+        cmd = _make_cmd(CmdGet, caller, "Wood")
+        cmd.func()
+        self.assertEqual(caller.db.activity_state, "idle")
+
+    def test_get_when_idle_is_noop_no_message(self):
+        loc = FakeLocation()
+        loc._objects_by_coord[(5, 5)] = [_FakeDrop(key="Wood")]
+        caller = FakeCaller(location=loc)
+        caller.db.activity_state = "idle"
+        cmd = _make_cmd(CmdGet, caller, "Wood")
+        cmd.func()
+        # No interrupt notice when nothing was in progress.
+        self.assertFalse(any("interrupted" in m.lower() for m in caller._messages))
+        self.assertEqual(caller.db.activity_state, "idle")
 
 
 if __name__ == "__main__":

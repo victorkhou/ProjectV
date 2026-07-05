@@ -420,6 +420,31 @@ class DataRegistry:
         """
         return self.buildings[abbr]
 
+    def resolve_building(self, token: str) -> BuildingDef | None:
+        """Resolve a building by abbreviation OR full name, case-insensitively.
+
+        Players type either the 2-letter abbreviation (``EX``) or the human
+        name (``extractor``); this accepts both. Matching is case-insensitive
+        and also tolerates spaces vs. underscores in names (``power armor`` ==
+        ``Power_Armor``). Returns ``None`` if nothing matches (callers surface a
+        clean "unknown building" message rather than raising).
+        """
+        if not token:
+            return None
+        key = token.strip()
+
+        # 1) Exact abbreviation (the registry key), case-insensitive.
+        upper = key.upper()
+        if upper in self.buildings:
+            return self.buildings[upper]
+
+        # 2) Full name, case-insensitive and space/underscore-insensitive.
+        norm = key.lower().replace("_", " ").strip()
+        for bdef in self.buildings.values():
+            if bdef.name.lower().replace("_", " ").strip() == norm:
+                return bdef
+        return None
+
     def get_item(self, key: str) -> ItemDef:
         """Get an item definition by key.
 

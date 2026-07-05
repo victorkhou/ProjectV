@@ -683,6 +683,25 @@ class TestStartConstruction(unittest.TestCase):
         self.assertEqual(building.attributes.get("construction_progress"), 0)
         self.assertEqual(building.attributes.get("construction_total"), 180)
 
+    def test_start_construction_by_full_name(self):
+        # Reported bug: "build headquarters" (full name) must work, not only
+        # the "HQ" abbreviation.
+        player = FakePlayer(resources={"Straw": 100, "Wood": 100, "Stone": 100})
+        tile = FakeTile()
+        system, created, _ = _make_building_system()
+        ok, msg = system.start_construction(player, tile, "headquarters")
+        self.assertTrue(ok, msg)
+        self.assertEqual(len(created), 1)
+
+    def test_start_construction_unknown_name_reports_cleanly(self):
+        player = FakePlayer(resources={"Straw": 100, "Wood": 100, "Stone": 100})
+        tile = FakeTile()
+        system, created, _ = _make_building_system()
+        ok, msg = system.start_construction(player, tile, "teleporter")
+        self.assertFalse(ok)
+        self.assertIn("Unknown building type", msg)
+        self.assertEqual(len(created), 0)
+
     def test_start_construction_deducts_resources(self):
         player = FakePlayer(resources={"Straw": 100, "Wood": 100, "Stone": 100})
         tile = FakeTile()

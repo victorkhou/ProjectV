@@ -84,9 +84,9 @@ class BuildingSystem:
 
         Returns (building_def, None) on success, or (None, error_message) on failure.
         """
-        try:
-            building_def = self.registry.get_building(building_abbr)
-        except KeyError:
+        # Accept either the abbreviation (EX) or the full name (extractor).
+        building_def = self.registry.resolve_building(building_abbr)
+        if building_def is None:
             return None, f"Unknown building type: {building_abbr}"
 
         for validator in [

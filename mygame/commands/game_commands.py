@@ -179,6 +179,55 @@ class GameCommand(BaseCommand):
         """Deprecated — returns None. Use PlanetRoom queries instead."""
         return None
 
+    def _building_at_caller(self, caller):
+        """Return the Building at the caller's coordinates, or None.
+
+        Coordinate-based lookup via the PlanetRoom spatial index — the
+        replacement for the removed per-tile ``building`` attribute. Used by
+        commands that act on the building the player is standing inside.
+        """
+        planet_room = getattr(caller, "location", None)
+        if planet_room is None or not hasattr(planet_room, "get_buildings_at"):
+            return None
+        x = getattr(caller.db, "coord_x", None)
+        y = getattr(caller.db, "coord_y", None)
+        if x is None or y is None:
+            return None
+        buildings = planet_room.get_buildings_at(int(x), int(y))
+        return buildings[0] if buildings else None
+
+    def _interrupt_activity(self, caller, moved=False):
+        """Cancel any active-presence activity (harvest/build) on the caller.
+
+        Physical actions (moving, picking up items) interrupt active-presence
+        work; info-only commands (score, look, …) do not. Building progress is
+        preserved so ``build`` can resume it. No-op when already idle.
+
+        Args:
+            caller: the acting character.
+            moved: True when the interruption is because the player left the
+                tile (movement) — tunes the message ("Return to the tile" vs.
+                a plain interrupted notice). Construction always notes it can
+                be resumed with ``build``.
+        """
+        db = getattr(caller, "db", None)
+        if db is None:
+            return
+        prev_state = getattr(db, "activity_state", "idle")
+        if prev_state == "idle":
+            return
+        if prev_state == "building":
+            target = getattr(db, "activity_target", None)
+            btype = get_building_attr(target, "building_type", "??") if target else "??"
+            where = "Return to the tile or type 'build'" if moved else "Type 'build'"
+            caller.msg(f"|y[Paused] Construction of {btype} paused. {where} to resume.|n")
+        elif prev_state == "harvesting":
+            suffix = " Return to the tile to resume." if moved else ""
+            caller.msg(f"|y[Stopped] Harvesting interrupted.{suffix}|n")
+        db.activity_state = "idle"
+        db.activity_target = None
+        db.activity_progress = 0
+
 
 class CmdMove(GameCommand):
     """Move to an adjacent tile.
@@ -255,18 +304,7 @@ class CmdMove(GameCommand):
                     return
 
         # Reset active-presence state on movement (Req 6.6, 6.7)
-        if hasattr(caller, "db"):
-            prev_state = getattr(caller.db, "activity_state", "idle")
-            if prev_state != "idle":
-                if prev_state == "building":
-                    target = getattr(caller.db, "activity_target", None)
-                    btype = get_building_attr(target, "building_type", "??") if target else "??"
-                    caller.msg(f"|y[Paused] Construction of {btype} paused. Return to the tile or type 'build' to resume.|n")
-                elif prev_state == "harvesting":
-                    caller.msg("|y[Paused] Harvesting paused. Return to the tile to resume.|n")
-                caller.db.activity_state = "idle"
-                caller.db.activity_target = None
-                caller.db.activity_progress = 0
+        self._interrupt_activity(caller, moved=True)
 
         # Atomic coordinate update via move_entity
         planet_room.move_entity(caller, tx, ty)
@@ -426,7 +464,17 @@ class CmdBuild(GameCommand):
             return
         x, y = int(x), int(y)
 
-        building_type = self.args.strip().upper()
+        # Resolve the typed token (abbreviation OR full name, e.g. "EX" or
+        # "extractor") to its canonical abbreviation so the resume-check and
+        # start_construction below both compare consistent values. Unknown
+        # tokens fall through as-is so start_construction emits the clean
+        # "Unknown building type" message.
+        raw_token = self.args.strip()
+        building_type = ""
+        if raw_token:
+            registry = _get_system(caller, "registry")
+            resolved = registry.resolve_building(raw_token) if registry else None
+            building_type = resolved.abbreviation if resolved else raw_token.upper()
 
         # Check for resuming construction on an incomplete building
         if hasattr(planet_room, "get_buildings_at"):
@@ -1416,12 +1464,14 @@ class CmdCloseExit(GameCommand):
 
     Usage:
         closeexit <direction>
+        close <direction>
 
     Prevents anyone from entering or leaving through that direction.
     Admin users are not affected by closed exits.
     """
 
     key = "closeexit"
+    aliases = ["close"]
     help_category = "Game"
 
     def func(self):
@@ -1438,12 +1488,7 @@ class CmdCloseExit(GameCommand):
             caller.msg("You must be inside a building to close an exit.")
             return
 
-        tile = self._find_player_tile()
-        if tile is None:
-            caller.msg("Cannot determine your position.")
-            return
-
-        building = getattr(tile, "building", None)
+        building = self._building_at_caller(caller)
         if building is None:
             caller.msg("No building here.")
             return
@@ -1473,9 +1518,11 @@ class CmdOpenExit(GameCommand):
 
     Usage:
         openexit <direction>
+        open <direction>
     """
 
     key = "openexit"
+    aliases = ["open"]
     help_category = "Game"
 
     def func(self):
@@ -1492,12 +1539,7 @@ class CmdOpenExit(GameCommand):
             caller.msg("You must be inside a building to open an exit.")
             return
 
-        tile = self._find_player_tile()
-        if tile is None:
-            caller.msg("Cannot determine your position.")
-            return
-
-        building = getattr(tile, "building", None)
+        building = self._building_at_caller(caller)
         if building is None:
             caller.msg("No building here.")
             return
@@ -1630,6 +1672,11 @@ class CmdGet(GameCommand):
         if loc is None:
             caller.msg("You have no location.")
             return
+
+        # Picking things up is a physical action — it interrupts any
+        # active-presence work (harvesting/building), same as moving.
+        # Info-only commands (score, look, …) never call this.
+        self._interrupt_activity(caller)
 
         cx = getattr(caller.db, "coord_x", None)
         cy = getattr(caller.db, "coord_y", None)

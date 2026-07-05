@@ -47,6 +47,13 @@ class CharacterCmdSet(default_cmds.CharacterCmdSet):
         # Remove Evennia built-ins replaced by game commands
         from evennia.commands.default.general import CmdWhisper
         self.remove(CmdWhisper)
+        # Remove the room-exit builder CmdOpen (key "@open"). Our world is
+        # coordinate-based (one PlanetRoom per planet, no room-to-room exits),
+        # so it is meaningless here — and because CMD_IGNORE_PREFIXES makes
+        # "@open" match a bare "open", leaving it would shadow the "open"
+        # alias on CmdOpenExit. CmdCloseExit's "close" alias has no builtin.
+        from evennia.commands.default.building import CmdOpen
+        self.remove(CmdOpen)
         # Game commands
         self.add(CmdMove())
         self.add(CmdHarvest())
