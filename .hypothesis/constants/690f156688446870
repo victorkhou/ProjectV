@@ -1,4 +1,0 @@
-# file: /workplace/victkhou/EV/evennia-main/mygame/world/coordinate/garbage_collector.py
-# hypothesis_version: 6.151.12
-
-[100, 'account', 'attributes', 'building_type', 'contents', 'created_tick', 'db', 'delete', 'depleted', 'desc', 'is_building', 'is_player', 'overworld_tile', 'persistence_type', 'planet', 'resource_node_data', 'room_type', 'tags', 'x', 'y']

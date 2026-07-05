@@ -1,4 +1,0 @@
-# file: /workplace/victkhou/EV/evennia-main/mygame/conftest.py
-# hypothesis_version: 6.151.12
-
-['Command', 'DefaultCharacter', 'DefaultObject', 'DefaultRoom', 'DefaultScript', 'General', '__file__', '_store', 'evennia', 'evennia.commands', 'evennia.objects', 'evennia.scripts', 'evennia.utils', 'evennia.utils.logger', 'evennia.utils.utils', 'key']

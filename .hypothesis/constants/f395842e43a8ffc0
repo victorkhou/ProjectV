@@ -1,4 +1,0 @@
-# file: /workplace/victkhou/EV/evennia-main/mygame/world/equipment_system.py
-# hypothesis_version: 6.151.12
-
-['?', 'AA', 'AR', '_inventory', 'ammo_cost', 'attributes', 'building_type', 'classification', 'db', 'get', 'inventory', 'is_offline', 'key', 'name', 'owner', 'required_rank', 'slot', 'stat_modifiers']

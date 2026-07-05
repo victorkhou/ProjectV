@@ -1,4 +1,0 @@
-# file: /workplace/victkhou/EV/evennia-main/mygame/commands/admin_commands.py
-# hypothesis_version: 6.151.12
-
-[',', '; ', '?', '@giveresource', '@purgerooms', '@reloaddata', '@tel', 'Admin', 'Builder', 'Developer', 'Helper', 'Player', '_permissions', 'add_resource', 'attributes', 'building_type', 'check', 'check_permstring', 'cmd:perm(Builder)', 'contents', 'coord_planet', 'depleted', 'desc', 'has_account', 'key', 'msg', 'mygame.admin', 'ndb', 'overworld_tile', 'permissions', 'planet_registry', 'registry', 'resource_node_data', 'room_type', 'search', 'systems', 'teleport', 'tile_resolver']

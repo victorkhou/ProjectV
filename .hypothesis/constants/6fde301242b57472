@@ -1,4 +1,0 @@
-# file: /workplace/victkhou/EV/evennia-main/mygame/server/conf/game_init.py
-# hypothesis_version: 6.151.12
-
-[100, 1000, '..', '_terrain_generators', 'auto_save', 'balance', 'building_system', 'chat_system', 'chunk_size', 'chunking', 'combat_engine', 'data', 'definitions', 'equipment_system', 'event_bus', 'fog_system', 'game_tick', 'garbage_collector', 'gc_interval_ticks', 'gc_min_age_ticks', 'metrics', 'notification_system', 'planet_registry', 'planets.yaml', 'powerup_system', 'rank_system', 'registry', 'resource_system', 'room_cache_max_size', 'tech_system', 'tile_resolver']

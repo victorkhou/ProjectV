@@ -1,4 +1,0 @@
-# file: /workplace/victkhou/EV/evennia-main/mygame/world/building_system.py
-# hypothesis_version: 6.151.12
-
-['.', '; ', 'HQ', 'attributes', 'building', 'building_level', 'building_type', 'combat_lockout_tick', 'db', 'delete', 'get_buildings', 'hp', 'hp_max', 'location', 'offline', 'owner', 'resource', 'set_offline', 'terrain_type', 'x', 'xyz', 'y']

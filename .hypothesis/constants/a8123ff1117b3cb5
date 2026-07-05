@@ -1,4 +1,0 @@
-# file: /workplace/victkhou/EV/evennia-main/mygame/world/coordinate/fog_of_war.py
-# hypothesis_version: 6.151.12
-
-['??', 'Unknown', 'attributes', 'building', 'building_type', 'buildings', 'coord_planet', 'coord_x', 'coord_y', 'db', 'discovered', 'fog', 'get', 'key', 'location', 'owner', 'owner_name', 'unexplored', 'visible', 'x', 'y']

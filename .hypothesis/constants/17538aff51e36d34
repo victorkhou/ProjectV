@@ -1,4 +1,0 @@
-# file: /workplace/victkhou/EV/evennia-main/mygame/world/coordinate/planet_registry.py
-# hypothesis_version: 6.151.12
-
-['default_planet', 'height', 'persistence_type', 'planet_key', 'planet_type', 'planets', 'r', 'seed_rotation_ticks', 'spawn_x', 'spawn_y', 'static', 'terrain_seed', 'terrain_weights', 'width', 'z_level']

@@ -1,4 +1,0 @@
-# file: /workplace/victkhou/EV/evennia-main/mygame/world/event_bus.py
-# hypothesis_version: 6.151.12
-
-['building_constructed', 'building_destroyed', 'building_upgraded', 'combat_action', 'player_eliminated', 'player_login', 'player_logout', 'player_moved', 'powerup_activated', 'powerup_expired', 'rank_demoted', 'rank_promoted', 'resource_gathered', 'tick_completed']

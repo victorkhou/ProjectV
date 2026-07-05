@@ -1,4 +1,0 @@
-# file: /workplace/victkhou/EV/evennia-main/mygame/commands/admin_commands.py
-# hypothesis_version: 6.151.12
-
-['; ', '?', '@giveresource', '@reloaddata', 'Admin', 'Builder', 'Developer', 'Helper', 'Player', '_permissions', 'add_resource', 'check', 'check_permstring', 'cmd:perm(Builder)', 'key', 'msg', 'mygame.admin', 'ndb', 'permissions', 'registry', 'search', 'systems']

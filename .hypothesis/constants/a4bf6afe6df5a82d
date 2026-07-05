@@ -1,4 +1,0 @@
-# file: /workplace/victkhou/EV/evennia-main/mygame/world/offline_protection.py
-# hypothesis_version: 6.151.12
-
-['?', 'add', 'attributes', 'get', 'get_buildings', 'is_offline', 'key', 'offline', 'set_offline']

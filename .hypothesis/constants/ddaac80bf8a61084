@@ -1,4 +1,0 @@
-# file: /workplace/victkhou/EV/evennia-main/mygame/typeclasses/objects.py
-# hypothesis_version: 6.151.12
-
-['??', 'ammo_cost', 'building_level', 'building_type', 'classification', 'hp', 'hp_max', 'item_key', 'key', 'modern', 'name', 'offline', 'owner', 'registry', 'required_rank', 'slot', 'stat_modifiers']

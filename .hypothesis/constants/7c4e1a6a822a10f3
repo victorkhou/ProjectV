@@ -1,4 +1,0 @@
-# file: /workplace/victkhou/EV/evennia-main/mygame/server/conf/game_init.py
-# hypothesis_version: 6.151.12
-
-['auto_save', 'balance', 'building_system', 'chat_system', 'chunk_size', 'chunking', 'combat_engine', 'equipment_system', 'event_bus', 'game_tick', 'map_renderer', 'metrics', 'mygame.game_init', 'notification_system', 'powerup_system', 'rank_system', 'registry', 'resource_system', 'tech_system']

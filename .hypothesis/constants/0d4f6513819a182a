@@ -1,4 +1,0 @@
-# file: /workplace/victkhou/EV/evennia-main/mygame/world/coordinate/tile_resolver.py
-# hypothesis_version: 6.151.12
-
-['coord_planet', 'coord_x', 'coord_y', 'depleted', 'overworld_tile', 'persistence_type', 'resource_node', 'resource_type', 'respawn_counter', 'room_type', 'terrain', 'terrain_type', 'unknown']

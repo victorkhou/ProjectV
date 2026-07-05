@@ -1,4 +1,0 @@
-# file: /workplace/victkhou/EV/evennia-main/mygame/world/tech_system.py
-# hypothesis_version: 6.151.12
-
-[100, '.', '; ', '?', 'bonus', 'building_unlock', 'db', 'hp', 'hp_max', 'item_unlock', 'key', 'max_hp', 'mygame.tech_system', 'player', 'rank_level', 'researched_techs', 'stat', 'stat_bonus', 'tech_key', 'tech_lab', 'ticks_remaining']

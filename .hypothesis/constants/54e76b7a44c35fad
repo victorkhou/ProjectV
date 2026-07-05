@@ -1,4 +1,0 @@
-# file: /workplace/victkhou/EV/evennia-main/mygame/world/combat_engine.py
-# hypothesis_version: 6.151.12
-
-[0.0, 100, '.', '; ', '?', 'Insufficient ammo: ', 'No weapon equipped.', 'Turret', 'Unknown', 'VV', '_nearby_players', 'active_powerups', 'add', 'ammo_cost', 'attacker', 'attributes', 'building', 'building_type', 'combat_lockout_tick', 'combat_xp', 'damage', 'damage_bonus', 'damage_reduction', 'db', 'delete', 'effect', 'effect_type', 'effect_value', 'equipment', 'get', 'get_equipped', 'get_nearby_players', 'get_stat', 'get_stat_total', 'has_resources', 'hp', 'hp_max', 'is_offline', 'key', 'location', 'msg', 'owner', 'range', 'stat_modifiers', 'target', 'weapon', 'weapon_item', 'x', 'xyz', 'y']

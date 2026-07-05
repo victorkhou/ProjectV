@@ -1,4 +1,0 @@
-# file: /workplace/victkhou/EV/evennia-main/mygame/world/schema_validator.py
-# hypothesis_version: 6.151.12
-
-['abbreviation', 'ammo_cost', 'category', 'chunk_size', 'combat_lockout_ticks', 'cooldown_ticks', 'cost', 'duration_ticks', 'effect_type', 'effect_value', 'gather_amount', 'items', 'key', 'level', 'map_symbol', 'max_health', 'metrics_enabled', 'metrics_interval', 'name', 'planets', 'production_scaling', 'required_rank', 'requires_hq', 'research_ticks', 'resource_cost', 'save_interval', 'slot', 'stat_modifiers', 'terrain', 'terrain_type', 'terrain_types', 'tick_interval', 'turret_damage', 'turret_radius', 'xp_building_destroy', 'xp_damage', 'xp_death_loss', 'xp_kill', 'xp_threshold']

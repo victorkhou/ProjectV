@@ -1,4 +1,0 @@
-# file: /workplace/victkhou/EV/evennia-main/mygame/world/data_registry.py
-# hypothesis_version: 6.151.12
-
-['abbreviation', 'ammo_cost', 'balance', 'buildings', 'category', 'chunk_size', 'classification', 'combat_lockout_ticks', 'config/balance.yaml', 'cooldown_ticks', 'cost', 'data', 'duration_ticks', 'effect_type', 'effect_value', 'gather_amount', 'items', 'key', 'level', 'map_symbol', 'max_health', 'metrics_enabled', 'metrics_interval', 'modern', 'mygame.data_registry', 'name', 'passable', 'planet_type', 'planets', 'powerups', 'produces', 'production_map', 'production_scaling', 'r', 'ranks', 'required_rank', 'required_terrain', 'requires_hq', 'research_ticks', 'resource_cost', 'resource_type', 'save_interval', 'slot', 'stat_modifiers', 'technologies', 'terrain', 'terrain_type', 'terrain_types', 'tick_interval', 'turret_damage', 'turret_radius', 'unlocks', 'xp_building_destroy', 'xp_damage', 'xp_death_loss', 'xp_kill', 'xp_threshold']

@@ -1,4 +1,0 @@
-# file: /workplace/victkhou/EV/evennia-main/mygame/world/resource_system.py
-# hypothesis_version: 6.151.12
-
-['add', 'attributes', 'building_level', 'building_type', 'db', 'depleted', 'get', 'is_offline', 'owner', 'resource', 'resource_node', 'resource_node_data', 'resource_type', 'respawn_counter']
