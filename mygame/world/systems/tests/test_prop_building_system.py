@@ -667,7 +667,7 @@ class TestProperty11UpgradeCostFormula(unittest.TestCase):
         ok, msg = system.upgrade(player, building)
 
         self.assertFalse(ok)
-        self.assertIn("Insufficient resources", msg)
+        self.assertIn("Insufficient Resources", msg)
 
 if __name__ == "__main__":
     unittest.main()

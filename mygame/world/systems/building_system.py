@@ -591,19 +591,23 @@ class BuildingSystem:
     def _validate_resources(
         self, player: Any, costs: dict[str, int]
     ) -> str | None:
-        """Check player has sufficient resources. Returns error or None."""
+        """Check player has sufficient resources. Returns error or None.
+
+        On failure, returns a multi-line breakdown listing EVERY required
+        resource (not just the ones short), each as ``have/need`` and colored
+        green when the requirement is met, red when it is not — a quick visual
+        aid for what still needs gathering.
+        """
         if player.has_resources(costs):
             return None
 
-        # Build a descriptive error message
-        missing = []
+        lines = ["|rInsufficient Resources:|n"]
         for resource, needed in costs.items():
             current = player.get_resource(resource)
-            if current < needed:
-                missing.append(
-                    f"need {needed} {resource}, have {current}"
-                )
-        return "Insufficient resources: " + "; ".join(missing) + "."
+            met = current >= needed
+            color = "|g" if met else "|r"
+            lines.append(f"  {color}{resource}: {current}/{needed}|n")
+        return "\n".join(lines)
 
     def _validate_rank_requirement(
         self, player: Any, building_def: BuildingDef

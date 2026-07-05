@@ -21,7 +21,7 @@ from commands.game_commands import (
     CmdAttack, CmdEquip, CmdUnequip, CmdResearch, CmdPowerup,
     CmdScore, CmdEquipment, CmdBuildings, CmdScan, CmdTechnology,
     CmdInventory, CmdChat, CmdMessage, CmdSay, CmdLook, CmdMap,
-    CmdLeave, CmdCloseExit, CmdOpenExit, CmdStop, CmdWho, CmdGet,
+    CmdLeave, CmdEnter, CmdCloseExit, CmdOpenExit, CmdStop, CmdWho, CmdGet,
 )
 from commands.agent_commands import CmdAgent
 from commands.admin_commands import (
@@ -78,6 +78,7 @@ class CharacterCmdSet(default_cmds.CharacterCmdSet):
         self.add(CmdGet())
         self.add(CmdMap())
         self.add(CmdLeave())
+        self.add(CmdEnter())
         self.add(CmdStop())
         self.add(CmdCloseExit())
         self.add(CmdOpenExit())

@@ -410,33 +410,67 @@ let map_renderer_plugin = (function () {
         var inputEl = document.getElementById("inputfield");
         if (!inputEl) return;
         var hist = [], histPos = -1, savedLine = "";
-        // Hook into send to capture history
-        var origOnSend = null;
-        if (typeof plugin_handler !== "undefined") {
-            // Intercept lines sent to capture history
-            var _origSend = Evennia.msg;
+
+        // Move the caret to the end of the input (after a history swap).
+        function caretToEnd() {
+            var len = inputEl.value.length;
+            try { inputEl.setSelectionRange(len, len); } catch (err) {}
         }
-        inputEl.addEventListener("keydown", function(e) {
+
+        function historyBack() {
+            // Save the partially-typed line when navigation begins.
+            if (histPos === -1) savedLine = inputEl.value;
+            if (histPos < hist.length - 1) {
+                histPos++;
+                inputEl.value = hist[hist.length - 1 - histPos];
+            }
+        }
+
+        function historyForward() {
+            if (histPos > 0) {
+                histPos--;
+                inputEl.value = hist[hist.length - 1 - histPos];
+            } else if (histPos === 0) {
+                histPos = -1;
+                inputEl.value = savedLine;
+            }
+        }
+
+        // Bind at the DOCUMENT level (like the Tab handler) rather than on the
+        // input element. default_in.js's document-level keydown focuses the
+        // input on the FIRST keystroke, but because it fires on `document`
+        // (not on #inputfield) an input-bound listener would miss that first
+        // press — so the old code needed a second Up press to cycle. Handling
+        // it at the document level lets a single press both focus the input
+        // and navigate history. Only act when the map (canvas) view is not the
+        // one swallowing input, and never hijack modified arrows.
+        document.addEventListener("keydown", function(e) {
+            if (e.key !== "ArrowUp" && e.key !== "ArrowDown") return;
+            if (e.shiftKey || e.ctrlKey || e.metaKey || e.altKey) return;
+            // Ignore when focus is on another editable field (future-proofing).
+            var active = document.activeElement;
+            if (active && active !== inputEl &&
+                (active.tagName === "TEXTAREA" || active.tagName === "INPUT")) {
+                return;
+            }
+            if (inputEl !== document.activeElement) {
+                inputEl.focus();
+            }
             if (e.key === "ArrowUp") {
-                // Save current line if starting navigation
-                if (histPos === -1) savedLine = inputEl.value;
-                if (histPos < hist.length - 1) {
-                    histPos++;
-                    inputEl.value = hist[hist.length - 1 - histPos];
-                }
-                e.preventDefault();
-            } else if (e.key === "ArrowDown") {
-                if (histPos > 0) {
-                    histPos--;
-                    inputEl.value = hist[hist.length - 1 - histPos];
-                } else if (histPos === 0) {
-                    histPos = -1;
-                    inputEl.value = savedLine;
-                }
-                e.preventDefault();
-            } else if (e.key === "Enter" && !e.shiftKey) {
+                historyBack();
+            } else {
+                historyForward();
+            }
+            caretToEnd();
+            e.preventDefault();
+        });
+
+        // Capture sent lines into history on Enter (input-scoped is fine here
+        // because Enter-to-send only happens while the input is focused).
+        inputEl.addEventListener("keydown", function(e) {
+            if (e.key === "Enter" && !e.shiftKey) {
                 var val = inputEl.value.trim();
-                if (val && (hist.length === 0 || hist[hist.length-1] !== val)) {
+                if (val && (hist.length === 0 || hist[hist.length - 1] !== val)) {
                     hist.push(val);
                     if (hist.length > 50) hist.shift();
                 }

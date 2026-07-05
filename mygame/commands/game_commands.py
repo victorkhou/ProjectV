@@ -1645,6 +1645,52 @@ class CmdLeave(GameCommand):
         _send_map_update(caller)
 
 
+class CmdEnter(GameCommand):
+    """Enter the building on your current tile.
+
+    Usage:
+        enter
+        in
+
+    The mirror of ``leave``: step into the building you are standing on
+    (e.g. after using ``leave`` while still on its tile). Movement onto a
+    building's tile still auto-enters; this re-enters without moving.
+    """
+
+    key = "enter"
+    aliases = ["in", "enter building"]
+    help_category = "Game"
+
+    def func(self):
+        caller = self.caller
+
+        if getattr(caller.db, "inside_building", False):
+            caller.msg("You are already inside a building.")
+            return
+
+        building = self._building_at_caller(caller)
+        if building is None:
+            caller.msg("There is no building here to enter.")
+            return
+
+        if getattr(building, "is_offline", False):
+            caller.msg("That building is offline and cannot be entered.")
+            return
+
+        # Respect a closed entrance the same way movement auto-enter does:
+        # admins bypass, otherwise a fully-sealed building blocks entry.
+        if not is_admin(caller):
+            closed = get_closed_exits(building)
+            if len(closed) >= 4:  # all four cardinal exits closed
+                caller.msg("This building is sealed — all its exits are closed.")
+                return
+
+        caller.db.inside_building = True
+        self._update_fog_and_render(caller, show_map=False)
+        _show_building_interior(caller, building)
+        _send_map_update(caller)
+
+
 class CmdGet(GameCommand):
     """Pick up an object at your current tile.
 

@@ -293,7 +293,7 @@ class TestConstructHQ(unittest.TestCase):
         system, created, _ = _make_building_system()
         ok, msg = system.construct(player, tile, "HQ")
         self.assertFalse(ok)
-        self.assertIn("Insufficient resources", msg)
+        self.assertIn("Insufficient Resources", msg)
         self.assertEqual(len(created), 0)
 
 class TestConstructRequiresHQ(unittest.TestCase):
@@ -503,7 +503,7 @@ class TestUpgrade(unittest.TestCase):
         system, _, _ = _make_building_system()
         ok, msg = system.upgrade(player, building)
         self.assertFalse(ok)
-        self.assertIn("Insufficient resources", msg)
+        self.assertIn("Insufficient Resources", msg)
 
     def test_upgrade_non_resource_building_rejected(self):
         player = FakePlayer(resources={"Iron": 1000, "Stone": 1000, "Wood": 1000})
@@ -1173,6 +1173,38 @@ class TestOneHQPerPlayerPerPlanet(unittest.TestCase):
         system, created, _ = _make_building_system()
         ok, msg = system.construct(player, tile, "MM")
         self.assertTrue(ok)
+
+
+class TestInsufficientResourceDisplay(unittest.TestCase):
+    """The insufficient-resources breakdown lists EVERY requirement.
+
+    Shows met AND unmet resources as have/need, color-coded, so the player
+    sees the full picture at a glance (not just the shortfalls).
+    """
+
+    def test_lists_all_requirements_including_met(self):
+        # Has enough Wood, short on Stone — both must appear.
+        player = FakePlayer(resources={"Wood": 100, "Stone": 3})
+        system, _, _ = _make_building_system()
+        msg = system._validate_resources(player, {"Wood": 10, "Stone": 10})
+        self.assertIsNotNone(msg)
+        self.assertIn("Wood: 100/10", msg)   # met requirement still shown
+        self.assertIn("Stone: 3/10", msg)    # unmet requirement
+
+    def test_met_requirement_green_unmet_red(self):
+        player = FakePlayer(resources={"Wood": 100, "Stone": 3})
+        system, _, _ = _make_building_system()
+        msg = system._validate_resources(player, {"Wood": 10, "Stone": 10})
+        # Green marker precedes the met Wood line, red precedes unmet Stone.
+        self.assertIn("|gWood: 100/10|n", msg)
+        self.assertIn("|rStone: 3/10|n", msg)
+
+    def test_returns_none_when_all_met(self):
+        player = FakePlayer(resources={"Wood": 100, "Stone": 100})
+        system, _, _ = _make_building_system()
+        self.assertIsNone(
+            system._validate_resources(player, {"Wood": 10, "Stone": 10})
+        )
 
 
 if __name__ == "__main__":
