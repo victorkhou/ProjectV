@@ -4,7 +4,15 @@ Evennia-backed AgentRepository / AgentFactory implementations.
 The single module that knows about ``ObjectDB``, agent tag categories, and
 ``evennia.create_object`` for agents. Implements the ports in
 ``world.core.ports.entity_repository`` so ``AgentSystem`` depends on the
-abstraction. Query failures are logged (not silently swallowed as "no agents").
+abstraction.
+
+On query failure these methods log the exception and return an empty list —
+fail-safe, so a transient DB error degrades to "no agents found" rather than
+crashing the game tick. Callers that derive *persisted* state from the result
+must therefore not treat an empty return as authoritative: e.g.
+``AgentSystem.train_agent`` floors the next agent ID on the monotonic
+``player.db.next_agent_id`` counter rather than on ``max(roster)`` for exactly
+this reason.
 """
 
 from __future__ import annotations

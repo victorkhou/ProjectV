@@ -722,7 +722,10 @@ class BuildingSystem(BaseSystem):
         # injected TerrainProvider port; fall back to the game_systems global
         # only when no provider was wired (legacy/test paths). A None terrain
         # means "no generator for this planet" → fall through to the room-based
-        # checks below, exactly as the previous ``gen is None`` branch did.
+        # checks below, exactly as the previous ``gen is None`` branch did. The
+        # ``"unknown"`` sentinel (returned by a generator with no terrain
+        # thresholds, e.g. a space-type planet with empty terrain_weights) is
+        # likewise non-definitive and must fall through, not reject placement.
         if x is not None and y is not None and planet:
             provider = self._terrain_provider or self._legacy_terrain_provider()
             if provider is not None:
@@ -730,7 +733,7 @@ class BuildingSystem(BaseSystem):
                     terrain, resource = provider.get_terrain_and_resource(
                         planet, int(x), int(y)
                     )
-                    if terrain is not None:
+                    if terrain is not None and terrain != "unknown":
                         if resource:
                             return None
                         return "Extractor must be placed on terrain with a resource."

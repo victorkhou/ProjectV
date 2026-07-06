@@ -43,12 +43,29 @@ def _imported_modules(path: pathlib.Path):
     """
     tree = ast.parse(path.read_text(), filename=str(path))
     for node in ast.walk(tree):
-        if isinstance(node, ast.Import):
+        yield from _import_targets(node)
+
+
+def _import_targets(node: ast.AST):
+    """Yield (module_name, lineno) for one import node.
+
+    For ``from pkg import name`` this yields BOTH ``pkg`` and ``pkg.name`` so a
+    forbidden symbol imported by name (e.g. ``from server.conf import
+    game_init``) is caught, not just forbidden packages imported wholesale. For
+    ``from . import name`` (relative, ``module`` is None) it yields the bare
+    ``name`` so those aren't silently skipped either.
+    """
+    if isinstance(node, ast.Import):
+        for alias in node.names:
+            yield alias.name, node.lineno
+    elif isinstance(node, ast.ImportFrom):
+        if node.module:
+            yield node.module, node.lineno
+            for alias in node.names:
+                yield f"{node.module}.{alias.name}", node.lineno
+        else:
             for alias in node.names:
                 yield alias.name, node.lineno
-        elif isinstance(node, ast.ImportFrom):
-            if node.module:
-                yield node.module, node.lineno
 
 
 def _matches_forbidden(module: str, forbidden) -> bool:
@@ -84,15 +101,10 @@ class TestSystemsHaveNoModuleLevelEvennia:
         for path in _iter_py_files(_SYSTEMS_DIR):
             tree = ast.parse(path.read_text(), filename=str(path))
             for node in tree.body:  # module-level statements only
-                mods = []
-                if isinstance(node, ast.Import):
-                    mods = [a.name for a in node.names]
-                elif isinstance(node, ast.ImportFrom) and node.module:
-                    mods = [node.module]
-                for m in mods:
-                    if _matches_forbidden(m, ("evennia",)):
+                for module, lineno in _import_targets(node):
+                    if _matches_forbidden(module, ("evennia",)):
                         rel = path.relative_to(_WORLD_DIR)
-                        violations.append(f"{rel}:{node.lineno} imports '{m}'")
+                        violations.append(f"{rel}:{lineno} imports '{module}'")
         assert not violations, (
             "world/systems must not import evennia at module scope but found:\n  "
             + "\n  ".join(violations)

@@ -113,13 +113,23 @@ class AgentSystem(AgentProgressionMixin, AgentBehaviorMixin, BaseSystem):
             return False, f"Agent cap reached ({current_count}/{max_agents}). Promote to a higher rank for more agents."
 
         # --- determine next ID ---
-        # Derive from existing agents to stay in sync after deletions
+        # The persisted, monotonic ``next_agent_id`` counter is the source of
+        # truth: agent IDs must be strictly increasing, unique, and NEVER reused
+        # (Req 7b.5), so a counter — not the live roster — governs. Deriving from
+        # ``max(roster) + 1`` would reuse an ID after the highest agent is
+        # dismissed, and would collide if the roster query transiently returned
+        # empty. The roster only ever raises the floor (never lowers it), so a
+        # legacy player whose counter lags its roster still can't collide.
+        counter = getattr(getattr(player, "db", None), "next_agent_id", None)
+        try:
+            counter = int(counter)
+        except (TypeError, ValueError):
+            counter = 1
+        roster_floor = 1
         agents = self.get_agents(player)
         if agents:
-            max_id = max(getattr(a.db, "agent_id", 0) for a in agents)
-            next_id = max_id + 1
-        else:
-            next_id = 1  # first agent
+            roster_floor = max(getattr(a.db, "agent_id", 0) for a in agents) + 1
+        next_id = max(counter, roster_floor)
 
         # --- cost calculation ---
         # Cost scales with how many agents you'll have after training
