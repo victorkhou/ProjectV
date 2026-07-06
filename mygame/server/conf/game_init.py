@@ -91,7 +91,20 @@ def initialize_game() -> dict:
     powerup_system = PowerupSystem(registry, event_bus)
     tech_system = TechLabSystem(registry, event_bus)
     equipment_system = EquipmentSystem(registry, event_bus)
-    agent_system = AgentSystem(registry, event_bus)
+    # Inject the Evennia-backed agent repository + factory so AgentSystem's
+    # roster/tick queries and NPC creation go through the adapter ports rather
+    # than importing evennia in the system body.
+    from world.adapters.evennia_agent_repository import (
+        EvenniaAgentFactory,
+        EvenniaAgentRepository,
+    )
+
+    agent_system = AgentSystem(
+        registry,
+        event_bus,
+        agent_repository=EvenniaAgentRepository(),
+        agent_factory=EvenniaAgentFactory(),
+    )
     movement_system = MovementSystem(max_paths_per_tick=MAX_PATHS_PER_TICK)
     # Restore in-memory training cache from DB (survives server restarts)
     try:

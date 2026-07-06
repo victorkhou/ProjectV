@@ -393,20 +393,26 @@ def _make_all_systems(registry=None, event_bus=None, planet_registry=None):
     # integration harness is independent of any table another test module
     # left behind (the __init__ build is skipped when already initialized).
     rank_system._rebuild_thresholds()
+    # In-memory AgentRepository over the tracked agents for the test harness.
+    class _FakeAgentRepo:
+        def find_agents_for_owner(self, owner):
+            return [
+                a for a in created_agents
+                if getattr(getattr(a, "db", None), "owner", None) is owner
+            ]
+
+        def find_all_agents(self):
+            return list(created_agents)
+
+        def find_training_buildings(self):
+            return []
+
     agent_system = AgentSystem(
         registry=registry,
         event_bus=event_bus,
         create_npc_func=fake_create_npc,
+        agent_repository=_FakeAgentRepo(),
     )
-
-    # Wire agent fallback for test environments
-    def agent_fallback(player):
-        owner_id = getattr(player, "id", id(player))
-        return [
-            a for a in created_agents
-            if getattr(getattr(a, "db", None), "owner", None) is player
-        ]
-    agent_system._get_agents_fallback = agent_fallback
 
     # Wire rank events → agent system (like game_init.py does)
     event_bus.subscribe(RANK_PROMOTED, lambda event_name, **kw: (

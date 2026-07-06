@@ -1,0 +1,51 @@
+"""
+Repository and factory ports for entity persistence and creation.
+
+Use-case systems (``AgentSystem``, later ``BuildingSystem`` /
+``MovementSystem``) need to *query* and *create* game entities, but must not
+import Evennia to do it. These abstractions capture "find agents for an owner",
+"find all agents", "find training buildings", and "create an agent" so the
+Django ORM / tag-index / ``create_object`` calls live only in the Evennia
+adapters (``world.adapters``). Swapping persistence means writing a new adapter,
+never editing a system body.
+"""
+
+from __future__ import annotations
+
+from abc import ABC, abstractmethod
+from typing import Any
+
+
+class AgentRepository(ABC):
+    """Read-side port for player-owned NPC agents.
+
+    Replaces the direct ``ObjectDB.objects.filter(...)`` /
+    ``search_object_by_tag(...)`` queries previously embedded in
+    ``AgentSystem``.
+    """
+
+    @abstractmethod
+    def find_agents_for_owner(self, owner: Any) -> list[Any]:
+        """Return every agent NPC owned by *owner* (empty list if none)."""
+
+    @abstractmethod
+    def find_all_agents(self) -> list[Any]:
+        """Return every agent NPC in the world (used by the per-tick sweep)."""
+
+    @abstractmethod
+    def find_training_buildings(self) -> list[Any]:
+        """Return buildings that currently hold a ``training_agent_id``."""
+
+
+class AgentFactory(ABC):
+    """Write-side port for creating agent NPCs.
+
+    Replaces ``AgentSystem._default_create_npc`` — the ``create_object`` call,
+    tag seeding, and coordinate-index registration all move into the adapter.
+    The system decides *whether* and *for whom* to create; the factory owns the
+    framework I/O of actually spawning and placing the NPC.
+    """
+
+    @abstractmethod
+    def create_agent(self, owner: Any, agent_id: int) -> Any:
+        """Create, persist, place, and index a new agent NPC; return it."""

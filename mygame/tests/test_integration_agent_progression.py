@@ -27,6 +27,30 @@ from mygame.world.systems.tests.test_agent_system import (
 )
 
 
+class _SettableAgentRepo:
+    """Test AgentRepository whose owner lookup delegates to a settable fn.
+
+    Replaces the old ``system._get_agents_fallback = <closure>`` seam: assign
+    ``repo.resolve = lambda player: [...]`` (or construct with it) and inject
+    the repo into ``AgentSystem``. ``find_all_agents`` is derived from the
+    resolver so per-tick sweeps see the same roster.
+    """
+
+    def __init__(self, resolve=None):
+        self.resolve = resolve or (lambda player: [])
+
+    def find_agents_for_owner(self, owner):
+        return self.resolve(owner)
+
+    def find_all_agents(self):
+        # No single owner in scope; the progression flows drive per-owner
+        # queries, so an empty sweep is correct for these tests.
+        return []
+
+    def find_training_buildings(self):
+        return []
+
+
 # ------------------------------------------------------------------ #
 #  Owner-level-change flow (Req 15.1, 15.2, 15.3, 15.4)
 # ------------------------------------------------------------------ #
@@ -56,10 +80,12 @@ class TestOwnerLevelChangeFlow(unittest.TestCase):
         }
 
         self.event_bus = EventBus()
+        self._repo = _SettableAgentRepo()
         self.system = AgentSystem(
             registry=self.registry,
             event_bus=self.event_bus,
             create_npc_func=lambda player, agent_id: None,
+            agent_repository=self._repo,
         )
 
         # Owner with one owned agent. Raw level is well above the gate so the
@@ -74,9 +100,8 @@ class TestOwnerLevelChangeFlow(unittest.TestCase):
             script_keys=["HarvesterScript"],  # harvester pre-attached
         )
 
-        # Make get_agents resolve to our single owned agent (stub DB has no
-        # ObjectDB, so the system falls back to this hook).
-        self.system._get_agents_fallback = lambda player: (
+        # Make get_agents resolve to our single owned agent.
+        self._repo.resolve = lambda player: (
             [self.agent] if player is self.owner else []
         )
 
@@ -214,16 +239,19 @@ def _make_full_registry():
 def _make_system(registry, event_bus=None, agents=None):
     """Build an AgentSystem whose roster query resolves to *agents*."""
     bus = event_bus or EventBus()
+    roster = agents if agents is not None else []
+    repo = _SettableAgentRepo(
+        resolve=lambda player: [
+            a for a in roster
+            if getattr(getattr(a, "db", None), "owner", None) is player
+        ]
+    )
     system = AgentSystem(
         registry=registry,
         event_bus=bus,
         create_npc_func=lambda player, agent_id: None,
+        agent_repository=repo,
     )
-    roster = agents if agents is not None else []
-    system._get_agents_fallback = lambda player: [
-        a for a in roster
-        if getattr(getattr(a, "db", None), "owner", None) is player
-    ]
     return system, bus
 
 
@@ -398,7 +426,7 @@ class TestReassignAttachesDeliveryGated(unittest.TestCase):
         qualifies (effective >= gate AND enabled)."""
         owner, agent = self._make_agent(30, 25, enabled=True)
         # Wire the roster so demotion/promotion can find the agent.
-        self.system._get_agents_fallback = lambda p: (
+        self.system._repo.resolve = lambda p: (
             [agent] if p is owner else []
         )
 
@@ -484,9 +512,9 @@ class TestRankPromotionFiresEventAndReserveHandling(unittest.TestCase):
             registry=self.registry,
             event_bus=self.event_bus,
             create_npc_func=lambda player, agent_id: None,
-        )
-        self.agent_system._get_agents_fallback = lambda p: (
-            list(self.agents) if p is self.player else []
+            agent_repository=_SettableAgentRepo(
+                resolve=lambda p: list(self.agents) if p is self.player else []
+            ),
         )
 
         # Wire reserve/restore subscriptions exactly like game_init.py.

@@ -167,20 +167,36 @@ class AgentSystemTestBase(unittest.TestCase):
             self.created_agents.append(agent)
             return agent
 
+        # In-memory AgentRepository over our tracked fakes — replaces the old
+        # _get_agents_fallback override with the injected port. ``all_agents``
+        # is settable so process_tick tests can supply an explicit sweep list.
+        test_case = self
+
+        class _FakeAgentRepo:
+            def __init__(self):
+                self.all_agents = None  # None => derive from created_agents
+
+            def find_agents_for_owner(self, owner):
+                return [
+                    a for a in test_case.created_agents
+                    if getattr(getattr(a, "db", None), "owner", None) is owner
+                ]
+
+            def find_all_agents(self):
+                if self.all_agents is not None:
+                    return list(self.all_agents)
+                return list(test_case.created_agents)
+
+            def find_training_buildings(self):
+                return []
+
+        self.repo = _FakeAgentRepo()
         self.system = AgentSystem(
             registry=self.registry,
             event_bus=self.event_bus,
             create_npc_func=fake_create_npc,
+            agent_repository=self.repo,
         )
-        # Override fallback to return our tracked agents
-        self.system._get_agents_fallback = self._fallback_agents
-
-    def _fallback_agents(self, player):
-        owner_id = getattr(player, "id", id(player))
-        return [
-            a for a in self.created_agents
-            if getattr(getattr(a, "db", None), "owner", None) is player
-        ]
 
 
 # -------------------------------------------------------------- #
@@ -1742,7 +1758,7 @@ class TestTimeServedTick(AgentSystemTestBase):
 
         self.assertEqual(agent.db.combat_xp, 0)
 
-    def test_process_tick_awards_via_search(self):
+    def test_process_tick_awards_discovered_agent(self):
         """End-to-end: process_tick awards time-served to a discovered agent."""
         self.registry.balance.agent_xp_time_served = 7
         owner = self._owner(level=20)
@@ -1818,14 +1834,12 @@ class TestTimeServedTick(AgentSystemTestBase):
         self.assertEqual(good.db.combat_xp, 7)
 
     def _run_process_tick(self, agents):
-        """Run process_tick with agent discovery monkeypatched to *agents*."""
-        search_mod = types.ModuleType("evennia.utils.search")
-        search_mod.search_object_by_tag = lambda tag, category=None: list(agents)
-        sys.modules["evennia.utils.search"] = search_mod
+        """Run process_tick with the repository's sweep list set to *agents*."""
+        self.repo.all_agents = list(agents)
         try:
             self.system.process_tick(1)
         finally:
-            del sys.modules["evennia.utils.search"]
+            self.repo.all_agents = None
 
 
 # -------------------------------------------------------------- #

@@ -8,7 +8,10 @@ and per-tick processing of agent behavior scripts.
 
 from __future__ import annotations
 
-from typing import Any, Callable
+from typing import Any, Callable, TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from world.core.ports.entity_repository import AgentFactory, AgentRepository
 
 from world.data_registry import DataRegistry
 from world.event_bus import EventBus
@@ -50,10 +53,15 @@ class AgentSystem(AgentProgressionMixin, AgentBehaviorMixin, BaseSystem):
     """Manages player-owned NPC agents: training, assignment, reserve.
 
     Constructor args:
-        registry:        DataRegistry for rank/building lookups.
-        event_bus:        EventBus for publishing agent events.
-        create_npc_func:  Optional factory ``(player, agent_id) -> NPC``.
-                          If *None*, uses ``evennia.create_object``.
+        registry:          DataRegistry for rank/building lookups.
+        event_bus:          EventBus for publishing agent events.
+        create_npc_func:    Optional factory ``(player, agent_id) -> NPC``.
+                            Back-compat seam; when given it overrides
+                            *agent_factory*. Used by the unit-test suite.
+        agent_repository:   Optional :class:`AgentRepository` for roster/tick
+                            queries. Defaults to the Evennia adapter.
+        agent_factory:      Optional :class:`AgentFactory` for NPC creation.
+                            Defaults to the Evennia adapter.
     """
 
     def __init__(
@@ -61,71 +69,26 @@ class AgentSystem(AgentProgressionMixin, AgentBehaviorMixin, BaseSystem):
         registry: DataRegistry,
         event_bus: EventBus,
         create_npc_func: Callable | None = None,
+        agent_repository: "AgentRepository | None" = None,
+        agent_factory: "AgentFactory | None" = None,
     ) -> None:
         super().__init__(registry, event_bus)
-        self._create_npc_func = create_npc_func or self._default_create_npc
+        # Ports (injected at the composition root). Lazy Evennia-adapter
+        # defaults keep the fast unit-test suite working without a live DB;
+        # production injects the adapters via game_init.
+        from world.adapters.evennia_agent_repository import (
+            EvenniaAgentFactory,
+            EvenniaAgentRepository,
+        )
+
+        self._repo: "AgentRepository" = agent_repository or EvenniaAgentRepository()
+        self._factory: "AgentFactory" = agent_factory or EvenniaAgentFactory()
+        # Back-compat: a raw factory callable still overrides the port so the
+        # existing tests' ``create_npc_func`` seam keeps working.
+        self._create_npc_func = create_npc_func or self._factory.create_agent
         # In-memory cache of buildings currently training agents.
         # Avoids a DB query every tick. Updated by train_agent/complete_training.
         self._training_buildings: list[Any] = []
-
-    # ------------------------------------------------------------------ #
-    #  NPC factory
-    # ------------------------------------------------------------------ #
-
-    @staticmethod
-    def _default_create_npc(player: Any, agent_id: int) -> Any:
-        """Create an NPC agent via Evennia's object creation API.
-
-        Places the NPC in the player's PlanetRoom at the player's HQ
-        coordinates (or the player's current position as fallback) so
-        it exists in the game world and can pathfind to its assignment.
-        """
-        import evennia
-
-        # Place in the player's PlanetRoom so the NPC has a location
-        planet_room = getattr(player, "location", None)
-
-        npc = evennia.create_object(
-            "typeclasses.npcs.NPC",
-            key=f"Agent-{agent_id}",
-            location=planet_room,
-        )
-        npc.db.owner = player
-        npc.db.npc_type = "agent"
-        npc.db.agent_id = agent_id
-        npc.db.role = ""
-        npc.db.role_target = None
-        npc.db.reserve = False
-        npc.tags.add("agent", category="npc_type")
-        owner_id = getattr(player, "id", id(player))
-        npc.tags.add(f"player_{owner_id}", category="agent_owner")
-
-        # Place at HQ coordinates so the agent walks to its assignment.
-        # Falls back to player position if no HQ exists.
-        spawn_x, spawn_y = None, None
-        try:
-            buildings = player.get_buildings() if hasattr(player, "get_buildings") else []
-            for b in buildings:
-                if getattr(b.db, "building_type", "") == "HQ":
-                    spawn_x = getattr(b.db, "coord_x", None)
-                    spawn_y = getattr(b.db, "coord_y", None)
-                    break
-        except Exception:
-            pass
-
-        if spawn_x is None or spawn_y is None:
-            spawn_x = getattr(getattr(player, "db", None), "coord_x", None)
-            spawn_y = getattr(getattr(player, "db", None), "coord_y", None)
-
-        if spawn_x is not None and spawn_y is not None:
-            npc.db.coord_x = int(spawn_x)
-            npc.db.coord_y = int(spawn_y)
-            # at_object_receive saw coord_x=None during create_object,
-            # so manually register in the coordinate index now.
-            if planet_room is not None and hasattr(planet_room, "coord_index"):
-                planet_room.coord_index.add(npc, int(spawn_x), int(spawn_y))
-
-        return npc
 
     # ------------------------------------------------------------------ #
     #  Training
@@ -614,27 +577,12 @@ class AgentSystem(AgentProgressionMixin, AgentBehaviorMixin, BaseSystem):
     # ------------------------------------------------------------------ #
 
     def get_agents(self, player: Any) -> list:
-        """Return all NPC objects tagged 'agent' owned by *player*."""
-        owner_id = getattr(player, "id", id(player))
-        try:
-            from evennia.objects.models import ObjectDB
+        """Return all NPC objects tagged 'agent' owned by *player*.
 
-            return list(
-                ObjectDB.objects.filter(
-                    db_tags__db_key="agent",
-                    db_tags__db_category="npc_type",
-                ).filter(
-                    db_tags__db_key=f"player_{owner_id}",
-                    db_tags__db_category="agent_owner",
-                )
-            )
-        except Exception:
-            # Fallback for test environments without full Evennia DB
-            return self._get_agents_fallback(player)
-
-    def _get_agents_fallback(self, player: Any) -> list:
-        """Fallback agent query for test environments."""
-        return []
+        Delegates to the injected :class:`AgentRepository`, so the query
+        mechanism is swappable and unit tests inject a fake with no Evennia DB.
+        """
+        return self._repo.find_agents_for_owner(player)
 
     def get_agent_by_id(self, player: Any, agent_id: int) -> Any | None:
         """Find a specific agent by ID.  Returns NPC or None."""
@@ -754,11 +702,8 @@ class AgentSystem(AgentProgressionMixin, AgentBehaviorMixin, BaseSystem):
         Each agent's award + gate re-eval is wrapped in its own try/except so a
         single misbehaving agent never halts the whole tick.
         """
-        try:
-            from evennia.utils.search import search_object_by_tag
-
-            agents = list(search_object_by_tag("agent", category="npc_type"))
-        except Exception:
+        agents = self._repo.find_all_agents()
+        if not agents:
             return
 
         # Per-tick progression: award time-served XP + converge gated abilities.
@@ -803,19 +748,7 @@ class AgentSystem(AgentProgressionMixin, AgentBehaviorMixin, BaseSystem):
         Called once from game_init. Returns the number of buildings found.
         """
         self._training_buildings.clear()
-        try:
-            from evennia.objects.models import ObjectDB
-            candidates = list(
-                ObjectDB.objects.filter(
-                    db_attributes__db_key="training_agent_id",
-                )
-            )
-            for b in candidates:
-                val = b.attributes.get("training_agent_id")
-                if val is not None:
-                    self._training_buildings.append(b)
-        except Exception:
-            pass
+        self._training_buildings.extend(self._repo.find_training_buildings())
         return len(self._training_buildings)
 
     # ------------------------------------------------------------------ #

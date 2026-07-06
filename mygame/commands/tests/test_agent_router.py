@@ -739,21 +739,31 @@ class _AbilityAgent:
 def _make_real_ability_system(agents):
     """Build a REAL AgentSystem with a delivery gate at level 21.
 
-    ``_get_agents_fallback`` is wired so ``get_agent_by_id(caller, id)`` finds
-    the agents whose ``db.owner`` is the querying caller (Evennia DB is absent
-    in tests, so ``get_agents`` falls through to this fallback).
+    A fake ``AgentRepository`` is injected so ``get_agent_by_id(caller, id)``
+    finds the agents whose ``db.owner`` is the querying caller (Evennia DB is
+    absent in tests).
     """
     registry = DataRegistry()
     registry.ranks = []
     registry.ability_gates = {
         "delivery": AbilityGateDef(key="delivery", required_level=21),
     }
-    system = AgentSystem(registry=registry, event_bus=EventBus())
 
-    def _fallback(player):
-        return [a for a in agents if getattr(a.db, "owner", None) is player]
+    class _FakeAgentRepo:
+        def find_agents_for_owner(self, owner):
+            return [a for a in agents if getattr(a.db, "owner", None) is owner]
 
-    system._get_agents_fallback = _fallback
+        def find_all_agents(self):
+            return list(agents)
+
+        def find_training_buildings(self):
+            return []
+
+    system = AgentSystem(
+        registry=registry,
+        event_bus=EventBus(),
+        agent_repository=_FakeAgentRepo(),
+    )
     return system
 
 

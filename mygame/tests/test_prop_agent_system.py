@@ -198,20 +198,27 @@ def _make_system():
         created_agents.append(agent)
         return agent
 
+    class _FakeAgentRepo:
+        """In-memory AgentRepository over the tracked ``created_agents``."""
+
+        def find_agents_for_owner(self, owner):
+            return [
+                a for a in created_agents
+                if getattr(getattr(a, "db", None), "owner", None) is owner
+            ]
+
+        def find_all_agents(self):
+            return list(created_agents)
+
+        def find_training_buildings(self):
+            return []
+
     system = AgentSystem(
         registry=registry,
         event_bus=event_bus,
         create_npc_func=fake_create_npc,
+        agent_repository=_FakeAgentRepo(),
     )
-
-    def fallback(player):
-        owner_id = getattr(player, "id", id(player))
-        return [
-            a for a in created_agents
-            if getattr(getattr(a, "db", None), "owner", None) is player
-        ]
-
-    system._get_agents_fallback = fallback
     return system, created_agents
 
 
@@ -2147,8 +2154,8 @@ class TestAgentProgressionProperty17AbilityEnablementCommand:
         notifying player and register it so ``get_agent_by_id`` finds it.
 
         ``enable_ability``/``disable_ability`` resolve the agent via
-        ``get_agent_by_id`` → ``get_agents`` → the ``_get_agents_fallback``
-        installed by ``_make_system`` (returns ``created`` owned by *player*), so
+        ``get_agent_by_id`` → ``get_agents`` → the fake ``AgentRepository``
+        injected by ``_make_system`` (returns ``created`` owned by *player*), so
         the agent must be appended to ``created`` with a matching ``owner`` and
         ``agent_id``.
         """
@@ -2303,8 +2310,8 @@ class TestAgentProgressionProperty18StickyEnablement:
         ``enable_ability`` / ``disable_ability`` resolve it.
 
         Mirrors the Property 17 registration pattern: the agent must be appended
-        to ``created`` with a matching ``owner`` and ``agent_id`` so the
-        ``_get_agents_fallback`` installed by ``_make_system`` returns it.
+        to ``created`` with a matching ``owner`` and ``agent_id`` so the fake
+        ``AgentRepository`` injected by ``_make_system`` returns it.
         """
         owner = NotifyingHarvesterOwner()
         owner.db.level = owner_level
