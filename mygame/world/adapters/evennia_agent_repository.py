@@ -108,12 +108,22 @@ class EvenniaAgentFactory(AgentFactory):
 
     @staticmethod
     def _resolve_spawn_coords(owner: Any) -> tuple[Any, Any]:
-        """HQ coordinates for *owner*, falling back to the owner's position."""
+        """HQ coordinates for *owner*, falling back to the owner's position.
+
+        Two-stage fallback (matching the original _default_create_npc): use the
+        HQ's coords only when BOTH are set; otherwise — HQ missing, or HQ found
+        but without coordinates yet — fall back to the owner's own position so
+        the agent is still placed and indexed.
+        """
         try:
             buildings = owner.get_buildings() if hasattr(owner, "get_buildings") else []
             for b in buildings:
                 if getattr(b.db, "building_type", "") == "HQ":
-                    return getattr(b.db, "coord_x", None), getattr(b.db, "coord_y", None)
+                    hx = getattr(b.db, "coord_x", None)
+                    hy = getattr(b.db, "coord_y", None)
+                    if hx is not None and hy is not None:
+                        return hx, hy
+                    break
         except Exception:
             pass
         db = getattr(owner, "db", None)
