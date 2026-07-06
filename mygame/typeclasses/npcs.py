@@ -5,7 +5,6 @@ Extends ``GameEntity`` (which extends ``DefaultObject``) because NPCs do not
 need account puppeting, command sets, or session handling.  Behavior is
 driven by Evennia Scripts attached to the NPC object.
 
-Requirements: 7.7, 7.8, 7.9, 7.10, 2.1–2.9, 5.1, 8.1, 8.2, 8.6, 8.7
 """
 
 from __future__ import annotations
@@ -47,9 +46,9 @@ class NPC(CombatEntity, GameEntity):
         super().at_object_creation()  # GameEntity tags + coord init
         self.at_combat_entity_init()  # CombatEntity HP/equipment + progression state
         # NOTE: combat_xp/level/rank_level are set by at_combat_entity_init()
-        # above (the single init path) — do not re-default them here (Req 12.1).
+        # above (the single init path) — do not re-default them here.
 
-        # Enabled Gated_Ability keys — empty on creation (Req 12.1, 12.4).
+        # Enabled Gated_Ability keys — empty on creation.
         self.db.enabled_abilities = []
 
         self.db.owner = None
@@ -59,7 +58,7 @@ class NPC(CombatEntity, GameEntity):
         self.db.role_target = None
         self.db.reserve = False
 
-        # Movement engine attributes (Req 2.1, 5.1, 8.1, 8.7)
+        # Movement engine attributes
         from world.constants import ACTIVITY_IDLE, DEFAULT_MOVEMENT_DELAY
         self.db.movement_queue = []
         self.db.movement_delay = DEFAULT_MOVEMENT_DELAY
@@ -71,7 +70,7 @@ class NPC(CombatEntity, GameEntity):
         self.tags.add("agent", category="npc_type")
 
     # ------------------------------------------------------------------ #
-    #  Movement Engine (Req 2.1–2.9, 5.1, 8.1, 8.2, 8.6, 8.7)
+    #  Movement Engine
     # ------------------------------------------------------------------ #
 
     def advance_movement(self, tick_number: int) -> bool:
@@ -79,11 +78,11 @@ class NPC(CombatEntity, GameEntity):
 
         Returns ``True`` if the NPC moved this tick.
 
-        Skips movement when the NPC is incapacitated (Req 2.4).
+        Skips movement when the NPC is incapacitated.
         Halts and clears the queue if the next tile is impassable
-        (dynamic obstacle detection — Req 2.3).
+        (dynamic obstacle detection).
         """
-        # Skip if incapacitated (Req 2.4)
+        # Skip if incapacitated
         if getattr(self.db, "incapacitated", False):
             return False
 
@@ -91,7 +90,7 @@ class NPC(CombatEntity, GameEntity):
         if not queue:
             return False
 
-        # Movement delay gating (Req 8.1, 8.6, 8.8)
+        # Movement delay gating
         # Equipment may provide a "move_speed" modifier that reduces the
         # effective delay (positive modifier = faster). Clamped to >= 1.
         base_delay = getattr(self.db, "movement_delay", 1) or 1
@@ -103,13 +102,13 @@ class NPC(CombatEntity, GameEntity):
         next_step = queue[0]
         nx, ny = int(next_step[0]), int(next_step[1])
 
-        # Dynamic obstacle detection (Req 2.3, 2.8, 2.9)
+        # Dynamic obstacle detection
         if not self._is_tile_passable(nx, ny):
             self.clear_movement()
             self.db.activity_status = "Blocked — waiting"
             return False
 
-        # Move the NPC via PlanetRoom.move_entity (Req 2.5)
+        # Move the NPC via PlanetRoom.move_entity
         room = self.location
         if room and hasattr(room, "move_entity"):
             room.move_entity(self, nx, ny)
@@ -122,7 +121,7 @@ class NPC(CombatEntity, GameEntity):
         queue.pop(0)
         self.db.movement_queue = queue
 
-        # Check if queue is now empty → movement complete (Req 2.2)
+        # Check if queue is now empty → movement complete
         if not queue:
             self.db.activity_status = ACTIVITY_IDLE
             self.at_movement_complete()

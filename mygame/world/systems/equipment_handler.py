@@ -4,7 +4,6 @@ Equipment Handler for the RTS Combat Overworld game.
 Manages equipment slots on a CombatCharacter. One item per slot.
 Adapted from EvAdventure's EquipmentHandler pattern.
 
-Requirements: 6.2, 6.17, 6.18
 """
 
 from __future__ import annotations

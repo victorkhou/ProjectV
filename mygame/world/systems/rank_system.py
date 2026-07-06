@@ -15,7 +15,6 @@ XP thresholds are defined per-level.  The YAML ``ranks.yaml`` defines
 The 5 levels within a rank are linearly interpolated between
 consecutive rank thresholds.
 
-Requirements: 7.1-7.10, 4.2-4.9, 4b.1-4b.7
 """
 
 from __future__ import annotations

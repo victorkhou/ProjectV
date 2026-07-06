@@ -9,7 +9,6 @@ Manages three visibility states per tile:
 Vision is computed as the union of Chebyshev-distance circles around
 the player position and each owned building.
 
-Requirements: 5.4, 5.5, 5.6, 5.7, 5.9, 11.1–11.9
 """
 
 from __future__ import annotations
@@ -274,13 +273,6 @@ def _get_building_coords(building: Any) -> tuple[int, int]:
     x = getattr(building, "x", 0) or 0
     y = getattr(building, "y", 0) or 0
     return (int(x), int(y))
-
-
-def _get_room_building(room: Any) -> Any | None:
-    """Get the building from a room, if any."""
-    if hasattr(room, "building"):
-        return room.building
-    return None
 
 
 def _get_building_owner(building: Any) -> Any | None:

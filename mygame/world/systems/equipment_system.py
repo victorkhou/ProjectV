@@ -4,7 +4,6 @@ Equipment System for the RTS Combat Overworld game.
 Manages equipment building production: Armory (AA) and Armorer (AR)
 buildings produce GameItem instances each tick from their production_map.
 
-Requirements: 14.1, 14.2, 14.3, 14.4
 """
 
 from __future__ import annotations

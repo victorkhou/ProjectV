@@ -5,14 +5,13 @@ Provides a simple pub-sub mechanism so game systems can communicate
 without direct coupling. Subscribers register callbacks for named events;
 publishers fire events with arbitrary keyword payloads.
 
-Requirements: 28.1, 28.2, 28.3
 """
 
 from collections import defaultdict
 from typing import Callable
 
 # ------------------------------------------------------------------ #
-#  Event name constants (Requirement 28.3)
+#  Event name constants
 # ------------------------------------------------------------------ #
 
 PLAYER_LOGIN = "player_login"

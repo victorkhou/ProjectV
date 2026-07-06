@@ -148,7 +148,6 @@ class GameItem(GameEntity):
         classification (str) — "modern" or "futuristic"
         required_rank (str | None) — rank name or None
 
-    Requirements: 18.6, 18.7
     """
 
     _object_type_tag = "item"
@@ -244,7 +243,6 @@ class Building(GameEntity):
         hp (int) — current health points
         hp_max (int) — maximum health points
 
-    Requirements: 3.6, 3.7, 3.8, 10.1, 10.5, 27.1
     """
 
     _object_type_tag = "building"
@@ -294,7 +292,7 @@ class Building(GameEntity):
     def take_damage(self, amount: int, attacker=None) -> None:
         """Apply *amount* damage to this building's HP.
 
-        If HP reaches zero the building goes offline (Req 6.9) rather
+        If HP reaches zero the building goes offline rather
         than being destroyed.  Publishes ``building_destroyed`` when HP
         hits 0.
         """
@@ -303,7 +301,7 @@ class Building(GameEntity):
         self.attributes.add("hp", hp)
 
         if hp <= 0:
-            # Req 6.9: set offline instead of destroying
+            # set offline instead of destroying
             self.set_offline(True)
             try:
                 from world.event_bus import event_bus, BUILDING_DESTROYED
@@ -326,7 +324,7 @@ class Building(GameEntity):
         return str(btype)[:2]
 
     # ------------------------------------------------------------------ #
-    #  Structured state (Requirement 27.1)
+    #  Structured state
     # ------------------------------------------------------------------ #
 
     def get_structured_state(self) -> dict:

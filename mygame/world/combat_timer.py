@@ -9,7 +9,6 @@ involved player and publishes a COMBAT_TIMER_STARTED event for each.
 The timer is tick-based: GameTickScript clears it when the current tick
 reaches the expiry value. CmdMove blocks Wall passage while active.
 
-Requirements: 17.1, 17.2, 17.3, 17.4, 17.5
 """
 
 from __future__ import annotations

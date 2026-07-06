@@ -1,8 +1,6 @@
 """
 Agent management commands — train, assign, unassign, list, patrol, stop agents.
 
-Requirements: 13.1, 13.2, 13.3, 13.4, 13.5, 13.6, 13.7, 3.1, 3.6, 3.7, 3.8,
-              10.3, 11.1
 """
 
 from __future__ import annotations
@@ -31,7 +29,7 @@ def _get_current_building(caller):
 
 
 # ------------------------------------------------------------------ #
-#  CmdAgent  — Game subcommand router (Req 5.1–5.10)
+#  CmdAgent  — Game subcommand router
 # ------------------------------------------------------------------ #
 
 class CmdAgent(GameSubcommandRouter):
@@ -90,7 +88,7 @@ class CmdAgent(GameSubcommandRouter):
 
                 activity = getattr(agent.db, "activity_status", None) or "Idle"
 
-                # Progression segment (Req 11.1-11.4). Defensive: a missing or
+                # Progression segment. Defensive: a missing or
                 # raising get_agent_progression_view must never break the roster.
                 prog_segment = ""
                 try:
@@ -102,10 +100,9 @@ class CmdAgent(GameSubcommandRouter):
 
                     # Per-ability status: decode each gate's wire status via the
                     # AgentSystem helper (the inverse of its encoder) rather than
-                    # hand-parsing the string here. Per Req 11.3, show
-                    # "no abilities" when the agent qualifies for none (every
-                    # gate locked, or no gates at all); otherwise list each
-                    # gate and its state.
+                    # hand-parsing the string here. Show "no abilities" when the
+                    # agent qualifies for none (every gate locked, or no gates at
+                    # all); otherwise list each gate and its state.
                     from world.systems.agent_system import AgentSystem
                     ability_parts = []
                     qualifies = False
@@ -345,15 +342,15 @@ class CmdAgent(GameSubcommandRouter):
         if agent_id is None:
             return
 
-        if len(parts) == 1:                         # status form (Req 16.5)
+        if len(parts) == 1:                         # status form
             caller.msg(agent_system.get_ability_status(caller, agent_id))
             return
 
         if len(parts) == 3 and parts[2].lower() in ("on", "off"):
             key, toggle = parts[1], parts[2].lower()
-            if toggle == "on":                      # Req 16.2 / 16.3
+            if toggle == "on":
                 caller.msg(agent_system.enable_ability(caller, agent_id, key))
-            else:                                   # Req 16.4
+            else:
                 caller.msg(agent_system.disable_ability(caller, agent_id, key))
             return
 

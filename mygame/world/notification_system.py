@@ -4,7 +4,6 @@ Notification System for the RTS Combat Overworld game.
 Subscribes to game events and broadcasts formatted messages to all
 connected sessions via Evennia's SESSION_HANDLER.
 
-Requirements: 12.1, 12.2, 12.3, 12.4, 12.5, 12.6, 28.4
 """
 
 from __future__ import annotations

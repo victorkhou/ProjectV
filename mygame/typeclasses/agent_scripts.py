@@ -6,7 +6,6 @@ Each script class corresponds to an agent role and implements
 ``interval = 0`` so they are driven by the GameTickScript rather
 than self-timed.
 
-Requirements: 9.1, 10.1, 10.5, 10.6, 11.1, 11.3, 12.1, 12.3
 """
 
 from __future__ import annotations
@@ -70,7 +69,7 @@ def _award_agent_xp(npc: Any, source: str) -> None:
 
 
 # ------------------------------------------------------------------ #
-#  HarvesterScript  (Req 9.1, 9.2, 9.3, 9.4)
+#  HarvesterScript
 # ------------------------------------------------------------------ #
 
 class HarvesterScript(DefaultScript):
@@ -167,7 +166,7 @@ class HarvesterScript(DefaultScript):
             building, production, resource_type, level,
         )
 
-        # Award harvest-production XP (Req 5.1). Routed through the freeze-aware
+        # Award harvest-production XP. Routed through the freeze-aware
         # AgentSystem.award_agent_xp via the module helper so the script stays
         # decoupled and a missing system never breaks the harvest loop.
         _award_agent_xp(npc, "harvest")
@@ -240,7 +239,7 @@ class HarvesterScript(DefaultScript):
 
 
 # ------------------------------------------------------------------ #
-#  EngineerScript  (Req 10.1, 10.5, 10.6)
+#  EngineerScript
 # ------------------------------------------------------------------ #
 
 class EngineerScript(DefaultScript):
@@ -279,7 +278,7 @@ class EngineerScript(DefaultScript):
                 _set_attr(building, "construction_progress", progress)
                 if progress >= construction_total:
                     self._complete_construction(building)
-                    # Award construction-completion XP (Req 5.3). Routed
+                    # Award construction-completion XP. Routed
                     # through the freeze-aware AgentSystem.award_agent_xp via
                     # the module helper so the script stays decoupled and a
                     # missing system never breaks the construction loop.
@@ -295,9 +294,9 @@ class EngineerScript(DefaultScript):
                 _set_attr(building, "research_progress", research_progress)
                 if research_progress >= research_total:
                     self._complete_research(building)
-                    # Award construction-completion XP for research, too
-                    # (Req 5.3). Routed through the freeze-aware
-                    # AgentSystem.award_agent_xp via the module helper.
+                    # Award construction-completion XP for research, too.
+                    # Routed through the freeze-aware AgentSystem.award_agent_xp
+                    # via the module helper.
                     _award_agent_xp(npc, "construction")
                 return
 
@@ -317,11 +316,11 @@ class EngineerScript(DefaultScript):
         # when the technology system is integrated.
 
 
-# GuardScript and ScoutScript removed — replaced by PatrolBehavior (Req 3.1)
+# GuardScript and ScoutScript removed — replaced by PatrolBehavior
 
 
 # ------------------------------------------------------------------ #
-#  PatrolBehavior  (Req 3.2, 3.3, 3.4, 3.5, 3.6, 10.1, 10.2)
+#  PatrolBehavior
 # ------------------------------------------------------------------ #
 
 class PatrolBehavior(DefaultScript):
@@ -429,7 +428,7 @@ class PatrolBehavior(DefaultScript):
 
 
 # ------------------------------------------------------------------ #
-#  DeliveryBehavior  (Req 4.1–4.8, 7.1–7.4, 8.4, 8.5, 9.1–9.5, 10.1, 10.2)
+#  DeliveryBehavior
 # ------------------------------------------------------------------ #
 
 class DeliveryBehavior(DefaultScript):
@@ -457,7 +456,7 @@ class DeliveryBehavior(DefaultScript):
         if npc is None:
             return
 
-        # Skip if incapacitated — drop carried resources (Req 9.5)
+        # Skip if incapacitated — drop carried resources
         if getattr(getattr(npc, "db", None), "incapacitated", False):
             self._handle_incapacitated(npc)
             return
@@ -507,7 +506,7 @@ class DeliveryBehavior(DefaultScript):
         if not drops:
             return  # No resources to pick up — stay idle
 
-        # Load resources up to carry_capacity (Req 9.2)
+        # Load resources up to carry_capacity
         from world.constants import DEFAULT_CARRY_CAPACITY
         capacity = getattr(npc.db, "carry_capacity", None)
         if capacity is None:
@@ -570,7 +569,7 @@ class DeliveryBehavior(DefaultScript):
 
         target = self.select_delivery_target(npc)
         if target is None:
-            # No storage building — stay idle (Req 4.6)
+            # No storage building — stay idle
             npc.db.delivery_state = DeliveryState.IDLE
             npc.db.activity_status = "No storage building — waiting"
             return
@@ -585,7 +584,7 @@ class DeliveryBehavior(DefaultScript):
 
         path = PatrolBehavior._compute_path(npc, (npc_x, npc_y), (tx, ty))
         if not path:
-            # Path blocked — retry next tick (Req 4.7)
+            # Path blocked — retry next tick
             npc.db.activity_status = "Delivery path blocked — retrying"
             return
 
@@ -597,7 +596,7 @@ class DeliveryBehavior(DefaultScript):
 
         npc.db.delivery_state = DeliveryState.DELIVERING
 
-        # Laden speed (Req 8.4)
+        # Laden speed
         from world.constants import HARVESTER_LADEN_DELAY
         npc.db.movement_delay = HARVESTER_LADEN_DELAY
 
@@ -610,10 +609,10 @@ class DeliveryBehavior(DefaultScript):
 
         Transitions: delivering → returning
         """
-        # Deposit resources into owner's resource pool (Req 4.4, 9.4)
+        # Deposit resources into owner's resource pool
         self.deposit_resources(npc)
 
-        # Award delivery-completion XP (Req 5.2). Routed through the freeze-aware
+        # Award delivery-completion XP. Routed through the freeze-aware
         # AgentSystem.award_agent_xp via the module helper so the script stays
         # decoupled and a missing system never breaks the delivery loop.
         _award_agent_xp(npc, "delivery")
@@ -638,7 +637,7 @@ class DeliveryBehavior(DefaultScript):
 
         path = PatrolBehavior._compute_path(npc, (npc_x, npc_y), (bx, by))
         if not path:
-            # Path blocked — retry next tick (Req 4.7)
+            # Path blocked — retry next tick
             npc.db.activity_status = "Return path blocked — retrying"
             return
 
@@ -650,7 +649,7 @@ class DeliveryBehavior(DefaultScript):
         npc.db.delivery_state = DeliveryState.RETURNING
         npc.db.delivery_target = None
 
-        # Empty speed (Req 8.5)
+        # Empty speed
         from world.constants import HARVESTER_EMPTY_DELAY
         npc.db.movement_delay = HARVESTER_EMPTY_DELAY
 
@@ -672,7 +671,7 @@ class DeliveryBehavior(DefaultScript):
 
     @staticmethod
     def deposit_resources(npc: Any) -> None:
-        """Transfer carried_resources to owner's resource pool (Req 4.4, 9.4)."""
+        """Transfer carried_resources to owner's resource pool."""
         carried = getattr(npc.db, "carried_resources", None) or {}
         if not carried:
             return
@@ -687,7 +686,7 @@ class DeliveryBehavior(DefaultScript):
 
     @staticmethod
     def select_delivery_target(npc: Any) -> Any | None:
-        """Find nearest Vault/HQ owned by same player (Req 7.1, 7.2).
+        """Find nearest Vault/HQ owned by same player.
 
         Prefers nearest by Manhattan distance. On tie, prefers Vault (VT) over HQ.
         """
@@ -777,7 +776,7 @@ class DeliveryBehavior(DefaultScript):
 
     @staticmethod
     def _handle_incapacitated(npc: Any) -> None:
-        """Drop carried resources at current coords when incapacitated (Req 9.5)."""
+        """Drop carried resources at current coords when incapacitated."""
         carried = getattr(npc.db, "carried_resources", None) or {}
         if not carried:
             return
@@ -801,7 +800,7 @@ class DeliveryBehavior(DefaultScript):
 
 
 # ------------------------------------------------------------------ #
-#  SoldierScript  (Req 11.1)
+#  SoldierScript
 # ------------------------------------------------------------------ #
 
 class SoldierScript(DefaultScript):
@@ -823,7 +822,7 @@ class SoldierScript(DefaultScript):
 
 
 # ------------------------------------------------------------------ #
-#  MedicScript  (Req 11.3)
+#  MedicScript
 # ------------------------------------------------------------------ #
 
 class MedicScript(DefaultScript):

@@ -5,8 +5,6 @@ Resolves attack actions and manages combat state. Reads damage from the
 attacker's equipped weapon-slot GameItem and damage_reduction from the
 target's equipped armor-slot GameItem.
 
-Requirements: 6.1, 6.3, 6.4, 6.5, 6.6, 6.7, 6.8, 6.9, 6.10, 6.11,
-              6.12, 6.13, 6.14, 6.15, 6.16
 """
 
 from __future__ import annotations
@@ -294,10 +292,10 @@ class CombatEngine(BaseSystem):
         rather than the player XP balance:
 
         - When the attacker is an agent, award ``"combat"`` XP through
-          ``AgentSystem.award_agent_xp`` (freeze-aware, Req 5.4); when the
+          ``AgentSystem.award_agent_xp`` (freeze-aware); when the
           attacker is a (non-agent) player, award the player ``xp_kill`` balance.
         - When the victim is an agent, apply death loss through
-          ``AgentSystem.apply_agent_death_loss`` (Req 6.1) instead of the player
+          ``AgentSystem.apply_agent_death_loss`` instead of the player
           ``xp_death_loss`` deduction, so death loss is never double-applied.
         - Respawn victim (reset HP).
         - Publish player_eliminated event.
@@ -311,7 +309,7 @@ class CombatEngine(BaseSystem):
 
         # Award XP to attacker.
         if self._is_agent(attacker):
-            # Agent combat kill XP via the freeze-aware AgentSystem (Req 5.4).
+            # Agent combat kill XP via the freeze-aware AgentSystem.
             self._award_agent_combat_xp(attacker)
         elif self._is_player(attacker):
             attacker_xp = self._get_combat_xp(attacker)
@@ -319,8 +317,8 @@ class CombatEngine(BaseSystem):
 
         # Deduct XP from victim.
         if self._is_agent(victim):
-            # Agents use the agent death-loss balance, not the player one
-            # (Req 6.1). Routed through AgentSystem to avoid double-deducting.
+            # Agents use the agent death-loss balance, not the player one.
+            # Routed through AgentSystem to avoid double-deducting.
             self._apply_agent_death_loss(victim)
         else:
             victim_xp = self._get_combat_xp(victim)
@@ -484,12 +482,9 @@ class CombatEngine(BaseSystem):
 
     def _get_attacker_bonus(self, attacker: Any) -> float:
         """Get tech/powerup damage bonus for the attacker."""
+        # Tech/equipment bonuses are already folded into weapon damage; only
+        # active powerups contribute an extra multiplier here.
         bonus = 0.0
-        # Check equipment stat total for tech bonuses
-        equipment = getattr(attacker, "equipment", None)
-        if equipment and hasattr(equipment, "get_stat_total"):
-            # Tech bonuses are reflected in equipment stats
-            pass  # Already included in weapon damage
 
         # Check active powerups for damage_bonus
         active_powerups = None
@@ -571,7 +566,7 @@ class CombatEngine(BaseSystem):
         """Award combat-kill XP to an agent via the freeze-aware AgentSystem.
 
         No-op (guarded) when the agent system is unavailable, so combat
-        resolution never breaks (Req 5.4).
+        resolution never breaks.
         """
         agent_system = self._get_agent_system()
         if agent_system is None:
@@ -582,7 +577,7 @@ class CombatEngine(BaseSystem):
             pass
 
     def _apply_agent_death_loss(self, agent: Any) -> None:
-        """Apply agent death-loss XP via the AgentSystem (Req 6.1).
+        """Apply agent death-loss XP via the AgentSystem.
 
         Routes an agent victim's death penalty through the agent death-loss
         balance instead of the player ``xp_death_loss`` path, avoiding a double

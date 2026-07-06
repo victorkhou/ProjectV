@@ -178,64 +178,6 @@ class MapDataProvider:
 
         return tile
 
-    def _visible_tile(self, x, y, planet, terrain, player, get_cached):
-        """Build tile data for a fully visible tile."""
-        tile = {"x": x, "y": y, "terrain": terrain, "state": "visible"}
-
-        player_id = getattr(player, "id", None)
-        room = get_cached(x, y, planet)
-        if room is not None:
-            # Check for building
-            bld = getattr(room, "building", None)
-            if bld is not None:
-                owner = None
-                if hasattr(bld, "attributes") and hasattr(bld.attributes, "get"):
-                    owner = bld.attributes.get("owner", default=None)
-                owner_id = getattr(owner, "id", None) if owner else None
-                tile["building"] = {
-                    "type": bld.attributes.get("building_type", default="??") if hasattr(bld, "attributes") else "??",
-                    "level": bld.attributes.get("building_level", default=1) if hasattr(bld, "attributes") else 1,
-                    "own": owner_id is not None and owner_id == player_id,
-                    "name": getattr(bld, "key", "?"),
-                }
-
-                # Check if building has entities inside (occupied flag)
-                bld_contents = getattr(bld, "contents", [])
-                occupied = False
-                for obj in bld_contents:
-                    if hasattr(obj, "has_account") and obj.has_account:
-                        occupied = True
-                        break
-                    if hasattr(obj, "tags") and obj.tags.get(category="npc_type"):
-                        occupied = True
-                        break
-                tile["building"]["occupied"] = occupied
-
-            # Check for other players (by coordinate match)
-            players_here = []
-            agents_here = []
-            for obj in getattr(room, "contents", []):
-                if hasattr(obj, "has_account") and obj.has_account:
-                    ox = _get_coord(obj, "coord_x") if hasattr(obj, "db") else None
-                    oy = _get_coord(obj, "coord_y") if hasattr(obj, "db") else None
-                    if ox == x and oy == y and obj is not player:
-                        players_here.append(getattr(obj, "key", "?"))
-                # NPC agents on the overworld tile
-                elif hasattr(obj, "tags") and obj.tags.get(category="npc_type"):
-                    npc_owner = getattr(obj.db, "owner", None) if hasattr(obj, "db") else None
-                    npc_owner_id = getattr(npc_owner, "id", None) if npc_owner else None
-                    role = getattr(obj.db, "role", "") if hasattr(obj, "db") else ""
-                    agents_here.append({
-                        "own": npc_owner_id is not None and npc_owner_id == player_id,
-                        "role": role,
-                    })
-            if players_here:
-                tile["players"] = players_here
-            if agents_here:
-                tile["agents"] = agents_here
-
-        return tile
-
     def _fog_tile(self, x, y, terrain, buildings_mem):
         """Build tile data for a fog-of-war tile."""
         tile = {"x": x, "y": y, "terrain": terrain, "state": "fog"}

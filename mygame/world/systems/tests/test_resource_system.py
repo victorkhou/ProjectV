@@ -261,48 +261,6 @@ class TestHarvestFailures(unittest.TestCase):
 #  Production Tests
 # -------------------------------------------------------------- #
 
-class TestProcessProduction(unittest.TestCase):
-    """Test automated resource building production."""
-
-    def test_production_adds_resources_to_owner(self):
-        player = FakePlayer()
-        building = FakeBuilding(building_type="MM", owner=player, level=1)
-        system, _ = _make_system()
-        system.process_production([building])
-        self.assertEqual(player.get_resource("Straw"), 10)
-
-    def test_production_scales_with_level(self):
-        player = FakePlayer()
-        building = FakeBuilding(building_type="MM", owner=player, level=3)
-        system, _ = _make_system()
-        system.process_production([building])
-        self.assertEqual(player.get_resource("Straw"), 150)
-
-    def test_production_skips_offline_buildings(self):
-        player = FakePlayer()
-        building = FakeBuilding(building_type="MM", owner=player, level=1, offline=True)
-        system, _ = _make_system()
-        system.process_production([building])
-        self.assertEqual(player.get_resource("Straw"), 0)
-
-    def test_production_skips_non_resource_buildings(self):
-        player = FakePlayer()
-        building = FakeBuilding(building_type="VV", owner=player, level=1)
-        system, _ = _make_system()
-        system.process_production([building])
-        # Turret doesn't produce resources
-        for r in RESOURCE_TYPES:
-            self.assertEqual(player.get_resource(r), 0)
-
-    def test_production_multiple_buildings(self):
-        player = FakePlayer()
-        b1 = FakeBuilding(building_type="MM", owner=player, level=1)
-        b2 = FakeBuilding(building_type="QQ", owner=player, level=2)
-        system, _ = _make_system()
-        system.process_production([b1, b2])
-        self.assertEqual(player.get_resource("Straw"), 10)
-        self.assertEqual(player.get_resource("Stone"), 50)
-
 # -------------------------------------------------------------- #
 #  Respawn Tests
 # -------------------------------------------------------------- #

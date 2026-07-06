@@ -5,7 +5,6 @@ Manages technology research: listing available techs by rank, starting
 research with resource deduction, tick-based timer countdown, and
 applying completed technology effects.
 
-Requirements: 8.1, 8.2, 8.3, 8.4, 8.5, 8.6
 """
 
 from __future__ import annotations

@@ -189,7 +189,6 @@ class CombatCharacter(CombatEntity, DefaultCharacter):
     environments.  The Traits system can be wired in later on a real
     Evennia server.
 
-    Requirements: 2.4, 3.2, 3.3, 7.6, 7.8, 10.1, 10.4, 14.1, 16.5, 16.6, 27.1
     """
 
     # ------------------------------------------------------------------ #
@@ -291,7 +290,7 @@ class CombatCharacter(CombatEntity, DefaultCharacter):
             return []
 
     # ------------------------------------------------------------------ #
-    #  Structured status (Requirement 27.1)
+    #  Structured status
     # ------------------------------------------------------------------ #
 
     def get_structured_status(self) -> dict:
@@ -353,7 +352,6 @@ class CombatCharacter(CombatEntity, DefaultCharacter):
         2. Character on a PlanetRoom but missing coord attrs → sync planet
         3. Character already has valid coords → nothing to do
 
-        Requirements: 7.8, 8.2
         """
         try:
             loc = self.location

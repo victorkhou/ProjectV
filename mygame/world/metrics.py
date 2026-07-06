@@ -4,7 +4,6 @@ Metrics Collector for the RTS Combat Overworld game.
 Lightweight in-memory counters and gauges for server health monitoring.
 Logs a summary at a configurable interval when enabled.
 
-Requirements: 30.1, 30.2, 30.3, 30.4
 """
 
 from __future__ import annotations

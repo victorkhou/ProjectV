@@ -4,7 +4,6 @@ Admin commands for the RTS Combat Overworld.
 Restricted to Builder+ permission level. All executions are logged
 with operator name, command, and target.
 
-Requirements: 26.1, 33.1, 33.2, 33.3, 33.4, 33.5
 """
 
 from __future__ import annotations
@@ -118,7 +117,6 @@ class CmdAdminBuilding(AdminSubcommandRouter):
         spawn   — Spawn a building at your current tile (Builder+)
         destroy — Destroy the building at your current tile (Builder+)
 
-    Requirements: 1.1, 1.2, 1.3, 1.4, 1.5
     """
 
     key = "@building"
@@ -283,7 +281,6 @@ class CmdAdminAgent(AdminSubcommandRouter):
         destroy — Destroy an agent by ID or clear training state (Admin+)
         list    — List all agents for a player (Builder+)
 
-    Requirements: 2.1, 2.2, 2.3, 2.4, 2.5, 2.6, 2.7, 2.8
     """
 
     key = "@agent"
@@ -566,7 +563,6 @@ class CmdAdminResource(AdminSubcommandRouter):
         give  — Give resources to a player (Builder+)
         reset — Reset player(s) to starting resources (Admin+)
 
-    Requirements: 3.1, 3.2, 3.3, 3.4, 3.5, 3.6
     """
 
     key = "@resource"
@@ -711,7 +707,6 @@ class CmdAdminPlayer(AdminSubcommandRouter):
 
     If [player] is omitted, targets the caller.
 
-    Requirements: 4.1, 4.2, 4.3, 4.4, 4.5
     """
 
     key = "@player"

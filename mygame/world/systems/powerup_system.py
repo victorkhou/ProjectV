@@ -4,7 +4,6 @@ Powerup System for the RTS Combat Overworld game.
 Manages temporary combat buffs: activation with rank/cooldown checks,
 tick-based duration tracking, and stat modifier queries.
 
-Requirements: 9.1, 9.2, 9.3, 9.4, 9.5, 9.6, 9.7
 """
 
 from __future__ import annotations

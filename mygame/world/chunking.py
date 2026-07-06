@@ -5,7 +5,6 @@ Divides the overworld into rectangular chunks for performance-optimized
 tick processing. Only active chunks (near online players) are processed
 each game tick.
 
-Requirements: 31.1, 31.2, 31.3, 31.4, 31.5
 """
 
 from __future__ import annotations
@@ -72,30 +71,6 @@ class WorldChunkManager:
                     active.add((cx + dx, cy + dy))
         return active
 
-    def get_tiles_in_chunks(
-        self, planet: str, chunks: set[tuple[int, int]], all_tiles: list[Any]
-    ) -> list[Any]:
-        """Filter tiles to only those within the given active chunks.
-
-        Args:
-            planet: The planet name.
-            chunks: Set of active chunk coordinates.
-            all_tiles: List of tile objects to filter.
-
-        Returns:
-            List of tiles that fall within active chunks.
-        """
-        result = []
-        for tile in all_tiles:
-            pos = self._get_tile_position(tile)
-            if pos is None:
-                continue
-            x, y = pos
-            chunk = self.get_chunk_coord(x, y)
-            if chunk in chunks:
-                result.append(tile)
-        return result
-
     def get_buildings_in_chunks(
         self, planet: str, chunks: set[tuple[int, int]], all_buildings: list[Any]
     ) -> list[Any]:
@@ -144,22 +119,6 @@ class WorldChunkManager:
             y = getattr(loc, "y", None)
             if x is not None and y is not None:
                 return (int(x), int(y))
-
-        return None
-
-    @staticmethod
-    def _get_tile_position(tile: Any) -> tuple[int, int] | None:
-        """Extract (x, y) position from a tile object."""
-        if hasattr(tile, "x") and hasattr(tile, "y"):
-            x = tile.x
-            y = tile.y
-            if x is not None and y is not None:
-                return (int(x), int(y))
-
-        if hasattr(tile, "position"):
-            pos = tile.position
-            if pos is not None:
-                return (pos[0], pos[1])
 
         return None
 

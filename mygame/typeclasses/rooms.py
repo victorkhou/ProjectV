@@ -432,15 +432,3 @@ class PlanetRoom(DefaultRoom):
         """Return True if the node at (x, y) is currently depleted."""
         nodes = self.db.depleted_nodes or {}
         return self._node_key(x, y) in nodes
-
-
-# ------------------------------------------------------------------ #
-#  Building interior display
-# ------------------------------------------------------------------ #
-
-# The interior formatter now lives in ``world.ui_formatters`` so the room
-# typeclass stays a pure spatial container. Re-exported here under its old
-# name for backward compatibility with existing importers.
-from world.ui_formatters import (  # noqa: E402
-    format_building_interior as _format_building_interior,
-)

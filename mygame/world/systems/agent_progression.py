@@ -8,7 +8,6 @@ assignment/tick orchestration. ``AgentProgressionMixin`` is combined into
 ``self`` (``self.registry``, ``self.get_agents``, the behavior-script helpers,
 etc.) — this is a pure relocation, not a behavior change.
 
-Requirements: 5.7, 5.9, 5.10, 6, 8, 9, 11, 12, 13.4, 13.5, 14, 15, 16, 17.
 """
 
 from __future__ import annotations
@@ -30,7 +29,7 @@ class AgentProgressionMixin:
     """
 
     # ------------------------------------------------------------------ #
-    #  Owner-level cap  (Req 14.1, 14.2, 14.3, 14.5, 14.6, 14.7)
+    #  Owner-level cap
     # ------------------------------------------------------------------ #
 
     @staticmethod
@@ -81,7 +80,7 @@ class AgentProgressionMixin:
     def get_cap_ceiling(self, agent: Any) -> int:
         """Return the agent's Cap_Ceiling = ``max(1, owner_level - 1)``.
 
-        The maximum Effective_Level the owner cap permits (Req 14.4). Floors at
+        The maximum Effective_Level the owner cap permits. Floors at
         1 so an agent owned by a level-1 player (or an orphaned agent) has a
         ceiling of 1.
         """
@@ -113,12 +112,12 @@ class AgentProgressionMixin:
     def compute_effective_level(self, agent: Any) -> int:
         """Return the agent's Effective_Level under the owner-level cap.
 
-        ``max(1, min(Raw_Level, owner_level - 1))`` (Req 14.1, 14.2, 14.3). The
+        ``max(1, min(Raw_Level, owner_level - 1))``. The
         Raw_Level is derived owner-agnostically from the agent's own Combat_XP
         via ``agent.get_raw_level()``; the cap bounds it strictly below the
-        owner's level. Handles the owner-demotion edge case (Req 14.5) where a
+        owner's level. Handles the owner-demotion edge case where a
         stored raw level can exceed the new ceiling, and re-derives on XP/owner
-        changes (Req 14.6, 14.7).
+        changes.
         """
         return max(1, min(self._raw_level(agent), self.get_owner_level(agent) - 1))
 
@@ -130,7 +129,7 @@ class AgentProgressionMixin:
     # (``get_agent_progression_view``), the roster's human rendering
     # (``agent_commands.sub_list``), and the ``agent ability`` status command
     # (``get_ability_status``) all derive from it, so the three renderings can
-    # never diverge (Req 11.2, 11.3, 16.5).
+    # never diverge.
 
     @staticmethod
     def _classify_ability(
@@ -175,16 +174,16 @@ class AgentProgressionMixin:
         return encoded, encoded
 
     # ------------------------------------------------------------------ #
-    #  Enabled-ability state  (Req 12.1, 12.4, 17.1)
+    #  Enabled-ability state
     # ------------------------------------------------------------------ #
 
     def get_enabled_abilities(self, agent: Any) -> set:
         """Return the agent's stored set of enabled gated-ability keys.
 
         Reads ``agent.db.enabled_abilities`` (a persisted list); absent or
-        ``None`` → empty set (legacy default, Req 12.4). The set is sticky and
+        ``None`` → empty set (legacy default). The set is sticky and
         independent of attach state — it reflects what the player has explicitly
-        enabled, not what is currently active (Req 17.1).
+        enabled, not what is currently active.
         """
         keys = getattr(getattr(agent, "db", None), "enabled_abilities", None)
         if not keys:
@@ -194,12 +193,12 @@ class AgentProgressionMixin:
     def _set_enabled_abilities(self, agent: Any, keys) -> None:
         """Persist the enabled-ability set back to ``agent.db.enabled_abilities``.
 
-        Stored as a list for Evennia attribute persistence (Req 12.1, 17.1).
+        Stored as a list for Evennia attribute persistence.
         """
         agent.db.enabled_abilities = list(keys)
 
     # ------------------------------------------------------------------ #
-    #  Gate evaluation  (Req 8, 9, 12.5, 12.6, 13.4, 15, 17)
+    #  Gate evaluation
     # ------------------------------------------------------------------ #
 
     def evaluate_gated_abilities(self, agent: Any, notify: bool = True) -> None:
@@ -208,26 +207,25 @@ class AgentProgressionMixin:
         For each ``Ability_Gate`` in the registry, attaches or detaches the
         gate's behavior script so that it is present *if and only if* the agent's
         ``Effective_Level`` meets or exceeds the gate's required level AND the
-        owning player has enabled that ability for the agent (Req 8.5, 8.6).
+        owning player has enabled that ability for the agent.
 
         Per-gate branch logic (mirrors the design pseudocode):
 
         - ``want and not attached`` → attach + init delivery state + notify the
-          owner the ability is now active (Req 9.2, 9.3, 15.3, 17.3).
+          owner the ability is now active.
         - ``attached and not want`` → detach the script. Notify re-lock ONLY when
           the loss was caused by a level drop (``not available``); a detach
           caused purely by the player disabling a still-available ability is
-          silent here (the disable command confirms it) (Req 9.5, 9.6, 9.7,
-          15.4, 17.4).
+          silent here (the disable command confirms it).
         - ``available and not enabled and not attached`` → mark the ability
           available and notify the owner how to enable it, once per
-          availability window (Req 9.1, 15.2).
-        - otherwise → no-op (Req 9.3, 9.8).
+          availability window.
+        - otherwise → no-op.
 
         Unresolved ability keys are skipped with a single warning so a missing
-        script never blocks evaluation of the remaining gates (Req 13.4). The
+        script never blocks evaluation of the remaining gates. The
         method is idempotent: repeated calls leave at most one instance of each
-        script attached (Req 9.4).
+        script attached.
         """
         effective = self.compute_effective_level(agent)
         enabled = self.get_enabled_abilities(agent)
@@ -270,8 +268,8 @@ class AgentProgressionMixin:
                 if not available:
                     # The availability window has closed: clear any stale
                     # "available" flag so a future re-cross into the
-                    # available-but-not-enabled state notifies again (Req 15.2,
-                    # Property 10). Mirrors the cleanup in the no-op else branch.
+                    # available-but-not-enabled state notifies again. Mirrors
+                    # the cleanup in the no-op else branch.
                     if key in notified:
                         notified.discard(key)
                         notified_changed = True
@@ -336,7 +334,7 @@ class AgentProgressionMixin:
 
         Read from ``agent.db.notified_available_abilities`` (a persisted list);
         absent or ``None`` → empty set. Used to send the "available, enable with"
-        notification at most once per availability window (Req 15.2).
+        notification at most once per availability window.
         """
         keys = getattr(
             getattr(agent, "db", None), "notified_available_abilities", None
@@ -372,19 +370,19 @@ class AgentProgressionMixin:
 
     # ------------------------------------------------------------------ #
     #  Ability enable / disable / status command backends
-    #  (Req 13.5, 16.2-16.7, 17.2, 17.5)
+    #
     # ------------------------------------------------------------------ #
 
     def enable_ability(self, player: Any, agent_id: Any, key: str) -> str:
         """Enable a gated ability *key* for the owner's *agent_id*.
 
-        Validates ownership (unknown agent → reject, Req 16.7) and that *key* is
-        a known ability gate (unknown key → reject, Req 16.6). When the agent's
+        Validates ownership (unknown agent → reject) and that *key* is
+        a known ability gate (unknown key → reject). When the agent's
         ``Effective_Level`` meets or exceeds the gate's required level, records
         the key in the enabled set, attaches the gate's behavior script (which
-        initializes its delivery state), and confirms (Req 16.2, 17.2). When
+        initializes its delivery state), and confirms. When
         below the gate, rejects with the required level and neither records the
-        key nor attaches the script (Req 16.3). Generic across keys (Req 13.5).
+        key nor attaches the script. Generic across keys.
 
         Returns a human-readable string for the command layer to ``msg()``.
         """
@@ -404,19 +402,19 @@ class AgentProgressionMixin:
                 f"level {gate.required_level} (currently level {effective})."
             )
 
-        # Record the key in the enabled set (sticky, Req 17.1/17.2).
+        # Record the key in the enabled set (sticky).
         enabled = self.get_enabled_abilities(agent)
         enabled.add(key)
         self._set_enabled_abilities(agent, enabled)
 
-        # Attach the gate's behavior script (inits delivery state, Req 16.2).
+        # Attach the gate's behavior script (inits delivery state).
         self._attach_single_script(agent, self.resolve_ability_script(key))
 
         # Enabling attaches the script directly (bypassing the
         # available-but-not-enabled branch of evaluate_gated_abilities), so
         # clear any stale "available" notification flag here too. Otherwise a
         # later detach + re-cross would find the flag set and skip the
-        # legitimate re-notification (Req 15.2, Property 10).
+        # legitimate re-notification.
         notified = self._get_notified_available(agent)
         if key in notified:
             notified.discard(key)
@@ -427,11 +425,11 @@ class AgentProgressionMixin:
     def disable_ability(self, player: Any, agent_id: Any, key: str) -> str:
         """Disable a gated ability *key* for the owner's *agent_id*.
 
-        Validates ownership (unknown agent → reject, Req 16.7) and that *key* is
-        a known ability gate (unknown key → reject, Req 16.6). Clears the key
-        from the enabled set so it does not auto-re-attach (Req 17.5) and detaches
+        Validates ownership (unknown agent → reject) and that *key* is
+        a known ability gate (unknown key → reject). Clears the key
+        from the enabled set so it does not auto-re-attach and detaches
         only that ability's behavior script via ``_detach_single_script`` —
-        ``HarvesterScript`` and any other scripts stay attached (Req 16.4, 9.6).
+        ``HarvesterScript`` and any other scripts stay attached.
 
         Returns a human-readable string for the command layer to ``msg()``.
         """
@@ -442,7 +440,7 @@ class AgentProgressionMixin:
         if key not in self.registry.ability_gates:
             return f"Unknown ability '{key}'."
 
-        # Clear the enabled flag (Req 16.4, 17.5).
+        # Clear the enabled flag.
         enabled = self.get_enabled_abilities(agent)
         enabled.discard(key)
         self._set_enabled_abilities(agent, enabled)
@@ -459,8 +457,8 @@ class AgentProgressionMixin:
     def get_ability_status(self, player: Any, agent_id: Any) -> str:
         """Return a per-ability status summary for the owner's *agent_id*.
 
-        Validates ownership (unknown agent → reject, Req 16.7). For each gate in
-        the registry, reports one of (Req 16.5):
+        Validates ownership (unknown agent → reject). For each gate in
+        the registry, reports one of:
 
         - ``locked (Lv N)`` when the agent's ``Effective_Level`` is below the
           gate's required level N;
@@ -468,7 +466,7 @@ class AgentProgressionMixin:
           key is not enabled;
         - ``enabled`` when the key is in the agent's enabled set.
 
-        Generic across all gate keys (Req 13.5). Returns a readable multi-line
+        Generic across all gate keys. Returns a readable multi-line
         string for the command layer to ``msg()``.
         """
         agent = self.get_agent_by_id(player, agent_id)
@@ -492,7 +490,7 @@ class AgentProgressionMixin:
         return "\n".join(lines)
 
     # ------------------------------------------------------------------ #
-    #  Roster progression view  (Req 11.1, 11.2, 11.3, 11.4, 14.5)
+    #  Roster progression view
     # ------------------------------------------------------------------ #
 
     def _rank_name_for_level(self, level: int) -> str:
@@ -503,7 +501,7 @@ class AgentProgressionMixin:
         ``RankDef`` whose ``.level`` equals that rank number, returning its
         ``.name`` with underscores normalized to spaces. Falls back to a
         generic ``Rank N`` when no matching ``RankDef`` is loaded so the view
-        never raises (Req 11.1, 14.5).
+        never raises.
         """
         from world.systems.rank_system import rank_from_level
 
@@ -520,18 +518,15 @@ class AgentProgressionMixin:
         owner-level cap, so the view can never go stale:
 
         - ``effective_level``: ``compute_effective_level(agent)`` — the
-          owner-capped level (Req 11.1).
+          owner-capped level.
         - ``rank_name``: the cosmetic rank name derived from the *effective*
-          level, not the raw level, so a capped agent shows its capped rank
-          (Req 11.1, 14.5).
+          level, not the raw level, so a capped agent shows its capped rank.
         - ``ability_status``: a map of each registry gate key to its status —
           ``'enabled'`` when the key is in the agent's enabled set,
           ``'available'`` when ``effective_level >= required_level`` but not
-          enabled, else ``'locked:N'`` with ``N`` the gate's required level
-          (Req 11.2, 11.3).
+          enabled, else ``'locked:N'`` with ``N`` the gate's required level.
         - ``capped_by_commander``: ``True`` iff the agent's Raw_Level exceeds
-          its Effective_Level, i.e. the owner cap is actively suppressing it
-          (Req 11.4).
+          its Effective_Level, i.e. the owner cap is actively suppressing it.
 
         Generic across all gate keys (no delivery-specific behavior).
         """
@@ -553,7 +548,7 @@ class AgentProgressionMixin:
         }
 
     # ------------------------------------------------------------------ #
-    #  Freeze-aware XP award / death loss  (Req 5.7, 5.9, 5.10, 6, 14.4)
+    #  Freeze-aware XP award / death loss
     # ------------------------------------------------------------------ #
 
     def _reevaluate_agent(self, agent: Any) -> None:
@@ -581,7 +576,7 @@ class AgentProgressionMixin:
         ``old_level``, ``new_level``); the level arguments are accepted to match
         that payload but are not needed here because each Agent's ``Cap_Ceiling``
         is recomputed from the owner's current level inside
-        ``evaluate_gated_abilities`` (Req 15.5).
+        ``evaluate_gated_abilities``.
 
         For each Agent owned by *player*, recomputes ``Cap_Ceiling`` /
         ``Effective_Level`` and calls ``evaluate_gated_abilities``, which applies
@@ -589,10 +584,9 @@ class AgentProgressionMixin:
 
         - a level rise that crosses a gate marks the ability available and
           notifies the owner (no attach) unless the ability is already enabled,
-          in which case it attaches the script and notifies it is active (Req
-          14.7, 14.8, 15.1, 15.2, 15.3);
+          in which case it attaches the script and notifies it is active;
         - a level drop below a gate detaches the script, retains the Agent's
-          enabled flag, and notifies a re-lock (Req 15.4).
+          enabled flag, and notifies a re-lock.
 
         Each Agent is evaluated inside its own ``try``/``except`` so one bad
         Agent never halts re-evaluation of the rest of the roster.
@@ -612,19 +606,18 @@ class AgentProgressionMixin:
 
         Computes the effective level and cap ceiling FIRST. WHILE the agent's
         level has reached its ``Cap_Ceiling``, no XP is awarded — gain is frozen
-        at the ceiling and no surplus accumulates (Req 5.9, 14.4). Otherwise the
+        at the ceiling and no surplus accumulates. Otherwise the
         amount is looked up from ``registry.balance`` by *source* key, awarded
-        via ``agent.award_xp`` (a zero/unknown amount is a no-op, Req 5.8), and
-        the agent's effective level + gated abilities are re-evaluated (Req
-        14.6). When the owner later raises the ceiling, awards resume on the
-        next earning event (Req 5.10, 14.8).
+        via ``agent.award_xp`` (a zero/unknown amount is a no-op), and the
+        agent's effective level + gated abilities are re-evaluated. When the
+        owner later raises the ceiling, awards resume on the next earning event.
 
         Returns ``True`` iff an award actually happened (and therefore gated
         abilities were re-evaluated), so callers like ``_process_agent_tick``
         can avoid a redundant second ``evaluate_gated_abilities`` pass.
         """
         # FREEZE check first — compute cap ceiling and compare against the
-        # agent's raw level. No banking when at/above the ceiling (Req 5.9).
+        # agent's raw level. No banking when at/above the ceiling.
         cap_ceiling = self.get_cap_ceiling(agent)
         current_level = getattr(getattr(agent, "db", None), "level", None)
         if current_level is None:
@@ -638,12 +631,12 @@ class AgentProgressionMixin:
             return False
         amount = getattr(self.registry.balance, field, 0) or 0
         if amount <= 0:
-            # Zero amount → no-op (Req 5.8). Nothing changed; skip re-eval.
+            # Zero amount → no-op. Nothing changed; skip re-eval.
             return False
 
         agent.award_xp(amount)
 
-        # Re-derive effective level + gated abilities after the change (Req 14.6).
+        # Re-derive effective level + gated abilities after the change.
         self._reevaluate_agent(agent)
         return True
 
@@ -652,7 +645,7 @@ class AgentProgressionMixin:
 
         Deducts ``balance.agent_xp_death_loss`` via ``agent.deduct_xp`` (floored
         at 0 by ``CombatEntity``), then re-derives the effective level and gated
-        abilities (Req 6.1, 6.2, 6.3, 14.6). Death loss is NEVER frozen — it only
+        abilities. Death loss is NEVER frozen — it only
         reduces XP, never adds past the ceiling.
         """
         amount = getattr(self.registry.balance, "agent_xp_death_loss", 0) or 0

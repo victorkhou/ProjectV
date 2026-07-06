@@ -13,7 +13,6 @@ and :meth:`parse_int` — so individual ``sub_*`` methods don't re-implement the
 "look up system / msg on failure" and "parse int arg / msg on failure"
 boilerplate.
 
-Requirements: 6.1, 6.2, 6.3, 6.4, 6.5, 6.6, 8.1, 8.2
 """
 
 from __future__ import annotations
@@ -166,7 +165,6 @@ class AdminSubcommandRouter(SubcommandRouter):
     level).  Individual subcommands enforce stricter permissions via
     ``_check_sub_perm``.
 
-    Requirements: 1.5, 2.7, 2.8, 3.5, 3.6, 4.5
     """
 
     help_category = "Admin"
@@ -184,7 +182,6 @@ class GameSubcommandRouter(SubcommandDispatchMixin, GameCommand):
 
     Sets ``help_category = "Game"``.
 
-    Requirements: 5.10, 6.1, 6.2, 6.3
     """
 
     help_category = "Game"

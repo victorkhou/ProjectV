@@ -853,9 +853,9 @@ class TestCmdMap(unittest.TestCase):
 class TestExitCommands(unittest.TestCase):
     """closeexit / openexit resolve the building via coordinates.
 
-    Regression: both commands previously called the deprecated
-    _find_player_tile() stub (always None) and always failed with
-    "Cannot determine your position" even when inside an owned building.
+    Regression: both commands previously relied on a tile-lookup stub that
+    always returned None and always failed with "Cannot determine your
+    position" even when inside an owned building.
     """
 
     def _make_owned_building(self, owner):

@@ -4,7 +4,6 @@ CombatEntity mixin — shared combat state for players and NPCs.
 Pure Python mixin with NO Evennia base class. Expects the host class
 to provide ``self.db.*`` (Evennia AttributeHandler).
 
-Requirements: 7.1, 7.2, 7.3, 7.4, 7.5
 """
 
 # Default number of ticks an entity stays incapacitated before respawn.

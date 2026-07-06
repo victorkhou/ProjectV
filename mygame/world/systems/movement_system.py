@@ -5,7 +5,6 @@ Maintains an in-memory set of moving NPCs to avoid per-tick DB queries
 (same pattern as ``agent_system._training_buildings``). Throttles
 pathfinding requests to prevent tick stalls.
 
-Requirements: 2.1, 5.4, 6.3
 """
 
 from __future__ import annotations

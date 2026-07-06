@@ -7,7 +7,6 @@ behavior (role scripts like ``HarvesterScript`` and gated ability scripts like
 focused on orchestration; combined into ``AgentSystem`` via inheritance so
 every method runs against the same ``self`` (a pure relocation).
 
-Requirements: 8, 9, 13.4, 16.2, 16.4.
 """
 
 from __future__ import annotations
@@ -40,8 +39,7 @@ class AgentBehaviorMixin:
         ability. For harvesters this means ``HarvesterScript`` always attaches and
         ``DeliveryBehavior`` attaches only via the gate evaluation, so the
         ``assign_agent`` reserve-restore/reassign path attaches delivery iff
-        effective ≥ gate AND enabled (Req 8.1, 8.2, 8.3, 8.5, 8.6, 10.3, 10.4,
-        12.6).
+        effective ≥ gate AND enabled.
 
         Silently no-ops in test environments where Evennia isn't available.
         """
@@ -100,7 +98,7 @@ class AgentBehaviorMixin:
         Looks up ``ABILITY_SCRIPT_MAP`` from ``agent_scripts`` lazily so the
         system stays decoupled from Script construction and importable outside
         the Evennia DB context. Returns the Script class, or ``None`` when the
-        key is unresolved or the import fails (Req 13.4).
+        key is unresolved or the import fails.
         """
         try:
             from typeclasses.agent_scripts import ABILITY_SCRIPT_MAP
@@ -129,9 +127,9 @@ class AgentBehaviorMixin:
         """Idempotently attach a single gated ability *script_cls* to *agent*.
 
         Checks the agent's existing scripts by ``key`` before adding so a
-        duplicate is never attached (Req 9.4). When attaching ``DeliveryBehavior``,
+        duplicate is never attached. When attaching ``DeliveryBehavior``,
         initializes ``delivery_state = DeliveryState.IDLE`` so the delivery FSM
-        starts from a clean state (Req 9.3).
+        starts from a clean state.
 
         Silently no-ops in test environments where Evennia isn't available.
         """
@@ -164,7 +162,7 @@ class AgentBehaviorMixin:
         Unlike ``_detach_behavior_script`` (which removes all behavior scripts on
         reassignment), this removes a single named ability script, leaving all
         other scripts — including ``HarvesterScript`` — attached. Used by gate
-        re-lock and player disable (Req 13.4).
+        re-lock and player disable.
 
         Silently no-ops in test environments where Evennia isn't available.
         """

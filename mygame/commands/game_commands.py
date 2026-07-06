@@ -5,9 +5,6 @@ Each command parses arguments from self.args, delegates to the
 appropriate game system, and sends results to the player via
 self.caller.msg().
 
-Requirements: 1.6, 1.7, 1.10, 2.3, 2.5, 3.3, 5.3, 6.2, 6.3, 6.4,
-              6.8, 6.17, 8.2, 9.2, 13.3, 13.5, 13.8, 16.1, 16.2,
-              16.3, 16.4, 16.5
 """
 
 from __future__ import annotations
@@ -166,18 +163,6 @@ class GameCommand(BaseCommand):
                 return cmd_key, raw
 
         return None, None
-
-    def _resolve_player_tile(self):
-        """Deprecated — returns None. Use PlanetRoom queries instead."""
-        return None
-
-    def _find_player_tile(self):
-        """Deprecated — returns None. Use PlanetRoom queries instead."""
-        return None
-
-    def _get_player_tile(self, create=False):
-        """Deprecated — returns None. Use PlanetRoom queries instead."""
-        return None
 
     def _building_at_caller(self, caller):
         """Return the Building at the caller's coordinates, or None.
@@ -348,7 +333,7 @@ class CmdMove(GameCommand):
             if getattr(building, "is_offline", False):
                 caller.msg("That tile is blocked by an offline building.")
                 return
-            # Wall passage check: block owner during combat timer (Req 6.24, 17.1-17.5)
+            # Wall passage check: block owner during combat timer
             from world.constants import COMBAT_BARRIER
             from world.utils import building_has_capability
             if building_has_capability(building, COMBAT_BARRIER) and is_owner(
@@ -361,7 +346,7 @@ class CmdMove(GameCommand):
                     )
                     return
 
-        # Reset active-presence state on movement (Req 6.6, 6.7)
+        # Reset active-presence state on movement
         self._interrupt_activity(caller, moved=True)
 
         # Atomic coordinate update via move_entity
@@ -482,7 +467,7 @@ class CmdHarvest(GameCommand):
             self.caller.msg("Cannot determine your position.")
             return
 
-        # Use active-presence harvesting (Req 3.4, 6.6, 6.7)
+        # Use active-presence harvesting
         # Pass PlanetRoom as the tile — start_harvest already supports
         # PlanetRoom path (reads player coords + TerrainGenerator)
         success, msg = resource_system.start_harvest(self.caller, planet_room)
@@ -950,7 +935,7 @@ class CmdScore(GameCommand):
             f"  Position: ({x}, {y}) on {planet}",
         ]
 
-        # Agent count (Req 7b.10)
+        # Agent count
         agent_system = _get_system(caller, "agent_system")
         if agent_system:
             try:
@@ -960,7 +945,7 @@ class CmdScore(GameCommand):
             except Exception:
                 pass
 
-        # Combat timer (Req 17.5)
+        # Combat timer
         combat_expires = getattr(caller.db, "combat_timer_expires", 0) or 0
         if combat_expires > 0:
             # Estimate remaining seconds from tick count
@@ -1143,18 +1128,6 @@ class CmdScan(GameCommand):
         buildings = []
         if caller_x is not None and caller_y is not None and hasattr(loc, "get_buildings_at"):
             buildings = loc.get_buildings_at(int(caller_x), int(caller_y))
-        else:
-            # Legacy fallback
-            tile = self._find_player_tile()
-            if tile is not None:
-                for obj in getattr(tile, "contents", []):
-                    if hasattr(obj, "building_type") or (
-                        hasattr(obj, "db") and hasattr(obj.db, "building_type")
-                    ):
-                        buildings.append(obj)
-                tile_building = getattr(tile, "building", None)
-                if tile_building is not None and tile_building not in buildings:
-                    buildings.append(tile_building)
 
         lines = ["|wScan Results:|n"]
         if players:

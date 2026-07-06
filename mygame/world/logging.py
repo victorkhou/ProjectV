@@ -4,7 +4,6 @@ Structured Logger for the RTS Combat Overworld game.
 Wraps Python's logging module with structured context fields for
 game events. Supports both human-readable and JSON output formats.
 
-Requirements: 29.1, 29.2, 29.3
 """
 
 from __future__ import annotations

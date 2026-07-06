@@ -5,8 +5,6 @@ Handles construction, upgrade, and destruction logic for all building types.
 Validates prerequisites, terrain, resources, and combat lockout before
 allowing construction. Publishes events via the EventBus.
 
-Requirements: 3.1, 3.2, 3.3, 3.4, 3.5, 3.6, 3.8, 3.9, 3.10, 3.11,
-              4.2, 4.4, 5.3, 5.4, 5.5, 5.6, 5.7
 """
 
 from __future__ import annotations
@@ -347,7 +345,7 @@ class BuildingSystem(BaseSystem):
             building.delete()
 
     # ------------------------------------------------------------------ #
-    #  Construction timer & active-presence (Req 6.5, 6.6, 6.7)
+    #  Construction timer & active-presence
     # ------------------------------------------------------------------ #
 
     def start_construction(
@@ -618,7 +616,7 @@ class BuildingSystem(BaseSystem):
     def _validate_rank_requirement(
         self, player: Any, building_def: BuildingDef
     ) -> str | None:
-        """Check player level meets building's rank_requirement (Req 6.5).
+        """Check player level meets building's rank_requirement.
 
         rank_requirement is now a level requirement (1-60).
         Returns error message or None.
@@ -640,7 +638,7 @@ class BuildingSystem(BaseSystem):
     def _validate_one_hq_per_planet(
         self, player: Any, building_def: BuildingDef, tile: Any
     ) -> str | None:
-        """Enforce one HQ per player per planet (Req 6.4).
+        """Enforce one HQ per player per planet.
 
         Returns error message or None.
         """
@@ -657,7 +655,7 @@ class BuildingSystem(BaseSystem):
         self, tile: Any, building_def: BuildingDef,
         x: int | None = None, y: int | None = None,
     ) -> str | None:
-        """Enforce Extractor placement on resource terrain (Req 6.11).
+        """Enforce Extractor placement on resource terrain.
 
         Queries the TerrainGenerator directly using the tile's
         coordinates, since room attributes may not be populated yet.
@@ -723,7 +721,7 @@ class BuildingSystem(BaseSystem):
         return "Extractor must be placed on terrain with a resource."
 
     # ------------------------------------------------------------------ #
-    #  Repair (Req 6.10, 14b.3)
+    #  Repair
     # ------------------------------------------------------------------ #
 
     def get_repair_cost(self, building: Any) -> dict[str, int]:
@@ -818,7 +816,7 @@ class BuildingSystem(BaseSystem):
         building.attributes.add("hp", building_def.max_health)
         building.attributes.add("hp_max", building_def.max_health)
         # Tag is auto-set by Building.at_object_creation via GameEntity
-        # Phase 1 construction timer & inventory attributes (Req 6.6, 6.10)
+        # Phase 1 construction timer & inventory attributes
         building.attributes.add("assigned_agent", None)
         building.attributes.add("construction_progress", 0)
         building.attributes.add("construction_total", 0)

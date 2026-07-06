@@ -5,7 +5,6 @@ A thin wrapper over Evennia's existing communication infrastructure.
 Configures game channels on startup and overrides message formatting
 to include player rank.
 
-Requirements: 13.1, 13.2, 13.3, 13.4, 13.5, 13.6, 13.7, 13.8
 """
 
 from __future__ import annotations

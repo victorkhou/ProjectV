@@ -12,7 +12,7 @@ import sys
 import types
 import unittest
 
-from hypothesis import given, settings, assume
+from hypothesis import given, settings
 from hypothesis import strategies as st
 
 # -------------------------------------------------------------- #
@@ -247,16 +247,6 @@ def terrain_with_resource_strategy(draw):
     return terrain, TERRAIN_RESOURCE_MAP[terrain]
 
 @st.composite
-def building_level_strategy(draw):
-    """Generate a valid building level (1-5)."""
-    return draw(st.integers(min_value=1, max_value=5))
-
-@st.composite
-def resource_building_strategy(draw):
-    """Generate a random resource building abbreviation."""
-    return draw(st.sampled_from(list(RESOURCE_BUILDING_DEFS.keys())))
-
-@st.composite
 def respawn_ticks_strategy(draw):
     """Generate a respawn tick count (1-100)."""
     return draw(st.integers(min_value=1, max_value=100))
@@ -447,109 +437,6 @@ class TestProperty5RespawnCycle(unittest.TestCase):
 
         node = tile.attributes.get("resource_node_data")
         self.assertFalse(node["depleted"])
-
-# -------------------------------------------------------------- #
-#  Property 10: Resource production scales with level
-#  **Validates: Requirements 5.2**
-# -------------------------------------------------------------- #
-
-class TestProperty10ProductionScalesWithLevel(unittest.TestCase):
-    """Property 10: Resource production scales with level.
-
-    For any resource building at level L, the production yield per tick
-    SHALL equal balance.production_scaling[L]. The produced resource
-    SHALL match the building definition's produces field.
-
-    **Validates: Requirements 5.2**
-    """
-
-    @given(
-        building_abbr=resource_building_strategy(),
-        level=building_level_strategy(),
-    )
-    @settings(max_examples=100)
-    def test_production_matches_scaling(self, building_abbr, level):
-        """Production yield equals production_scaling[level]."""
-        building_def = RESOURCE_BUILDING_DEFS[building_abbr]
-        expected_resource = building_def.produces
-        expected_yield = PRODUCTION_SCALING[level]
-
-        player = FakePlayer()
-        building = FakeBuilding(
-            building_type=building_abbr,
-            owner=player,
-            level=level,
-        )
-
-        system, _ = _make_system()
-        system.process_production([building])
-
-        self.assertEqual(
-            player.get_resource(expected_resource),
-            expected_yield,
-            f"Level {level} {building_abbr} should produce {expected_yield} "
-            f"{expected_resource}, got {player.get_resource(expected_resource)}",
-        )
-
-    @given(
-        building_abbr=resource_building_strategy(),
-        level=building_level_strategy(),
-    )
-    @settings(max_examples=100)
-    def test_production_only_affects_correct_resource(self, building_abbr, level):
-        """Production only adds to the building's designated resource."""
-        building_def = RESOURCE_BUILDING_DEFS[building_abbr]
-        expected_resource = building_def.produces
-
-        player = FakePlayer()
-        building = FakeBuilding(
-            building_type=building_abbr,
-            owner=player,
-            level=level,
-        )
-
-        system, _ = _make_system()
-        system.process_production([building])
-
-        for r in ALL_RESOURCE_TYPES:
-            if r == expected_resource:
-                self.assertGreater(player.get_resource(r), 0)
-            else:
-                self.assertEqual(
-                    player.get_resource(r), 0,
-                    f"Resource {r} should be 0 after {building_abbr} production",
-                )
-
-    @given(
-        building_abbr=resource_building_strategy(),
-        level1=building_level_strategy(),
-        level2=building_level_strategy(),
-    )
-    @settings(max_examples=100)
-    def test_higher_level_produces_more_or_equal(self, building_abbr, level1, level2):
-        """A higher-level building produces at least as much as a lower-level one."""
-        assume(level1 < level2)
-
-        building_def = RESOURCE_BUILDING_DEFS[building_abbr]
-        expected_resource = building_def.produces
-
-        player1 = FakePlayer()
-        player2 = FakePlayer()
-        b1 = FakeBuilding(building_type=building_abbr, owner=player1, level=level1)
-        b2 = FakeBuilding(building_type=building_abbr, owner=player2, level=level2)
-
-        system, _ = _make_system()
-        system.process_production([b1])
-        system.process_production([b2])
-
-        yield1 = player1.get_resource(expected_resource)
-        yield2 = player2.get_resource(expected_resource)
-
-        self.assertGreaterEqual(
-            yield2, yield1,
-            f"Level {level2} should produce >= level {level1}: "
-            f"{yield2} vs {yield1}",
-        )
 
 if __name__ == "__main__":
     unittest.main()

@@ -5,9 +5,6 @@ Handles manual resource gathering from terrain nodes, active-presence
 harvesting, automated Extractor production from Harvester agents,
 Extractor inventory management, and depleted node respawn cycles.
 
-Requirements: 2.1, 2.2, 2.3, 2.5, 2.6, 2.7, 3.4, 3.5, 5.2, 5.8,
-              6.6, 6.7, 6.12, 6.22, 9.1, 9.2, 9.3, 9.4, 14.7, 14.8,
-              15.1, 15.2, 15.3, 15.4
 """
 
 from __future__ import annotations
@@ -97,7 +94,7 @@ class ResourceSystem(BaseSystem):
         return True, f"Harvested {gather_amount} {resource_type}."
 
     # ------------------------------------------------------------------ #
-    #  Active-presence harvesting (Req 3.4, 6.6, 6.7)
+    #  Active-presence harvesting
     # ------------------------------------------------------------------ #
 
     # Harvest cooldown, yield, and multiplier imported from world.constants
@@ -285,7 +282,7 @@ class ResourceSystem(BaseSystem):
         return False
 
     # ------------------------------------------------------------------ #
-    #  Extractor inventory management (Req 6.12, 6.22)
+    #  Extractor inventory management
     # ------------------------------------------------------------------ #
 
     @staticmethod
@@ -368,7 +365,7 @@ class ResourceSystem(BaseSystem):
         return actual
 
     # ------------------------------------------------------------------ #
-    #  Harvester agent / Extractor production (Req 9.1, 9.2, 9.3, 9.4)
+    #  Harvester agent / Extractor production
     # ------------------------------------------------------------------ #
 
     def process_extractor_production(self, buildings: list) -> None:
@@ -450,46 +447,6 @@ class ResourceSystem(BaseSystem):
                     amount=production_int,
                     tile=building,
                 )
-
-    # ------------------------------------------------------------------ #
-    #  Automated production from resource buildings
-    # ------------------------------------------------------------------ #
-
-    def process_production(self, active_buildings: list) -> None:
-        """DEPRECATED — passive production removed in Phase 1.
-
-        Extractors now require player presence or a Harvester agent.
-        This method is kept for backward compatibility with tests but
-        is no longer called from the game tick loop.
-        """
-        import warnings
-        warnings.warn(
-            "process_production is deprecated — use process_extractor_production",
-            DeprecationWarning,
-            stacklevel=2,
-        )
-        for building in active_buildings:
-            if getattr(building, "is_offline", False):
-                continue
-            building_type = self._get_building_type(building)
-            if not building_type:
-                continue
-            try:
-                building_def = self.registry.get_building(building_type)
-            except KeyError:
-                continue
-            if not building_def.has_capability(HARVESTABLE):
-                continue
-            resource_type = building_def.produces
-            if not resource_type:
-                continue
-            owner = getattr(building, "owner", None)
-            if owner is None:
-                continue
-            level = self._get_building_level(building)
-            production_yield = self.registry.balance.production_scaling.get(level, 0)
-            if production_yield > 0:
-                owner.add_resource(resource_type, production_yield)
 
     # ------------------------------------------------------------------ #
     #  Resource node respawn

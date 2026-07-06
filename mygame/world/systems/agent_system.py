@@ -4,7 +4,6 @@ Agent System — manages player-owned NPC agents.
 Handles training, role assignment, demotion/promotion reserve,
 and per-tick processing of agent behavior scripts.
 
-Requirements: 7b.1–7b.14, 8.1–8.7
 """
 
 from __future__ import annotations
@@ -129,7 +128,7 @@ class AgentSystem(AgentProgressionMixin, AgentBehaviorMixin, BaseSystem):
         return npc
 
     # ------------------------------------------------------------------ #
-    #  Training  (Req 8.1–8.7)
+    #  Training
     # ------------------------------------------------------------------ #
 
     def train_agent(
@@ -243,7 +242,7 @@ class AgentSystem(AgentProgressionMixin, AgentBehaviorMixin, BaseSystem):
         return npc
 
     # ------------------------------------------------------------------ #
-    #  Assignment  (Req 7b.6, 7b.7, 7b.8, 7b.11)
+    #  Assignment
     # ------------------------------------------------------------------ #
 
     def assign_agent(
@@ -336,7 +335,7 @@ class AgentSystem(AgentProgressionMixin, AgentBehaviorMixin, BaseSystem):
         agent.db.carried_resources = {}
         agent.db.delivery_target = None
 
-        # Path agent to building coordinates instead of teleporting (Req 2.6)
+        # Path agent to building coordinates instead of teleporting
         if target_building is not None:
             bx = getattr(getattr(target_building, "db", None), "coord_x", None)
             by = getattr(getattr(target_building, "db", None), "coord_y", None)
@@ -387,7 +386,7 @@ class AgentSystem(AgentProgressionMixin, AgentBehaviorMixin, BaseSystem):
         return True, f"Agent #{agent_id} assigned as {role}."
 
     # ------------------------------------------------------------------ #
-    #  Unassignment  (Req 7b.7)
+    #  Unassignment
     # ------------------------------------------------------------------ #
 
     def unassign_agent(
@@ -418,15 +417,15 @@ class AgentSystem(AgentProgressionMixin, AgentBehaviorMixin, BaseSystem):
         # Detach behavior script before clearing role
         self._detach_behavior_script(agent)
 
-        # Clear current movement queue (Req 11.2)
+        # Clear current movement queue
         if hasattr(agent, "clear_movement"):
             agent.clear_movement()
 
-        # Clear patrol-related attributes (Req 3.6)
+        # Clear patrol-related attributes
         agent.db.patrol_route = None
         agent.db.patrol_waypoint_index = 0
 
-        # Clear delivery-related attributes (Req 3.6, 11.2)
+        # Clear delivery-related attributes
         agent.db.delivery_state = None
         agent.db.carried_resources = {}
         agent.db.delivery_target = None
@@ -434,7 +433,7 @@ class AgentSystem(AgentProgressionMixin, AgentBehaviorMixin, BaseSystem):
         agent.db.role = ""
         agent.db.role_target = None
 
-        # Compute path to HQ instead of teleporting (Req 11.2)
+        # Compute path to HQ instead of teleporting
         hq = self._find_hq(player)
         if hq is not None:
             hx = getattr(getattr(hq, "db", None), "coord_x", None)
@@ -474,7 +473,7 @@ class AgentSystem(AgentProgressionMixin, AgentBehaviorMixin, BaseSystem):
         return True, f"Agent #{agent_id} unassigned and returned to HQ."
 
     # ------------------------------------------------------------------ #
-    #  Patrol routes  (Req 3.1, 3.6, 3.7, 3.8)
+    #  Patrol routes
     # ------------------------------------------------------------------ #
 
     def set_patrol_route(
@@ -560,7 +559,7 @@ class AgentSystem(AgentProgressionMixin, AgentBehaviorMixin, BaseSystem):
         return True, f"Agent #{agent_id} patrol route cleared."
 
     # ------------------------------------------------------------------ #
-    #  Stop / cancel  (Req 11.1, 11.3, 11.4)
+    #  Stop / cancel
     # ------------------------------------------------------------------ #
 
     def stop_agent(
@@ -586,7 +585,7 @@ class AgentSystem(AgentProgressionMixin, AgentBehaviorMixin, BaseSystem):
 
         agent.db.activity_status = ACTIVITY_IDLE
 
-        # Harvesters retain carried resources (Req 11.4) — no cleanup needed.
+        # Harvesters retain carried resources — no cleanup needed.
         # Just reset delivery_state so the behavior script can re-evaluate.
         role = getattr(agent.db, "role", "")
         if role == "harvester":
@@ -611,7 +610,7 @@ class AgentSystem(AgentProgressionMixin, AgentBehaviorMixin, BaseSystem):
         return True, f"Agent #{agent_id} stopped."
 
     # ------------------------------------------------------------------ #
-    #  Queries  (Req 7b.10)
+    #  Queries
     # ------------------------------------------------------------------ #
 
     def get_agents(self, player: Any) -> list:
@@ -709,7 +708,7 @@ class AgentSystem(AgentProgressionMixin, AgentBehaviorMixin, BaseSystem):
 
     def _is_actively_assigned(self, agent: Any) -> bool:
         """True iff *agent* is actively assigned: has a non-empty ``db.role``,
-        is not reserved, and is not incapacitated (Req 5.5).
+        is not reserved, and is not incapacitated.
         """
         db = getattr(agent, "db", None)
         if db is None:
@@ -728,10 +727,10 @@ class AgentSystem(AgentProgressionMixin, AgentBehaviorMixin, BaseSystem):
 
         For an actively-assigned, non-reserved, non-incapacitated agent, awards
         ``"time_served"`` once per tick (a zero configured amount is a no-op via
-        ``CombatEntity.award_xp``, Req 5.8; an agent frozen at its cap ceiling is
-        short-circuited inside ``award_agent_xp``, Req 5.9), then runs a
+        ``CombatEntity.award_xp``; an agent frozen at its cap ceiling is
+        short-circuited inside ``award_agent_xp``), then runs a
         defensive ``evaluate_gated_abilities`` re-eval so an agent whose effective
-        level changed converges (Req 14.6).
+        level changed converges.
         """
         if not self._is_actively_assigned(agent):
             return
@@ -747,13 +746,13 @@ class AgentSystem(AgentProgressionMixin, AgentBehaviorMixin, BaseSystem):
         """Process all agent-related per-tick work.
 
         For each actively-assigned agent, awards the configured time-served XP
-        once per tick and re-evaluates its gated abilities (Req 5.5, 5.8, 5.9).
+        once per tick and re-evaluates its gated abilities.
         Then iterates all agents with behavior scripts (interval=0) and calls
         ``at_repeat()`` on each script to drive polling-based behaviors
         (harvesting, patrol, delivery).
 
         Each agent's award + gate re-eval is wrapped in its own try/except so a
-        single misbehaving agent never halts the whole tick (Req 5.5).
+        single misbehaving agent never halts the whole tick.
         """
         try:
             from evennia.utils.search import search_object_by_tag

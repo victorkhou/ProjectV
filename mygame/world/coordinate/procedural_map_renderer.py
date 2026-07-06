@@ -18,7 +18,6 @@ Color scheme (Evennia |X codes):
 - Terrain: per-type color
 - Fog tiles: |x dark grey overlay
 
-Requirements: 5.1, 5.2, 5.3, 5.4, 5.5, 5.6, 5.7, 5.8
 """
 
 from __future__ import annotations
@@ -475,7 +474,7 @@ class ProceduralMapRenderer:
                         abbr = str(bt)[:2]
 
             # Agents inside buildings render as occupied building (dark blue),
-            # not as separate agent symbols (Req 19.5, 19.8)
+            # not as separate agent symbols
             bld_contents = getattr(bld, "contents", [])
             has_entity_inside = False
             for obj in bld_contents:

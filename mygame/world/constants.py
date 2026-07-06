@@ -142,7 +142,7 @@ def compute_effective_delay(base_delay: int, speed_modifier: int) -> int:
         Effective delay: ``max(1, base_delay - speed_modifier)``.
 
     Notes:
-        Validates agent-ai Requirement 8.8. Used by ``NPC.advance_movement``.
+        Used by ``NPC.advance_movement``.
     """
     return max(1, base_delay - speed_modifier)
 

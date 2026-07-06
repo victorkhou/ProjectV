@@ -80,14 +80,12 @@ class GameTickScript(DefaultScript):
     """Persistent script driving the game tick loop.
 
     Orchestrates all game systems each tick in a defined order.
-    Each processing step is wrapped in try/except for error resilience
-    (Requirement 11.3).
+    Each processing step is wrapped in try/except for error resilience.
 
     The tick determines active world chunks based on online player
     positions, then processes only buildings and tiles within those
-    chunks for performance (Requirement 11.4, 31.1-31.5).
+    chunks for performance.
 
-    Requirements: 11.1, 11.2, 11.3, 11.4, 11.5
     """
 
     def at_script_creation(self):
@@ -113,7 +111,7 @@ class GameTickScript(DefaultScript):
         10. Record metrics
 
         Each step is wrapped in try/except so a failure in one step
-        does not prevent the others from executing (Requirement 11.3).
+        does not prevent the others from executing.
         """
         start_time = time.time()
         tick_number = getattr(self.db, "tick_count", 0) + 1
@@ -311,8 +309,7 @@ class GameTickScript(DefaultScript):
 
         # NOTE: Harvester-agent production is driven by HarvesterScript
         # (one script per agent, run in the agent_processing step), per the
-        # agent-ai spec (Req 9.8: "THE harvester Agent SHALL continue
-        # producing resources via HarvesterScript ..."). The old
+        # agent-ai spec. The old
         # process_extractor_production tick step was a second, faster driver
         # for the same (extractor, agent) pairs and produced resources twice
         # per tick — it has been removed. process_extractor_production remains
@@ -389,7 +386,6 @@ class AutoSaveScript(DefaultScript):
     Runs as a persistent script with a configurable interval.
     On error, logs and retries next interval.
 
-    Requirements: 32.1, 32.2, 32.3, 32.4
     """
 
     def at_script_creation(self):

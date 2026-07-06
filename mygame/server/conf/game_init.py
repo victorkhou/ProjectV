@@ -4,7 +4,6 @@ Server startup initialization for the RTS Combat Overworld.
 Called from Evennia's at_server_start hook. Initializes all game
 systems, wires event subscribers, and starts persistent scripts.
 
-Requirements: 25.2, 25.3, 28.4
 """
 
 from __future__ import annotations
@@ -203,16 +202,16 @@ def initialize_game() -> dict:
     # NotificationSystem auto-subscribes in __init__
     notification_system = NotificationSystem(event_bus)
 
-    # Combat timer: start/reset on COMBAT_ACTION events (Req 17.1-17.5)
+    # Combat timer: start/reset on COMBAT_ACTION events
     from world.combat_timer import subscribe_combat_timer
     subscribe_combat_timer(event_bus)
 
-    # Agent demotion/promotion: reserve or restore agents on rank change (Req 18.1, 18.2)
+    # Agent demotion/promotion: reserve or restore agents on rank change
     from world.event_bus import RANK_DEMOTED, RANK_PROMOTED
     event_bus.subscribe(RANK_DEMOTED, lambda **kw: agent_system.handle_demotion(kw.get("player"), kw.get("new_agent_cap", 2)))
     event_bus.subscribe(RANK_PROMOTED, lambda **kw: agent_system.handle_promotion(kw.get("player"), kw.get("new_agent_cap", 2)))
 
-    # Owner level change: re-evaluate gated abilities on every owned Agent (Req 15.5)
+    # Owner level change: re-evaluate gated abilities on every owned Agent
     from world.event_bus import LEVEL_CHANGED
     event_bus.subscribe(LEVEL_CHANGED, lambda **kw: agent_system.on_owner_level_changed(kw.get("player"), kw.get("old_level"), kw.get("new_level")))
 

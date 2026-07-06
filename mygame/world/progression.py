@@ -17,7 +17,6 @@ This module must stay free of Evennia imports and must not import
 rule (``rank_from_level``) is imported lazily inside ``rank_for_level``;
 only ``world.constants`` is imported at the top level.
 
-Requirements: 3.1, 3.2, 3.5, 3.6
 """
 
 from __future__ import annotations
@@ -110,7 +109,6 @@ def level_for_xp(xp: int) -> int:
     Clamped to ``1..MAX_LEVEL``. When the table is uninitialized and cannot
     be lazily built, falls back to level ``1``.
 
-    Requirements: 3.2, 3.5, 3.6
     """
     if not _ensure_initialized():
         return 1
@@ -146,7 +144,6 @@ def rank_for_level(level: int) -> int:
     lazily here to avoid the ``rank_system`` <-> ``progression`` circular
     import.
 
-    Requirements: 3.3
     """
     from world.systems.rank_system import rank_from_level
 

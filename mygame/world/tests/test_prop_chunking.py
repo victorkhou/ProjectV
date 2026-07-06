@@ -64,13 +64,6 @@ class FakePlayer:
     def __init__(self, x: int, y: int):
         self.position = (x, y)
 
-class FakeTile:
-    """Lightweight stand-in for a tile with coordinates."""
-
-    def __init__(self, x: int, y: int):
-        self.x = x
-        self.y = y
-
 class FakeBuilding:
     """Lightweight stand-in for a building with a position."""
 
@@ -242,34 +235,6 @@ class TestProperty29WorldChunkActivation(unittest.TestCase):
         mgr = WorldChunkManager(chunk_size=chunk_size)
         active = mgr.get_active_chunks("test_planet", [])
         self.assertEqual(len(active), 0)
-
-    @given(
-        positions=player_positions_strategy(),
-        chunk_size=chunk_size_strategy(),
-    )
-    @settings(max_examples=100)
-    def test_tiles_filtered_by_active_chunks(self, positions, chunk_size):
-        """get_tiles_in_chunks only returns tiles in active chunks."""
-        mgr = WorldChunkManager(chunk_size=chunk_size)
-        players = [FakePlayer(x, y) for x, y in positions]
-        active = mgr.get_active_chunks("test_planet", players)
-
-        # Create tiles both inside and outside active chunks
-        all_tiles = []
-        for x, y in positions:
-            all_tiles.append(FakeTile(x, y))  # in active chunk
-        # Add a tile far away
-        far_x = max(p[0] for p in positions) + chunk_size * 5
-        far_y = max(p[1] for p in positions) + chunk_size * 5
-        far_tile = FakeTile(far_x, far_y)
-        all_tiles.append(far_tile)
-
-        result = mgr.get_tiles_in_chunks("test_planet", active, all_tiles)
-
-        # All result tiles should be in active chunks
-        for tile in result:
-            chunk = mgr.get_chunk_coord(tile.x, tile.y)
-            self.assertIn(chunk, active)
 
     @given(
         positions=player_positions_strategy(),
