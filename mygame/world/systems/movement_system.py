@@ -11,7 +11,10 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
-from typing import Any, Callable
+from typing import Any, Callable, TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from world.core.ports.entity_repository import MovingEntityRepository
 
 logger = logging.getLogger("evennia.world.systems.movement_system")
 
@@ -36,13 +39,23 @@ class MovementSystem:
     queries. Throttles pathfinding requests to prevent tick stalls.
     """
 
-    def __init__(self, max_paths_per_tick: int | None = None):
+    def __init__(self, max_paths_per_tick: int | None = None,
+                 moving_entity_repository: "MovingEntityRepository | None" = None):
         from world.constants import MAX_PATHS_PER_TICK
         self.max_paths_per_tick = max_paths_per_tick if max_paths_per_tick is not None else MAX_PATHS_PER_TICK
         self._pending_requests: list[PathRequest] = []
         self._paths_this_tick: int = 0
         self._moving_npcs: set = set()  # in-memory, rebuilt on restart
         self._initialized: bool = False
+        # Repository for restart recovery of in-flight NPCs. Lazy Evennia-
+        # adapter default keeps the throttler usable without a live DB.
+        from world.adapters.evennia_building_repository import (
+            EvenniaMovingEntityRepository,
+        )
+
+        self._repo: "MovingEntityRepository" = (
+            moving_entity_repository or EvenniaMovingEntityRepository()
+        )
 
     # ------------------------------------------------------------------ #
     #  Moving NPC tracking
@@ -92,16 +105,8 @@ class MovementSystem:
         if self._initialized:
             return
         self._initialized = True
-        try:
-            from evennia.utils.search import search_object_by_tag
-
-            for npc in search_object_by_tag("npc", category="object_type"):
-                queue = getattr(getattr(npc, "db", None), "movement_queue", None)
-                if queue:
-                    self._moving_npcs.add(npc)
-        except Exception:
-            # Evennia may not be fully available (e.g., during tests)
-            pass
+        for npc in self._repo.find_moving_npcs():
+            self._moving_npcs.add(npc)
 
     # ------------------------------------------------------------------ #
     #  Pathfinding throttle

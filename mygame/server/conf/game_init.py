@@ -84,7 +84,14 @@ def initialize_game() -> dict:
     from world.notification_system import NotificationSystem
     from world.chat_system import ChatSystem
 
-    building_system = BuildingSystem(registry, event_bus)
+    from world.adapters.evennia_building_repository import (
+        EvenniaBuildingFactory,
+        EvenniaMovingEntityRepository,
+    )
+
+    building_system = BuildingSystem(
+        registry, event_bus, building_factory=EvenniaBuildingFactory()
+    )
     combat_engine = CombatEngine(registry, event_bus)
     rank_system = RankSystem(registry, event_bus)
     resource_system = ResourceSystem(registry, event_bus)
@@ -105,7 +112,10 @@ def initialize_game() -> dict:
         agent_repository=EvenniaAgentRepository(),
         agent_factory=EvenniaAgentFactory(),
     )
-    movement_system = MovementSystem(max_paths_per_tick=MAX_PATHS_PER_TICK)
+    movement_system = MovementSystem(
+        max_paths_per_tick=MAX_PATHS_PER_TICK,
+        moving_entity_repository=EvenniaMovingEntityRepository(),
+    )
     # Restore in-memory training cache from DB (survives server restarts)
     try:
         n = agent_system.restore_training_cache()
@@ -156,6 +166,17 @@ def initialize_game() -> dict:
             terrain_generators[planet_key] = TerrainGenerator(space_def, data_registry=registry)
         logger.info(
             "TerrainGenerators created for %d planet(s).", len(terrain_generators)
+        )
+
+        # Wire the terrain provider into BuildingSystem now that the per-planet
+        # generators exist (they are built after the systems), replacing the
+        # game_systems-global fallback used for Extractor placement validation.
+        from world.adapters.game_systems_terrain_provider import (
+            GameSystemsTerrainProvider,
+        )
+
+        building_system.set_terrain_provider(
+            GameSystemsTerrainProvider(terrain_generators)
         )
 
         # 3. Balance config for fog system

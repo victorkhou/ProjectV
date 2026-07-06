@@ -49,3 +49,35 @@ class AgentFactory(ABC):
     @abstractmethod
     def create_agent(self, owner: Any, agent_id: int) -> Any:
         """Create, persist, place, and index a new agent NPC; return it."""
+
+
+class BuildingFactory(ABC):
+    """Write-side port for creating Building objects.
+
+    Replaces ``BuildingSystem._default_create_building`` — the
+    ``create_object`` call, attribute seeding, and coordinate-index
+    registration move into the adapter.
+    """
+
+    @abstractmethod
+    def create_building(
+        self,
+        building_def: Any,
+        tile: Any,
+        owner: Any,
+        x: int | None = None,
+        y: int | None = None,
+    ) -> Any:
+        """Create, persist, place, and index a new Building; return it."""
+
+
+class MovingEntityRepository(ABC):
+    """Read-side port for recovering in-flight moving NPCs after a restart.
+
+    Replaces the ``search_object_by_tag("npc", ...)`` scan embedded in
+    ``MovementSystem._ensure_initialized``.
+    """
+
+    @abstractmethod
+    def find_moving_npcs(self) -> list[Any]:
+        """Return NPCs that currently have a non-empty movement queue."""

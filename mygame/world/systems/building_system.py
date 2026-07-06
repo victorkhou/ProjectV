@@ -9,7 +9,11 @@ allowing construction. Publishes events via the EventBus.
 
 from __future__ import annotations
 
-from typing import Any, Callable
+from typing import Any, Callable, TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from world.core.ports.entity_repository import BuildingFactory
+    from world.core.ports.terrain_provider import TerrainProvider
 
 from world.data_registry import DataRegistry
 from world.definitions import BuildingDef
@@ -54,10 +58,15 @@ class BuildingSystem(BaseSystem):
         event_bus: The EventBus for publishing game events.
         create_building_func: Optional factory callable for creating Building
             objects. Signature: ``(building_def, tile, owner) -> building``.
-            If not provided, uses ``evennia.create_object`` by default.
+            Back-compat seam; when given it overrides *building_factory*.
         build_range: Maximum Manhattan distance for building placement.
         current_tick_func: Optional callable returning the current game tick.
             Defaults to returning 0 (no combat lockout).
+        building_factory: Optional :class:`BuildingFactory` for object creation.
+            Defaults to the Evennia adapter.
+        terrain_provider: Optional :class:`TerrainProvider` for Extractor
+            placement validation. Defaults to reading the game_systems global
+            (legacy fallback) until injected at the composition root.
     """
 
     def __init__(
@@ -67,11 +76,30 @@ class BuildingSystem(BaseSystem):
         create_building_func: Callable | None = None,
         build_range: int = DEFAULT_BUILD_RANGE,
         current_tick_func: Callable[[], int] | None = None,
+        building_factory: "BuildingFactory | None" = None,
+        terrain_provider: "TerrainProvider | None" = None,
     ) -> None:
         super().__init__(registry, event_bus)
-        self._create_building_func = create_building_func or self._default_create_building
+        # Building factory port (lazy Evennia-adapter default keeps the fast
+        # unit-test suite working; a raw create_building_func still overrides it
+        # for back-compat).
+        from world.adapters.evennia_building_repository import EvenniaBuildingFactory
+
+        self._factory: "BuildingFactory" = building_factory or EvenniaBuildingFactory()
+        self._create_building_func = create_building_func or self._factory.create_building
+        self._terrain_provider = terrain_provider
         self.build_range = build_range
         self._current_tick_func = current_tick_func or (lambda: 0)
+
+    def set_terrain_provider(self, terrain_provider: "TerrainProvider") -> None:
+        """Inject the terrain provider after construction.
+
+        The per-planet terrain generators are built later than the systems at
+        the composition root, so ``game_init`` wires the provider here once the
+        generators exist. Until then Extractor validation uses the
+        ``_legacy_terrain_provider`` fallback.
+        """
+        self._terrain_provider = terrain_provider
 
     # ------------------------------------------------------------------ #
     #  Construction
@@ -690,19 +718,24 @@ class BuildingSystem(BaseSystem):
         if not planet:
             planet = getattr(tile, "planet_name", None)
 
-        # Ask the terrain generator directly — most reliable source
+        # Ask the terrain provider directly — most reliable source. Prefer the
+        # injected TerrainProvider port; fall back to the game_systems global
+        # only when no provider was wired (legacy/test paths). A None terrain
+        # means "no generator for this planet" → fall through to the room-based
+        # checks below, exactly as the previous ``gen is None`` branch did.
         if x is not None and y is not None and planet:
-            try:
-                from server.conf.game_init import game_systems
-                generators = game_systems.get("_terrain_generators", {})
-                gen = generators.get(planet)
-                if gen:
-                    _, resource = gen.get_terrain_and_resource(int(x), int(y))
-                    if resource:
-                        return None
-                    return "Extractor must be placed on terrain with a resource."
-            except Exception:
-                pass
+            provider = self._terrain_provider or self._legacy_terrain_provider()
+            if provider is not None:
+                try:
+                    terrain, resource = provider.get_terrain_and_resource(
+                        planet, int(x), int(y)
+                    )
+                    if terrain is not None:
+                        if resource:
+                            return None
+                        return "Extractor must be placed on terrain with a resource."
+                except Exception:
+                    pass
 
         # Fallback: check room's resource_node_data
         rn = getattr(tile, "resource_node", None)
@@ -784,44 +817,24 @@ class BuildingSystem(BaseSystem):
         return get_coords(obj)
 
     @staticmethod
-    def _default_create_building(
-        building_def: BuildingDef, tile: Any, owner: Any,
-        x: int | None = None, y: int | None = None,
-    ) -> Any:
-        """Default building factory using evennia.create_object.
+    def _legacy_terrain_provider() -> Any | None:
+        """Build a TerrainProvider from the game_systems global (fallback).
 
-        If *x* and *y* are provided the building is placed in a
-        PlanetRoom with explicit coordinates.  Otherwise the legacy
-        OverworldRoom placement (location only) is used.
+        Used only when no ``terrain_provider`` was injected — preserves the
+        prior behavior of reading ``game_systems["_terrain_generators"]`` so
+        Extractor validation still works in contexts that predate injection.
+        Returns ``None`` if the global is unavailable.
         """
-        import evennia
+        try:
+            from server.conf.game_init import game_systems
+            from world.adapters.game_systems_terrain_provider import (
+                GameSystemsTerrainProvider,
+            )
 
-        building = evennia.create_object(
-            "typeclasses.objects.Building",
-            key=building_def.name,
-            location=tile,
-        )
-        if x is not None and y is not None:
-            building.db.coord_x = x
-            building.db.coord_y = y
-            # The building was added to PlanetRoom.contents by create_object,
-            # but at_object_receive saw coord_x=None (set by at_object_creation).
-            # Manually register in the coordinate index now that coords are set.
-            if hasattr(tile, "coord_index"):
-                tile.coord_index.add(building, x, y)
-        building.attributes.add("building_type", building_def.abbreviation)
-        building.attributes.add("owner", owner)
-        building.attributes.add("building_level", 1)
-        building.attributes.add("offline", False)
-        building.attributes.add("hp", building_def.max_health)
-        building.attributes.add("hp_max", building_def.max_health)
-        # Tag is auto-set by Building.at_object_creation via GameEntity
-        # Phase 1 construction timer & inventory attributes
-        building.attributes.add("assigned_agent", None)
-        building.attributes.add("construction_progress", 0)
-        building.attributes.add("construction_total", 0)
-        building.attributes.add("under_construction", False)
-        return building
+            generators = game_systems.get("_terrain_generators", {})
+            return GameSystemsTerrainProvider(generators)
+        except Exception:
+            return None
 
     # ------------------------------------------------------------------ #
     #  Construction completion & tile helpers
