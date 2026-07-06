@@ -52,13 +52,11 @@ def initialize_game() -> dict:
     # then fail closed against a definitively-unpopulated registry rather than a
     # confusingly-partial one, and a healthy load always installs a full one.
     DataRegistry.set_instance(registry)
-
-    # Hot-reload-safe read-model view over the live registry. Injected into
-    # systems/helpers that need definitions + balance without owning a registry
-    # reference, in place of the DataRegistry.get_instance() singleton reach.
-    from world.adapters.registry_definitions_provider import RegistryDefinitionsProvider
-
-    definitions_provider = RegistryDefinitionsProvider(registry)
+    # Owner-agnostic helpers (world.utils, world.chat_system, world.progression)
+    # resolve a hot-reload-safe DefinitionsProvider over this singleton on demand
+    # via ``default_definitions_provider()`` — the single choke point for the
+    # former DataRegistry.get_instance() reaches — so no provider instance needs
+    # to be threaded through game_systems here.
 
     # ---------------------------------------------------------- #
     #  2. Event Bus singleton
@@ -286,7 +284,6 @@ def initialize_game() -> dict:
     # ---------------------------------------------------------- #
     game_systems.update({
         "registry": registry,
-        "definitions_provider": definitions_provider,
         "event_bus": event_bus,
         "building_system": building_system,
         "combat_engine": combat_engine,

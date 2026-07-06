@@ -91,11 +91,13 @@ def _ensure_initialized() -> bool:
     if _level_thresholds:
         return True
     try:
-        from world.data_registry import DataRegistry
+        from world.adapters.registry_definitions_provider import (
+            default_definitions_provider,
+        )
 
-        registry = DataRegistry.get_instance()
-        if registry is not None and getattr(registry, "ranks", None):
-            build_thresholds(registry.ranks)
+        provider = default_definitions_provider()
+        if provider is not None and getattr(provider, "ranks", None):
+            build_thresholds(provider.ranks)
     except Exception:
         # Registry unavailable (e.g. fast unit-test suite) — treat as
         # uninitialized and let callers apply their fallback.

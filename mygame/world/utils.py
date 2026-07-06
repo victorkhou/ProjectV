@@ -194,26 +194,31 @@ def is_building(entity: Any) -> bool:
     return get_building_type(entity) is not None
 
 
-def building_has_capability(building: Any, capability: str) -> bool:
+def building_has_capability(building: Any, capability: str, provider: Any = None) -> bool:
     """Return True if *building*'s definition declares *capability*.
 
-    Resolves the building's ``building_type`` against the ``DataRegistry``
-    singleton and checks its ``capabilities`` (see
-    ``world.constants.BUILDING_CAPABILITIES``). Returns False if the registry
-    is unavailable or the type is unknown, so callers stay safe outside a
-    running server. This is the shared entry point for capability checks on a
-    *live building object* (as opposed to a ``BuildingDef``, which exposes
-    ``has_capability`` directly).
+    Resolves the building's ``building_type`` via a
+    :class:`~world.core.ports.definitions_provider.DefinitionsProvider` and
+    checks its ``capabilities`` (see ``world.constants.BUILDING_CAPABILITIES``).
+    Pass *provider* to inject a fake in tests; when omitted it defaults to a
+    provider over the live ``DataRegistry`` (``default_definitions_provider``).
+    Returns False if no provider is available or the type is unknown, so callers
+    stay safe outside a running server. Shared entry point for capability checks
+    on a *live building object* (a ``BuildingDef`` exposes ``has_capability``
+    directly).
     """
     btype = get_building_type(building)
     if not btype:
         return False
     try:
-        from world.data_registry import DataRegistry
-        registry = DataRegistry.get_instance()
-        if registry is None:
+        if provider is None:
+            from world.adapters.registry_definitions_provider import (
+                default_definitions_provider,
+            )
+            provider = default_definitions_provider()
+        if provider is None:
             return False
-        bdef = registry.resolve_building(btype)
+        bdef = provider.resolve_building(btype)
     except Exception:
         return False
     return bdef is not None and bdef.has_capability(capability)
@@ -378,8 +383,13 @@ def format_dm_message(sender: Any, message: str) -> str:
     return f"[{rank}] {name} (DM): {message}"
 
 
-def _get_rank_name(player: Any) -> str:
-    """Get the rank name for a player."""
+def _get_rank_name(player: Any, provider: Any = None) -> str:
+    """Get the rank name for a player.
+
+    Resolves rank definitions via a
+    :class:`~world.core.ports.definitions_provider.DefinitionsProvider`
+    (injectable for tests; defaults to a provider over the live registry).
+    """
     rank_name = getattr(player, "rank_name", None)
     if rank_name:
         return rank_name
@@ -391,10 +401,13 @@ def _get_rank_name(player: Any) -> str:
         if level is not None:
             rank_num = rank_from_level(int(level))
             try:
-                from server.conf.game_init import game_systems
-                registry = game_systems.get("registry")
-                if registry:
-                    for r in registry.ranks:
+                if provider is None:
+                    from world.adapters.registry_definitions_provider import (
+                        default_definitions_provider,
+                    )
+                    provider = default_definitions_provider()
+                if provider is not None:
+                    for r in provider.ranks:
                         if r.level == rank_num:
                             return r.name.replace("_", " ")
             except (ImportError, AttributeError):

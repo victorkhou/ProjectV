@@ -35,3 +35,23 @@ class RegistryDefinitionsProvider(DefinitionsProvider):
 
     def get_ability_gates(self) -> list[Any]:
         return self._registry.get_ability_gates()
+
+
+def default_definitions_provider() -> DefinitionsProvider | None:
+    """Return a provider over the process-wide ``DataRegistry`` singleton.
+
+    The single choke point that confines the ``DataRegistry.get_instance()``
+    reach to one place. Owner-agnostic helpers (``world.utils``,
+    ``world.chat_system``, ``world.progression``) call this only as the default
+    when no provider is injected — so production still resolves the live
+    registry, but tests can pass a fake provider instead of mutating the global
+    singleton with ``set_instance``. Returns ``None`` when no registry is
+    registered (e.g. the fast unit-test suite), and callers apply their own
+    fallback.
+    """
+    from world.data_registry import DataRegistry
+
+    registry = DataRegistry.get_instance()
+    if registry is None:
+        return None
+    return RegistryDefinitionsProvider(registry)

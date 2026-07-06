@@ -124,18 +124,22 @@ class ChatSystem:
         if rank_name:
             return rank_name
 
-        # Derive rank from level via the rank system
+        # Derive rank from level via the rank system, resolving rank
+        # definitions through a DefinitionsProvider over the live registry
+        # (single choke point; no direct singleton reach here).
         try:
             from world.systems.rank_system import rank_from_level
-            from world.data_registry import DataRegistry
+            from world.adapters.registry_definitions_provider import (
+                default_definitions_provider,
+            )
             level = getattr(getattr(player, "db", None), "level", None)
             if level is None:
                 level = getattr(getattr(player, "db", None), "rank_level", None)
             if level is not None:
                 rank_num = rank_from_level(int(level))
-                registry = DataRegistry.get_instance()
-                if registry is not None:
-                    for r in registry.ranks:
+                provider = default_definitions_provider()
+                if provider is not None:
+                    for r in provider.ranks:
                         if r.level == rank_num:
                             return r.name.replace("_", " ")
                 return f"Rank {rank_num}"
