@@ -346,18 +346,18 @@ def is_admin(caller: Any) -> bool:
 def broadcast(message: str, cls: str = "game-chat") -> None:
     """Broadcast a tagged message to all connected players.
 
+    Thin compatibility shim that delegates to the default
+    :class:`~world.adapters.evennia_notifier.EvenniaNotifier`. New code should
+    depend on the :class:`~world.core.ports.notifier.Notifier` port and have an
+    adapter injected rather than calling this module-level helper.
+
     Args:
         message: The text to send.
         cls: CSS class for webclient routing (default: "game-chat").
     """
-    try:
-        from evennia import SESSION_HANDLER
-        for session in SESSION_HANDLER.get_sessions():
-            account = session.get_account()
-            if account and hasattr(account, "msg"):
-                account.msg(text=(message, {"cls": cls}))
-    except Exception:
-        logger.exception("broadcast failed")
+    from world.adapters.evennia_notifier import EvenniaNotifier
+
+    EvenniaNotifier().broadcast(message, cls=cls)
 
 
 # ------------------------------------------------------------------ #
