@@ -103,38 +103,57 @@ def _ensure_initialized() -> bool:
     return bool(_level_thresholds)
 
 
-def level_for_xp(xp: int) -> int:
+def level_for_xp(xp: int, thresholds: list[int] | None = None) -> int:
     """Return the highest level whose threshold is <= ``xp``.
 
-    Clamped to ``1..MAX_LEVEL``. When the table is uninitialized and cannot
-    be lazily built, falls back to level ``1``.
+    Clamped to ``1..MAX_LEVEL``. Passing *thresholds* (a table as returned by
+    ``build_thresholds``) makes this a pure function with no global reach —
+    the preferred form for callers that hold a registry and for unit tests.
+    When omitted, falls back to the lazily-built module curve (and to level
+    ``1`` if that cannot be built).
 
+    Args:
+        xp: The combat XP to map to a level.
+        thresholds: Optional explicit threshold table; when given, the module
+            singleton is not consulted.
     """
-    if not _ensure_initialized():
-        return 1
+    table = thresholds
+    if table is None:
+        if not _ensure_initialized():
+            return 1
+        table = _level_thresholds
 
     if xp is None:
         xp = 0
 
     best = 1
     for lvl in range(1, MAX_LEVEL + 1):
-        if _level_thresholds[lvl] <= xp:
+        if table[lvl] <= xp:
             best = lvl
         else:
             break
     return best
 
 
-def xp_for_level(level: int) -> int:
+def xp_for_level(level: int, thresholds: list[int] | None = None) -> int:
     """Return the XP threshold required to reach ``level``.
 
-    ``level`` is clamped to ``1..MAX_LEVEL``. When the table is
-    uninitialized and cannot be lazily built, falls back to ``0``.
+    ``level`` is clamped to ``1..MAX_LEVEL``. Passing *thresholds* makes this
+    a pure function with no global reach; when omitted, falls back to the
+    lazily-built module curve (and to ``0`` if that cannot be built).
+
+    Args:
+        level: The target level.
+        thresholds: Optional explicit threshold table; when given, the module
+            singleton is not consulted.
     """
-    if not _ensure_initialized():
-        return 0
+    table = thresholds
+    if table is None:
+        if not _ensure_initialized():
+            return 0
+        table = _level_thresholds
     level = max(1, min(level, MAX_LEVEL))
-    return _level_thresholds[level]
+    return table[level]
 
 
 def rank_for_level(level: int) -> int:

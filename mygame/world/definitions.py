@@ -234,12 +234,21 @@ class BalanceConfig:
     def current(cls) -> "BalanceConfig":
         """Return the live balance config, or defaults when none is registered.
 
-        The single accessor for hot-tunable balance from code paths that lack
-        a ``DataRegistry`` reference (e.g. Evennia scripts and the class-level
+        The accessor for hot-tunable balance from code paths that lack a
+        ``DataRegistry`` reference (e.g. Evennia scripts and the class-level
         ``ResourceSystem`` helpers). Returns the registered singleton's balance
         when a server is running, and a default ``BalanceConfig()`` otherwise
         (e.g. the fast unit-test suite, which registers no singleton). The
         ``DataRegistry`` import is lazy to avoid a definitions→registry cycle.
+
+        Deprecated:
+            Reaches the process-wide ``DataRegistry`` singleton, which hides
+            the dependency and leaks global state between tests. Prefer
+            depending on
+            ``world.core.ports.definitions_provider.DefinitionsProvider`` and
+            reading ``provider.balance`` (injected via
+            ``RegistryDefinitionsProvider`` at the composition root). Retained
+            until the remaining script/static-helper callers are migrated.
         """
         try:
             from world.data_registry import DataRegistry
