@@ -112,6 +112,9 @@ def initialize_game() -> dict:
         agent_repository=EvenniaAgentRepository(),
         agent_factory=EvenniaAgentFactory(),
     )
+    # Late-bind the agent XP-awarder into CombatEngine now that AgentSystem
+    # exists, replacing its game_systems-global reach on agent kills.
+    combat_engine.set_agent_xp_awarder(lambda: agent_system)
     movement_system = MovementSystem(
         max_paths_per_tick=MAX_PATHS_PER_TICK,
         moving_entity_repository=EvenniaMovingEntityRepository(),

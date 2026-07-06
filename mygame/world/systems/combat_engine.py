@@ -40,10 +40,26 @@ class CombatEngine(BaseSystem):
         registry: DataRegistry,
         event_bus: EventBus,
         current_tick_func: Callable[[], int] | None = None,
+        agent_xp_awarder_provider: Callable[[], Any] | None = None,
     ) -> None:
         super().__init__(registry, event_bus)
         self._current_tick_func = current_tick_func or (lambda: 0)
         self.pending_actions: list[dict] = []
+        # Late-bound resolver for the agent XP-awarder. CombatEngine is built
+        # before AgentSystem at the composition root, so a *callable* is
+        # injected (via set_agent_xp_awarder) rather than the instance. Defaults
+        # to the game_systems-global lookup for un-injected/legacy contexts.
+        self._agent_xp_awarder_provider = agent_xp_awarder_provider
+
+    def set_agent_xp_awarder(self, provider: Callable[[], Any]) -> None:
+        """Inject the late-bound agent XP-awarder resolver.
+
+        *provider* is a zero-arg callable returning the object exposing
+        ``award_agent_xp`` / ``apply_agent_death_loss`` (the AgentSystem), or
+        ``None`` when unavailable. Called at the composition root once both
+        systems exist, replacing the game_systems-global reach.
+        """
+        self._agent_xp_awarder_provider = provider
 
     # ------------------------------------------------------------------ #
     #  Queue attack
@@ -546,15 +562,20 @@ class CombatEngine(BaseSystem):
             return False
         return getattr(entity.db, "npc_type", None) == "agent"
 
-    @staticmethod
-    def _get_agent_system() -> Any | None:
-        """Lazily resolve the AgentSystem from the global game_systems dict.
+    def _get_agent_system(self) -> Any | None:
+        """Resolve the agent XP-awarder (the AgentSystem).
 
-        Mirrors the lookup pattern used by ``agent_scripts._award_agent_xp`` so
-        the CombatEngine stays decoupled from system construction/ordering. The
-        lookup is guarded so combat never breaks if the agent system is
-        unavailable (e.g. in tests or before initialization).
+        Prefers the injected late-bound provider; falls back to the
+        game_systems-global lookup for un-injected/legacy contexts. Guarded so
+        combat never breaks if the agent system is unavailable (e.g. in tests
+        or before initialization).
         """
+        provider = self._agent_xp_awarder_provider
+        if provider is not None:
+            try:
+                return provider()
+            except Exception:  # noqa: BLE001 - never let resolution break combat
+                return None
         try:
             from server.conf.game_init import game_systems
 

@@ -238,37 +238,6 @@ class FakeAgentSystem:
         self.death_losses.append(agent)
 
 
-def _install_fake_agent_system(agent_system):
-    """Install a fake agent system into a stub server.conf.game_init module.
-
-    Returns a cleanup callable that restores the previous module state.
-    """
-    prev_modules = {
-        name: sys.modules.get(name)
-        for name in ("server", "server.conf", "server.conf.game_init")
-    }
-
-    server_mod = sys.modules.get("server") or types.ModuleType("server")
-    conf_mod = sys.modules.get("server.conf") or types.ModuleType("server.conf")
-    init_mod = types.ModuleType("server.conf.game_init")
-    init_mod.game_systems = {"agent_system": agent_system}
-
-    server_mod.conf = conf_mod
-    conf_mod.game_init = init_mod
-    sys.modules["server"] = server_mod
-    sys.modules["server.conf"] = conf_mod
-    sys.modules["server.conf.game_init"] = init_mod
-
-    def _cleanup():
-        for name, mod in prev_modules.items():
-            if mod is None:
-                sys.modules.pop(name, None)
-            else:
-                sys.modules[name] = mod
-
-    return _cleanup
-
-
 def _make_registry() -> DataRegistry:
     """Create a DataRegistry with default balance config."""
     registry = DataRegistry()
@@ -718,15 +687,17 @@ class TestAgentDefeatXP(unittest.TestCase):
 
     def setUp(self):
         self.agent_system = FakeAgentSystem()
-        self._cleanup = _install_fake_agent_system(self.agent_system)
 
-    def tearDown(self):
-        self._cleanup()
+    def _make_engine_with_awarder(self):
+        """Build an engine and inject the fake agent XP-awarder."""
+        engine, extra = _make_engine()
+        engine.set_agent_xp_awarder(lambda: self.agent_system)
+        return engine, extra
 
     def test_agent_attacker_awarded_combat_xp_on_kill(self):
         """An agent attacker that kills a victim is awarded "combat" XP."""
         weapon = FakeWeapon(damage=200, weapon_range=5)
-        engine, _ = _make_engine()
+        engine, _ = self._make_engine_with_awarder()
         attacker = FakeAgent(name="AgentAttacker", weapon=weapon,
                              location=FakeTile(xyz=(0, 0, "earth")))
         target = FakePlayer(name="Target", hp=100, combat_xp=200,
@@ -741,7 +712,7 @@ class TestAgentDefeatXP(unittest.TestCase):
     def test_agent_victim_gets_death_loss_applied(self):
         """A defeated agent victim has agent death loss applied via AgentSystem."""
         weapon = FakeWeapon(damage=200, weapon_range=5)
-        engine, _ = _make_engine()
+        engine, _ = self._make_engine_with_awarder()
         attacker = FakePlayer(name="Attacker", weapon=weapon, combat_xp=0,
                               location=FakeTile(xyz=(0, 0, "earth")))
         victim = FakeAgent(name="AgentVictim", hp=100, combat_xp=200,
@@ -757,7 +728,7 @@ class TestAgentDefeatXP(unittest.TestCase):
     def test_agent_victim_not_double_deducted(self):
         """Agent victim defeat does not also run the player xp_death_loss path."""
         weapon = FakeWeapon(damage=200, weapon_range=5)
-        engine, _ = _make_engine()
+        engine, _ = self._make_engine_with_awarder()
         attacker = FakePlayer(name="Attacker", weapon=weapon,
                               location=FakeTile(xyz=(0, 0, "earth")))
         victim = FakeAgent(name="AgentVictim", hp=100, combat_xp=200,
@@ -772,7 +743,7 @@ class TestAgentDefeatXP(unittest.TestCase):
     def test_player_attacker_still_uses_player_xp_path(self):
         """A non-agent player attacker still earns xp_kill, not agent XP."""
         weapon = FakeWeapon(damage=200, weapon_range=5)
-        engine, _ = _make_engine()
+        engine, _ = self._make_engine_with_awarder()
         attacker = FakePlayer(name="Attacker", weapon=weapon, combat_xp=50,
                               location=FakeTile(xyz=(0, 0, "earth")))
         target = FakePlayer(name="Target", hp=100, combat_xp=200,
@@ -787,7 +758,7 @@ class TestAgentDefeatXP(unittest.TestCase):
     def test_agent_victim_respawned(self):
         """An agent victim's HP is restored to max after defeat."""
         weapon = FakeWeapon(damage=200, weapon_range=5)
-        engine, _ = _make_engine()
+        engine, _ = self._make_engine_with_awarder()
         attacker = FakePlayer(name="Attacker", weapon=weapon,
                               location=FakeTile(xyz=(0, 0, "earth")))
         victim = FakeAgent(name="AgentVictim", hp=100, hp_max=100,
