@@ -16,11 +16,12 @@ from typing import Any
 from world.data_registry import DataRegistry
 from world.definitions import TechnologyDef
 from world.event_bus import TECHNOLOGY_RESEARCHED, EventBus
+from world.systems.base_system import BaseSystem
 
 logger = logging.getLogger("mygame.tech_system")
 
 
-class TechLabSystem:
+class TechLabSystem(BaseSystem):
     """Manages technology research at Tech Labs.
 
     Research timers are stored on the Tech_Lab building as
@@ -32,8 +33,7 @@ class TechLabSystem:
     """
 
     def __init__(self, registry: DataRegistry, event_bus: EventBus) -> None:
-        self.registry = registry
-        self.event_bus = event_bus
+        super().__init__(registry, event_bus)
         # Track active research: list of {tech_key, player, ticks_remaining, tech_lab}
         self._active_research: list[dict] = []
 
@@ -239,18 +239,9 @@ class TechLabSystem:
 
     @staticmethod
     def _get_player_level(player: Any) -> int:
-        """Read the player's level (1-60)."""
-        if hasattr(player, "db"):
-            lvl = getattr(player.db, "level", None)
-            if lvl is not None:
-                return int(lvl)
-            # Backward compat: old rank_level (1-12) → first level of rank
-            from world.constants import NUM_RANKS, LEVELS_PER_RANK
-            rl = getattr(player.db, "rank_level", 0) or 0
-            if 1 <= rl <= NUM_RANKS:
-                return (rl - 1) * LEVELS_PER_RANK + 1
-            return rl
-        return 0
+        """Read the player's level (1-60). See ``world.utils.get_player_level``."""
+        from world.utils import get_player_level
+        return get_player_level(player, default=0)
 
     @staticmethod
     def _get_researched_techs(player: Any) -> set:

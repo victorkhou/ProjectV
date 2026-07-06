@@ -20,6 +20,48 @@ from evennia.scripts.scripts import DefaultScript
 logger = logging.getLogger("evennia")
 
 
+# ------------------------------------------------------------------ #
+#  Tick step ordering (declared as data)
+# ------------------------------------------------------------------ #
+#
+# Canonical per-tick execution order. Each entry is (step_name, rationale).
+# The order is SIGNIFICANT — several steps depend on an earlier one having run
+# this tick, and those dependencies are documented here rather than being
+# implicit in append-order inside ``_build_tick_steps``:
+#
+#   - ``active_chunks`` MUST run first: it populates the shared ``tick_data``
+#     (online players + active buildings) that nearly every later step reads.
+#   - ``npc_movement`` / ``agent_processing`` run before combat so agents are at
+#     their resolved positions when attacks resolve.
+#   - ``combat_resolution`` runs before ``turret_attacks`` so turrets fire at
+#     the post-resolution world state.
+#   - ``powerup_ticks`` runs AFTER ``combat_resolution`` so a powerup lasts
+#     through the tick it would expire on (its buff still applied to this
+#     tick's combat).
+#   - ``tick_completed`` is last: it announces the tick is fully processed.
+#
+# A step whose backing system is absent this run is simply not registered by
+# ``_build_tick_steps`` and is skipped here, so the same declared order works in
+# minimal/test setups. To add or reorder a step, edit THIS tuple (and register
+# its builder) — do not rely on code position.
+TICK_STEP_ORDER = (
+    ("active_chunks", "First: populates shared tick_data (players + buildings)."),
+    ("terrain_epochs", "Advance dynamic-planet terrain before tiles are read."),
+    ("npc_movement", "Move NPCs before combat so positions are current."),
+    ("agent_processing", "Run agent behavior (incl. harvester production) pre-combat."),
+    ("agent_training", "Decrement training timers."),
+    ("active_presence", "Online-player construction/harvest progress."),
+    ("equipment_production", "Equipment buildings emit items."),
+    ("combat_resolution", "Resolve queued attacks before turrets/expiry."),
+    ("turret_attacks", "Turrets fire at the post-resolution world state."),
+    ("combat_timer_decrement", "Expire combat lockouts."),
+    ("powerup_ticks", "Expire powerups after this tick's combat resolved."),
+    ("tech_research", "Decrement research timers."),
+    ("resource_respawns", "Decrement depleted-node respawn counters."),
+    ("tick_completed", "Last: announce the tick is fully processed."),
+)
+
+
 class Script(DefaultScript):
     """
     This is the base TypeClass for all Scripts. Scripts describe
@@ -192,18 +234,21 @@ class GameTickScript(DefaultScript):
         return active_buildings
 
     def _build_tick_steps(self, systems, tick_number):
-        """Build the ordered list of (name, callable) tick steps.
+        """Build the tick steps, emitted in the canonical ``TICK_STEP_ORDER``.
 
-        Computes active chunks from online player positions, then
-        creates step callables that pass filtered buildings/tiles
-        to each game system.
+        Each available system registers a named step callable into a dict; the
+        method then emits those steps in the order declared by the module-level
+        ``TICK_STEP_ORDER`` (the single source of truth for ordering and its
+        rationale). A step whose backing system is absent is simply never
+        registered and is skipped. This keeps execution order declarative —
+        reordering means editing ``TICK_STEP_ORDER``, not moving code.
 
         Args:
             systems: dict of system name -> system instance.
             tick_number: Current tick number.
 
         Returns:
-            List of (step_name, step_callable) tuples.
+            List of (step_name, step_callable) tuples, in ``TICK_STEP_ORDER``.
         """
         chunking = systems.get("chunking")
         resource_system = systems.get("resource_system")
@@ -214,74 +259,55 @@ class GameTickScript(DefaultScript):
         event_bus = systems.get("event_bus")
         agent_system = systems.get("agent_system")
         building_system = systems.get("building_system")
+        movement_system = systems.get("movement_system")
+        terrain_generators = systems.get("_terrain_generators")
 
         # Compute active data once, shared across steps.
         # Mutable container so the active_chunks step can populate it
         # and subsequent steps use the result.
         tick_data = {"buildings": [], "online_players": []}
 
+        # Registry of name -> callable. Only steps whose backing system is
+        # present get registered; ordering is applied afterward.
+        registered = {}
+
         def compute_active_chunks():
-            """Step 1: determine active chunks and filter world data."""
+            """Determine active chunks and filter world data (populates tick_data)."""
             online_players = self._get_online_players()
             tick_data["online_players"] = online_players
             if not chunking:
                 # No chunk manager — use all buildings
                 tick_data["buildings"] = self._get_all_buildings()
                 return
-            buildings = self._compute_active_data(
+            tick_data["buildings"] = self._compute_active_data(
                 chunking, online_players
             )
-            tick_data["buildings"] = buildings
+        registered["active_chunks"] = compute_active_chunks
 
-        steps = []
-
-        # 1. Active chunks (always first — populates tick_data)
-        steps.append(("active_chunks", compute_active_chunks))
-
-        # 1b. Advance terrain epochs for dynamic planets
-        terrain_generators = systems.get("_terrain_generators")
         if terrain_generators:
             def advance_terrain_epochs():
                 for gen in terrain_generators.values():
                     if gen.is_dynamic:
                         gen.advance_tick(tick_number)
-            steps.append(("terrain_epochs", advance_terrain_epochs))
+            registered["terrain_epochs"] = advance_terrain_epochs
 
-        # 2. NPC movement — advance all moving NPCs and process pathfinding
-        movement_system = systems.get("movement_system")
         if movement_system:
             def process_npc_movement():
                 movement_system.reset_tick()
                 movement_system.process_movement(tick_number)
                 movement_system.process_pathfinding()
-            steps.append(("npc_movement", process_npc_movement))
+            registered["npc_movement"] = process_npc_movement
 
-        # 3. Agent system tick — process all agent behavior scripts
         if agent_system:
-            steps.append((
-                "agent_processing",
-                lambda: agent_system.process_tick(tick_number),
-            ))
-
-        # 3b. Agent training timer — uses in-memory cache, no DB query per tick
-        if agent_system:
-            steps.append((
-                "agent_training",
+            registered["agent_processing"] = (
+                lambda: agent_system.process_tick(tick_number)
+            )
+            # Uses in-memory cache, no DB query per tick.
+            registered["agent_training"] = (
                 lambda: agent_system.process_training_tick(
                     agent_system._training_buildings
-                ),
-            ))
-
-        # 4. Active-presence processing — building and harvesting for online players
-        if building_system or resource_system:
-            def process_active_presence():
-                for player in tick_data["online_players"]:
-                    state = getattr(getattr(player, "db", None), "activity_state", "idle")
-                    if state == "building" and building_system:
-                        building_system.process_construction_tick(player)
-                    elif state == "harvesting" and resource_system:
-                        resource_system.process_harvest_tick(player)
-            steps.append(("active_presence", process_active_presence))
+                )
+            )
 
         # NOTE: Harvester-agent production is driven by HarvesterScript
         # (one script per agent, run in the agent_processing step), per the
@@ -292,34 +318,29 @@ class GameTickScript(DefaultScript):
         # per tick — it has been removed. process_extractor_production remains
         # for direct unit/integration test use but is no longer in the loop.
 
-        # 5. Equipment building production
+        if building_system or resource_system:
+            def process_active_presence():
+                for player in tick_data["online_players"]:
+                    state = getattr(getattr(player, "db", None), "activity_state", "idle")
+                    if state == "building" and building_system:
+                        building_system.process_construction_tick(player)
+                    elif state == "harvesting" and resource_system:
+                        resource_system.process_harvest_tick(player)
+            registered["active_presence"] = process_active_presence
+
         if equipment_system:
-            steps.append((
-                "equipment_production",
-                lambda: equipment_system.process_production(
-                    tick_data["buildings"]
-                ),
-            ))
+            registered["equipment_production"] = (
+                lambda: equipment_system.process_production(tick_data["buildings"])
+            )
 
-        # 6. Combat resolution
         if combat_engine:
-            steps.append((
-                "combat_resolution",
-                lambda: combat_engine.resolve_tick(
-                    tick_data["buildings"]
-                ),
-            ))
+            registered["combat_resolution"] = (
+                lambda: combat_engine.resolve_tick(tick_data["buildings"])
+            )
+            registered["turret_attacks"] = (
+                lambda: combat_engine.process_turrets(tick_data["buildings"])
+            )
 
-        # 7. Turret auto-attacks
-        if combat_engine:
-            steps.append((
-                "turret_attacks",
-                lambda: combat_engine.process_turrets(
-                    tick_data["buildings"]
-                ),
-            ))
-
-        # 8. Combat timer decrement — expire combat timers for online players
         def decrement_combat_timers():
             for player in tick_data["online_players"]:
                 db = getattr(player, "db", None)
@@ -328,23 +349,16 @@ class GameTickScript(DefaultScript):
                 expires = getattr(db, "combat_timer_expires", 0) or 0
                 if expires > 0 and tick_number >= expires:
                     db.combat_timer_expires = 0
-        steps.append(("combat_timer_decrement", decrement_combat_timers))
+        registered["combat_timer_decrement"] = decrement_combat_timers
 
-        # 9. Powerup duration decrements
         if powerup_system:
-            steps.append((
-                "powerup_ticks",
-                lambda: powerup_system.process_tick(tick_number),
-            ))
+            registered["powerup_ticks"] = (
+                lambda: powerup_system.process_tick(tick_number)
+            )
 
-        # 10. Technology research timer decrements
         if tech_system:
-            steps.append((
-                "tech_research",
-                lambda: tech_system.process_tick(),
-            ))
+            registered["tech_research"] = lambda: tech_system.process_tick()
 
-        # 11. Resource node respawn counter decrements
         if resource_system:
             def _process_respawns():
                 """Pass PlanetRoom objects to process_respawns."""
@@ -354,22 +368,19 @@ class GameTickScript(DefaultScript):
                 except Exception:
                     planet_rooms_list = []
                 resource_system.process_respawns(planet_rooms_list)
-            steps.append((
-                "resource_respawns",
-                _process_respawns,
-            ))
+            registered["resource_respawns"] = _process_respawns
 
-        # 12. Publish tick_completed event
         if event_bus:
-            steps.append((
-                "tick_completed",
-                lambda: event_bus.publish(
-                    "tick_completed",
-                    tick_number=tick_number,
-                ),
-            ))
+            registered["tick_completed"] = (
+                lambda: event_bus.publish("tick_completed", tick_number=tick_number)
+            )
 
-        return steps
+        # Emit in the canonical declared order, skipping unregistered steps.
+        return [
+            (name, registered[name])
+            for name, _rationale in TICK_STEP_ORDER
+            if name in registered
+        ]
 
 
 class AutoSaveScript(DefaultScript):

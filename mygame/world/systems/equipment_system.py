@@ -16,6 +16,7 @@ from typing import Any, Callable
 from world.data_registry import DataRegistry
 from world.definitions import ItemDef
 from world.event_bus import EventBus
+from world.systems.base_system import BaseSystem
 
 logger = logging.getLogger("mygame.equipment_system")
 
@@ -23,7 +24,7 @@ logger = logging.getLogger("mygame.equipment_system")
 EQUIPMENT_BUILDING_TYPES = ("AA", "AR")
 
 
-class EquipmentSystem:
+class EquipmentSystem(BaseSystem):
     """Manages Armory and Armorer GameItem generation.
 
     Each tick, active equipment buildings look up their producible items
@@ -45,8 +46,7 @@ class EquipmentSystem:
         event_bus: EventBus,
         create_item_func: Callable[[ItemDef, Any], Any] | None = None,
     ) -> None:
-        self.registry = registry
-        self.event_bus = event_bus
+        super().__init__(registry, event_bus)
         self._create_item_func = create_item_func or self._default_create_item
 
     # ------------------------------------------------------------------ #

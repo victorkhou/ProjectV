@@ -149,6 +149,44 @@ class _MockOwner:
         self.resources[rtype] = self.resources.get(rtype, 0) + amount
 
 
+def _install_capability_registry():
+    """Register a DataRegistry singleton so building capability checks resolve.
+
+    Delivery/harvester scripts branch on capabilities (``storage``,
+    ``harvestable``) resolved via the singleton rather than hardcoded
+    abbreviations, so tests that drive those paths must publish a registry.
+    """
+    from world.data_registry import DataRegistry
+    from world.definitions import BuildingDef
+    registry = DataRegistry()
+    registry.buildings = {
+        "VT": BuildingDef(
+            name="Vault", abbreviation="VT", cost={"Stone": 25},
+            max_health=400, requires_hq=True, required_terrain=None,
+            category="storage", produces=None,
+            capabilities=frozenset({"storage", "primary_storage"}),
+        ),
+        "HQ": BuildingDef(
+            name="Headquarters", abbreviation="HQ", cost={"Wood": 10},
+            max_health=500, requires_hq=False, required_terrain=None,
+            category="headquarters", produces=None,
+            capabilities=frozenset({"headquarters", "storage"}),
+        ),
+        "EX": BuildingDef(
+            name="Extractor", abbreviation="EX", cost={"Wood": 15},
+            max_health=200, requires_hq=True, required_terrain=None,
+            category="resource", produces=None,
+            capabilities=frozenset({"harvestable"}),
+        ),
+    }
+    DataRegistry.set_instance(registry)
+
+
+def _clear_capability_registry():
+    from world.data_registry import DataRegistry
+    DataRegistry.set_instance(None)
+
+
 def _make_npc(**overrides):
     """Create an NPC instance with test defaults."""
     npc = NPC.__new__(NPC)
@@ -502,6 +540,12 @@ class TestDeliveryEdgeCases:
 
 class TestActivityStatusUpdates:
     """Activity status string updates on state transitions."""
+
+    def setup_method(self, method):
+        _install_capability_registry()
+
+    def teardown_method(self, method):
+        _clear_capability_registry()
 
     def test_patrol_status_updates_on_waypoint_advance(self):
         """Patrolling NPC updates activity_status with waypoint info.

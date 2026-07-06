@@ -170,36 +170,42 @@ class FakeBuilding:
         return bool(self.attributes.get("offline", default=False))
 
 # Resource building definitions
+_HARVEST_CAPS = frozenset({"harvestable", "upgradable"})
 RESOURCE_BUILDING_DEFS = {
     "MM": BuildingDef(
         name="Mill", abbreviation="MM",
         cost={"Straw": 20, "Wood": 10},
         max_health=150, requires_hq=True, required_terrain="Plains",
         category="resource", produces="Straw", unlocks=[], map_symbol="MM",
+        capabilities=_HARVEST_CAPS,
     ),
     "QQ": BuildingDef(
         name="Quarry", abbreviation="QQ",
         cost={"Wood": 20, "Stone": 10},
         max_health=200, requires_hq=True, required_terrain="Rock",
         category="resource", produces="Stone", unlocks=[], map_symbol="QQ",
+        capabilities=_HARVEST_CAPS,
     ),
     "II": BuildingDef(
         name="Mine", abbreviation="II",
         cost={"Wood": 30, "Stone": 20},
         max_health=250, requires_hq=True, required_terrain="Mountain",
         category="resource", produces="Iron", unlocks=[], map_symbol="II",
+        capabilities=_HARVEST_CAPS,
     ),
     "LL": BuildingDef(
         name="Lumberyard", abbreviation="LL",
         cost={"Straw": 15, "Wood": 15},
         max_health=150, requires_hq=True, required_terrain="Forest",
         category="resource", produces="Wood", unlocks=[], map_symbol="LL",
+        capabilities=_HARVEST_CAPS,
     ),
     "KK": BuildingDef(
         name="Kiln", abbreviation="KK",
         cost={"Wood": 20, "Clay": 10},
         max_health=150, requires_hq=True, required_terrain="Dirt",
         category="resource", produces="Clay", unlocks=[], map_symbol="KK",
+        capabilities=_HARVEST_CAPS,
     ),
 }
 

@@ -196,6 +196,61 @@ class GameCommand(BaseCommand):
         buildings = planet_room.get_buildings_at(int(x), int(y))
         return buildings[0] if buildings else None
 
+    # ------------------------------------------------------------------ #
+    #  Shared command helpers (absorb repeated boilerplate)
+    # ------------------------------------------------------------------ #
+
+    def require_system(self, name, unavailable_msg=None):
+        """Return the named game system, or message the caller and return None.
+
+        Collapses the ``sys = _get_system(caller, name); if sys is None: msg;
+        return`` block that recurred in almost every command. Callers do:
+        ``sys = self.require_system("building_system"); if sys is None: return``.
+        """
+        system = _get_system(self.caller, name)
+        if system is None:
+            # Sentence-case (e.g. "building_system" -> "Building system") to
+            # match the original per-command wording.
+            pretty = name.replace("_", " ").capitalize()
+            self.caller.msg(unavailable_msg or f"{pretty} unavailable.")
+        return system
+
+    def require_coords(self):
+        """Return the caller's ``(x, y)`` as ints, or message and return None.
+
+        Replaces the repeated coord_x/coord_y read + "Cannot determine your
+        position." guard. Callers do:
+        ``coords = self.require_coords(); if coords is None: return; x, y = coords``.
+        """
+        caller = self.caller
+        x = getattr(caller.db, "coord_x", None)
+        y = getattr(caller.db, "coord_y", None)
+        if x is None or y is None:
+            caller.msg("Cannot determine your position.")
+            return None
+        return int(x), int(y)
+
+    def buildings_here(self, x=None, y=None):
+        """Return the buildings on the caller's tile (modern + legacy paths).
+
+        Prefers the PlanetRoom coordinate index (``get_buildings_at``) and
+        falls back to the legacy single ``building`` attribute for old rooms /
+        test fakes. If *x*/*y* are omitted they are read from the caller.
+        Returns a (possibly empty) list.
+        """
+        planet_room = getattr(self.caller, "location", None)
+        if planet_room is None:
+            return []
+        if x is None or y is None:
+            coords = self.require_coords()
+            if coords is None:
+                return []
+            x, y = coords
+        if hasattr(planet_room, "get_buildings_at"):
+            return planet_room.get_buildings_at(int(x), int(y)) or []
+        b = getattr(planet_room, "building", None)
+        return [b] if b is not None else []
+
     def _interrupt_activity(self, caller, moved=False):
         """Cancel any active-presence activity (harvest/build) on the caller.
 
@@ -294,8 +349,11 @@ class CmdMove(GameCommand):
                 caller.msg("That tile is blocked by an offline building.")
                 return
             # Wall passage check: block owner during combat timer (Req 6.24, 17.1-17.5)
-            btype = get_building_attr(building, "building_type")
-            if btype == "WL" and is_owner(caller, get_building_attr(building, "owner")):
+            from world.constants import COMBAT_BARRIER
+            from world.utils import building_has_capability
+            if building_has_capability(building, COMBAT_BARRIER) and is_owner(
+                caller, get_building_attr(building, "owner")
+            ):
                 combat_expires = getattr(caller.db, "combat_timer_expires", 0) or 0
                 if combat_expires > 0:
                     caller.msg(
@@ -415,9 +473,8 @@ class CmdHarvest(GameCommand):
     help_category = "Game"
 
     def func(self):
-        resource_system = _get_system(self.caller, "resource_system")
+        resource_system = self.require_system("resource_system")
         if resource_system is None:
-            self.caller.msg("Resource system unavailable.")
             return
 
         planet_room = self.caller.location
@@ -451,18 +508,15 @@ class CmdBuild(GameCommand):
     def func(self):
         caller = self.caller
 
-        building_system = _get_system(caller, "building_system")
+        building_system = self.require_system("building_system")
         if building_system is None:
-            caller.msg("Building system unavailable.")
             return
 
         planet_room = caller.location
-        x = getattr(caller.db, "coord_x", None)
-        y = getattr(caller.db, "coord_y", None)
-        if x is None or y is None:
-            caller.msg("Cannot determine your position.")
+        coords = self.require_coords()
+        if coords is None:
             return
-        x, y = int(x), int(y)
+        x, y = coords
 
         # Resolve the typed token (abbreviation OR full name, e.g. "EX" or
         # "extractor") to its canonical abbreviation so the resume-check and
@@ -477,13 +531,7 @@ class CmdBuild(GameCommand):
             building_type = resolved.abbreviation if resolved else raw_token.upper()
 
         # Check for resuming construction on an incomplete building
-        if hasattr(planet_room, "get_buildings_at"):
-            existing_buildings = planet_room.get_buildings_at(x, y)
-        else:
-            existing_buildings = []
-            eb = getattr(planet_room, "building", None)
-            if eb is not None:
-                existing_buildings = [eb]
+        existing_buildings = self.buildings_here(x, y)
 
         for existing in existing_buildings:
             under_construction = get_building_attr(existing, "under_construction", False)
@@ -579,28 +627,16 @@ class CmdUpgrade(GameCommand):
     def func(self):
         caller = self.caller
 
-        building_system = _get_system(caller, "building_system")
+        building_system = self.require_system("building_system")
         if building_system is None:
-            caller.msg("Building system unavailable.")
             return
 
-        planet_room = caller.location
-        x = getattr(caller.db, "coord_x", None)
-        y = getattr(caller.db, "coord_y", None)
-        if x is None or y is None:
-            caller.msg("Cannot determine your position.")
+        coords = self.require_coords()
+        if coords is None:
             return
-        x, y = int(x), int(y)
+        x, y = coords
 
-        # Find building at player's coordinates
-        if hasattr(planet_room, "get_buildings_at"):
-            buildings = planet_room.get_buildings_at(x, y)
-        else:
-            buildings = []
-            b = getattr(planet_room, "building", None)
-            if b is not None:
-                buildings = [b]
-
+        buildings = self.buildings_here(x, y)
         if not buildings:
             caller.msg("No building on this tile.")
             return
@@ -631,12 +667,10 @@ class CmdDemolish(GameCommand):
         caller = self.caller
 
         planet_room = caller.location
-        x = getattr(caller.db, "coord_x", None)
-        y = getattr(caller.db, "coord_y", None)
-        if x is None or y is None:
-            caller.msg("Cannot determine your position.")
+        coords = self.require_coords()
+        if coords is None:
             return
-        x, y = int(x), int(y)
+        x, y = coords
 
         # Find building at player's coordinates
         if hasattr(planet_room, "get_buildings_at"):
@@ -718,9 +752,10 @@ class CmdAttack(GameCommand):
             self.caller.msg("Usage: attack <target>")
             return
 
-        combat_engine = _get_system(self.caller, "combat_engine")
+        combat_engine = self.require_system(
+            "combat_engine", "Combat system unavailable."
+        )
         if combat_engine is None:
-            self.caller.msg("Combat system unavailable.")
             return
 
         # Search for target in the caller's location
@@ -814,9 +849,8 @@ class CmdResearch(GameCommand):
             self.caller.msg("Usage: research <tech_key>")
             return
 
-        tech_system = _get_system(self.caller, "tech_system")
+        tech_system = self.require_system("tech_system", "Tech system unavailable.")
         if tech_system is None:
-            self.caller.msg("Tech system unavailable.")
             return
 
         success, msg = tech_system.start_research(self.caller, tech_key)
@@ -840,9 +874,10 @@ class CmdPowerup(GameCommand):
             self.caller.msg("Usage: powerup <key>")
             return
 
-        powerup_system = _get_system(self.caller, "powerup_system")
+        powerup_system = self.require_system(
+            "powerup_system", "Powerup system unavailable."
+        )
         if powerup_system is None:
-            self.caller.msg("Powerup system unavailable.")
             return
 
         success, msg = powerup_system.activate(self.caller, powerup_key)
@@ -1449,12 +1484,12 @@ def _show_tile_summary(caller, planet_room):
 def _show_building_interior(caller, building):
     """Display the interior of a building.
 
-    Uses the shared formatter from rooms.py to avoid duplication.
+    Uses the shared formatter from ``world.ui_formatters`` to avoid duplication.
     """
     try:
-        from typeclasses.rooms import _format_building_interior
+        from world.ui_formatters import format_building_interior
         registry = _get_system(caller, "registry")
-        caller.msg(_format_building_interior(caller, building, registry=registry))
+        caller.msg(format_building_interior(caller, building, registry=registry))
     except ImportError:
         caller.msg("You are inside a building.")
 

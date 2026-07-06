@@ -285,6 +285,7 @@ _TEST_BUILDINGS = {
         max_health=500, requires_hq=False, required_terrain=None,
         category="headquarters", produces=None,
         build_time_seconds=5, rank_requirement=1,
+        capabilities=frozenset({"headquarters", "storage"}),
     ),
     "EX": BuildingDef(
         name="Extractor", abbreviation="EX",
@@ -293,6 +294,9 @@ _TEST_BUILDINGS = {
         category="resource", produces="Wood",
         build_time_seconds=3, rank_requirement=1,
         storage_capacity=100,
+        capabilities=frozenset(
+            {"harvestable", "upgradable", "requires_resource_terrain"}
+        ),
     ),
     "AC": BuildingDef(
         name="Academy", abbreviation="AC",
@@ -348,6 +352,10 @@ def _make_all_systems(registry=None, event_bus=None, planet_registry=None):
     registry = registry or _make_registry()
     event_bus = event_bus or EventBus()
     planet_registry = planet_registry or _make_planet_registry()
+
+    # Publish this registry as the singleton so capability lookups
+    # (building_has_capability, used by harvester/delivery scripts) resolve.
+    DataRegistry.set_instance(registry)
 
     created_agents: list[FakeAgent] = []
 

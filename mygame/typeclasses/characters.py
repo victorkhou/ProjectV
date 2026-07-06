@@ -473,8 +473,10 @@ class CombatCharacter(CombatEntity, DefaultCharacter):
                     if btype in PROTECTED_BUILDING_TYPES:
                         continue
 
-                    # 1. Clear extractor resource_inventory
-                    if btype == "EX":
+                    # 1. Clear harvestable-building (Extractor) inventory
+                    from world.constants import HARVESTABLE
+                    from world.utils import building_has_capability
+                    if building_has_capability(b, HARVESTABLE):
                         _clear_extractor_inventory(b)
                         logger.debug("Cleared inventory on %s", getattr(b, "key", "?"))
 

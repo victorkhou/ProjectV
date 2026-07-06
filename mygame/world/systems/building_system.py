@@ -23,17 +23,24 @@ from world.event_bus import (
     CONSTRUCTION_COMPLETED,
     EventBus,
 )
+from world.systems.base_system import BaseSystem
 from world.utils import get_building_attr as _get_building_attr_shared
 from world.utils import set_building_attr as _set_building_attr_shared
 from world.constants import (
     CONSTRUCTION_PROGRESS_INTERVAL,
+    MAX_BUILDING_LEVEL,
+    HEADQUARTERS,
+    REQUIRES_RESOURCE_TERRAIN,
+    UPGRADABLE,
 )
 
 # Default maximum build range (Manhattan distance)
 DEFAULT_BUILD_RANGE = 10
 
-# Maximum building level
-MAX_BUILDING_LEVEL = 5
+# ``MAX_BUILDING_LEVEL`` is imported from ``world.constants`` (the single
+# structural source) and re-exported here for backward compatibility with
+# callers/tests that import it from this module.
+__all__ = ["BuildingSystem", "MAX_BUILDING_LEVEL", "DEFAULT_BUILD_RANGE"]
 
 
 def _manhattan_distance(x1: int, y1: int, x2: int, y2: int) -> int:
@@ -41,7 +48,7 @@ def _manhattan_distance(x1: int, y1: int, x2: int, y2: int) -> int:
     return abs(x1 - x2) + abs(y1 - y2)
 
 
-class BuildingSystem:
+class BuildingSystem(BaseSystem):
     """Manages building construction, upgrades, and destruction.
 
     Args:
@@ -63,8 +70,7 @@ class BuildingSystem:
         build_range: int = DEFAULT_BUILD_RANGE,
         current_tick_func: Callable[[], int] | None = None,
     ) -> None:
-        self.registry = registry
-        self.event_bus = event_bus
+        super().__init__(registry, event_bus)
         self._create_building_func = create_building_func or self._default_create_building
         self.build_range = build_range
         self._current_tick_func = current_tick_func or (lambda: 0)
@@ -277,8 +283,8 @@ class BuildingSystem:
         except KeyError:
             return False, f"Unknown building type: {building_type}"
 
-        if building_def.category != "resource":
-            return False, "Only resource buildings can be upgraded."
+        if not building_def.has_capability(UPGRADABLE):
+            return False, "This building type cannot be upgraded."
 
         # 3. Level check
         current_level = building.building_level
@@ -638,7 +644,7 @@ class BuildingSystem:
 
         Returns error message or None.
         """
-        if building_def.abbreviation != "HQ":
+        if not building_def.has_capability(HEADQUARTERS):
             return None
 
         # Check if the player already has an HQ
@@ -661,7 +667,7 @@ class BuildingSystem:
 
         Returns error message or None.
         """
-        if building_def.abbreviation != "EX":
+        if not building_def.has_capability(REQUIRES_RESOURCE_TERRAIN):
             return None
 
         # Get tile coordinates — prefer explicit params, then db, then properties
@@ -753,7 +759,7 @@ class BuildingSystem:
     # ------------------------------------------------------------------ #
 
     def _player_has_hq(self, player: Any) -> bool:
-        """Check if the player owns an HQ building."""
+        """Check if the player owns a headquarters-capability building."""
         buildings = self._get_player_buildings(player)
         for b in buildings:
             btype = None
@@ -761,7 +767,10 @@ class BuildingSystem:
                 btype = b.attributes.get("building_type", default=None)
             elif hasattr(b, "db"):
                 btype = getattr(b.db, "building_type", None)
-            if btype == "HQ":
+            if not btype:
+                continue
+            bdef = self.registry.resolve_building(btype)
+            if bdef is not None and bdef.has_capability(HEADQUARTERS):
                 return True
         return False
 

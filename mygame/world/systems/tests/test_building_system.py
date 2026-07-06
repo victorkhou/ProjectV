@@ -192,6 +192,7 @@ def _make_registry_with_buildings() -> DataRegistry:
             category="headquarters", produces=None,
             unlocks=["MM", "QQ"], map_symbol="HQ",
             build_time_seconds=180, rank_requirement=1,
+            capabilities=frozenset({"headquarters", "storage"}),
         ),
         "MM": BuildingDef(
             name="Mill", abbreviation="MM",
@@ -200,6 +201,7 @@ def _make_registry_with_buildings() -> DataRegistry:
             category="resource", produces="Straw",
             unlocks=[], map_symbol="MM",
             build_time_seconds=60, rank_requirement=1,
+            capabilities=frozenset({"harvestable", "upgradable"}),
         ),
         "QQ": BuildingDef(
             name="Quarry", abbreviation="QQ",
@@ -208,6 +210,7 @@ def _make_registry_with_buildings() -> DataRegistry:
             category="resource", produces="Stone",
             unlocks=[], map_symbol="QQ",
             build_time_seconds=90, rank_requirement=2,
+            capabilities=frozenset({"harvestable", "upgradable"}),
         ),
         "VV": BuildingDef(
             name="Turret", abbreviation="VV",
@@ -511,7 +514,7 @@ class TestUpgrade(unittest.TestCase):
         system, _, _ = _make_building_system()
         ok, msg = system.upgrade(player, building)
         self.assertFalse(ok)
-        self.assertIn("resource buildings", msg.lower())
+        self.assertIn("cannot be upgraded", msg.lower())
 
     def test_upgrade_not_owned_rejected(self):
         owner = FakePlayer(name="Owner")
@@ -769,6 +772,7 @@ class TestProcessConstructionTick(unittest.TestCase):
             category="headquarters", produces=None,
             unlocks=["MM", "QQ"], map_symbol="HQ",
             build_time_seconds=build_time, rank_requirement=1,
+            capabilities=frozenset({"headquarters", "storage"}),
         )
         system, created, event_bus = _make_building_system(registry=registry)
         system.start_construction(player, tile, "HQ")
@@ -996,6 +1000,9 @@ def _make_registry_with_extractor() -> DataRegistry:
         category="resource", produces=None,
         unlocks=[], map_symbol="EX",
         build_time_seconds=120, rank_requirement=2,
+        capabilities=frozenset(
+            {"harvestable", "upgradable", "requires_resource_terrain"}
+        ),
     )
     return registry
 

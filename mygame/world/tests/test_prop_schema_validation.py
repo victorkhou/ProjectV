@@ -12,6 +12,7 @@ from hypothesis import given, settings, assume
 from hypothesis import strategies as st
 
 from mygame.world.schema_validator import SchemaValidator
+from mygame.world.constants import MAX_BUILDING_LEVEL
 
 validator = SchemaValidator()
 
@@ -44,7 +45,7 @@ def valid_building_dict():
         "category": st.sampled_from(["headquarters", "resource", "equipment", "defense", "research"]),
         "map_symbol": two_char_str,
         "build_time_seconds": positive_int,
-        "max_level": positive_int,
+        "max_level": st.integers(min_value=1, max_value=MAX_BUILDING_LEVEL),
         "rank_requirement": positive_int,
         "requires_agent": st.booleans(),
         "storage_capacity": non_negative_int,

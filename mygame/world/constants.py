@@ -73,6 +73,11 @@ TRAINING_PROGRESS_INTERVAL = 5
 #: Seconds between construction progress messages
 CONSTRUCTION_PROGRESS_INTERVAL = 5
 
+#: Maximum level any building can be upgraded to. Structural bound: it caps the
+#: ``max_level`` a definition may declare and gates the upgrade path. (The
+#: *cost/time* of each upgrade is balance and lives in ``BalanceConfig``.)
+MAX_BUILDING_LEVEL = 5
+
 # NOTE: Resource/harvest, storage-capacity, upgrade-scaling, turret-bonus and
 # demolish-refund balance now live in ``BalanceConfig``
 # (data/config/balance.yaml), hot-tunable via @reload.
@@ -164,6 +169,51 @@ class DeliveryState(StrEnum):
 
 #: Default/idle activity status shown in agent rosters and the map view.
 ACTIVITY_IDLE = "Idle"
+
+# ------------------------------------------------------------------ #
+#  Building capabilities
+# ------------------------------------------------------------------ #
+
+#: The controlled vocabulary of building *capability* flags. A building
+#: declares zero or more of these in ``buildings.yaml`` (``capabilities: [...]``)
+#: and game code branches on the capability rather than on a hardcoded
+#: abbreviation (``if bdef.abbreviation == "EX"`` → ``if bdef.has_capability(
+#: HARVESTABLE)``). This keeps building behavior data-driven: adding a building
+#: that harvests, stores, or blocks movement is a YAML edit, not a code change
+#: scattered across systems. The schema validator rejects any capability not in
+#: this set, so typos fail at load time.
+#:
+#: Meaning of each flag:
+#:   - ``harvestable``: a resource-producing Extractor. Harvester agents target
+#:     it, it produces on a tick cooldown, and its inventory is cleared on the
+#:     owner's disconnect.
+#:   - ``upgradable``: may be upgraded to a higher level (raises output/capacity).
+#:   - ``requires_resource_terrain``: must be placed on a tile that has a
+#:     resource (enforced at construction).
+#:   - ``storage``: a valid drop-off for a Harvester delivering resources.
+#:   - ``primary_storage``: a *dedicated* store, preferred over other ``storage``
+#:     buildings as a delivery target on a distance tie.
+#:   - ``headquarters``: the player's HQ — limited to one per planet and the
+#:     prerequisite that satisfies other buildings' ``requires_hq``.
+#:   - ``combat_barrier``: a Wall that blocks its own owner from passing while
+#:     the owner has an active combat timer.
+HARVESTABLE = "harvestable"
+UPGRADABLE = "upgradable"
+REQUIRES_RESOURCE_TERRAIN = "requires_resource_terrain"
+STORAGE = "storage"
+PRIMARY_STORAGE = "primary_storage"
+HEADQUARTERS = "headquarters"
+COMBAT_BARRIER = "combat_barrier"
+
+BUILDING_CAPABILITIES: frozenset[str] = frozenset({
+    HARVESTABLE,
+    UPGRADABLE,
+    REQUIRES_RESOURCE_TERRAIN,
+    STORAGE,
+    PRIMARY_STORAGE,
+    HEADQUARTERS,
+    COMBAT_BARRIER,
+})
 
 # ------------------------------------------------------------------ #
 #  Disconnect cleanup

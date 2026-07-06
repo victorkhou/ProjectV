@@ -183,6 +183,35 @@ class TestFullDeliveryLoop:
     Validates: Requirements 4.1, 4.4
     """
 
+    def setup_method(self, method):
+        """Register a DataRegistry singleton so storage capabilities resolve.
+
+        Delivery target selection branches on the ``storage`` capability
+        (resolved via the singleton) rather than a hardcoded building type.
+        """
+        from world.data_registry import DataRegistry
+        from world.definitions import BuildingDef
+        registry = DataRegistry()
+        registry.buildings = {
+            "VT": BuildingDef(
+                name="Vault", abbreviation="VT", cost={"Stone": 25},
+                max_health=400, requires_hq=True, required_terrain=None,
+                category="storage", produces=None,
+                capabilities=frozenset({"storage", "primary_storage"}),
+            ),
+            "EX": BuildingDef(
+                name="Extractor", abbreviation="EX", cost={"Wood": 15},
+                max_health=200, requires_hq=True, required_terrain=None,
+                category="resource", produces=None,
+                capabilities=frozenset({"harvestable"}),
+            ),
+        }
+        DataRegistry.set_instance(registry)
+
+    def teardown_method(self, method):
+        from world.data_registry import DataRegistry
+        DataRegistry.set_instance(None)
+
     def test_full_delivery_cycle(self):
         """Simulate: pick up → path to Vault → deposit → path back → arrive.
 

@@ -12,7 +12,14 @@ from typing import Any
 
 @dataclass
 class BuildingDef:
-    """Definition for a building type."""
+    """Definition for a building type.
+
+    ``capabilities`` is the data-driven behavior vocabulary (see
+    ``world.constants.BUILDING_CAPABILITIES``). Game systems branch on
+    capabilities rather than on the two-letter ``abbreviation`` so adding a
+    building with existing behavior is a YAML edit, not a code change. Use
+    :meth:`has_capability` to test membership.
+    """
 
     name: str
     abbreviation: str
@@ -29,6 +36,11 @@ class BuildingDef:
     rank_requirement: int = 1
     requires_agent: bool = False
     storage_capacity: int = 0
+    capabilities: frozenset[str] = field(default_factory=frozenset)
+
+    def has_capability(self, capability: str) -> bool:
+        """Return True if this building declares the given capability flag."""
+        return capability in self.capabilities
 
 
 @dataclass

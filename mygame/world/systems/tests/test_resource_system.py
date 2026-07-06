@@ -163,12 +163,14 @@ def _make_registry() -> DataRegistry:
             cost={"Straw": 20, "Wood": 10},
             max_health=150, requires_hq=True, required_terrain="Plains",
             category="resource", produces="Straw", unlocks=[], map_symbol="MM",
+            capabilities=frozenset({"harvestable", "upgradable"}),
         ),
         "QQ": BuildingDef(
             name="Quarry", abbreviation="QQ",
             cost={"Wood": 20, "Stone": 10},
             max_health=200, requires_hq=True, required_terrain="Rock",
             category="resource", produces="Stone", unlocks=[], map_symbol="QQ",
+            capabilities=frozenset({"harvestable", "upgradable"}),
         ),
         "VV": BuildingDef(
             name="Turret", abbreviation="VV",
@@ -448,6 +450,9 @@ def _make_extractor_registry() -> DataRegistry:
         max_health=200, requires_hq=True, required_terrain="Forest",
         category="resource", produces="Wood", unlocks=[], map_symbol="EX",
         storage_capacity=100,
+        capabilities=frozenset(
+            {"harvestable", "upgradable", "requires_resource_terrain"}
+        ),
     )
     return registry
 

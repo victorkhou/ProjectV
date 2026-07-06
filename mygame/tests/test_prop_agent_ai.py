@@ -1114,6 +1114,43 @@ class TestProperty12DeliveryTargetSelection:
     **Validates: Requirements 7.1, 7.2**
     """
 
+    def setup_method(self, method):
+        """Register a DataRegistry singleton so storage capabilities resolve.
+
+        Delivery target selection now branches on the ``storage`` /
+        ``primary_storage`` capabilities (resolved via the singleton) rather
+        than a hardcoded ``building_type in ("VT", "HQ")`` — VT is the primary
+        (preferred) store, HQ is a plain store.
+        """
+        from world.data_registry import DataRegistry
+        from world.definitions import BuildingDef
+        registry = DataRegistry()
+        registry.buildings = {
+            "VT": BuildingDef(
+                name="Vault", abbreviation="VT", cost={"Stone": 25},
+                max_health=400, requires_hq=True, required_terrain=None,
+                category="storage", produces=None,
+                capabilities=frozenset({"storage", "primary_storage"}),
+            ),
+            "HQ": BuildingDef(
+                name="Headquarters", abbreviation="HQ", cost={"Wood": 10},
+                max_health=500, requires_hq=False, required_terrain=None,
+                category="headquarters", produces=None,
+                capabilities=frozenset({"headquarters", "storage"}),
+            ),
+            "EX": BuildingDef(
+                name="Extractor", abbreviation="EX", cost={"Wood": 15},
+                max_health=200, requires_hq=True, required_terrain=None,
+                category="resource", produces=None,
+                capabilities=frozenset({"harvestable"}),
+            ),
+        }
+        DataRegistry.set_instance(registry)
+
+    def teardown_method(self, method):
+        from world.data_registry import DataRegistry
+        DataRegistry.set_instance(None)
+
     @given(data=st.data())
     @settings(max_examples=100)
     def test_selects_nearest_with_vault_preference(self, data):

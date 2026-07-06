@@ -232,7 +232,7 @@ class TestDataclassContracts:
     """Verify all definitions are proper dataclasses with expected field counts."""
 
     def test_building_def_field_count(self):
-        assert len(fields(BuildingDef)) == 15
+        assert len(fields(BuildingDef)) == 16
 
     def test_item_def_field_count(self):
         assert len(fields(ItemDef)) == 7

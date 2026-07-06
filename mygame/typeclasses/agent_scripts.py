@@ -116,9 +116,10 @@ class HarvesterScript(DefaultScript):
         if building is None:
             return
 
-        # Determine building type — must be an Extractor (resource category)
-        building_type = _get_attr(building, "building_type")
-        if building_type != "EX":
+        # Must be a harvestable building (Extractor) to produce resources.
+        from world.constants import HARVESTABLE
+        from world.utils import building_has_capability
+        if not building_has_capability(building, HARVESTABLE):
             return
 
         # Determine resource type from the terrain tile the Extractor sits on
@@ -732,9 +733,10 @@ class DeliveryBehavior(DefaultScript):
                 )
             ]
 
+        from world.constants import STORAGE, PRIMARY_STORAGE
+        from world.utils import building_has_capability
         for bld in all_buildings:
-            bld_type = _get_attr(bld, "building_type")
-            if bld_type not in ("VT", "HQ"):
+            if not building_has_capability(bld, STORAGE):
                 continue
 
             bld_owner = _get_attr(bld, "owner")
@@ -757,14 +759,15 @@ class DeliveryBehavior(DefaultScript):
             cx, cy = int(cx), int(cy)
             dist = abs(cx - bx) + abs(cy - by)
 
-            # Sort key: (distance, type_priority) where VT=0, HQ=1
-            type_priority = 0 if bld_type == "VT" else 1
+            # Sort key: (distance, type_priority) — dedicated (primary) storage
+            # is preferred over general storage on a distance tie.
+            type_priority = 0 if building_has_capability(bld, PRIMARY_STORAGE) else 1
             candidates.append((dist, type_priority, bld))
 
         if not candidates:
             return None
 
-        # Sort by distance first, then by type priority (VT preferred on tie)
+        # Sort by distance first, then by priority (primary storage wins ties)
         candidates.sort(key=lambda c: (c[0], c[1]))
         return candidates[0][2]
 
@@ -843,24 +846,85 @@ class MedicScript(DefaultScript):
 
 
 # ------------------------------------------------------------------ #
-#  Script class lookup
+#  Agent role & ability registry  (single source of truth)
 # ------------------------------------------------------------------ #
+#
+# Everything the game needs to know about an agent role or gated ability lives
+# in ONE table here, co-located with the Script classes it references. Adding a
+# role/ability is a single entry — the derived lookups below (valid-role list,
+# building→role map, army-role set, role→script map, script-key sets) are all
+# computed from these tables, so they can never drift out of sync. AgentSystem
+# imports the derived structures rather than maintaining parallel copies.
 
-#: Maps role name → Script class (or list of Script classes) for use by
-#: AgentSystem when attaching behavior scripts to NPC agents.
-ROLE_SCRIPT_MAP: dict[str, type | list[type]] = {
-    "harvester": HarvesterScript,  # production only; resources stay at Extractor
-    "engineer": EngineerScript,
-    "guard": PatrolBehavior,      # replaces GuardScript
-    "scout": PatrolBehavior,      # replaces ScoutScript
-    "soldier": SoldierScript,
-    "medic": MedicScript,
+from dataclasses import dataclass
+
+
+@dataclass(frozen=True)
+class RoleSpec:
+    """Everything AgentSystem needs to know about one agent role.
+
+    Attributes:
+        name: The role identifier (e.g. ``"harvester"``).
+        script: The behavior Script class attached to an agent in this role.
+        script_key: The Evennia ``key`` that Script sets in
+            ``at_script_creation`` — used to detach it without instantiating.
+        buildings: Building abbreviations that *require* this role (a building's
+            assigned agent must have the matching role). Empty for army roles.
+        army: True for army roles, which are assigned without a target building.
+    """
+
+    name: str
+    script: type
+    script_key: str
+    buildings: tuple[str, ...] = ()
+    army: bool = False
+
+
+@dataclass(frozen=True)
+class AbilitySpec:
+    """A gated, enablement-driven ability (attached independent of role).
+
+    Unlike a role script, an ability script is attached by
+    ``AgentSystem.evaluate_gated_abilities`` when the agent is at or above the
+    ability's gate level AND the player has explicitly enabled it.
+    """
+
+    name: str
+    script: type
+    script_key: str
+
+
+#: Canonical role table. Order defines the user-facing ``VALID_ROLES`` order.
+AGENT_ROLES: dict[str, RoleSpec] = {
+    "harvester": RoleSpec("harvester", HarvesterScript, "harvester_script", buildings=("EX",)),
+    "engineer": RoleSpec("engineer", EngineerScript, "engineer_script", buildings=("AR", "LB")),
+    "soldier": RoleSpec("soldier", SoldierScript, "soldier_script", army=True),
+    "guard": RoleSpec("guard", PatrolBehavior, "patrol_behavior", buildings=("TU",)),
+    "scout": RoleSpec("scout", PatrolBehavior, "patrol_behavior", buildings=("RD",)),
+    "medic": RoleSpec("medic", MedicScript, "medic_script", buildings=("MB",), army=True),
 }
 
-#: Maps ability name → Script class for gated, enablement-driven abilities.
-#: Unlike ROLE_SCRIPT_MAP, these scripts are not attached based on role; they
-#: are attached by AgentSystem.evaluate_gated_abilities when the agent is at or
-#: above the ability's gate level AND the player has explicitly enabled it.
+#: Canonical gated-ability table.
+AGENT_ABILITIES: dict[str, AbilitySpec] = {
+    "delivery": AbilitySpec("delivery", DeliveryBehavior, "delivery_behavior"),
+}
+
+# ---- Derived lookups (do not edit directly — edit the tables above) ---- #
+
+#: Maps role name → Script class, for AgentSystem.attach_behavior_script.
+ROLE_SCRIPT_MAP: dict[str, type] = {
+    name: spec.script for name, spec in AGENT_ROLES.items()
+}
+
+#: Maps ability name → Script class, for gated-ability attachment.
 ABILITY_SCRIPT_MAP: dict[str, type] = {
-    "delivery": DeliveryBehavior,
+    name: spec.script for name, spec in AGENT_ABILITIES.items()
 }
+
+#: Every Evennia script key a behavior/ability script may register under.
+#: Used by AgentSystem._detach_behavior_script to remove any of them without
+#: instantiating the classes (which fails outside the Evennia DB context).
+ALL_BEHAVIOR_SCRIPT_KEYS: frozenset[str] = frozenset(
+    {spec.script_key for spec in AGENT_ROLES.values()}
+    | {spec.script_key for spec in AGENT_ABILITIES.values()}
+)

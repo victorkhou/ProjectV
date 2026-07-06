@@ -36,10 +36,6 @@ def initialize_game() -> dict:
     from world.data_registry import DataRegistry
 
     registry = DataRegistry()
-    # Register the process-wide singleton so owner-agnostic helpers
-    # (world.progression, chat_system, agent_scripts) can resolve the live
-    # registry via DataRegistry.get_instance() without a threaded reference.
-    DataRegistry.set_instance(registry)
     try:
         registry.load_all()
         logger.info("DataRegistry loaded successfully.")
@@ -49,6 +45,14 @@ def initialize_game() -> dict:
         logger.info("Progression thresholds built.")
     except Exception:
         logger.exception("DataRegistry load failed — using empty registry.")
+    # Register the process-wide singleton so owner-agnostic helpers
+    # (world.progression, chat_system, agent_scripts, building capability
+    # checks) can resolve the live registry via DataRegistry.get_instance()
+    # without a threaded reference. Set AFTER load_all so a load failure never
+    # installs a half-populated registry as the singleton — capability lookups
+    # then fail closed against a definitively-unpopulated registry rather than a
+    # confusingly-partial one, and a healthy load always installs a full one.
+    DataRegistry.set_instance(registry)
 
     # ---------------------------------------------------------- #
     #  2. Event Bus singleton

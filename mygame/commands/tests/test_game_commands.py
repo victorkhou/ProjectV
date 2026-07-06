@@ -243,6 +243,30 @@ def _make_cmd(cmd_class, caller, args=""):
 # -------------------------------------------------------------- #
 
 class TestCmdMove(unittest.TestCase):
+    def setUp(self):
+        """Register a DataRegistry singleton mapping WL → a combat_barrier.
+
+        The Wall passage check now branches on the ``combat_barrier``
+        capability (resolved via the DataRegistry singleton) rather than a
+        hardcoded ``building_type == "WL"``.
+        """
+        from world.data_registry import DataRegistry
+        from world.definitions import BuildingDef
+        registry = DataRegistry()
+        registry.buildings = {
+            "WL": BuildingDef(
+                name="Wall", abbreviation="WL", cost={"Stone": 5},
+                max_health=600, requires_hq=True, required_terrain=None,
+                category="defense", produces=None,
+                capabilities=frozenset({"combat_barrier"}),
+            ),
+        }
+        DataRegistry.set_instance(registry)
+
+    def tearDown(self):
+        from world.data_registry import DataRegistry
+        DataRegistry.set_instance(None)
+
     def test_no_args(self):
         caller = FakeCaller()
         cmd = _make_cmd(CmdMove, caller, "")

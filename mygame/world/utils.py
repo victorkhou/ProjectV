@@ -139,9 +139,84 @@ def is_player(entity: Any) -> bool:
     )
 
 
+# ------------------------------------------------------------------ #
+#  Level reading  (single source of truth)
+# ------------------------------------------------------------------ #
+
+def _coerce_level(value: Any) -> int | None:
+    """Coerce a stored level/rank value to ``int``; ``None`` if not numeric.
+
+    Corrupted out-of-band state (an admin edit or migration bug leaving a
+    non-numeric ``db.level``/``db.rank_level``) must not raise ``ValueError``
+    up through level math into a command handler. Returns ``None`` so the
+    caller falls back to its default.
+    """
+    if value is None:
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        logger.debug("Ignoring non-numeric level value %r; treating as unset.", value)
+        return None
+
+
+def get_player_level(entity: Any, default: int = 1) -> int:
+    """Read an entity's Entity_Level (1-60), with legacy fallback.
+
+    Prefers ``db.level``. Falls back to the legacy ``db.rank_level`` (a 1-12
+    rank number) by mapping it to the first level of that rank
+    (``(rank - 1) * LEVELS_PER_RANK + 1``); a ``rank_level`` already above the
+    rank range is treated as an actual level. Returns ``default`` when the
+    entity has no ``db`` or neither attribute is set.
+
+    Single source of truth shared by RankSystem, TechLabSystem, PowerupSystem
+    and AgentSystem so the "which level is this" rule cannot drift between them.
+    Non-numeric stored values are treated as unset rather than raising.
+    """
+    from world.constants import NUM_RANKS, LEVELS_PER_RANK
+
+    db = getattr(entity, "db", None)
+    if db is None:
+        return default
+    lvl = _coerce_level(getattr(db, "level", None))
+    if lvl is not None:
+        return lvl
+    rl = _coerce_level(getattr(db, "rank_level", None))
+    if rl is not None:
+        if 1 <= rl <= NUM_RANKS:
+            return (rl - 1) * LEVELS_PER_RANK + 1
+        return rl
+    return default
+
+
 def is_building(entity: Any) -> bool:
     """Return True if the entity is a building (has building_type attribute)."""
     return get_building_type(entity) is not None
+
+
+def building_has_capability(building: Any, capability: str) -> bool:
+    """Return True if *building*'s definition declares *capability*.
+
+    Resolves the building's ``building_type`` against the ``DataRegistry``
+    singleton and checks its ``capabilities`` (see
+    ``world.constants.BUILDING_CAPABILITIES``). Returns False if the registry
+    is unavailable or the type is unknown, so callers stay safe outside a
+    running server. This is the shared entry point for capability checks on a
+    *live building object* (as opposed to a ``BuildingDef``, which exposes
+    ``has_capability`` directly).
+    """
+    btype = get_building_type(building)
+    if not btype:
+        return False
+    try:
+        from world.data_registry import DataRegistry
+        registry = DataRegistry.get_instance()
+        if registry is None:
+            return False
+        bdef = registry.resolve_building(btype)
+    except Exception:
+        return False
+    return bdef is not None and bdef.has_capability(capability)
 
 
 # ------------------------------------------------------------------ #

@@ -14,9 +14,11 @@ from __future__ import annotations
 
 from typing import Any
 
+from world.constants import HARVESTABLE
 from world.data_registry import DataRegistry
 from world.definitions import BalanceConfig
 from world.event_bus import RESOURCE_GATHERED, EventBus
+from world.systems.base_system import BaseSystem
 from world.utils import get_building_attr as _get_building_attr_shared
 
 
@@ -31,7 +33,7 @@ def _current_balance() -> BalanceConfig:
     return BalanceConfig.current()
 
 
-class ResourceSystem:
+class ResourceSystem(BaseSystem):
     """Manages resource gathering, building production, and node respawns.
 
     Args:
@@ -40,9 +42,7 @@ class ResourceSystem:
         event_bus: The EventBus for publishing game events.
     """
 
-    def __init__(self, registry: DataRegistry, event_bus: EventBus) -> None:
-        self.registry = registry
-        self.event_bus = event_bus
+    # Uses BaseSystem.__init__(registry, event_bus) unchanged.
 
     # ------------------------------------------------------------------ #
     #  Manual harvest
@@ -404,7 +404,7 @@ class ResourceSystem:
             if getattr(getattr(agent, "db", None), "incapacitated", False):
                 continue
 
-            # Must be an Extractor (resource category)
+            # Must be a harvestable building (Extractor)
             building_type = self._get_building_type(building)
             if not building_type:
                 continue
@@ -412,7 +412,7 @@ class ResourceSystem:
                 building_def = self.registry.get_building(building_type)
             except KeyError:
                 continue
-            if building_def.category != "resource":
+            if not building_def.has_capability(HARVESTABLE):
                 continue
 
             resource_type = building_def.produces
@@ -478,7 +478,7 @@ class ResourceSystem:
                 building_def = self.registry.get_building(building_type)
             except KeyError:
                 continue
-            if building_def.category != "resource":
+            if not building_def.has_capability(HARVESTABLE):
                 continue
             resource_type = building_def.produces
             if not resource_type:
@@ -641,13 +641,12 @@ class ResourceSystem:
             pass
         return None
 
-    @staticmethod
-    def _get_tile_extractor(tile: Any, px: int = None, py: int = None) -> Any | None:
+    def _get_tile_extractor(self, tile: Any, px: int = None, py: int = None) -> Any | None:
         """Return the Extractor building on *tile* at player coords, or None.
 
         For PlanetRoom tiles, queries get_buildings_at(px, py).
         For legacy tiles, checks the tile's ``building`` attribute.
-        Verifies it's an Extractor (building_type == "EX") that is
+        Verifies it's a harvestable building (Extractor) that is
         not offline and not under construction.
         """
         building = None
@@ -670,7 +669,8 @@ class ResourceSystem:
         elif hasattr(building, "db"):
             btype = getattr(building.db, "building_type", None)
 
-        if btype != "EX":
+        bdef = self.registry.resolve_building(btype) if btype else None
+        if bdef is None or not bdef.has_capability(HARVESTABLE):
             return None
 
         if getattr(building, "is_offline", False):

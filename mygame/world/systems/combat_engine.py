@@ -20,6 +20,7 @@ from world.event_bus import (
     PLAYER_ELIMINATED,
     EventBus,
 )
+from world.systems.base_system import BaseSystem
 
 
 def _manhattan_distance(x1: int, y1: int, x2: int, y2: int) -> int:
@@ -27,7 +28,7 @@ def _manhattan_distance(x1: int, y1: int, x2: int, y2: int) -> int:
     return abs(x1 - x2) + abs(y1 - y2)
 
 
-class CombatEngine:
+class CombatEngine(BaseSystem):
     """Resolves combat actions each game tick.
 
     Args:
@@ -42,8 +43,7 @@ class CombatEngine:
         event_bus: EventBus,
         current_tick_func: Callable[[], int] | None = None,
     ) -> None:
-        self.registry = registry
-        self.event_bus = event_bus
+        super().__init__(registry, event_bus)
         self._current_tick_func = current_tick_func or (lambda: 0)
         self.pending_actions: list[dict] = []
 

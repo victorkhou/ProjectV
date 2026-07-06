@@ -25,6 +25,7 @@ from mygame.world.definitions import (
     RankDef,
     TerrainDef,
 )
+from mygame.world.constants import MAX_BUILDING_LEVEL
 from mygame.world.schema_validator import SchemaValidator
 
 validator = SchemaValidator()
@@ -110,7 +111,7 @@ def building_defs(draw):
         unlocks=draw(st.lists(short_text, max_size=4)),
         map_symbol=draw(two_char_str),
         build_time_seconds=draw(positive_int),
-        max_level=draw(st.integers(min_value=1, max_value=10)),
+        max_level=draw(st.integers(min_value=1, max_value=MAX_BUILDING_LEVEL)),
         rank_requirement=draw(positive_int),
         requires_agent=draw(st.booleans()),
         storage_capacity=draw(non_negative_int),
@@ -190,7 +191,7 @@ def valid_building_validator_dict():
         "requires_hq": st.booleans(),
         "category": st.sampled_from(["headquarters", "resource", "defense", "research", "equipment"]),
         "build_time_seconds": positive_int,
-        "max_level": positive_int,
+        "max_level": st.integers(min_value=1, max_value=MAX_BUILDING_LEVEL),
         "rank_requirement": positive_int,
         "requires_agent": st.booleans(),
         "storage_capacity": non_negative_int,

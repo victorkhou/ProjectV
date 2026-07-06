@@ -256,7 +256,8 @@ class PlanetRoom(DefaultRoom):
                     if buildings:
                         building = buildings[0]
                         registry = systems.get("registry")
-                        parts.append(_format_building_interior(looker, building, registry=registry))
+                        from world.ui_formatters import format_building_interior
+                        parts.append(format_building_interior(looker, building, registry=registry))
             except Exception:
                 pass
 
@@ -434,163 +435,12 @@ class PlanetRoom(DefaultRoom):
 
 
 # ------------------------------------------------------------------ #
-#  Helper for building interior display from PlanetRoom
+#  Building interior display
 # ------------------------------------------------------------------ #
 
-def _format_building_interior(looker, building, registry=None):
-    """Format building interior as a string for return_appearance."""
-    from world.utils import get_building_info, get_building_attr, get_closed_exits
-
-    info = get_building_info(building)
-    owner = info["owner"]
-    owner_name = getattr(owner, "key", str(owner)) if owner else "nobody"
-
-    category = "unknown"
-    produces = "—"
-    unlocks_str = "—"
-    if registry is None:
-        try:
-            from server.conf.game_init import game_systems
-            registry = game_systems.get("registry")
-        except Exception:
-            pass
-    try:
-        if registry:
-            bdef = registry.get_building(info["type"])
-            category = bdef.category
-            produces = bdef.produces or "—"
-            if bdef.unlocks:
-                unlocks_str = ", ".join(bdef.unlocks)
-    except Exception:
-        pass
-
-    closed = get_closed_exits(building)
-    exit_parts = []
-    for d in ("north", "south", "east", "west"):
-        if d in closed:
-            exit_parts.append(f"|r{d} (closed)|n")
-        else:
-            exit_parts.append(f"|g{d}|n")
-
-    # Check construction state
-    under_construction = get_building_attr(building, "under_construction", False)
-    progress = get_building_attr(building, "construction_progress", 0) or 0
-    total = get_building_attr(building, "construction_total", 0) or 0
-
-    lines = [
-        f"|w=== {info['name']} ({info['type']}) ===|n",
-    ]
-
-    if under_construction and total > 0:
-        pct = int((progress / total) * 100) if total > 0 else 0
-        remaining = max(0, total - progress)
-        lines.append(f"  |y*** UNDER CONSTRUCTION ***|n")
-        lines.append(f"  Progress: {progress}/{total}s ({pct}%) — {remaining}s remaining")
-        lines.append(f"  Stay on the tile or assign an Engineer to continue.")
-        lines.append("")
-
-    lines.extend([
-        f"  Owner: {owner_name}",
-        f"  Level: {info['level']} | HP: {info['hp']}/{info['hp_max']}",
-        f"  Category: {category}",
-        f"  Produces: {produces}",
-    ])
-    if unlocks_str != "—":
-        lines.append(f"  Unlocks: {unlocks_str}")
-
-    # Show training progress for Academies
-    training_agent_id = get_building_attr(building, "training_agent_id")
-    if training_agent_id is not None:
-        training_remaining = get_building_attr(building, "training_ticks_remaining", 0) or 0
-        lines.append("")
-        lines.append(f"  |c[Training] Agent #{training_agent_id} — {training_remaining}s remaining|n")
-
-    # Building coordinates (used by assigned-agent check and resource drops)
-    bx = getattr(getattr(building, "db", None), "coord_x", None)
-    by = getattr(getattr(building, "db", None), "coord_y", None)
-    tile = getattr(building, "location", None)
-
-    # Show assigned agent
-    assigned = get_building_attr(building, "assigned_agent")
-    if assigned is not None:
-        aid = getattr(getattr(assigned, "db", None), "agent_id", "?")
-        role = getattr(getattr(assigned, "db", None), "role", "") or "idle"
-        activity = getattr(getattr(assigned, "db", None), "activity_status", None) or "Idle"
-
-        # Check if the agent is physically at this building's tile
-        agent_x = getattr(getattr(assigned, "db", None), "coord_x", None)
-        agent_y = getattr(getattr(assigned, "db", None), "coord_y", None)
-        at_building = (
-            agent_x is not None and agent_y is not None
-            and bx is not None and by is not None
-            and int(agent_x) == int(bx) and int(agent_y) == int(by)
-        )
-
-        if at_building:
-            lines.append(f"  |gAgent #{aid}|n assigned as |w{role}|n — {activity}")
-        else:
-            lines.append(f"  |yAgent #{aid}|n assigned as |w{role}|n — |yen route|n")
-
-    # Show resource drops at the building's coordinates
-    if tile is not None and bx is not None and by is not None and hasattr(tile, "get_objects_at"):
-        drops = []
-        for obj in tile.get_objects_at(int(bx), int(by), type_tag="resource_drop"):
-            rtype = getattr(getattr(obj, "db", None), "resource_type", "?")
-            amt = getattr(getattr(obj, "db", None), "amount", 0)
-            if amt > 0:
-                drops.append(f"{amt} {rtype}")
-        if drops:
-            lines.append("")
-            lines.append(f"  |yResources: {', '.join(drops)}|n")
-            lines.append(f"  Use |wget|n to pick them up.")
-    elif tile is not None:
-        # Legacy fallback: iterate contents
-        drops = []
-        for obj in getattr(tile, "contents", []):
-            if hasattr(obj, "tags") and obj.tags.get("resource_drop", category="object_type"):
-                rtype = getattr(getattr(obj, "db", None), "resource_type", "?")
-                amt = getattr(getattr(obj, "db", None), "amount", 0)
-                if amt > 0:
-                    drops.append(f"{amt} {rtype}")
-        if drops:
-            lines.append("")
-            lines.append(f"  |yResources: {', '.join(drops)}|n")
-            lines.append(f"  Use |wget|n to pick them up.")
-
-    # Show other agents at the building's coordinates
-    if tile is not None and bx is not None and by is not None and hasattr(tile, "get_objects_at"):
-        tile_agents = []
-        for obj in tile.get_objects_at(int(bx), int(by)):
-            if obj is building:
-                continue
-            if obj is assigned:
-                continue  # already shown above
-            if hasattr(obj, "tags") and obj.tags.get(category="npc_type"):
-                npc_owner = getattr(getattr(obj, "db", None), "owner", None)
-                if npc_owner is looker:
-                    aid = getattr(obj.db, "agent_id", "?")
-                    role = getattr(obj.db, "role", "") or "idle"
-                    tile_agents.append(f"Agent #{aid} ({role})")
-        if tile_agents:
-            lines.append(f"  Agents here: {', '.join(tile_agents)}")
-    elif tile is not None:
-        # Legacy fallback
-        tile_agents = []
-        for obj in getattr(tile, "contents", []):
-            if obj is building:
-                continue
-            if obj is assigned:
-                continue
-            if hasattr(obj, "tags") and obj.tags.get(category="npc_type"):
-                npc_owner = getattr(getattr(obj, "db", None), "owner", None)
-                if npc_owner is looker:
-                    aid = getattr(obj.db, "agent_id", "?")
-                    role = getattr(obj.db, "role", "") or "idle"
-                    tile_agents.append(f"Agent #{aid} ({role})")
-        if tile_agents:
-            lines.append(f"  Agents here: {', '.join(tile_agents)}")
-
-    lines.append("")
-    lines.append(f"  Exits: {', '.join(exit_parts)}")
-
-    return "\n".join(lines)
+# The interior formatter now lives in ``world.ui_formatters`` so the room
+# typeclass stays a pure spatial container. Re-exported here under its old
+# name for backward compatibility with existing importers.
+from world.ui_formatters import (  # noqa: E402
+    format_building_interior as _format_building_interior,
+)

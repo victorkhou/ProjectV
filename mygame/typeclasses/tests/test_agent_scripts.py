@@ -137,6 +137,39 @@ class FakeBuilding:
 
 class TestHarvesterScript(unittest.TestCase):
 
+    def setUp(self):
+        """Register a DataRegistry singleton so capability checks resolve.
+
+        HarvesterScript now decides "is this a harvestable building?" via the
+        ``harvestable`` capability (looked up through the DataRegistry
+        singleton) rather than a hardcoded ``building_type == "EX"``. Provide a
+        registry mapping the test abbreviations to defs with the right caps.
+        """
+        # Use the ``world.*`` namespace to match production imports in
+        # agent_scripts (``from world.data_registry import DataRegistry``);
+        # ``mygame.world.*`` is a distinct module object with its own singleton.
+        from world.data_registry import DataRegistry
+        from world.definitions import BuildingDef
+        registry = DataRegistry()
+        registry.buildings = {
+            "EX": BuildingDef(
+                name="Extractor", abbreviation="EX", cost={"Wood": 10},
+                max_health=200, requires_hq=True, required_terrain=None,
+                category="resource", produces=None,
+                capabilities=frozenset({"harvestable", "upgradable"}),
+            ),
+            "TU": BuildingDef(
+                name="Turret", abbreviation="TU", cost={"Iron": 10},
+                max_health=300, requires_hq=True, required_terrain=None,
+                category="defense", produces=None,
+            ),
+        }
+        DataRegistry.set_instance(registry)
+
+    def tearDown(self):
+        from world.data_registry import DataRegistry
+        DataRegistry.set_instance(None)
+
     def _make_script(self, npc):
         script = HarvesterScript()
         script.obj = npc

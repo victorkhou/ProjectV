@@ -25,6 +25,7 @@ from typing import TYPE_CHECKING, Any
 
 from world import progression
 from world.event_bus import RANK_PROMOTED, RANK_DEMOTED, LEVEL_CHANGED
+from world.systems.base_system import BaseSystem
 from world.constants import (
     MAX_LEVEL,
     LEVELS_PER_RANK,
@@ -51,7 +52,7 @@ def level_range_for_rank(rank: int) -> tuple[int, int]:
     return low, min(high, MAX_LEVEL)
 
 
-class RankSystem:
+class RankSystem(BaseSystem):
     """Manages player level/rank progression based on Combat XP.
 
     The player's ``db.level`` (1-60) is the authoritative progression
@@ -63,8 +64,7 @@ class RankSystem:
 
     def __init__(self, registry: "DataRegistry", event_bus: "EventBus",
                  planet_registry=None) -> None:
-        self.registry = registry
-        self.event_bus = event_bus
+        super().__init__(registry, event_bus)
         self.planet_registry = planet_registry
         # The level->XP curve lives in ``world.progression`` (the single
         # source of truth shared with ``CombatEntity``). Build the table
@@ -229,21 +229,11 @@ class RankSystem:
         """Read the player's level, falling back to rank_level for compat.
 
         Old players only have rank_level (1-12, a rank number). Convert
-        to the first level of that rank: ``(rank - 1) * 5 + 1``.
+        to the first level of that rank: ``(rank - 1) * 5 + 1``. Delegates
+        to ``world.utils.get_player_level`` (the single source of truth).
         """
-        if hasattr(player, "db"):
-            lvl = getattr(player.db, "level", None)
-            if lvl is not None:
-                return int(lvl)
-            # Backward compat: old players only have rank_level (1-12)
-            rl = getattr(player.db, "rank_level", None)
-            if rl is not None:
-                rl = int(rl)
-                if rl <= NUM_RANKS:
-                    # Old rank number → first level of that rank
-                    return (rl - 1) * LEVELS_PER_RANK + 1
-                return rl  # Already a level if > 12
-        return 1
+        from world.utils import get_player_level
+        return get_player_level(player, default=1)
 
     def _sync_level(self, player: Any, old_level: int) -> None:
         """Recompute level from XP and fire events if rank changed."""

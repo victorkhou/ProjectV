@@ -241,6 +241,7 @@ class DataRegistry:
                 rank_requirement=entry.get("rank_requirement", 1),
                 requires_agent=entry.get("requires_agent", False),
                 storage_capacity=entry.get("storage_capacity", 0),
+                capabilities=frozenset(entry.get("capabilities", []) or []),
             )
             self.buildings[bdef.abbreviation] = bdef
 
@@ -420,30 +421,63 @@ class DataRegistry:
         """
         return self.buildings[abbr]
 
-    def resolve_building(self, token: str) -> BuildingDef | None:
-        """Resolve a building by abbreviation OR full name, case-insensitively.
+    @staticmethod
+    def _resolve(token: str, by_key: dict, name_attr: str = "name",
+                 key_upper: bool = True):
+        """Resolve a definition by registry key OR full name, typo-tolerantly.
 
-        Players type either the 2-letter abbreviation (``EX``) or the human
-        name (``extractor``); this accepts both. Matching is case-insensitive
-        and also tolerates spaces vs. underscores in names (``power armor`` ==
-        ``Power_Armor``). Returns ``None`` if nothing matches (callers surface a
-        clean "unknown building" message rather than raising).
+        Shared implementation behind the ``resolve_*`` family. Players type
+        either the short key (``EX``, an item key) or the human name
+        (``extractor``); this accepts both. Matching is case-insensitive and
+        tolerates spaces vs. underscores in names (``power armor`` ==
+        ``Power_Armor``). Returns ``None`` if nothing matches, so callers can
+        surface a clean "unknown" message rather than raising.
+
+        Args:
+            token: The user-supplied string.
+            by_key: The registry dict (key -> def).
+            name_attr: Attribute on each def holding its display name.
+            key_upper: Upper-case the token before the exact-key lookup
+                (building abbreviations are stored upper-case; item/tech/powerup
+                keys are stored verbatim, so those pass ``False``).
         """
         if not token:
             return None
         key = token.strip()
 
-        # 1) Exact abbreviation (the registry key), case-insensitive.
-        upper = key.upper()
-        if upper in self.buildings:
-            return self.buildings[upper]
+        # 1) Exact registry key.
+        lookup = key.upper() if key_upper else key
+        if lookup in by_key:
+            return by_key[lookup]
 
         # 2) Full name, case-insensitive and space/underscore-insensitive.
         norm = key.lower().replace("_", " ").strip()
-        for bdef in self.buildings.values():
-            if bdef.name.lower().replace("_", " ").strip() == norm:
-                return bdef
+        for d in by_key.values():
+            dname = getattr(d, name_attr, "") or ""
+            if dname.lower().replace("_", " ").strip() == norm:
+                return d
         return None
+
+    def resolve_building(self, token: str) -> BuildingDef | None:
+        """Resolve a building by abbreviation OR full name, case-insensitively.
+
+        Players type either the 2-letter abbreviation (``EX``) or the human
+        name (``extractor``); this accepts both. Returns ``None`` if nothing
+        matches (callers surface a clean "unknown building" message).
+        """
+        return self._resolve(token, self.buildings, key_upper=True)
+
+    def resolve_item(self, token: str) -> ItemDef | None:
+        """Resolve an item by key OR full name, typo-tolerantly (or ``None``)."""
+        return self._resolve(token, self.items, key_upper=False)
+
+    def resolve_technology(self, token: str) -> TechnologyDef | None:
+        """Resolve a technology by key OR full name (or ``None``)."""
+        return self._resolve(token, self.technologies, key_upper=False)
+
+    def resolve_powerup(self, token: str) -> PowerupDef | None:
+        """Resolve a powerup by key OR full name (or ``None``)."""
+        return self._resolve(token, self.powerups, key_upper=False)
 
     def get_item(self, key: str) -> ItemDef:
         """Get an item definition by key.

@@ -77,12 +77,18 @@ class SchemaValidator:
                         f"{prefix}: build_time_seconds must be a positive integer, got {bts!r}"
                     )
 
-            # max_level must be a positive int
+            # max_level must be a positive int within the structural ceiling
             ml = entry.get("max_level")
             if ml is not None:
+                from world.constants import MAX_BUILDING_LEVEL
                 if not isinstance(ml, int) or ml <= 0:
                     errors.append(
                         f"{prefix}: max_level must be a positive integer, got {ml!r}"
+                    )
+                elif ml > MAX_BUILDING_LEVEL:
+                    errors.append(
+                        f"{prefix}: max_level {ml} exceeds MAX_BUILDING_LEVEL "
+                        f"({MAX_BUILDING_LEVEL})"
                     )
 
             # rank_requirement must be a positive int
@@ -107,6 +113,22 @@ class SchemaValidator:
                     errors.append(
                         f"{prefix}: storage_capacity must be a non-negative integer, got {sc!r}"
                     )
+
+            # capabilities (optional) must be a list of known capability flags
+            caps = entry.get("capabilities")
+            if caps is not None:
+                from world.constants import BUILDING_CAPABILITIES
+                if not isinstance(caps, list):
+                    errors.append(
+                        f"{prefix}: capabilities must be a list, got {type(caps).__name__}"
+                    )
+                else:
+                    for cap in caps:
+                        if cap not in BUILDING_CAPABILITIES:
+                            errors.append(
+                                f"{prefix}: unknown capability '{cap}' "
+                                f"(known: {sorted(BUILDING_CAPABILITIES)})"
+                            )
 
         return errors
 
