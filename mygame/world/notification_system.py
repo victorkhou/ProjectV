@@ -9,7 +9,7 @@ connected sessions via Evennia's SESSION_HANDLER.
 from __future__ import annotations
 
 import logging
-from typing import Any
+from typing import Any, TYPE_CHECKING
 
 from world.event_bus import (
     EventBus,
@@ -20,14 +20,29 @@ from world.event_bus import (
     RANK_DEMOTED,
 )
 
+if TYPE_CHECKING:
+    from world.core.ports.notifier import Notifier
+
 logger = logging.getLogger("evennia")
 
 
 class NotificationSystem:
-    """Subscribes to game events and sends global notifications."""
+    """Subscribes to game events and sends global notifications.
 
-    def __init__(self, event_bus: EventBus, **kwargs) -> None:
+    Args:
+        event_bus: The EventBus to subscribe to.
+        notifier: The :class:`Notifier` port used to broadcast. Defaults to the
+            Evennia adapter; tests inject a fake that records messages instead
+            of monkeypatching the module-level ``world.utils.broadcast``.
+    """
+
+    def __init__(
+        self, event_bus: EventBus, notifier: "Notifier | None" = None, **kwargs
+    ) -> None:
         self.event_bus = event_bus
+        from world.adapters.evennia_notifier import EvenniaNotifier
+
+        self._notifier: "Notifier" = notifier or EvenniaNotifier()
         self._subscribe()
 
     def _subscribe(self) -> None:
@@ -38,11 +53,9 @@ class NotificationSystem:
         self.event_bus.subscribe(RANK_PROMOTED, self.on_rank_promoted)
         self.event_bus.subscribe(RANK_DEMOTED, self.on_rank_demoted)
 
-    @staticmethod
-    def _broadcast(message: str) -> None:
-        """Send a tagged message to all connected players."""
-        from world.utils import broadcast
-        broadcast(message)
+    def _broadcast(self, message: str) -> None:
+        """Send a tagged message to all connected players via the notifier."""
+        self._notifier.broadcast(message)
 
     # ------------------------------------------------------------------ #
     #  Event handlers

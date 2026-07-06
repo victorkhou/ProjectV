@@ -241,8 +241,12 @@ def initialize_game() -> dict:
     # ---------------------------------------------------------- #
     #  4. Wire event subscribers
     # ---------------------------------------------------------- #
-    # NotificationSystem auto-subscribes in __init__
-    notification_system = NotificationSystem(event_bus)
+    # NotificationSystem auto-subscribes in __init__. Inject the Evennia
+    # notifier explicitly (rather than relying on the lazy default) so the
+    # transport is wired at the composition root like the other adapters.
+    from world.adapters.evennia_notifier import EvenniaNotifier
+
+    notification_system = NotificationSystem(event_bus, notifier=EvenniaNotifier())
 
     # Combat timer: start/reset on COMBAT_ACTION events
     from world.combat_timer import subscribe_combat_timer
