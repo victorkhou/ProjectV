@@ -131,9 +131,9 @@ class HarvesterScript(DefaultScript):
         # Read the live balance config (falling back to defaults outside a
         # running server) so autonomous harvesting and manual harvesting always
         # use the SAME hot-tunable rate and can't desync on @reload.
-        from world.definitions import BalanceConfig
+        from world.adapters.registry_definitions_provider import default_balance
 
-        bal = BalanceConfig.current()
+        bal = default_balance()
         cooldown = getattr(getattr(npc, "db", None), "_harvest_tick_counter", 0) or 0
         cooldown += 1
         if cooldown < bal.harvest_cooldown_ticks:
@@ -228,14 +228,14 @@ class HarvesterScript(DefaultScript):
     def _get_base_rate() -> int:
         """Return the base harvest rate from the live balance config.
 
-        Uses ``BalanceConfig.current()`` so the value tracks the single source
-        of truth (and falls back to ``BalanceConfig`` defaults when no registry
-        is registered, e.g. the fast unit-test suite) rather than a hardcoded
-        literal that can silently drift out of sync.
+        Uses the shared ``default_balance`` choke point so the value tracks the
+        single source of truth (and falls back to ``BalanceConfig`` defaults
+        when no registry is registered, e.g. the fast unit-test suite) rather
+        than a hardcoded literal that can silently drift out of sync.
         """
-        from world.definitions import BalanceConfig
+        from world.adapters.registry_definitions_provider import default_balance
 
-        return BalanceConfig.current().gather_amount
+        return default_balance().gather_amount
 
 
 # ------------------------------------------------------------------ #

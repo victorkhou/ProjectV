@@ -55,3 +55,22 @@ def default_definitions_provider() -> DefinitionsProvider | None:
     if registry is None:
         return None
     return RegistryDefinitionsProvider(registry)
+
+
+def default_balance() -> Any:
+    """Return the live ``BalanceConfig`` for provider-less code paths.
+
+    A convenience over :func:`default_definitions_provider` for the Script hooks
+    and class-level static helpers that hold no registry reference and need only
+    the hot-tunable balance (not the full provider). Routes through the same
+    single ``get_instance()`` choke point; falls back to a default
+    ``BalanceConfig()`` when no registry is registered (e.g. the fast unit-test
+    suite), matching the semantics callers previously got from the retired
+    ``BalanceConfig.current()``.
+    """
+    provider = default_definitions_provider()
+    if provider is not None:
+        return provider.balance
+    from world.definitions import BalanceConfig
+
+    return BalanceConfig()

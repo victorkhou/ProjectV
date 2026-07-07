@@ -22,12 +22,14 @@ from world.utils import get_building_attr as _get_building_attr_shared
 def _current_balance() -> BalanceConfig:
     """Live balance config for the class-level capacity/damage helpers.
 
-    Thin alias for :meth:`BalanceConfig.current` so the ``@staticmethod``
-    helpers (which have no ``self.registry``) read the same hot-tunable values
-    as the instance methods, and still get ``BalanceConfig`` defaults in the
-    fast unit-test suite (which registers no ``DataRegistry`` singleton).
+    The ``@staticmethod`` helpers (which have no ``self.registry``) read the
+    same hot-tunable values as the instance methods via the shared
+    ``default_balance`` choke point, and still get ``BalanceConfig`` defaults in
+    the fast unit-test suite (which registers no ``DataRegistry`` singleton).
     """
-    return BalanceConfig.current()
+    from world.adapters.registry_definitions_provider import default_balance
+
+    return default_balance()
 
 
 class ResourceSystem(BaseSystem):
