@@ -205,12 +205,12 @@ class AgentSystem(AgentProgressionMixin, AgentBehaviorMixin, BaseSystem):
             pass
 
         # Notify the player
-        if player is not None and hasattr(player, "msg"):
-            player.msg(
-                f"|g[Complete] Agent #{agent_id} training finished! "
-                f"Use 'agents' to see your roster and 'assign {agent_id}' "
-                f"to put them to work.|n"
-            )
+        self.notify_player(
+            player,
+            f"|g[Complete] Agent #{agent_id} training finished! "
+            f"Use 'agents' to see your roster and 'assign {agent_id}' "
+            f"to put them to work.|n",
+        )
 
         return npc
 
@@ -653,12 +653,12 @@ class AgentSystem(AgentProgressionMixin, AgentBehaviorMixin, BaseSystem):
             # Periodic progress update — only if player is inside the Academy
             if remaining % TRAINING_PROGRESS_INTERVAL == 0:
                 player = self._get_building_attr(building, "training_owner")
-                if player is not None and hasattr(player, "msg"):
-                    if self._player_inside_building(player, building):
-                        player.msg(
-                            f"|y[Training] Agent #{agent_id}... "
-                            f"{remaining}s remaining|n"
-                        )
+                if player is not None and self._player_inside_building(player, building):
+                    self.notify_player(
+                        player,
+                        f"|y[Training] Agent #{agent_id}... "
+                        f"{remaining}s remaining|n",
+                    )
 
     # ------------------------------------------------------------------ #
     #  Tick processing

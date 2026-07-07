@@ -348,25 +348,19 @@ class AgentProgressionMixin:
         """Persist the notified-available set as a list for Evennia attributes."""
         agent.db.notified_available_abilities = list(keys)
 
-    @staticmethod
-    def _notify_owner(agent: Any, notify: bool, message: str) -> None:
+    def _notify_owner(self, agent: Any, notify: bool, message: str) -> None:
         """Send *message* to the agent's owning player when notifications are on.
 
-        No-ops when ``notify`` is False, the agent has no ``db.owner``, or the
-        owner has no ``msg`` method (e.g. offline-only or test fakes).
+        No-ops when ``notify`` is False or the agent has no ``db.owner``; the
+        injected ``PlayerNotifier`` (via :meth:`notify_player`) absorbs the
+        missing-``msg``/transport-error guarding.
         """
         if not notify:
             return
         owner = getattr(getattr(agent, "db", None), "owner", None)
-        if owner is None or not hasattr(owner, "msg"):
+        if owner is None:
             return
-        try:
-            owner.msg(message)
-        except Exception:
-            logger.exception(
-                "Failed to notify owner of agent %s",
-                getattr(agent, "key", "?"),
-            )
+        self.notify_player(owner, message)
 
     # ------------------------------------------------------------------ #
     #  Ability enable / disable / status command backends

@@ -456,14 +456,14 @@ class BuildingSystem(BaseSystem):
             return True
 
         # Periodic progress update
-        if hasattr(player, "msg") and progress % CONSTRUCTION_PROGRESS_INTERVAL == 0:
+        if player is not None and progress % CONSTRUCTION_PROGRESS_INTERVAL == 0:
             remaining = total - progress
             btype = self._get_building_attr(building, "building_type", "??")
             target_level = self._get_building_attr(building, "upgrade_target_level")
             if target_level:
-                player.msg(f"|y[Building] Upgrading {btype} to L{target_level}... {progress}/{total}s ({remaining}s remaining)|n")
+                self.notify_player(player, f"|y[Building] Upgrading {btype} to L{target_level}... {progress}/{total}s ({remaining}s remaining)|n")
             else:
-                player.msg(f"|y[Building] Constructing {btype}... {progress}/{total}s ({remaining}s remaining)|n")
+                self.notify_player(player, f"|y[Building] Constructing {btype}... {progress}/{total}s ({remaining}s remaining)|n")
 
         return False
 
@@ -879,12 +879,10 @@ class BuildingSystem(BaseSystem):
             )
 
             # Notify player
-            if player is not None and hasattr(player, "msg"):
-                player.msg(f"|g[Complete] {building_type} upgraded to level {target_level}!|n")
+            self.notify_player(player, f"|g[Complete] {building_type} upgraded to level {target_level}!|n")
         else:
             # New construction complete
-            if player is not None and hasattr(player, "msg"):
-                player.msg(f"|g[Complete] {building_type} construction finished! The building is now operational.|n")
+            self.notify_player(player, f"|g[Complete] {building_type} construction finished! The building is now operational.|n")
 
         # Clear construction timer
         self._set_building_attr(building, "construction_total", 0)

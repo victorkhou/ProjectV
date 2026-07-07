@@ -248,11 +248,11 @@ class RankSystem(BaseSystem):
         player.db.rank_level = new_rank_num
 
         # Notify on level change
-        if new_level != old_level and hasattr(player, "msg"):
+        if new_level != old_level:
             rank_def = self._get_rank_by_level(new_rank_num)
             rank_name = rank_def.name.replace("_", " ") if rank_def else f"Rank {new_rank_num}"
             sub = ((new_level - 1) % LEVELS_PER_RANK) + 1
-            player.msg(f"You are now Level {new_level} ({rank_name} {sub})")
+            self.notify_player(player, f"You are now Level {new_level} ({rank_name} {sub})")
 
         # Fire rank events if rank boundary crossed
         if new_rank_num > old_rank_num:

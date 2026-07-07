@@ -410,15 +410,15 @@ class CombatEngine(BaseSystem):
         )
 
         if self._is_player(target):
-            if hasattr(target, "msg"):
-                target.msg(message)
+            self.notify_player(target, message)
         elif self._is_building(target):
             owner = self._get_building_owner(target)
-            if owner is not None and hasattr(owner, "msg"):
+            if owner is not None:
                 building_name = getattr(target, "key", "building")
-                owner.msg(
+                self.notify_player(
+                    owner,
                     f"Your {building_name} was attacked by {attacker_name} "
-                    f"with {weapon_name} for {damage} damage."
+                    f"with {weapon_name} for {damage} damage.",
                 )
 
     # ------------------------------------------------------------------ #
