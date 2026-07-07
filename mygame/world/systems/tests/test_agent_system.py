@@ -125,6 +125,9 @@ class FakePlayer:
             "Energy": 0, "Circuits": 0, "Nexium": 0,
         }
 
+    def get_resource(self, resource_type):
+        return self._resources.get(resource_type, 0)
+
     def has_resources(self, costs):
         return all(self._resources.get(r, 0) >= amt for r, amt in costs.items())
 
@@ -261,7 +264,12 @@ class TestTrainAgent(AgentSystemTestBase):
         academy = FakeBuilding(building_type="AC", building_level=1)
         ok, msg = self.system.train_agent(player, academy)
         self.assertFalse(ok)
-        self.assertIn("Insufficient", msg)
+        # Mirrors the building resource-requirement breakdown: header + a
+        # colored have/need line per required resource.
+        self.assertIn("Insufficient Resources:", msg)
+        self.assertIn("Wood: 0/15", msg)
+        self.assertIn("Stone: 0/10", msg)
+        self.assertIn("Iron: 0/5", msg)
 
     def test_training_time_reduced_by_academy_level(self):
         """Each academy level reduces training time by 15%."""

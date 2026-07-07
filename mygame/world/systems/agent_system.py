@@ -138,8 +138,9 @@ class AgentSystem(AgentProgressionMixin, AgentBehaviorMixin, BaseSystem):
         cost = {res: base * n for res, base in bal.base_training_cost.items()}
 
         if not player.has_resources(cost):
-            cost_str = ", ".join(f"{v} {k}" for k, v in cost.items())
-            return False, f"Insufficient resources. Training agent #{next_id} costs {cost_str}."
+            from world.utils import format_insufficient_resources
+
+            return False, format_insufficient_resources(player, cost)
 
         # --- deduct resources ---
         player.deduct_resources(cost)

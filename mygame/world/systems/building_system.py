@@ -625,21 +625,14 @@ class BuildingSystem(BaseSystem):
     ) -> str | None:
         """Check player has sufficient resources. Returns error or None.
 
-        On failure, returns a multi-line breakdown listing EVERY required
-        resource (not just the ones short), each as ``have/need`` and colored
-        green when the requirement is met, red when it is not — a quick visual
-        aid for what still needs gathering.
+        On failure, returns the shared multi-line ``have/need`` breakdown (see
+        :func:`world.utils.format_insufficient_resources`).
         """
         if player.has_resources(costs):
             return None
+        from world.utils import format_insufficient_resources
 
-        lines = ["|rInsufficient Resources:|n"]
-        for resource, needed in costs.items():
-            current = player.get_resource(resource)
-            met = current >= needed
-            color = "|g" if met else "|r"
-            lines.append(f"  {color}{resource}: {current}/{needed}|n")
-        return "\n".join(lines)
+        return format_insufficient_resources(player, costs)
 
     def _validate_rank_requirement(
         self, player: Any, building_def: BuildingDef

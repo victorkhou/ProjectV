@@ -366,6 +366,27 @@ def broadcast(message: str, cls: str = "game-chat") -> None:
 
 
 # ------------------------------------------------------------------ #
+#  Resource formatting
+# ------------------------------------------------------------------ #
+
+def format_insufficient_resources(player: Any, costs: dict[str, int]) -> str:
+    """Format the shared "insufficient resources" breakdown.
+
+    Returns a multi-line message listing EVERY required resource (not just the
+    ones short), each as ``have/need`` and colored green when the requirement is
+    met, red when it is not — a quick visual aid for what still needs gathering.
+    Used by building construction/upgrade, agent training, and anywhere else a
+    resource cost can't be met, so the message is identical everywhere.
+    """
+    lines = ["|rInsufficient Resources:|n"]
+    for resource, needed in costs.items():
+        current = player.get_resource(resource)
+        color = "|g" if current >= needed else "|r"
+        lines.append(f"  {color}{resource}: {current}/{needed}|n")
+    return "\n".join(lines)
+
+
+# ------------------------------------------------------------------ #
 #  Chat formatting
 # ------------------------------------------------------------------ #
 
