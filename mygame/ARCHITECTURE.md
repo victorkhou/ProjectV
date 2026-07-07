@@ -19,8 +19,13 @@ This document contains two views:
 ## 1. Layered Architecture (containers)
 
 The codebase is a strict acyclic stack. Lower layers never import upward; runtime
-coupling is inverted via **dependency injection** (`registry`, `event_bus` passed
-into every system) and a **service‑locator** (`get_system`).
+coupling is inverted via **dependency injection** (`registry`, `event_bus`, and
+framework‑free **ports** passed into every system) and a **service‑locator**
+(`get_system`). The **use‑case systems never import Evennia** — all framework I/O
+is reached through ports whose Evennia implementations (**adapters**) are wired at
+the composition root. This is enforced, not just intended: see
+[§1b](#1b-ports-adapters--presenters-clean-architecture-seam) and the AST layering
+guard.
 
 ```mermaid
 graph TD
@@ -47,8 +52,14 @@ graph TD
         AScripts["Agent behavior scripts<br/>Harvester · Engineer · Patrol · Delivery FSM"]
     end
 
-    subgraph L4["Domain Systems — world/systems/"]
+    subgraph L4["Domain Systems — world/systems/ (framework‑free)"]
         Systems["AgentSystem · CombatEngine · ResourceSystem · BuildingSystem<br/>RankSystem · Equipment · Movement · Powerup · Tech"]
+    end
+
+    subgraph L4b["Clean‑Architecture Seam"]
+        Ports["Ports (ABCs) — world/core/ports/<br/>Notifier · PlayerNotifier · DefinitionsProvider<br/>Agent/Building/MovingEntity repos+factories · TerrainProvider"]
+        Adapters["Adapters (Evennia impls) — world/adapters/<br/>EvenniaNotifier · EvenniaPlayerNotifier · RegistryDefinitionsProvider<br/>EvenniaAgent/BuildingRepository+Factory · GameSystemsTerrainProvider"]
+        Presenters["Presenters — world/presenters/<br/>NotificationPresenter (Observer: PLAYER_NOTIFICATION → text)"]
     end
 
     subgraph L3["Coordinate / Procedural World — world/coordinate/"]
@@ -75,6 +86,8 @@ graph TD
     Boot --> Registry
     Boot --> Coord
     Boot --> Support
+    Boot -->|constructs + injects| Adapters
+    Boot -->|subscribes| Presenters
 
     CmdSets --> Routers --> Systems
     Routers --> OOB
@@ -89,6 +102,11 @@ graph TD
     Systems --> Progression
     Systems --> Entities
     Systems --> Coord
+    Systems -->|depend only on| Ports
+    Adapters -.implement.-> Ports
+    Adapters --> Entities
+    Bus -.PLAYER_NOTIFICATION.-> Presenters
+    Presenters -->|deliver via| Ports
 
     Entities --> Mixin
     Entities -.->|subclass| EVBase
@@ -106,11 +124,82 @@ graph TD
 
 **Dependency rules that hold across the stack**
 
-- Systems **receive** `(registry, event_bus)` — they never import `game_init`.
+- Systems **receive** `(registry, event_bus)` plus any collaborator **ports** —
+  they never import `game_init`, and (per the layering guard) **never import
+  Evennia at module scope**.
+- All framework I/O crosses a **port** (`world/core/ports/`, stdlib‑only ABCs).
+  The concrete **adapters** (`world/adapters/`) are the only place Evennia is
+  touched, and they are constructed and injected at the composition root
+  (`game_init`). Lazy Evennia‑backed defaults keep unit tests DB‑free.
 - Cross‑system talk is either **EventBus** (decoupled) or **lazy `get_system()`**
   lookup (avoids import cycles, e.g. `CombatEngine → AgentSystem`).
 - `progression.py` is the **single source of truth** for the level↔XP curve; both
   `CombatEntity` and `RankSystem` derive levels from it identically.
+- `DataRegistry.get_instance()` has a **single choke point**:
+  `default_definitions_provider()` / `default_balance()` in
+  `adapters/registry_definitions_provider.py`. Owner‑agnostic helpers resolve the
+  live registry through it rather than reaching for the singleton directly.
+
+---
+
+### 1b. Ports, Adapters & Presenters (Clean‑Architecture seam)
+
+The `world/systems/` and `world/core/` layers are **framework‑free**: they hold
+pure business logic and depend only on abstract **ports**. Everything that talks
+to Evennia lives behind an adapter.
+
+```mermaid
+graph LR
+    subgraph Core["world/core/ports/ — abstractions (stdlib only)"]
+        P1["Notifier"]
+        P2["PlayerNotifier"]
+        P3["DefinitionsProvider"]
+        P4["Agent/Building/MovingEntity<br/>Repository + Factory"]
+        P5["TerrainProvider"]
+    end
+    subgraph Sys["world/systems/ — use cases"]
+        S["Domain systems (BaseSystem.notify)"]
+    end
+    subgraph Adapt["world/adapters/ — Evennia impls"]
+        A1["EvenniaNotifier"]
+        A2["EvenniaPlayerNotifier"]
+        A3["RegistryDefinitionsProvider<br/>(+ default_definitions_provider / default_balance)"]
+        A4["EvenniaAgent/BuildingRepository + Factory<br/>EvenniaMovingEntityRepository"]
+        A5["GameSystemsTerrainProvider"]
+    end
+    subgraph Pres["world/presenters/"]
+        PR["NotificationPresenter"]
+    end
+    S -->|depends on| Core
+    A1 -.implements.-> P1
+    A2 -.implements.-> P2
+    A3 -.implements.-> P3
+    A4 -.implements.-> P4
+    A5 -.implements.-> P5
+    PR -->|delivers via| P2
+    Boot["game_init (composition root)"] -->|injects adapters| S
+    Boot -->|wires| PR
+```
+
+| Port (`world/core/ports/`) | Adapter (`world/adapters/`) | Injected into |
+|---|---|---|
+| `Notifier` | `EvenniaNotifier` | `NotificationSystem` (broadcast) |
+| `PlayerNotifier` | `EvenniaPlayerNotifier` | `NotificationPresenter` (per‑player) |
+| `DefinitionsProvider` | `RegistryDefinitionsProvider` | `world.utils`/`chat_system`/`progression` via `default_definitions_provider()` |
+| `AgentRepository` / `AgentFactory` | `EvenniaAgentRepository` / `EvenniaAgentFactory` | `AgentSystem` |
+| `BuildingFactory` / `MovingEntityRepository` | `EvenniaBuildingFactory` / `EvenniaMovingEntityRepository` | `BuildingSystem` / `MovementSystem` |
+| `TerrainProvider` | `GameSystemsTerrainProvider` | `BuildingSystem` (Extractor placement) |
+
+> **The layering guard makes this checkable.**
+> [`world/core/tests/test_layering_invariant.py`](world/core/tests/test_layering_invariant.py)
+> parses every non‑test module in `world/core/` and `world/systems/` with the AST
+> and asserts: (1) core imports no `evennia`/`django`/`twisted`/`server.conf.game_init`,
+> and (2) systems import no Evennia at module scope. A second guard,
+> [`server/tests/test_game_init_names.py`](server/tests/test_game_init_names.py),
+> asserts every capitalized name *called* in `game_init` is imported/defined —
+> catching the composition‑root `NameError` class that the live suite can't see
+> (it never runs `initialize_game()`). Together they turn "swap the DB or
+> framework with zero changes to core logic" into an enforced property.
 
 ---
 
@@ -141,10 +230,11 @@ sequenceDiagram
     Val-->>Reg: error list (raise DataRegistryError if any)
     Reg->>Prog: build_thresholds(registry.ranks)
     Init->>Bus: import event_bus singleton
-    Init->>Sys: construct each system(registry, event_bus)
-    Note over Sys: Building · Combat · Rank · Resource · Powerup<br/>Tech · Equipment · Agent · Movement · Chunk · Chat
+    Init->>Sys: construct each system(registry, event_bus, <ports…>)
+    Note over Sys: Building · Combat · Rank · Resource · Powerup<br/>Tech · Equipment · Agent · Movement · Chunk · Chat<br/>(adapters injected: Agent/Building repos+factories, TerrainProvider)
     Init->>Sys: build procedural world<br/>(PlanetRegistry, TerrainGenerators, FogOfWar,<br/>MapDataProvider, ProceduralMapRenderer, PlanetRooms)
-    Init->>Subs: NotificationSystem(event_bus) auto-subscribes
+    Init->>Subs: NotificationSystem(event_bus, notifier=EvenniaNotifier()) auto-subscribes
+    Init->>Subs: NotificationPresenter(event_bus, EvenniaPlayerNotifier())<br/>subscribes PLAYER_NOTIFICATION
     Init->>Subs: subscribe_combat_timer(event_bus)
     Init->>Subs: subscribe RANK_PROMOTED / RANK_DEMOTED / LEVEL_CHANGED → AgentSystem
     Init->>Init: populate game_systems{} dict
@@ -324,6 +414,7 @@ graph LR
         RES[ResourceSystem]
         PWR[PowerupSystem]
         TECH[TechLabSystem]
+        AGT[AgentSystem / progression]
         CHAR[CombatCharacter login/logout]
         TICK[GameTickScript]
     end
@@ -337,11 +428,13 @@ graph LR
         e6((PLAYER_LOGIN / LOGOUT))
         e7((POWERUP_* / TECHNOLOGY_RESEARCHED / RESOURCE_GATHERED))
         e8((TICK_COMPLETED))
+        e9((PLAYER_NOTIFICATION))
     end
 
     subgraph Subscribers
         AGENT[AgentSystem.on_owner_level_changed<br/>handle_demotion/promotion]
-        NOTIF[NotificationSystem]
+        NOTIF[NotificationSystem<br/>broadcast → Notifier port]
+        PRES[NotificationPresenter<br/>format → PlayerNotifier port]
         CT[CombatTimer]
     end
 
@@ -357,11 +450,29 @@ graph LR
     PWR --> e7
     TECH --> e7
     TICK --> e8
+    RANK --> e9 --> PRES
+    COMBAT --> e9
+    BLD --> e9
+    RES --> e9
+    AGT --> e9
     CT -->|publishes| CTS((COMBAT_TIMER_STARTED))
 ```
 
 The bus swallows subscriber exceptions (logs, never propagates) so a bad handler
 can't break a publisher.
+
+**`PLAYER_NOTIFICATION` — the presentation seam.** Domain systems never compose
+per‑player text. Instead `BaseSystem.notify(player, kind, **data)` publishes a
+structured `PLAYER_NOTIFICATION(player, kind, data)` event; the single
+`NotificationPresenter` (an Observer) looks `kind` up in its formatter table,
+builds the string, and delivers it through the injected `PlayerNotifier` port.
+Restyling or re‑wording any of the ~11 player messages
+(`rank_level_up`, `building_progress`/`building_complete`,
+`agent_training_progress`/`agent_training_complete`, `harvest_drop`, `attacked`,
+`building_attacked`, `ability_active`/`ability_relocked`/`ability_available`) is
+a one‑line edit to
+[`presenters/notification_presenter.py`](world/presenters/notification_presenter.py) —
+with **zero** edits to the use‑case systems.
 
 ---
 
@@ -555,7 +666,8 @@ graph TD
 
 | Module | Kind | Role | Wiring |
 |---|---|---|---|
-| `notification_system.py` | class | Broadcasts login/logout/elimination/rank messages to all sessions | **subscribes** PLAYER_LOGIN, PLAYER_LOGOUT, PLAYER_ELIMINATED, RANK_PROMOTED, RANK_DEMOTED |
+| `notification_system.py` | class | Broadcasts login/logout/elimination/rank messages to all sessions via the injected `Notifier` port | **subscribes** PLAYER_LOGIN, PLAYER_LOGOUT, PLAYER_ELIMINATED, RANK_PROMOTED, RANK_DEMOTED |
+| `presenters/notification_presenter.py` | class | Formats + delivers per‑player messages via the injected `PlayerNotifier` port; single owner of all per‑player notification strings | **subscribes** PLAYER_NOTIFICATION |
 | `combat_timer.py` | functions | Sets `combat_timer_expires = tick + 60` on combatants (blocks wall passage) | **subscribes** COMBAT_ACTION; **publishes** COMBAT_TIMER_STARTED |
 | `offline_protection.py` | functions | Buildings become unattackable/blocking/idle while owner is offline | called from `CombatCharacter.at_post_login / at_pre_unpuppet` |
 | `metrics.py` | class | In‑memory counters/gauges + periodic summary log | called directly (no bus) by tick, combat, building, command paths |

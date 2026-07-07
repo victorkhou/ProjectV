@@ -191,11 +191,15 @@ YAML definitions), `@purgerooms`, `@migrate`.
 
 ## Architecture
 
-The code follows a layered design: thin command "controllers" delegate to
-plain-Python game **systems**, which read static data from a central
-**registry** and mutate persistent state on Evennia **typeclasses**. A
-one-second **tick script** drives the real-time simulation, and an **event bus**
-decouples systems from one another.
+The code follows a **Clean-Architecture** layered design: thin command
+"controllers" delegate to **framework-free** plain-Python game **systems**, which
+read static data from a central **registry** and reach all Evennia I/O through
+abstract **ports** whose concrete **adapters** are the only code that imports
+Evennia. A one-second **tick script** drives the real-time simulation, an **event
+bus** decouples systems from one another, and **presenters** turn domain events
+into player-facing text. The whole thing is wired at one **composition root**
+(`server/conf/game_init.py`), so swapping the framework or DB touches zero core
+logic — a property enforced by an AST layering-guard test, not just convention.
 
 All game code lives under [`mygame/`](mygame/):
 
@@ -203,10 +207,17 @@ All game code lives under [`mygame/`](mygame/):
 commands/         Player, agent, and admin commands (thin controllers)
   command_router.py    SubcommandRouter base for noun+verb commands
 world/
-  systems/        Domain logic — one class per concern:
+  systems/        Domain logic (framework-free) — one class per concern:
                     BuildingSystem, ResourceSystem, CombatEngine, AgentSystem,
                     RankSystem, PowerupSystem, TechLabSystem, EquipmentSystem,
-                    MovementSystem
+                    MovementSystem  (all take collaborator ports via DI)
+  core/ports/     Abstract ports (stdlib-only ABCs): Notifier, PlayerNotifier,
+                    DefinitionsProvider, Agent/Building/MovingEntity repos +
+                    factories, TerrainProvider — the contracts the core depends on
+  adapters/       Evennia implementations of the ports (the ONLY modules that
+                    import Evennia); constructed + injected at the composition root
+  presenters/     NotificationPresenter — Observer over PLAYER_NOTIFICATION;
+                    formats + delivers per-player messages via a port
   coordinate/     Coordinate index, procedural terrain generation, fog-of-war
                     (bit-packed), per-planet registry, map rendering
   data_registry.py + schema_validator.py + definitions.py
@@ -242,16 +253,28 @@ data/             YAML content: buildings, items, ranks, technologies,
   individually error-guarded steps each second, filtered to chunks near online
   players. Agent behaviour scripts have `interval = 0` and are driven by this
   loop rather than self-timing, so the whole simulation advances deterministically.
+- **Ports & adapters (dependency inversion).** Game systems depend only on
+  abstract ports; Evennia lives behind adapters injected at the composition root.
+  The core imports no framework, so it's unit-testable without a server or DB —
+  and the boundary is guarded by an AST test
+  ([`world/core/tests/test_layering_invariant.py`](mygame/world/core/tests/test_layering_invariant.py)),
+  making "framework swap = zero core changes" a checkable property.
+- **Presentation seam.** Domain systems never build player-facing text; they
+  publish structured `PLAYER_NOTIFICATION` events, and a single
+  `NotificationPresenter` (Observer) formats and delivers them. Restyling any
+  player message is a one-line edit in one file.
 
 ---
 
 ## Testing
 
-The game ships with an extensive test suite — 66 test files, ~1,170 test
-functions, including ~249 [Hypothesis](https://hypothesis.readthedocs.io)
+The game ships with an extensive test suite — 80 test files, ~1,500 test
+functions, including ~309 [Hypothesis](https://hypothesis.readthedocs.io)
 property-based tests (file names prefixed `test_prop_`). A `conftest.py` installs
 lightweight Evennia stubs so the bulk of the suite runs as fast plain-Python unit
-tests without a live server or database.
+tests without a live server or database. Two AST-based guard tests defend the
+architecture itself: the layering invariant (core stays framework-free) and the
+composition-root name check (`game_init` calls nothing it didn't import).
 
 Run the fast unit/property tests with `pytest` **from the repository root**
 (the test modules import packages such as `world` and `commands` relative to

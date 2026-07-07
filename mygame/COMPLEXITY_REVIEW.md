@@ -9,9 +9,12 @@ Each section below doubles as a mini-README ("how to add X") whose *touchpoint
 count* is the complexity meter. All `file:line` references are current.
 
 > **Status:** This document reflects the codebase **after** the consolidation
-> pass described in [Part 3](#part-3--consolidations-applied). Every 🔴/🟡
-> finding from the original review has been addressed; the full suite (1450
-> tests) passes. The "before → after" deltas are called out inline.
+> pass ([Part 3](#part-3--consolidations-applied)) **and** the subsequent
+> Dependency‑Inversion / Clean‑Architecture pass ([Part 4](#part-4--dependency-inversion--clean-architecture-pass)).
+> Every 🔴/🟡 finding from the original review has been addressed and the
+> framework‑coupling findings (4f and the definition‑access reach) are now
+> resolved behind ports; the full suite (**1499 tests**) passes. The
+> "before → after" deltas are called out inline.
 
 ---
 
@@ -28,6 +31,8 @@ count* is the complexity meter. All `file:line` references are current.
 | A schema field on a definition | 3 | 3 | 🟡 C | C |
 | A world system | 3 | 8 | 🟡 C | C |
 | A tunable balance value | 1 | 1 | 🟢 A | A |
+| **Restyle a player notification** | 1 | 1 | 🟢 A | 🟡 C (was inline in systems) |
+| **A framework/DB swap for a port** | 1 | 1 | 🟢 A | 🔴 (was woven through systems) |
 
 The three 🔴 workflows from the original review — *building with behavior*,
 *agent role*, and (indirectly) the *AgentSystem god-module* — are gone. Behavior
@@ -272,12 +277,14 @@ the public API and every `self.` call-site are unchanged:
 MRO, zero behavior change, but each concern now lives in a file you can hold in
 your head.
 
-### 4f. Event bus vs. direct calls (unchanged, acknowledged) 🟡
+### 4f. Event bus vs. direct calls 🟢 *(was 🟡; resolved in Part 4)*
 
-`CombatEngine` still reaches into `game_systems` to call
-`agent_system.award_agent_xp()` directly on an agent kill (a synchronous
-cap-ceiling award that can't be deferred). Left as a documented, deliberate
-coupling rather than forcing it through the event bus.
+`CombatEngine` used to reach into the `game_systems` global to call
+`agent_system.award_agent_xp()` directly on an agent kill. It now receives an
+injected **XP‑awarder callable** (`combat_engine.set_agent_xp_awarder(lambda:
+agent_system)`, wired in `game_init`), so the synchronous cap‑ceiling award still
+happens inline (it can't be deferred through the bus) but the dependency is
+inverted — `CombatEngine` no longer knows the service locator exists.
 
 ---
 
@@ -288,10 +295,11 @@ coupling rather than forcing it through the event bus.
 | 1 | Adding a *definition field* still touches 3 places (dataclass/validator/populator) | 🟡 Med | Per-type explicit validators; acceptable |
 | 2 | Adding a *system* is ~8 touchpoints | 🟡 Med | Inherent; `BaseSystem` eases step 1 |
 | 3 | Loosely-typed `db.*` attributes, no schema | 🟡 Med | Larger project than this pass |
-| 4 | `CombatEngine → AgentSystem` direct call bypasses the bus | 🟢 Low | Deliberate, documented |
+| 4 | ~~`CombatEngine → AgentSystem` direct call bypasses the bus~~ | ✅ Resolved | Now an injected XP‑awarder callable (Part 4, §4f) |
 | 5 | Turret detection uses `"VV"` while YAML Turret is `"TU"`; equipment uses `("AA","AR")` vs. YAML `AR` | 🟢 Low | Pre-existing, isolated in named constants — **not** scattered; left untouched to avoid behavior drift |
 
-Every 🔴 High and most 🟡 Medium findings from the original review are resolved.
+Every 🔴 High and most 🟡 Medium findings from the original review are resolved;
+the framework‑coupling findings were closed by the DI pass ([Part 4](#part-4--dependency-inversion--clean-architecture-pass)).
 
 ---
 
@@ -323,8 +331,85 @@ throughout.
 
 ## What's intentionally left
 
-- Definition-field 3-way edit, new-system touchpoints, `db.*` schema, and the
-  `CombatEngine→AgentSystem` coupling (Part 2) — each is either inherent, low
-  value, or a larger project than a consolidation pass warrants.
+- Definition-field 3-way edit, new-system touchpoints, and the `db.*` schema
+  (Part 2) — each is either inherent, low value, or a larger project than a
+  consolidation pass warrants.
 - `PROTECTED_BUILDING_TYPES` stays its own small, well-tested constant rather
   than folding into capabilities — it was never scattered.
+
+---
+
+# Part 4 — Dependency-Inversion / Clean-Architecture pass
+
+A follow-up pass took the codebase from "layered, but the systems still import
+Evennia" to a **framework-free core** with the framework isolated behind ports.
+The premise carries over: the truest measure of decoupling is *how much of the
+core you must touch to swap the framework* — now **zero**, and enforced by a
+test rather than a convention. The suite grew from 1450 → **1499 tests** across
+this pass; it stayed green throughout.
+
+### 4.1 The seam — ports / adapters / presenters
+
+| Layer | Location | Rule |
+|---|---|---|
+| **Ports** | [`world/core/ports/`](world/core/ports/) | Abstract base classes, **stdlib only**. The contracts the core depends on. |
+| **Adapters** | [`world/adapters/`](world/adapters/) | The **only** modules that import Evennia. Each implements a port. |
+| **Presenters** | [`world/presenters/`](world/presenters/) | Turn domain events into player-facing text; deliver via a port. |
+| **Composition root** | [`server/conf/game_init.py`](server/conf/game_init.py) | The one place that constructs adapters and injects them. |
+
+Ports shipped: `Notifier`, `PlayerNotifier`, `DefinitionsProvider`,
+`AgentRepository`/`AgentFactory`, `BuildingFactory`/`MovingEntityRepository`,
+`TerrainProvider`. Each system takes its collaborator ports as constructor
+kwargs with **lazy Evennia-backed defaults**, so production wiring is explicit at
+the root while unit tests inject fakes and never touch a DB.
+
+### 4.2 Presenter (Observer) for per-player messages 🟢
+
+The ~11 per-player notification strings used to be inline f-strings scattered
+across `rank_system`, `building_system`, `combat_engine`, `agent_system`,
+`agent_progression`, and `resource_system`. They now flow through one seam:
+
+```
+system → BaseSystem.notify(player, kind, **data)
+       → publish PLAYER_NOTIFICATION(player, kind, data)
+       → NotificationPresenter looks up `kind` in its formatter table
+       → delivers via the injected PlayerNotifier port
+```
+
+`world/systems/` now contains **zero** presentation strings. Restyling a message
+is a one-line edit to
+[`presenters/notification_presenter.py`](world/presenters/notification_presenter.py).
+The string output was verified byte-for-byte identical to the old inline
+versions (colour codes, em-dash, spacing, trailing punctuation).
+
+### 4.3 Single `get_instance()` choke point 🟢
+
+The old `DataRegistry.get_instance()` reaches (and `BalanceConfig.current`) are
+funnelled through `default_definitions_provider()` / `default_balance()` in
+[`adapters/registry_definitions_provider.py`](world/adapters/registry_definitions_provider.py).
+Owner-agnostic helpers (`world.utils`, `chat_system`, `progression`) resolve a
+hot-reload-safe `DefinitionsProvider` on demand instead of grabbing the
+singleton directly.
+
+### 4.4 The invariants are now tests, not conventions 🟢
+
+- [`world/core/tests/test_layering_invariant.py`](world/core/tests/test_layering_invariant.py)
+  — AST guard: core imports no `evennia`/`django`/`twisted`/`server.conf.game_init`;
+  systems import no Evennia at module scope. This is the acceptance test for
+  "framework swap = zero core changes."
+- [`server/tests/test_game_init_names.py`](server/tests/test_game_init_names.py)
+  — AST guard: every capitalized name *called* in `game_init` is imported/defined.
+  Added after a real regression — the composition root called
+  `EvenniaPlayerNotifier()` without importing it, which would `NameError` on boot
+  and silently drop *all* player notifications. The live suite couldn't see it
+  (it never runs `initialize_game()`); this guard now does.
+
+### Part 4 scorecard
+
+| Concern | Before | After |
+|---|---|---|
+| Evennia imports in `world/systems/` | many | **0** (enforced) |
+| Presentation strings in `world/systems/` | ~11 scattered | **0** |
+| `DataRegistry.get_instance()` reaches | scattered | 1 choke point |
+| `CombatEngine → AgentSystem` global reach | direct | injected callable |
+| "Framework swap touches core?" | yes | **no** (guard-tested) |
