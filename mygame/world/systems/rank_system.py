@@ -252,7 +252,7 @@ class RankSystem(BaseSystem):
             rank_def = self._get_rank_by_level(new_rank_num)
             rank_name = rank_def.name.replace("_", " ") if rank_def else f"Rank {new_rank_num}"
             sub = ((new_level - 1) % LEVELS_PER_RANK) + 1
-            self.notify_player(player, f"You are now Level {new_level} ({rank_name} {sub})")
+            self.notify(player, "rank_level_up", level=new_level, rank_name=rank_name, sub=sub)
 
         # Fire rank events if rank boundary crossed
         if new_rank_num > old_rank_num:

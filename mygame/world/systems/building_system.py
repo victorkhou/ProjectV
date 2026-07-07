@@ -460,10 +460,10 @@ class BuildingSystem(BaseSystem):
             remaining = total - progress
             btype = self._get_building_attr(building, "building_type", "??")
             target_level = self._get_building_attr(building, "upgrade_target_level")
-            if target_level:
-                self.notify_player(player, f"|y[Building] Upgrading {btype} to L{target_level}... {progress}/{total}s ({remaining}s remaining)|n")
-            else:
-                self.notify_player(player, f"|y[Building] Constructing {btype}... {progress}/{total}s ({remaining}s remaining)|n")
+            self.notify(
+                player, "building_progress", btype=btype, target_level=target_level,
+                progress=progress, total=total, remaining=remaining,
+            )
 
         return False
 
@@ -879,10 +879,10 @@ class BuildingSystem(BaseSystem):
             )
 
             # Notify player
-            self.notify_player(player, f"|g[Complete] {building_type} upgraded to level {target_level}!|n")
+            self.notify(player, "building_complete", building_type=building_type, target_level=target_level)
         else:
             # New construction complete
-            self.notify_player(player, f"|g[Complete] {building_type} construction finished! The building is now operational.|n")
+            self.notify(player, "building_complete", building_type=building_type, target_level=None)
 
         # Clear construction timer
         self._set_building_attr(building, "construction_total", 0)

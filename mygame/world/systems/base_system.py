@@ -19,7 +19,6 @@ from __future__ import annotations
 from typing import Any, TYPE_CHECKING
 
 if TYPE_CHECKING:  # avoid import cycles at runtime
-    from world.core.ports.player_notifier import PlayerNotifier
     from world.data_registry import DataRegistry
     from world.event_bus import EventBus
 
@@ -31,30 +30,25 @@ class BaseSystem:
         registry: The :class:`DataRegistry` holding definitions and the
             hot-tunable :class:`BalanceConfig`.
         event_bus: The :class:`EventBus` used to publish/subscribe to events.
-        player_notifier: The :class:`PlayerNotifier` port used by
-            :meth:`notify_player` to message a single player. Defaults to the
-            Evennia adapter; tests inject a fake to capture messages.
     """
 
-    def __init__(
-        self,
-        registry: "DataRegistry",
-        event_bus: "EventBus",
-        player_notifier: "PlayerNotifier | None" = None,
-    ) -> None:
+    def __init__(self, registry: "DataRegistry", event_bus: "EventBus") -> None:
         self.registry = registry
         self.event_bus = event_bus
-        from world.adapters.evennia_player_notifier import EvenniaPlayerNotifier
 
-        self._player_notifier: "PlayerNotifier" = (
-            player_notifier or EvenniaPlayerNotifier()
-        )
+    def notify(self, player: Any, kind: str, **data: Any) -> None:
+        """Emit a player-facing notification for the presenter to render.
 
-    def notify_player(self, player: Any, message: str) -> None:
-        """Send *message* to a single *player* via the injected notifier.
-
-        Replaces the ``if hasattr(player, "msg"): player.msg(...)`` pattern in
-        the domain: the adapter absorbs the None/missing-sink/error guarding, so
-        systems just call ``self.notify_player(player, msg)``.
+        The domain never composes or sends the message text: it publishes the
+        structured ``(player, kind, data)`` on the ``PLAYER_NOTIFICATION``
+        event, and the :class:`~world.presenters.notification_presenter.\
+NotificationPresenter` formats it for *kind* and delivers it. A ``None``
+        player is dropped here so callers stay guard-free.
         """
-        self._player_notifier.notify(player, message)
+        if player is None:
+            return
+        from world.event_bus import PLAYER_NOTIFICATION
+
+        self.event_bus.publish(
+            PLAYER_NOTIFICATION, player=player, kind=kind, data=data
+        )

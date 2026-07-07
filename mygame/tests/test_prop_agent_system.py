@@ -219,6 +219,10 @@ def _make_system():
         create_npc_func=fake_create_npc,
         agent_repository=_FakeAgentRepo(),
     )
+    # Ability notifications are PLAYER_NOTIFICATION events; attach the real
+    # presenter so owner.messages captures the rendered strings.
+    from mygame.world.presenters.test_support import attach_presenter
+    attach_presenter(event_bus)
     return system, created_agents
 
 

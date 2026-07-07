@@ -1,26 +1,16 @@
 """
-Unit tests for the PlayerNotifier port and BaseSystem.notify_player.
+Unit tests for the PlayerNotifier port, its Evennia adapter, and the
+domain-side BaseSystem.notify event emission.
 
-Payoff: a system's per-player notifications can be captured by an injected fake
-PlayerNotifier — no player.msg sink, no Evennia — and the adapter's guarding
-means a None/sink-less player is a silent no-op rather than a crash.
+The PlayerNotifier is the transport the NotificationPresenter delivers through;
+its adapter absorbs None/missing-sink/error guarding so a bad sink never
+crashes a tick. BaseSystem.notify only emits a structured event — the domain
+neither formats nor sends text.
 """
 
 from mygame.world.core.ports.player_notifier import PlayerNotifier
 from mygame.world.adapters.evennia_player_notifier import EvenniaPlayerNotifier
 from mygame.world.systems.base_system import BaseSystem
-
-# NOTE: BaseSystem imports its default adapter via the ``world.`` namespace,
-# which is a DISTINCT module object from ``mygame.world.`` — so identity checks
-# on the default notifier compare by class *name*, not isinstance.
-
-
-class _FakePlayerNotifier(PlayerNotifier):
-    def __init__(self):
-        self.sent = []  # list of (player, message)
-
-    def notify(self, player, message):
-        self.sent.append((player, message))
 
 
 class TestPlayerNotifierPort:
@@ -32,17 +22,39 @@ class TestPlayerNotifierPort:
         raise AssertionError("PlayerNotifier should be abstract")
 
 
-class TestBaseSystemNotifyPlayer:
-    def test_injected_notifier_captures_message(self):
-        notifier = _FakePlayerNotifier()
-        system = BaseSystem(registry=None, event_bus=None, player_notifier=notifier)
-        player = object()
-        system.notify_player(player, "hello")
-        assert notifier.sent == [(player, "hello")]
+class TestBaseSystemNotify:
+    """BaseSystem.notify emits a structured PLAYER_NOTIFICATION event.
 
-    def test_defaults_to_evennia_adapter(self):
-        system = BaseSystem(registry=None, event_bus=None)
-        assert type(system._player_notifier).__name__ == "EvenniaPlayerNotifier"
+    The domain no longer formats or delivers text: it publishes
+    (player, kind, data) and the NotificationPresenter renders it.
+    """
+
+    def test_notify_publishes_event(self):
+        from mygame.world.event_bus import EventBus, PLAYER_NOTIFICATION
+
+        bus = EventBus()
+        captured = []
+        bus.subscribe(PLAYER_NOTIFICATION, lambda **kw: captured.append(kw))
+        system = BaseSystem(registry=None, event_bus=bus)
+
+        player = object()
+        system.notify(player, "harvest_drop", amount=5, resource_type="Wood")
+
+        assert len(captured) == 1
+        assert captured[0]["player"] is player
+        assert captured[0]["kind"] == "harvest_drop"
+        assert captured[0]["data"] == {"amount": 5, "resource_type": "Wood"}
+
+    def test_notify_none_player_is_dropped(self):
+        from mygame.world.event_bus import EventBus, PLAYER_NOTIFICATION
+
+        bus = EventBus()
+        captured = []
+        bus.subscribe(PLAYER_NOTIFICATION, lambda **kw: captured.append(kw))
+        system = BaseSystem(registry=None, event_bus=bus)
+
+        system.notify(None, "harvest_drop", amount=5)
+        assert captured == []
 
 
 class TestEvenniaPlayerNotifierGuarding:

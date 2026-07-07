@@ -43,6 +43,12 @@ RESOURCE_GATHERED = "resource_gathered"
 
 TICK_COMPLETED = "tick_completed"
 
+# A single player-facing notification. Domain systems emit this with a
+# ``player``, a ``kind`` (one of NotificationPresenter's known kinds), and the
+# ``data`` needed to format the line; the NotificationPresenter owns the string
+# formatting and delivery. Keeps presentation out of the domain.
+PLAYER_NOTIFICATION = "player_notification"
+
 ALL_EVENTS = (
     PLAYER_LOGIN,
     PLAYER_LOGOUT,
@@ -63,6 +69,7 @@ ALL_EVENTS = (
     TECHNOLOGY_RESEARCHED,
     RESOURCE_GATHERED,
     TICK_COMPLETED,
+    PLAYER_NOTIFICATION,
 )
 
 

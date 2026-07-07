@@ -248,6 +248,14 @@ def initialize_game() -> dict:
 
     notification_system = NotificationSystem(event_bus, notifier=EvenniaNotifier())
 
+    # NotificationPresenter — subscribes to PLAYER_NOTIFICATION events emitted
+    # by domain systems, formats them via its kind→string table, and delivers
+    # via the per-player Evennia adapter. The presenter is the single owner of
+    # all per-player notification strings — domain code never composes text.
+    from world.presenters.notification_presenter import NotificationPresenter
+
+    notification_presenter = NotificationPresenter(event_bus, player_notifier=EvenniaPlayerNotifier())
+
     # Combat timer: start/reset on COMBAT_ACTION events
     from world.combat_timer import subscribe_combat_timer
     subscribe_combat_timer(event_bus)

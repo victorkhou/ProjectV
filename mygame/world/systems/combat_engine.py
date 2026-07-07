@@ -404,22 +404,17 @@ class CombatEngine(BaseSystem):
         """
         attacker_name = getattr(attacker, "key", "Unknown")
         weapon_name = getattr(weapon_item, "key", str(weapon_item))
-        message = (
-            f"You were attacked by {attacker_name} with {weapon_name} "
-            f"for {damage} damage."
-        )
 
         if self._is_player(target):
-            self.notify_player(target, message)
+            self.notify(target, "attacked", attacker_name=attacker_name,
+                        weapon_name=weapon_name, damage=damage)
         elif self._is_building(target):
             owner = self._get_building_owner(target)
             if owner is not None:
                 building_name = getattr(target, "key", "building")
-                self.notify_player(
-                    owner,
-                    f"Your {building_name} was attacked by {attacker_name} "
-                    f"with {weapon_name} for {damage} damage.",
-                )
+                self.notify(owner, "building_attacked", building_name=building_name,
+                            attacker_name=attacker_name, weapon_name=weapon_name,
+                            damage=damage)
 
     # ------------------------------------------------------------------ #
     #  Internal helpers

@@ -255,6 +255,11 @@ def _make_engine(registry=None, event_bus=None, current_tick=0):
         event_bus=event_bus,
         current_tick_func=lambda: current_tick,
     )
+    # Attack notifications are now emitted as PLAYER_NOTIFICATION events;
+    # attach the real presenter so tests capturing target._messages see the
+    # rendered attack strings.
+    from mygame.world.presenters.test_support import attach_presenter
+    attach_presenter(event_bus)
     return engine, event_bus
 
 # -------------------------------------------------------------- #

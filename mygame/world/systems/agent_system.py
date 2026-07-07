@@ -205,12 +205,7 @@ class AgentSystem(AgentProgressionMixin, AgentBehaviorMixin, BaseSystem):
             pass
 
         # Notify the player
-        self.notify_player(
-            player,
-            f"|g[Complete] Agent #{agent_id} training finished! "
-            f"Use 'agents' to see your roster and 'assign {agent_id}' "
-            f"to put them to work.|n",
-        )
+        self.notify(player, "agent_training_complete", agent_id=agent_id)
 
         return npc
 
@@ -654,11 +649,8 @@ class AgentSystem(AgentProgressionMixin, AgentBehaviorMixin, BaseSystem):
             if remaining % TRAINING_PROGRESS_INTERVAL == 0:
                 player = self._get_building_attr(building, "training_owner")
                 if player is not None and self._player_inside_building(player, building):
-                    self.notify_player(
-                        player,
-                        f"|y[Training] Agent #{agent_id}... "
-                        f"{remaining}s remaining|n",
-                    )
+                    self.notify(player, "agent_training_progress",
+                                agent_id=agent_id, remaining=remaining)
 
     # ------------------------------------------------------------------ #
     #  Tick processing

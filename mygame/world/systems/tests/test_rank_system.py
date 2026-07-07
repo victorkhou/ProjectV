@@ -140,6 +140,10 @@ def _make_rank_system(registry=None, event_bus=None):
     # (shared with CombatEntity). Force this registry's curve active so the
     # test is independent of any table left behind by another test/module.
     system._rebuild_thresholds()
+    # Route level-up notification events through the real presenter so tests
+    # that capture player.msg see the rendered strings.
+    from mygame.world.presenters.test_support import attach_presenter
+    attach_presenter(event_bus)
     return system, event_bus
 
 
@@ -406,8 +410,11 @@ class TestSubLevelNotification(unittest.TestCase):
         registry.ranks = ranks
         registry.technologies = {}
         registry.powerups = {}
-        system = RankSystem(registry=registry, event_bus=EventBus())
+        bus = EventBus()
+        system = RankSystem(registry=registry, event_bus=bus)
         system._rebuild_thresholds()
+        from mygame.world.presenters.test_support import attach_presenter
+        attach_presenter(bus)
         messages = []
         player = FakePlayer(combat_xp=0, level=1)
         player.msg = lambda m: messages.append(m)

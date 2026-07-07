@@ -689,11 +689,16 @@ class TestHarvesterGateDrivenDelivery(unittest.TestCase):
         registry.ability_gates = {
             "delivery": AbilityGateDef(key="delivery", required_level=21),
         }
+        bus = EventBus()
         self.system = AgentSystem(
             registry=registry,
-            event_bus=EventBus(),
+            event_bus=bus,
             create_npc_func=lambda player, agent_id: None,
         )
+        # Ability notifications flow as events; attach the presenter so
+        # owner message assertions capture the rendered strings.
+        from mygame.world.presenters.test_support import attach_presenter
+        attach_presenter(bus)
 
     def _script_keys(self, agent):
         return [s.key for s in agent.scripts.all()]

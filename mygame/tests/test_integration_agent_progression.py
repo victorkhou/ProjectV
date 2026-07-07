@@ -87,6 +87,10 @@ class TestOwnerLevelChangeFlow(unittest.TestCase):
             create_npc_func=lambda player, agent_id: None,
             agent_repository=self._repo,
         )
+        # Ability notifications flow as PLAYER_NOTIFICATION events; attach the
+        # real presenter so owner.messages captures the rendered strings.
+        from mygame.world.presenters.test_support import attach_presenter
+        attach_presenter(self.event_bus)
 
         # Owner with one owned agent. Raw level is well above the gate so the
         # owner cap (Effective_Level = min(raw, owner_level - 1)) is the only
@@ -252,6 +256,10 @@ def _make_system(registry, event_bus=None, agents=None):
         create_npc_func=lambda player, agent_id: None,
         agent_repository=repo,
     )
+    # Ability notifications are emitted as PLAYER_NOTIFICATION events; attach
+    # the real presenter so tests capturing owner.messages see the strings.
+    from mygame.world.presenters.test_support import attach_presenter
+    attach_presenter(bus)
     return system, bus
 
 

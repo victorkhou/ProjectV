@@ -255,10 +255,8 @@ class AgentProgressionMixin:
                     notified.discard(key)
                     notified_changed = True
                 self._notify_owner(
-                    agent,
-                    notify,
-                    f"|g[Ability] '{key}' is now active for Agent "
-                    f"#{self._agent_id(agent)}.|n",
+                    agent, notify, "ability_active",
+                    key=key, agent_id=self._agent_id(agent),
                 )
             elif attached and not want:
                 # Attached but no longer wanted → detach. Re-lock notification
@@ -274,11 +272,8 @@ class AgentProgressionMixin:
                         notified.discard(key)
                         notified_changed = True
                     self._notify_owner(
-                        agent,
-                        notify,
-                        f"|r[Ability] '{key}' has re-locked for Agent "
-                        f"#{self._agent_id(agent)} — its level dropped below "
-                        f"{required}.|n",
+                        agent, notify, "ability_relocked",
+                        key=key, agent_id=self._agent_id(agent), required=required,
                     )
             elif available and not is_enabled and not attached:
                 # Unlocked but not enabled → offer it to the player once.
@@ -286,11 +281,8 @@ class AgentProgressionMixin:
                     notified.add(key)
                     notified_changed = True
                     self._notify_owner(
-                        agent,
-                        notify,
-                        f"|y[Ability] '{key}' is now available for Agent "
-                        f"#{self._agent_id(agent)}. Enable it with "
-                        f"'agent ability {self._agent_id(agent)} {key} on'.|n",
+                        agent, notify, "ability_available",
+                        key=key, agent_id=self._agent_id(agent),
                     )
             else:
                 # No-op. If the gate is no longer available, clear any stale
@@ -348,19 +340,19 @@ class AgentProgressionMixin:
         """Persist the notified-available set as a list for Evennia attributes."""
         agent.db.notified_available_abilities = list(keys)
 
-    def _notify_owner(self, agent: Any, notify: bool, message: str) -> None:
-        """Send *message* to the agent's owning player when notifications are on.
+    def _notify_owner(self, agent: Any, notify: bool, kind: str, **data: Any) -> None:
+        """Emit a *kind* notification to the agent's owning player.
 
-        No-ops when ``notify`` is False or the agent has no ``db.owner``; the
-        injected ``PlayerNotifier`` (via :meth:`notify_player`) absorbs the
-        missing-``msg``/transport-error guarding.
+        No-ops when ``notify`` is False or the agent has no ``db.owner``. The
+        message text is composed by the NotificationPresenter from *kind* +
+        *data*, not here — the domain only supplies structured values.
         """
         if not notify:
             return
         owner = getattr(getattr(agent, "db", None), "owner", None)
         if owner is None:
             return
-        self.notify_player(owner, message)
+        self.notify(owner, kind, **data)
 
     # ------------------------------------------------------------------ #
     #  Ability enable / disable / status command backends

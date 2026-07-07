@@ -162,6 +162,11 @@ class AgentSystemTestBase(unittest.TestCase):
         self.event_bus = EventBus()
         self.created_agents: list[FakeAgent] = []
 
+        # Attach the real presenter so ability-gate notifications (emitted as
+        # PLAYER_NOTIFICATION events) flow to owner.messages.
+        from mygame.world.presenters.test_support import attach_presenter
+        attach_presenter(self.event_bus)
+
         def fake_create_npc(player, agent_id):
             agent = FakeAgent(agent_id=agent_id, owner=player)
             self.created_agents.append(agent)

@@ -266,11 +266,7 @@ class ResourceSystem(BaseSystem):
                     drop_location = tile
                 self._spawn_resource_drop(drop_location, resource_type, amount)
 
-            self.notify_player(
-                player,
-                f"|y[Harvest] +{amount} {resource_type} dropped. "
-                f"Use 'get' to pick up.|n",
-            )
+            self.notify(player, "harvest_drop", amount=amount, resource_type=resource_type)
 
             self.event_bus.publish(
                 RESOURCE_GATHERED,
