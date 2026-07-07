@@ -551,6 +551,23 @@ class TestProcessHarvestTick(unittest.TestCase):
         self.assertEqual(events[0]["resource_type"], "Wood")
         self.assertEqual(events[0]["amount"], 1)
 
+    def test_harvest_drop_notifies_player_end_to_end(self):
+        """The harvest_drop notification renders through the real presenter
+        (guards producer->formatter key drift for this kind)."""
+        from mygame.world.presenters.test_support import attach_presenter
+
+        player, tile = self._setup_harvesting_player()
+        messages = []
+        player.msg = lambda m: messages.append(m)
+        event_bus = EventBus()
+        attach_presenter(event_bus)
+        system = ResourceSystem(_make_registry(), event_bus)
+
+        for _ in range(4):  # cooldown is 4 ticks -> yields + drops on tick 4
+            system.process_harvest_tick(player)
+
+        self.assertTrue(any("dropped" in m for m in messages))
+
 
 # -------------------------------------------------------------- #
 #  Extractor Inventory Tests

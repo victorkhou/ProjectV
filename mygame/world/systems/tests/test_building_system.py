@@ -797,6 +797,20 @@ class TestProcessConstructionTick(unittest.TestCase):
         self.assertIsNone(player.db.activity_target)
         self.assertEqual(len(events), 1)
 
+    def test_construction_complete_notifies_player_end_to_end(self):
+        """The building_complete notification renders through the real
+        presenter (guards producer->formatter key drift for this kind)."""
+        from mygame.world.presenters.test_support import attach_presenter
+
+        system, player, building, tile, event_bus = self._setup_construction(build_time=2)
+        attach_presenter(event_bus)
+        messages = []
+        player.msg = lambda m: messages.append(m)
+        for _ in range(2):
+            system.process_construction_tick(player)
+        # The presenter formatted and delivered the completion line.
+        self.assertTrue(any("construction finished" in m for m in messages))
+
     def test_tick_pauses_when_player_moves_away(self):
         system, player, building, tile, _ = self._setup_construction(build_time=5)
         # Tick once (progress = 1)
