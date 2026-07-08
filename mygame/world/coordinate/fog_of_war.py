@@ -60,10 +60,11 @@ class FogOfWarSystem:
         """
         visible: set[tuple[int, int]] = set()
 
-        # Player vision circle
+        # Player vision circle (base radius + equipped sight_range bonus)
         px = _get_coord(player, "coord_x")
         py = _get_coord(player, "coord_y")
-        _add_chebyshev_circle(visible, px, py, self.player_vision_radius)
+        vision_radius = self.player_vision_radius + _get_sight_bonus(player)
+        _add_chebyshev_circle(visible, px, py, vision_radius)
 
         # Building vision circles
         for building in player_buildings:
@@ -243,6 +244,23 @@ def _add_chebyshev_circle(
     for dx in range(-radius, radius + 1):
         for dy in range(-radius, radius + 1):
             tiles.add((cx + dx, cy + dy))
+
+
+def _get_sight_bonus(player: Any) -> int:
+    """Return the player's aggregate ``sight_range`` bonus from equipped gear.
+
+    Falls back to ``0`` when the player has no equipment handler (e.g.
+    synthetic viewers or tests), so the vision radius stays at the base
+    ``player_vision_radius``. The bonus stat may be a float, so it is
+    coerced to ``int`` to keep the radius integral.
+    """
+    equipment = getattr(player, "equipment", None)
+    if equipment is None or not hasattr(equipment, "get_stat_total"):
+        return 0
+    try:
+        return int(equipment.get_stat_total("sight_range"))
+    except (TypeError, ValueError):
+        return 0
 
 
 def _get_coord(obj: Any, attr: str) -> int:

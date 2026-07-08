@@ -17,16 +17,16 @@ from world.utils import get_system as _get_system
 logger = logging.getLogger("mygame.admin")
 
 
-class CmdReloadData(BaseCommand):
+class CmdReboot(BaseCommand):
     """Hot-reload all YAML definition files.
 
     Usage:
-        @reloaddata
+        @reboot
 
     Restricted to Builder+ permission level.
     """
 
-    key = "@reloaddata"
+    key = "@reboot"
     locks = "cmd:perm(Builder);view:perm(Builder)"
     help_category = "Admin"
 
@@ -39,7 +39,7 @@ class CmdReloadData(BaseCommand):
             return
 
         logger.info(
-            "Admin command @reloaddata executed by %s",
+            "Admin command @reboot executed by %s",
             getattr(caller, "key", "?"),
         )
 
@@ -612,6 +612,10 @@ class CmdAdminResource(AdminSubcommandRouter):
             caller.msg(f"{target_name} is not a valid player character.")
             return
 
+        # Admin override: give resources directly, bypassing the carry-weight
+        # cap (Req 16.7 — admins are exempt). We intentionally do NOT route this
+        # through EquipmentSystem.add_resource_capped, keeping it the simplest
+        # correct path for an admin grant.
         target.add_resource(resource_type, amount)
 
         target_name = getattr(target, "key", "?")

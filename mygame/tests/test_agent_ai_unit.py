@@ -163,13 +163,13 @@ def _install_capability_registry():
         "VT": BuildingDef(
             name="Vault", abbreviation="VT", cost={"Stone": 25},
             max_health=400, requires_hq=True, required_terrain=None,
-            category="storage", produces=None,
+            category="storage", produces=None, storage_capacity=1000,
             capabilities=frozenset({"storage", "primary_storage"}),
         ),
         "HQ": BuildingDef(
             name="Headquarters", abbreviation="HQ", cost={"Wood": 10},
             max_health=500, requires_hq=False, required_terrain=None,
-            category="headquarters", produces=None,
+            category="headquarters", produces=None, storage_capacity=1000,
             capabilities=frozenset({"headquarters", "storage"}),
         ),
         "EX": BuildingDef(

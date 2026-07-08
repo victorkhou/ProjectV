@@ -236,6 +236,22 @@ class GameCommand(BaseCommand):
         b = getattr(planet_room, "building", None)
         return [b] if b is not None else []
 
+    def find_storage_building(self, x=None, y=None):
+        """Return the first co-located ``storage``-capability building, or None.
+
+        Scans ``buildings_here`` and returns the first building whose definition
+        declares the ``STORAGE`` capability (HQ, Vault). Used by the
+        ``deposit``/``withdraw`` commands to resolve the Storage_Building the
+        player is standing at.
+        """
+        from world.constants import STORAGE
+        from world.utils import building_has_capability
+
+        for building in self.buildings_here(x, y):
+            if building_has_capability(building, STORAGE):
+                return building
+        return None
+
     def _interrupt_activity(self, caller, moved=False):
         """Cancel any active-presence activity (harvest/build) on the caller.
 
@@ -346,6 +362,11 @@ class CmdMove(GameCommand):
                     )
                     return
 
+        # In-combat movement lag — equipment move_speed alleviates it.
+        # Out of combat this is a no-op (instant movement).
+        if not self._check_combat_move_lag(caller):
+            return
+
         # Reset active-presence state on movement
         self._interrupt_activity(caller, moved=True)
 
@@ -417,6 +438,47 @@ class CmdMove(GameCommand):
     def _resolve_coords(self, caller):
         """Resolve caller's current coordinates, syncing from room if needed."""
         return ensure_coords(caller)
+
+    def _check_combat_move_lag(self, caller) -> bool:
+        """Gate a player's move while they are in the combat state.
+
+        Out of combat, movement is always instant (returns ``True`` and
+        clears any stale pending lag). While in combat (``combat_timer_expires``
+        is in the future), a base movement lag of ``COMBAT_MOVE_LAG_TICKS``
+        applies between steps, reduced by the player's equipment ``move_speed``
+        via ``compute_effective_delay`` — the same equipment-derived mechanism
+        agents use for their per-tick movement delay. Returns ``False`` (and
+        messages the caller) when the player must still wait before moving.
+
+        Defensive: an entity with no equipment handler yields a ``move_speed``
+        modifier of 0 (``_get_move_speed_modifier``), so the base lag applies.
+        """
+        from world.constants import COMBAT_MOVE_LAG_TICKS, compute_effective_delay
+        from world.combat_timer import _get_current_tick
+
+        current_tick = _get_current_tick()
+        combat_expires = getattr(caller.db, "combat_timer_expires", 0) or 0
+
+        # Out of combat: instant movement. Clear any stale pending lag.
+        if combat_expires <= current_tick:
+            if getattr(caller.db, "next_move_tick", 0):
+                caller.db.next_move_tick = 0
+            return True
+
+        # In combat: enforce the (move_speed-reduced) movement lag.
+        next_move_tick = getattr(caller.db, "next_move_tick", 0) or 0
+        if current_tick < next_move_tick:
+            caller.msg("You are still repositioning — combat slows your movement.")
+            return False
+
+        modifier = (
+            caller._get_move_speed_modifier()
+            if hasattr(caller, "_get_move_speed_modifier")
+            else 0
+        )
+        delay = compute_effective_delay(COMBAT_MOVE_LAG_TICKS, modifier)
+        caller.db.next_move_tick = current_tick + delay
+        return True
 
     def _update_fog_and_render(self, caller, show_map=True):
         """Update fog of war discovery and render the map."""
@@ -754,7 +816,10 @@ class CmdAttack(GameCommand):
             return
 
         success, msg = combat_engine.queue_attack(self.caller, target)
-        self.caller.msg(msg)
+        # Some rejections (e.g. empty magazine) deliver their feedback via the
+        # presenter and return an empty string — don't msg a blank line.
+        if msg:
+            self.caller.msg(msg)
 
 
 class CmdEquip(GameCommand):
@@ -778,13 +843,14 @@ class CmdEquip(GameCommand):
             self.caller.msg(f"Could not find item '{item_name}'.")
             return
 
-        handler = getattr(self.caller, "equipment", None)
-        if handler is None:
-            self.caller.msg("Equipment system unavailable.")
+        equipment_system = self.require_system("equipment_system")
+        if equipment_system is None:
             return
 
-        success, msg = handler.equip(item)
-        self.caller.msg(msg)
+        # The system enforces the slot/rank gates and emits the player-facing
+        # notification (equipped / equip_denied) via the presenter, so the
+        # command composes no success/failure string here.
+        equipment_system.equip(self.caller, item)
 
 
 class CmdUnequip(GameCommand):
@@ -803,18 +869,298 @@ class CmdUnequip(GameCommand):
             self.caller.msg("Usage: unequip <slot>")
             return
 
-        handler = getattr(self.caller, "equipment", None)
-        if handler is None:
-            self.caller.msg("Equipment system unavailable.")
+        equipment_system = self.require_system("equipment_system")
+        if equipment_system is None:
             return
 
-        item = handler.unequip(slot)
-        if item is None:
-            self.caller.msg(f"No item equipped in '{slot}' slot.")
+        # The system validates the slot and emits the player-facing
+        # notification (unequipped) via the presenter on success; the command
+        # composes no success/failure string here.
+        equipment_system.unequip(self.caller, slot)
+
+
+def _resolve_item_key(caller, token):
+    """Resolve *token* to a canonical Item_Def key via the registry.
+
+    Returns the ``Item_Def.key`` for the resolved item, or ``None`` when the
+    registry is unavailable or the token matches no item. Players may type
+    either the item key (``frag_grenade``) or its display name (``Frag
+    Grenade``); ``registry.resolve_item`` is typo-tolerant and accepts both.
+    """
+    registry = _get_system(caller, "registry")
+    if registry is None or not hasattr(registry, "resolve_item"):
+        return None
+    idef = registry.resolve_item(token)
+    if idef is None:
+        return None
+    return getattr(idef, "key", None)
+
+
+def _is_int_token(token):
+    """True if *token* parses as a (possibly negative) integer coordinate."""
+    if not token:
+        return False
+    body = token[1:] if token[0] == "-" else token
+    return body.isdigit()
+
+
+class CmdUse(GameCommand):
+    """Use a consumable from your Supply_Bag.
+
+    Usage:
+        use <item>
+
+    Example: use medkit
+    """
+
+    key = "use"
+    help_category = "Game"
+
+    def func(self):
+        item_name = self.args.strip()
+        if not item_name:
+            self.caller.msg("Usage: use <item>")
             return
 
-        item_name = getattr(item, "key", str(item))
-        self.caller.msg(f"Unequipped {item_name} from {slot} slot.")
+        equipment_system = self.require_system("equipment_system")
+        if equipment_system is None:
+            return
+
+        item_key = _resolve_item_key(self.caller, item_name)
+        if item_key is None:
+            self.caller.msg(f"Unknown item '{item_name}'.")
+            return
+
+        # The system verifies the item is held, is a consumable, applies the
+        # effect and rank gate, and emits the player-facing notification
+        # (healed / buff_applied / use_failed) via the presenter. The command
+        # composes no action-outcome string here.
+        equipment_system.use(self.caller, item_key)
+
+
+class CmdThrow(GameCommand):
+    """Throw a throwable at a target or coordinates.
+
+    Usage:
+        throw <item> <target>
+        throw <item> <x> <y>
+
+    Examples:
+        throw grenade goblin
+        throw frag_grenade 12 8
+    """
+
+    key = "throw"
+    aliases = ["th"]
+    help_category = "Game"
+
+    _USAGE = "Usage: throw <item> <target>|<x> <y>"
+
+    def func(self):
+        caller = self.caller
+
+        tokens = self.args.split()
+        if not tokens:
+            caller.msg(self._USAGE)
+            return
+
+        equipment_system = self.require_system("equipment_system")
+        if equipment_system is None:
+            return
+
+        # A throw always needs both an item and a target location.
+        if len(tokens) < 2:
+            caller.msg(self._USAGE)
+            return
+
+        # Ensure the thrower has a resolvable position (the system measures
+        # throw range from it).
+        if self.require_coords() is None:
+            return
+
+        # Target parse: trailing "<x> <y>" integer pair is explicit
+        # coordinates; otherwise the final token is a target name resolved to
+        # its coordinates via caller.search.
+        if len(tokens) >= 3 and _is_int_token(tokens[-2]) and _is_int_token(tokens[-1]):
+            tx, ty = int(tokens[-2]), int(tokens[-1])
+            item_str = " ".join(tokens[:-2])
+        else:
+            target_name = tokens[-1]
+            item_str = " ".join(tokens[:-1])
+            target = caller.search(target_name) if hasattr(caller, "search") else None
+            if target is None:
+                # caller.search already messages "Could not find ..." on miss;
+                # guard for fakes that return None silently.
+                caller.msg(f"Could not find target '{target_name}'.")
+                return
+            tx = getattr(getattr(target, "db", None), "coord_x", None)
+            ty = getattr(getattr(target, "db", None), "coord_y", None)
+            if tx is None or ty is None:
+                caller.msg(f"Cannot determine the position of '{target_name}'.")
+                return
+            tx, ty = int(tx), int(ty)
+
+        if not item_str:
+            caller.msg(self._USAGE)
+            return
+
+        item_key = _resolve_item_key(caller, item_str)
+        if item_key is None:
+            caller.msg(f"Unknown item '{item_str}'.")
+            return
+
+        # The system verifies the item is held, is a throwable, applies the
+        # range/rank gates and AoE damage, and emits the player-facing
+        # notification (bombed / throw_failed) via the presenter. The command
+        # composes no action-outcome string here.
+        equipment_system.throw(caller, item_key, tx, ty)
+
+
+class CmdReload(GameCommand):
+    """Reload your equipped ranged weapon from your Supply_Bag.
+
+    Usage:
+        reload
+    """
+
+    key = "reload"
+    aliases = ["rl"]
+    help_category = "Game"
+
+    def func(self):
+        equipment_system = self.require_system("equipment_system")
+        if equipment_system is None:
+            return
+
+        # The system reads the equipped ranged weapon, transfers ammo from the
+        # Supply_Bag, and emits the player-facing notification (reloaded /
+        # reload_failed) via the presenter. The command composes no
+        # action-outcome string here.
+        equipment_system.reload(self.caller)
+
+
+def _parse_resource_amount(args):
+    """Parse ``<resource> [<amount>|all]`` into ``(Title_Case_resource, amount)``.
+
+    Per Req 12.8 the amount is optional and the literal ``all`` is accepted:
+
+    - ``deposit iron`` or ``deposit iron all`` → ``("Iron", None)`` (all available).
+    - ``deposit iron 100`` → ``("Iron", 100)``.
+
+    Returns ``None`` (→ usage message) for no resource, more than two tokens, a
+    non-integer non-``all`` amount, or a non-positive amount. Resource names are
+    canonical title-case. An amount of ``None`` means "all available"; the
+    Equipment_System resolves it to the full quantity on hand.
+    """
+    tokens = args.split()
+    if len(tokens) == 1:
+        return tokens[0].title(), None
+    if len(tokens) != 2:
+        return None
+    resource, amount_tok = tokens
+    if amount_tok.lower() == "all":
+        return resource.title(), None
+    if not _is_int_token(amount_tok) or int(amount_tok) <= 0:
+        return None
+    return resource.title(), int(amount_tok)
+
+
+class CmdDeposit(GameCommand):
+    """Deposit resources into a co-located storage building.
+
+    Usage:
+        deposit <resource> [<amount>|all]
+
+    Examples: deposit iron 100 · deposit iron all · deposit iron
+
+    Moves resources from your person into a storage building (HQ, Vault) on
+    your current tile, up to the building's remaining capacity. With no amount
+    (or ``all``), deposits everything you hold of that resource.
+    """
+
+    key = "deposit"
+    aliases = ["dep"]
+    help_category = "Game"
+
+    _USAGE = "Usage: deposit <resource> [<amount>|all]"
+
+    def func(self):
+        equipment_system = self.require_system("equipment_system")
+        if equipment_system is None:
+            return
+
+        parsed = _parse_resource_amount(self.args)
+        if parsed is None:
+            self.caller.msg(self._USAGE)
+            return
+        resource, amount = parsed
+
+        building = self.find_storage_building()
+        if building is None:
+            self.caller.msg("No storage building here.")
+            return
+
+        # Only the owner may use their storage (mirrors upgrade/demolish/exit
+        # commands). Without this any player could deposit into — or, via
+        # withdraw, drain — an enemy Vault/HQ they are standing on.
+        if not is_owner(self.caller, get_building_attr(building, "owner")):
+            self.caller.msg("You do not own this building.")
+            return
+
+        # The system caps by what the player holds and the building's remaining
+        # capacity, deducts only what was actually stored, and emits the
+        # player-facing notification (deposited / storage_full) via the
+        # presenter — including the building's new stored/capacity totals. The
+        # command composes no action-outcome string here.
+        equipment_system.deposit(self.caller, building, resource, amount)
+
+
+class CmdWithdraw(GameCommand):
+    """Withdraw resources from a co-located storage building.
+
+    Usage:
+        withdraw <resource> [<amount>|all]
+
+    Examples: withdraw iron 100 · withdraw iron all · withdraw iron
+
+    Moves resources from a storage building (HQ, Vault) on your current tile
+    onto your person, up to your remaining carry weight. With no amount (or
+    ``all``), withdraws as much as the building stores (capped by carry weight).
+    """
+
+    key = "withdraw"
+    aliases = ["wd"]
+    help_category = "Game"
+
+    _USAGE = "Usage: withdraw <resource> [<amount>|all]"
+
+    def func(self):
+        equipment_system = self.require_system("equipment_system")
+        if equipment_system is None:
+            return
+
+        parsed = _parse_resource_amount(self.args)
+        if parsed is None:
+            self.caller.msg(self._USAGE)
+            return
+        resource, amount = parsed
+
+        building = self.find_storage_building()
+        if building is None:
+            self.caller.msg("No storage building here.")
+            return
+
+        # Only the owner may withdraw from their storage (see CmdDeposit).
+        if not is_owner(self.caller, get_building_attr(building, "owner")):
+            self.caller.msg("You do not own this building.")
+            return
+
+        # The system caps by what the building stores and the player's remaining
+        # carry-weight room, adds only the fitting amount, and emits the
+        # player-facing notification (withdrew) via the presenter — including
+        # the player's carried weight against their limit. The command composes
+        # no action-outcome string here.
+        equipment_system.withdraw(self.caller, building, resource, amount)
 
 
 class CmdResearch(GameCommand):
@@ -867,6 +1213,77 @@ class CmdPowerup(GameCommand):
 
         success, msg = powerup_system.activate(self.caller, powerup_key)
         self.caller.msg(msg)
+
+
+def _item_display_name(registry, item_key):
+    """Return the human-readable name for *item_key*, falling back to the key.
+
+    Resolves the ``Item_Def.name`` through the registry when one is available;
+    an unavailable registry or an unknown key degrades gracefully to the raw
+    ``item_key`` so the display never errors.
+    """
+    if registry is not None:
+        try:
+            idef = registry.get_item(item_key)
+        except Exception:
+            idef = None
+        if idef is not None:
+            name = getattr(idef, "name", None)
+            if name:
+                return name
+    return item_key
+
+
+def _append_supplies_section(caller, lines):
+    """Append a ``Supplies:`` section (Supply_Bag counts) to *lines*.
+
+    Reads the fungible Supply_Bag via ``caller.equipment.get_supplies()``
+    (``{item_key: count}``) and renders one indented line per non-empty entry,
+    resolving display names through the registry when convenient. No section is
+    added when the bag is empty or the handler is unavailable. Returns True when
+    a section was appended.
+    """
+    handler = getattr(caller, "equipment", None)
+    if handler is None or not hasattr(handler, "get_supplies"):
+        return False
+    try:
+        supplies = handler.get_supplies() or {}
+    except Exception:
+        return False
+
+    entries = [(k, c) for k, c in supplies.items() if c]
+    if not entries:
+        return False
+
+    registry = _get_system(caller, "registry")
+    lines.append("  Supplies:")
+    for item_key, count in entries:
+        name = _item_display_name(registry, item_key)
+        lines.append(f"    {name}: {count}")
+    return True
+
+
+def _append_carry_line(caller, lines):
+    """Append a ``Carry: <carried>/<limit>`` line to *lines*.
+
+    Computes carried weight and carry limit via the EquipmentSystem
+    (``carried_weight``/``carry_limit``). Degrades gracefully: if the system is
+    unavailable or the computation fails, the carry line is skipped rather than
+    erroring. An admin's infinite limit renders as ``∞``. Returns True when a
+    line was appended.
+    """
+    equipment_system = _get_system(caller, "equipment_system")
+    if equipment_system is None:
+        return False
+    try:
+        carried = float(equipment_system.carried_weight(caller))
+        limit = float(equipment_system.carry_limit(caller))
+    except Exception:
+        return False
+
+    limit_str = "∞" if limit == float("inf") else f"{limit:.0f}"
+    lines.append(f"  Carry: {carried:.0f}/{limit_str}")
+    return True
 
 
 class CmdScore(GameCommand):
@@ -977,6 +1394,24 @@ class CmdScore(GameCommand):
                             for slot, item in equipped.items()]
                 lines.append("  Equipment: " + ", ".join(eq_parts))
 
+            # Aggregated equipment stat totals (only non-zero, to stay clean).
+            totals = [
+                ("Armor", handler.get_stat_total("damage_reduction")),
+                ("Damage",
+                 handler.get_stat_total("damage_bonus")
+                 + handler.get_stat_total("damage")),
+                ("Move speed", handler.get_stat_total("move_speed")),
+                ("Sight range", handler.get_stat_total("sight_range")),
+            ]
+            total_parts = [f"{label}: +{value:.0f}"
+                           for label, value in totals if value]
+            if total_parts:
+                lines.append("  Equipment totals: " + ", ".join(total_parts))
+
+        # Supplies (Supply_Bag counts) + carried weight vs carry limit.
+        _append_supplies_section(caller, lines)
+        _append_carry_line(caller, lines)
+
         # Buildings + techs
         building_count = 0
         if hasattr(caller, "get_buildings"):
@@ -995,6 +1430,12 @@ class CmdScore(GameCommand):
 class CmdEquipment(GameCommand):
     """Display your current equipment loadout with stats.
 
+    A full paperdoll: every one of the eleven Equipment_Slots is listed
+    (empty slots included), each occupied slot shows its item and stat
+    modifiers, the equipped ranged weapon shows its loaded/magazine
+    ammunition count, and aggregated totals are shown for armor, damage,
+    move speed, and sight range.
+
     Usage:
         equipment
     """
@@ -1010,33 +1451,79 @@ class CmdEquipment(GameCommand):
             caller.msg("Equipment system unavailable.")
             return
 
-        equipped = handler.get_all_equipped()
+        from world.constants import EQUIPMENT_SLOTS
+
         lines = ["|wEquipment:|n"]
 
-        if not equipped:
-            lines.append("  Nothing equipped.")
-        else:
-            for slot, item in equipped.items():
-                item_name = getattr(item, "key", str(item))
-                # Show stat modifiers if available
-                mods = getattr(item, "stat_modifiers", None)
-                if mods and isinstance(mods, dict):
-                    mod_str = ", ".join(f"{k}: +{v}" for k, v in mods.items() if v)
-                    lines.append(f"  [{slot}] {item_name} ({mod_str})")
-                else:
-                    lines.append(f"  [{slot}] {item_name}")
+        # Paperdoll: iterate ALL slots, including empties.
+        for slot in EQUIPMENT_SLOTS:
+            item = handler.get_equipped(slot)
+            if item is None:
+                lines.append(f"  [{slot}] (empty)")
+                continue
 
-        # Show stat totals
-        if equipped:
-            lines.append("  ---")
-            dmg = handler.get_stat_total("damage")
-            armor = handler.get_stat_total("damage_reduction")
-            if dmg:
-                lines.append(f"  Total damage bonus: +{dmg:.0f}")
-            if armor:
-                lines.append(f"  Total armor: +{armor:.0f}")
+            item_name = getattr(item, "key", str(item))
+            mods = getattr(item, "stat_modifiers", None)
+            if isinstance(mods, dict) and any(mods.values()):
+                mod_str = ", ".join(
+                    f"{k}: +{v}" for k, v in mods.items() if v
+                )
+                line = f"  [{slot}] {item_name} ({mod_str})"
+            else:
+                line = f"  [{slot}] {item_name}"
+
+            # Show the ammunition count for an equipped ranged weapon.
+            if slot == "weapon":
+                ammo = self._weapon_ammo(item)
+                if ammo is not None:
+                    line += f"  Ammo: {ammo}"
+
+            lines.append(line)
+
+        # Aggregated stat totals.
+        lines.append("  ---")
+        damage = handler.get_stat_total("damage_bonus") + handler.get_stat_total("damage")
+        armor = handler.get_stat_total("damage_reduction")
+        move = handler.get_stat_total("move_speed")
+        sight = handler.get_stat_total("sight_range")
+        lines.append(f"  Armor (damage_reduction): +{armor:.0f}")
+        lines.append(f"  Damage: +{damage:.0f}")
+        lines.append(f"  Move speed: +{move:.0f}")
+        lines.append(f"  Sight range: +{sight:.0f}")
 
         caller.msg("\n".join(lines))
+
+    @staticmethod
+    def _weapon_ammo(weapon_item):
+        """Return a ``loaded/magazine_size`` string for a ranged weapon, else None.
+
+        Only ranged weapons carry a magazine, so melee weapons and any
+        non-weapon item in the slot yield ``None``. The loaded count is read
+        from ``weapon.db.loaded`` (mirroring the combat engine), falling back
+        to a plain ``loaded`` attribute/key for dict-shaped test weapons.
+        """
+        weapon_type = getattr(weapon_item, "weapon_type", None)
+        if weapon_type != "ranged":
+            return None
+
+        magazine_size = getattr(weapon_item, "magazine_size", None)
+        if magazine_size is None:
+            return None
+
+        # Read db.loaded, falling back to attr/dict for test doubles.
+        loaded = None
+        db = getattr(weapon_item, "db", None)
+        if db is not None:
+            loaded = getattr(db, "loaded", None)
+        if loaded is None:
+            if isinstance(weapon_item, dict):
+                loaded = weapon_item.get("loaded")
+            else:
+                loaded = getattr(weapon_item, "loaded", None)
+        if loaded is None:
+            loaded = 0
+
+        return f"{int(loaded)}/{int(magazine_size)}"
 
 
 class CmdBuildings(GameCommand):
@@ -1222,6 +1709,10 @@ class CmdInventory(GameCommand):
                 for slot, item in equipped.items():
                     item_name = getattr(item, "key", str(item))
                     lines.append(f"    [{slot}] {item_name}")
+
+        # Supplies (Supply_Bag counts) + carried weight vs carry limit.
+        _append_supplies_section(caller, lines)
+        _append_carry_line(caller, lines)
 
         if len(lines) == 1:
             lines.append("  Empty.")

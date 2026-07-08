@@ -17,6 +17,25 @@ logger = logging.getLogger("evennia.server.game_init")
 game_systems: dict = {}
 
 
+def _holder_room_and_coords(holder: Any) -> tuple[Any, int | None, int | None]:
+    """Resolve a drop holder's ``(room, x, y)`` for spawning a ground drop.
+
+    Used by the resource-/supply-drop spawners wired into ``EquipmentSystem``
+    at the composition root. *holder* is a player or a building; both expose an
+    Evennia ``location`` (the room / PlanetRoom the drop lands in) and
+    ``db.coord_x``/``db.coord_y`` (its tile). Returns ``(None, None, None)``
+    when the holder is not placed on the map so the caller spills nothing rather
+    than dropping at an undefined position.
+    """
+    from world.utils import get_coords
+
+    room = getattr(holder, "location", None)
+    coords = get_coords(holder)
+    if room is None or coords is None:
+        return None, None, None
+    return room, coords[0], coords[1]
+
+
 def initialize_game() -> dict:
     """Initialize all game systems and wire them together.
 
@@ -95,7 +114,18 @@ def initialize_game() -> dict:
     resource_system = ResourceSystem(registry, event_bus)
     powerup_system = PowerupSystem(registry, event_bus)
     tech_system = TechLabSystem(registry, event_bus)
-    equipment_system = EquipmentSystem(registry, event_bus)
+    # Inject the live-GameItem production factory so Gear produced each tick is a
+    # real, equippable Evennia object (not the framework-free dict placeholder
+    # the use-case defaults to for tests). The ``typeclasses`` import lives here
+    # at the composition root; ``world/systems`` stays framework-free. Supplies
+    # are still routed into the Supply_Bag as counts by ``process_production``.
+    from typeclasses.objects import create_game_item
+
+    equipment_system = EquipmentSystem(
+        registry,
+        event_bus,
+        create_item_func=lambda item_def, owner: create_game_item(owner, item_def),
+    )
     # Inject the Evennia-backed agent repository + factory so AgentSystem's
     # roster/tick queries and NPC creation go through the adapter ports rather
     # than importing evennia in the system body.
@@ -113,6 +143,53 @@ def initialize_game() -> dict:
     # Late-bind the agent XP-awarder into CombatEngine now that AgentSystem
     # exists, replacing its game_systems-global reach on agent kills.
     combat_engine.set_agent_xp_awarder(lambda: agent_system)
+    # Inject the PowerupSystem into EquipmentSystem so ``use`` applies a
+    # consumable buff through the real timed-effect machinery (correct entry
+    # shape + tick-based expiry) rather than reaching into game_systems.
+    equipment_system.set_powerup_system(powerup_system)
+    # Inject the area-damage applier so ``EquipmentSystem.throw`` routes each
+    # AoE victim through the CombatEngine damage pipeline (real armor reduction
+    # + min-0 clamp) rather than reaching into game_systems. Zero-arg callable
+    # returning the live CombatEngine.
+    equipment_system.set_area_damage_applier(lambda: combat_engine)
+
+    # Inject the resource-drop spawner so ``EquipmentSystem.add_resource_capped``
+    # can spill the over-capacity remainder of a *holder-pool* inflow (a
+    # player's Spend_Pool or a Storage_Building's stored pool) back to a ground
+    # ``ResourceDrop`` at the holder's coordinates, so no resource is ever
+    # destroyed (D9, Req 16.8). This is the injected ResourceSystem<->
+    # EquipmentSystem inflow-choke relationship (task 9.2/11.1): the callable
+    # ``(holder, resource, amount)`` delegates to the existing
+    # ``ResourceSystem._spawn_resource_drop`` mechanism rather than
+    # ``EquipmentSystem`` reaching into ``game_systems`` or importing
+    # ``typeclasses`` — ``world/systems`` stays framework-free.
+    def _spawn_resource_drop_for(holder: Any, resource: str, amount: int) -> Any:
+        room, cx, cy = _holder_room_and_coords(holder)
+        if room is None:
+            return None
+        return resource_system._spawn_resource_drop(room, resource, amount, x=cx, y=cy)
+
+    equipment_system.set_resource_drop_spawner(_spawn_resource_drop_for)
+
+    # Inject the supply-drop spawner so ``EquipmentSystem.add_supply_drop`` can
+    # spill over-stack / over-weight Supply leftovers to a ground pickup at the
+    # player's coordinates, so supplies are never destroyed (D9). Supplies are
+    # counted items held in a pool distinct from ``db.resources``, so the spill
+    # is a ``GameItem`` supply drop (``typeclasses.objects.spawn_supply_drop``),
+    # NOT a ``ResourceDrop`` — a ResourceDrop's ``at_get`` would mis-file the
+    # units into the resource pool. The ``typeclasses`` import lives here at the
+    # composition root; ``world/systems`` holds only the injected callable
+    # ``(player, item_key, count)``.
+    def _spawn_supply_drop_for(player: Any, item_key: str, count: int) -> Any:
+        room, cx, cy = _holder_room_and_coords(player)
+        if room is None:
+            return None
+        from typeclasses.objects import spawn_supply_drop
+
+        return spawn_supply_drop(room, item_key, count, x=cx, y=cy)
+
+    equipment_system.set_supply_drop_spawner(_spawn_supply_drop_for)
+
     movement_system = MovementSystem(
         max_paths_per_tick=MAX_PATHS_PER_TICK,
         moving_entity_repository=EvenniaMovingEntityRepository(),

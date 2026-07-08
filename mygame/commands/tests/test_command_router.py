@@ -670,9 +670,9 @@ class TestCharacterCmdSetRegistration(unittest.TestCase):
 
     # --- Requirement 7.3: Unchanged standalone commands still registered ---
 
-    def test_reloaddata_still_registered(self):
-        """CmdReloadData (@reloaddata) is still registered."""
-        self.assertIn("@reloaddata", self.registered_keys)
+    def test_reboot_still_registered(self):
+        """CmdReboot (@reboot) is still registered."""
+        self.assertIn("@reboot", self.registered_keys)
 
     def test_teleport_still_registered(self):
         """CmdTeleport (@teleport) is still registered."""

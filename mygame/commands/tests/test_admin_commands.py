@@ -1,7 +1,7 @@
 """
 Unit tests for admin commands.
 
-Tests permission checks, @reloaddata success/failure paths,
+Tests permission checks, @reboot success/failure paths,
 @giveresource resource addition, and execution logging.
 
 Requirements: 33.3, 33.4
@@ -94,7 +94,7 @@ def _ensure_evennia_stubs():
 _ensure_evennia_stubs()
 
 from mygame.commands.admin_commands import (  # noqa: E402
-    CmdReloadData,
+    CmdReboot,
 )
 from mygame.commands.admin_commands import CmdAdminResource  # noqa: E402
 
@@ -159,10 +159,10 @@ def _make_cmd(cmd_class, caller, args=""):
 #  Tests
 # -------------------------------------------------------------- #
 
-class TestCmdReloadDataPermission(unittest.TestCase):
+class TestCmdRebootPermission(unittest.TestCase):
     def test_denied_without_builder(self):
         caller = FakeCaller(permissions={"Player"})
-        cmd = _make_cmd(CmdReloadData, caller)
+        cmd = _make_cmd(CmdReboot, caller)
         cmd.func()
         self.assertTrue(any("Permission denied" in m for m in caller._messages))
 
@@ -172,7 +172,7 @@ class TestCmdReloadDataPermission(unittest.TestCase):
             permissions={"Builder"},
             systems={"registry": registry},
         )
-        cmd = _make_cmd(CmdReloadData, caller)
+        cmd = _make_cmd(CmdReboot, caller)
         cmd.func()
         self.assertTrue(any("successful" in m.lower() for m in caller._messages))
 
@@ -182,18 +182,18 @@ class TestCmdReloadDataPermission(unittest.TestCase):
             permissions={"Admin"},
             systems={"registry": registry},
         )
-        cmd = _make_cmd(CmdReloadData, caller)
+        cmd = _make_cmd(CmdReboot, caller)
         cmd.func()
         self.assertTrue(any("successful" in m.lower() for m in caller._messages))
 
-class TestCmdReloadDataPaths(unittest.TestCase):
+class TestCmdRebootPaths(unittest.TestCase):
     def test_success_path(self):
         registry = FakeRegistry(success=True)
         caller = FakeCaller(
             permissions={"Builder"},
             systems={"registry": registry},
         )
-        cmd = _make_cmd(CmdReloadData, caller)
+        cmd = _make_cmd(CmdReboot, caller)
         cmd.func()
         self.assertTrue(any("successful" in m.lower() for m in caller._messages))
 
@@ -203,14 +203,14 @@ class TestCmdReloadDataPaths(unittest.TestCase):
             permissions={"Builder"},
             systems={"registry": registry},
         )
-        cmd = _make_cmd(CmdReloadData, caller)
+        cmd = _make_cmd(CmdReboot, caller)
         cmd.func()
         self.assertTrue(any("failed" in m.lower() for m in caller._messages))
         self.assertTrue(any("buildings.yaml" in m for m in caller._messages))
 
     def test_no_registry(self):
         caller = FakeCaller(permissions={"Builder"})
-        cmd = _make_cmd(CmdReloadData, caller)
+        cmd = _make_cmd(CmdReboot, caller)
         cmd.func()
         self.assertTrue(any("unavailable" in m.lower() for m in caller._messages))
 

@@ -100,23 +100,20 @@ class PowerupSystem(BaseSystem):
         if powerup_key in active:
             return False, f"Powerup {powerup_key} is already active."
 
-        # Apply: store active powerup
-        expires_tick = current_tick + pdef.duration_ticks
-        active[powerup_key] = {
-            "expires_tick": expires_tick,
-            "effect": {
-                "effect_type": pdef.effect_type,
-                "effect_value": pdef.effect_value,
-            },
-        }
-        self._set_active_powerups(player, active)
+        # Apply: register the timed effect via the shared entry point so
+        # process_tick expires it. Keyed by powerup_key so the existing
+        # cooldown / already-active / expiry semantics are unchanged.
+        expires_tick = self.apply_timed_effect(
+            player,
+            pdef.effect_type,
+            pdef.effect_value,
+            pdef.duration_ticks,
+            key=powerup_key,
+        )
 
         # Set cooldown
         cooldowns[powerup_key] = current_tick + pdef.cooldown_ticks
         self._set_cooldowns(player, cooldowns)
-
-        # Track player for process_tick
-        self._active_players.add(player)
 
         # Publish event
         self.event_bus.publish(
@@ -131,6 +128,56 @@ class PowerupSystem(BaseSystem):
         )
 
         return True, f"Activated {pdef.name} for {pdef.duration_ticks} ticks."
+
+    def apply_timed_effect(
+        self,
+        player: Any,
+        effect_type: str,
+        value: float,
+        duration_ticks: int,
+        key: str | None = None,
+    ) -> int:
+        """Register a timed stat effect on *player* using the powerup machinery.
+
+        This is the shared entry point extracted from :meth:`activate`. It
+        writes an entry into ``player.db.active_powerups`` in the real shape
+        (``{expires_tick, effect: {effect_type, effect_value}}``) and registers
+        the player in :attr:`_active_players` so :meth:`process_tick` visits and
+        expires it. Any timed buff — a powerup activation or a consumable stim
+        applied by ``EquipmentSystem.use`` — must route through here rather than
+        writing ``db.active_powerups`` by hand, because an entry written by hand
+        (and a player never added to ``_active_players``) is never expired.
+
+        Args:
+            player: The entity receiving the timed effect.
+            effect_type: The stat the effect modifies (e.g. ``"damage_bonus"``).
+            value: The effect magnitude (``effect_value``).
+            duration_ticks: How many ticks the effect lasts from now.
+            key: The entry key. Defaults to a synthetic key derived from the
+                effect type and expiry tick so independent consumable buffs do
+                not collide; :meth:`activate` passes the ``powerup_key``.
+
+        Returns:
+            The absolute ``expires_tick`` at which the effect lapses.
+        """
+        current_tick = self._current_tick_func()
+        expires_tick = current_tick + duration_ticks
+        if key is None:
+            key = f"effect_{effect_type}_{expires_tick}"
+        active = self._get_active_powerups(player)
+        active[key] = {
+            "expires_tick": expires_tick,
+            "effect": {
+                "effect_type": effect_type,
+                "effect_value": value,
+            },
+        }
+        self._set_active_powerups(player, active)
+
+        # Track player for process_tick expiry.
+        self._active_players.add(player)
+
+        return expires_tick
 
     # ------------------------------------------------------------------ #
     #  Tick processing

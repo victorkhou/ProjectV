@@ -10,7 +10,15 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from world.constants import MAX_LEVEL
+from world.constants import (
+    EFFECT_TYPES,
+    EQUIPMENT_SLOTS,
+    GEAR_CATEGORIES,
+    ITEM_CATEGORIES,
+    MAX_LEVEL,
+    RESOURCE_TYPES,
+    WEAPON_TYPES,
+)
 
 if TYPE_CHECKING:
     pass  # DataRegistry imported only for type hints in cross_validate
@@ -147,7 +155,10 @@ class SchemaValidator:
             errors.append(f"items.items: expected a list, got {type(items_list).__name__}")
             items_list = []
 
-        required = {"key", "name", "slot"}
+        # `slot` is required only for Gear categories (handled per-item below),
+        # so it is not part of the unconditional required set. Supply items
+        # (ammo/consumable/throwable) occupy no slot.
+        required = {"key", "name"}
         item_keys: set[str] = set()
 
         for idx, entry in enumerate(items_list):
@@ -164,7 +175,9 @@ class SchemaValidator:
             if isinstance(key, str):
                 item_keys.add(key)
 
-            # stat_modifiers values must be numeric
+            # stat_modifiers values must be numeric. `max_hp` and `accuracy` are
+            # accepted here as ordinary numeric stat keys with no wired effect
+            # (D6) — no key allowlist is applied.
             sm = entry.get("stat_modifiers")
             if sm is not None:
                 if not isinstance(sm, dict):
@@ -173,7 +186,7 @@ class SchemaValidator:
                     )
                 else:
                     for stat, val in sm.items():
-                        if not isinstance(val, (int, float)):
+                        if not isinstance(val, (int, float)) or isinstance(val, bool):
                             errors.append(
                                 f"{prefix}: stat_modifiers['{stat}'] must be numeric, got {val!r}"
                             )
@@ -191,6 +204,117 @@ class SchemaValidator:
                             errors.append(
                                 f"{prefix}: ammo_cost['{res}'] must be a positive integer, got {val!r}"
                             )
+
+            # ---- category (Req 3.4) ------------------------------------- #
+            # A missing category defaults to "armor" in the populator, so an
+            # absent category is treated as the default rather than an error.
+            category = entry.get("category")
+            if category is not None and category not in ITEM_CATEGORIES:
+                errors.append(
+                    f"{prefix}: category '{category}' not one of {list(ITEM_CATEGORIES)}"
+                )
+            effective_category = category if category is not None else "armor"
+
+            # ---- slot: required for Gear, not for Supply (Req 3.5, 3.6) -- #
+            slot = entry.get("slot")
+            if effective_category in GEAR_CATEGORIES:
+                if slot is None:
+                    errors.append(
+                        f"{prefix}: slot is required for '{effective_category}' "
+                        f"(Gear) items"
+                    )
+                elif slot not in EQUIPMENT_SLOTS:
+                    errors.append(
+                        f"{prefix}: slot '{slot}' not in EQUIPMENT_SLOTS "
+                        f"{list(EQUIPMENT_SLOTS)}"
+                    )
+                # A `weapon`-category item must occupy the `weapon` slot:
+                # combat resolves the attacker's weapon via the `weapon` slot
+                # specifically, so a weapon parked in a body slot (e.g. `head`)
+                # would never be found and could never be used to attack.
+                # (`armor`/`accessory` gear may occupy any body slot — e.g. a
+                # scope in `eyes`, a jetpack in `back`.)
+                elif effective_category == "weapon" and slot != "weapon":
+                    errors.append(
+                        f"{prefix}: weapon items must use slot 'weapon', got '{slot}'"
+                    )
+
+            # ---- weapon_type: required iff weapon, rejected otherwise (Req 4.5)
+            weapon_type = entry.get("weapon_type")
+            if effective_category == "weapon":
+                if weapon_type not in WEAPON_TYPES:
+                    errors.append(
+                        f"{prefix}: weapon_type must be one of {list(WEAPON_TYPES)} "
+                        f"for weapon items, got {weapon_type!r}"
+                    )
+            elif weapon_type is not None:
+                errors.append(
+                    f"{prefix}: weapon_type is only valid on weapon-category "
+                    f"items, got {weapon_type!r}"
+                )
+
+            # ---- ranged-weapon ammo fields must be positive ints (Req 5.1) #
+            if effective_category == "weapon" and weapon_type == "ranged":
+                aps = entry.get("ammo_per_shot")
+                if aps is not None and (
+                    not isinstance(aps, int) or isinstance(aps, bool) or aps <= 0
+                ):
+                    errors.append(
+                        f"{prefix}: ammo_per_shot must be a positive integer, got {aps!r}"
+                    )
+                mag = entry.get("magazine_size")
+                if mag is not None and (
+                    not isinstance(mag, int) or isinstance(mag, bool) or mag <= 0
+                ):
+                    errors.append(
+                        f"{prefix}: magazine_size must be a positive integer, got {mag!r}"
+                    )
+                # A ranged weapon that consumes counted ammo (declares an
+                # ammo_type) MUST declare a magazine (Req 5.1). Without it the
+                # weapon seeds db.loaded=0 and can never fire — a load-time
+                # brick, so reject it up front rather than shipping dead gear.
+                if entry.get("ammo_type") is not None and mag is None:
+                    errors.append(
+                        f"{prefix}: ranged weapon with ammo_type must declare a "
+                        f"positive magazine_size"
+                    )
+
+            # ---- max_stack must be a positive int (Req 10.4) ------------ #
+            max_stack = entry.get("max_stack")
+            if max_stack is not None and (
+                not isinstance(max_stack, int)
+                or isinstance(max_stack, bool)
+                or max_stack <= 0
+            ):
+                errors.append(
+                    f"{prefix}: max_stack must be a positive integer, got {max_stack!r}"
+                )
+
+            # ---- weight must be a number >= 0 (Req 15.1) ---------------- #
+            weight = entry.get("weight")
+            if weight is not None and (
+                not isinstance(weight, (int, float))
+                or isinstance(weight, bool)
+                or weight < 0
+            ):
+                errors.append(
+                    f"{prefix}: weight must be a number >= 0, got {weight!r}"
+                )
+
+            # ---- effect.type for consumable/throwable (Req 6.4, 13.5) --- #
+            effect = entry.get("effect")
+            if effect is not None and effective_category in ("consumable", "throwable"):
+                if not isinstance(effect, dict):
+                    errors.append(
+                        f"{prefix}: effect must be a dict, got {type(effect).__name__}"
+                    )
+                else:
+                    etype = effect.get("type")
+                    if etype not in EFFECT_TYPES:
+                        errors.append(
+                            f"{prefix}: effect.type must be one of {list(EFFECT_TYPES)}, "
+                            f"got {etype!r}"
+                        )
 
         return errors
 
@@ -459,6 +583,7 @@ class SchemaValidator:
             # here too (previously the explicit constructor silently dropped them).
             "player_vision_radius", "building_vision_radius", "room_cache_max_size",
             "gc_interval_ticks", "gc_min_age_ticks", "map_border_tiles",
+            "equipment_production_ticks", "equipment_production_owner_cap",
         ]
         float_fields = [
             "xp_damage", "tick_interval",
@@ -508,6 +633,31 @@ class SchemaValidator:
                         f"balance.{field}['{res}']: must be a positive integer, "
                         f"got {amount!r}"
                     )
+
+        # resource_weights: keys must be a subset of RESOURCE_TYPES (case-sensitive
+        # title-case), values must be numbers >= 0.
+        rw = data.get("resource_weights")
+        if rw is not None:
+            if not isinstance(rw, dict):
+                errors.append(
+                    f"balance.resource_weights: expected dict, got {type(rw).__name__}"
+                )
+            else:
+                for res, weight in rw.items():
+                    if res not in RESOURCE_TYPES:
+                        errors.append(
+                            f"balance.resource_weights['{res}']: unknown resource; "
+                            f"must be one of {RESOURCE_TYPES}"
+                        )
+                    if (
+                        not isinstance(weight, (int, float))
+                        or isinstance(weight, bool)
+                        or weight < 0
+                    ):
+                        errors.append(
+                            f"balance.resource_weights['{res}']: must be a number "
+                            f">= 0, got {weight!r}"
+                        )
 
         # Level(1-5)->fraction maps (e.g. demolish_refund_rates)
         for field in level_rate_map_fields:
@@ -586,6 +736,45 @@ class SchemaValidator:
                     f"item '{key}': required_rank '{idef.required_rank}' "
                     f"not found in rank definitions"
                 )
+
+        # Item ammo_type → must reference an existing 'ammo'-category item
+        # (Req 5.7); melee weapons must not declare any ammo fields (Req 5.8).
+        for key, idef in registry.items.items():
+            # ammo_type FK: when set, it must name an existing ammo item.
+            if idef.ammo_type is not None:
+                ref = registry.items.get(idef.ammo_type)
+                if ref is None:
+                    errors.append(
+                        f"item '{key}': ammo_type '{idef.ammo_type}' "
+                        f"not found in item definitions"
+                    )
+                elif ref.category != "ammo":
+                    errors.append(
+                        f"item '{key}': ammo_type '{idef.ammo_type}' "
+                        f"is not an 'ammo'-category item "
+                        f"(category '{ref.category}')"
+                    )
+
+            # Melee weapons carry no ammunition. ammo_per_shot defaults to 1,
+            # so only a non-default value is treated as "declared" — ammo_type
+            # and magazine_size are None by default, so any non-None value is a
+            # violation.
+            if idef.category == "weapon" and idef.weapon_type == "melee":
+                if idef.ammo_type is not None:
+                    errors.append(
+                        f"item '{key}': melee weapon must not declare "
+                        f"ammo_type '{idef.ammo_type}'"
+                    )
+                if idef.magazine_size is not None:
+                    errors.append(
+                        f"item '{key}': melee weapon must not declare "
+                        f"magazine_size {idef.magazine_size}"
+                    )
+                if idef.ammo_per_shot != 1:
+                    errors.append(
+                        f"item '{key}': melee weapon must not declare "
+                        f"ammo_per_shot {idef.ammo_per_shot}"
+                    )
 
         # Technology required_rank → valid rank names
         for key, tdef in registry.technologies.items():

@@ -51,6 +51,35 @@ class EquipmentHandler:
         # Always keep the fallback in sync
         self.character._equipment_slots = slots
 
+    def _get_supplies(self) -> dict:
+        """Return the current Supply_Bag dict (``db.supplies``).
+
+        Mirrors :meth:`_get_slots`: reads the Evennia ``supplies`` Attribute
+        when available, falling back to a plain ``_supplies`` dict on the
+        character for the stubbed test environment.
+        """
+        # Try Evennia Attribute first
+        if hasattr(self.character, "attributes") and hasattr(
+            self.character.attributes, "get"
+        ):
+            supplies = self.character.attributes.get("supplies", default=None)
+            if supplies is not None:
+                return dict(supplies)
+        # Fallback for testing: use a plain dict on the character
+        if not hasattr(self.character, "_supplies"):
+            self.character._supplies = {}
+        return self.character._supplies
+
+    def _set_supplies(self, supplies: dict) -> None:
+        """Persist the Supply_Bag dict. Mirrors :meth:`_set_slots`."""
+        # Try Evennia Attribute first
+        if hasattr(self.character, "attributes") and hasattr(
+            self.character.attributes, "add"
+        ):
+            self.character.attributes.add("supplies", supplies)
+        # Always keep the fallback in sync
+        self.character._supplies = supplies
+
     # ------------------------------------------------------------------ #
     #  Public API
     # ------------------------------------------------------------------ #
@@ -137,3 +166,126 @@ class EquipmentHandler:
     def get_slot_names(self) -> list[str]:
         """Return a list of all currently occupied slot names."""
         return list(self._get_slots().keys())
+
+    # ------------------------------------------------------------------ #
+    #  Supply_Bag API (counted, fungible Supplies: ammo/consumable/throwable)
+    # ------------------------------------------------------------------ #
+
+    def get_supplies(self) -> dict[str, int]:
+        """Return a copy of the Supply_Bag: ``{item_key: count}``.
+
+        Counts are non-negative integers; depleted entries are never present
+        (they are removed by :meth:`remove_supply`).
+        """
+        return dict(self._get_supplies())
+
+    def get_supply(self, item_key: str) -> int:
+        """Return the carried count for *item_key* (0 if not held)."""
+        return int(self._get_supplies().get(item_key, 0))
+
+    def add_supply(self, item_key: str, count: int, max_stack: int = 99) -> int:
+        """Add *count* units of *item_key* to the Supply_Bag.
+
+        Respects the per-entry ``max_stack`` cap: the entry never grows beyond
+        ``max_stack``. The handler holds no definitions provider, so the caller
+        (the ``EquipmentSystem``, which resolves ``Item_Def.max_stack`` via its
+        provider) passes the resolved cap; it defaults to the ``ItemDef``
+        default of 99 for provider-less callers/tests.
+
+        Args:
+            item_key: The Supply item key.
+            count: The number of units requested to add (non-positive is a
+                no-op returning 0).
+            max_stack: The per-entry stack cap (positive int).
+
+        Returns:
+            The number of units actually added (0..count), after capping.
+        """
+        if count <= 0:
+            return 0
+        supplies = self._get_supplies()
+        current = int(supplies.get(item_key, 0))
+        room = max_stack - current
+        if room <= 0:
+            return 0
+        added = min(count, room)
+        supplies[item_key] = current + added
+        self._set_supplies(supplies)
+        return added
+
+    def remove_supply(self, item_key: str, count: int) -> bool:
+        """Remove *count* units of *item_key* from the Supply_Bag.
+
+        Never underflows: if the bag holds fewer than *count* units, nothing is
+        removed and ``False`` is returned. A depleted entry (count reaches 0) is
+        removed from the bag entirely.
+
+        Args:
+            item_key: The Supply item key.
+            count: The number of units to remove (non-positive is rejected).
+
+        Returns:
+            ``True`` if the removal succeeded, ``False`` if insufficient.
+        """
+        if count <= 0:
+            return False
+        supplies = self._get_supplies()
+        current = int(supplies.get(item_key, 0))
+        if current < count:
+            return False
+        remaining = current - count
+        if remaining > 0:
+            supplies[item_key] = remaining
+        else:
+            supplies.pop(item_key, None)
+        self._set_supplies(supplies)
+        return True
+
+    def supplies_weight(self, provider) -> float:
+        """Return the total carried weight of the Supply_Bag.
+
+        Computed as ``Σ Item_Def.weight × count`` over every entry. The item
+        definitions are resolved via *provider* — an explicit
+        ``DefinitionsProvider`` / registry-like argument — because the handler
+        holds no provider itself (keeping it framework-free).
+
+        Args:
+            provider: An object able to resolve an item key to its ``ItemDef``
+                (via ``resolve_item``/``get_item``/``items``), each exposing a
+                ``weight`` attribute.
+
+        Returns:
+            The total weight as a float. An item whose definition cannot be
+            resolved contributes 0.
+        """
+        total = 0.0
+        for item_key, count in self._get_supplies().items():
+            item_def = self._resolve_item_def(provider, item_key)
+            if item_def is None:
+                continue
+            weight = getattr(item_def, "weight", 0.0)
+            total += float(weight) * int(count)
+        return total
+
+    @staticmethod
+    def _resolve_item_def(provider, item_key: str):
+        """Resolve *item_key* to an ``ItemDef`` via *provider*, or ``None``.
+
+        Tolerates the several shapes a provider/registry may expose:
+        ``resolve_item(key)``, ``get_item(key)``, or an ``items`` mapping.
+        """
+        if provider is None:
+            return None
+        resolve = getattr(provider, "resolve_item", None)
+        if callable(resolve):
+            return resolve(item_key)
+        get_item = getattr(provider, "get_item", None)
+        if callable(get_item):
+            try:
+                return get_item(item_key)
+            except KeyError:
+                return None
+        items = getattr(provider, "items", None)
+        if isinstance(items, dict):
+            return items.get(item_key)
+        return None

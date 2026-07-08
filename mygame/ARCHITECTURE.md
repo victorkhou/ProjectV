@@ -350,8 +350,8 @@ graph LR
 | **RankSystem** | event‑driven | Level 1‑60 → rank 1‑12; XP thresholds; tech unlock/revoke; **publishes** `LEVEL_CHANGED`/`RANK_*` | progression, EventBus |
 | **ResourceSystem** | 4, 11 | Manual + presence harvest, Extractor inventory, respawns | Movement, terrain, EventBus |
 | **BuildingSystem** | 4 | Construct/upgrade validation + timers (player‑presence & engineer‑agent) | terrain, EventBus |
-| **EquipmentSystem** | 5 | Armory/Armorer per‑tick item production | registry |
-| **EquipmentHandler** | — | Per‑character slot equip/unequip + stat aggregation | (standalone) |
+| **EquipmentSystem** | 5 | Per‑tick item production **and** the use‑case mediating equip/unequip/use/throw/reload/deposit/withdraw + carry‑weight/rank/ammo checks (see §12) | registry, EquipmentHandler, injected area‑damage applier + PowerupSystem + supply/resource‑drop spawners |
+| **EquipmentHandler** | — | Per‑character Gear slots (equip/unequip) + stat aggregation + Supply‑bag storage | (standalone; per `CombatEntity`) |
 | **MovementSystem** | 2 | In‑memory moving‑NPC set; per‑tick advance; pathfinding throttle | pathfinding |
 | **PowerupSystem** | 9 | Timed buffs, cooldowns, combat stat modifiers | RankSystem, EventBus |
 | **TechLabSystem** | 10 | Research timers, apply tech effects/unlocks | RankSystem, EventBus |
@@ -466,13 +466,18 @@ per‑player text. Instead `BaseSystem.notify(player, kind, **data)` publishes a
 structured `PLAYER_NOTIFICATION(player, kind, data)` event; the single
 `NotificationPresenter` (an Observer) looks `kind` up in its formatter table,
 builds the string, and delivers it through the injected `PlayerNotifier` port.
-Restyling or re‑wording any of the ~11 player messages
+Restyling or re‑wording any player message — the original combat/economy kinds
 (`rank_level_up`, `building_progress`/`building_complete`,
 `agent_training_progress`/`agent_training_complete`, `harvest_drop`, `attacked`,
-`building_attacked`, `ability_active`/`ability_relocked`/`ability_available`) is
-a one‑line edit to
+`building_attacked`, `ability_active`/`ability_relocked`/`ability_available`)
+plus the equipment/storage kinds added by the equipment‑items feature
+(`equip_denied`, `out_of_ammo`, `reloaded`, `reload_failed`, `healed`,
+`buff_applied`, `bombed`, `carry_full`, `storage_full`, `deposited`, `withdrew`;
+thrown victims reuse `attacked`) — is a one‑line edit to
 [`presenters/notification_presenter.py`](world/presenters/notification_presenter.py) —
-with **zero** edits to the use‑case systems.
+with **zero** edits to the use‑case systems. (A `kind` with no formatter is
+silently dropped by `on_notification`, so every kind a system emits must have a
+matching formatter entry.)
 
 ---
 
@@ -717,9 +722,17 @@ erDiagram
     ITEM_DEF {
         string key PK
         string name
-        string slot
+        string category "armor|weapon|accessory|ammo|consumable|throwable"
+        string slot "∈ EQUIPMENT_SLOTS for Gear; empty for Supplies"
         dict   stat_modifiers
+        string weapon_type "nullable; melee|ranged (weapon only)"
+        string ammo_type "nullable FK → ammo-category ITEM_DEF.key (ranged)"
+        int    ammo_per_shot "default 1"
+        int    magazine_size "nullable (ranged)"
         dict   ammo_cost "nullable; keys soft → RESOURCE"
+        dict   effect "nullable; {type: heal|buff|aoe_damage, …} (consumable/throwable)"
+        int    max_stack "default 99 (Supplies)"
+        float  weight "≥ 0, default 1.0"
         string classification "modern | futuristic"
         string required_rank FK "nullable, ENFORCED → RANK_DEF.name"
     }
@@ -781,6 +794,7 @@ erDiagram
     POWERUP_DEF          }o--|| RANK_DEF     : "required_rank (ENFORCED)"
     BUILDING_DEF          ||--o{ ITEM_PRODUCTION_MAP : "produces (ENFORCED)"
     ITEM_DEF              ||--o{ ITEM_PRODUCTION_MAP : "produced as (ENFORCED)"
+    ITEM_DEF              }o--o| ITEM_DEF     : "ammo_type → ammo item (ENFORCED)"
     PLANET_DEF            }o--|{ TERRAIN_DEF  : "terrain_types (ENFORCED)"
 
     %% ---- SOFT references (declared, used at runtime, NOT validated) ----
@@ -827,6 +841,97 @@ erDiagram
   checked against each other at load.
 - **`rank_requirement` is a misnomer** on both `BuildingDef` and `CoordinateSpaceDef`:
   per the YAML comments it now holds a **level (1–60)**, not a rank (1–12).
+
+---
+
+## 12. Equipment, Items & Storage (Gear · Supplies · Carry Weight)
+
+The item layer is one `GameItem` typeclass differentiated by validated `ItemDef`
+data. Every item has a required **category**, and the category decides *how it is
+stored* and *which actions apply*:
+
+| Category | Class | Stored in | Actions |
+|---|---|---|---|
+| `armor`, `weapon`, `accessory` | **Gear** | `db.equipment_slots` — one Game_Item per slot | `equip` / `unequip` |
+| `ammo`, `consumable`, `throwable` | **Supply** | `db.supplies: {item_key: count}` — fungible counted stacks | `reload` / `use` / `throw` |
+
+**Eleven canonical slots** (`EQUIPMENT_SLOTS` in `world/constants.py`):
+`head`, `eyes`, `face`, `torso`, `arms`, `hands`, `legs`, `feet`, `back`,
+`weapon`, `accessory`. Every slot can carry stat modifiers; `EquipmentHandler.get_stat_total(stat)`
+sums a stat across **all** equipped Gear. The combat engine already read target
+armor as `get_stat_total("damage_reduction")`, so the multi‑slot model needed
+**zero** damage‑formula change — the two additive combat touches are attacker
+`damage_bonus` aggregation and melee/magazine gating. Utility stats aggregate the
+same way: `move_speed` (for players, reduces in‑combat movement lag via
+`compute_effective_delay`; out of combat movement is instant), `sight_range` (fog‑of‑war
+vision radius), and `carry_capacity` (raises the weight limit). `max_hp` and
+`accuracy` are validated numeric stat keys but **reserved** — no HP/combat effect
+is wired in this feature.
+
+**Weapons & the magazine/reload model.** A `weapon`‑category item is `melee`
+(effective range 1, never consumes ammo) or `ranged`. A ranged weapon fires from a
+**loaded magazine** tracked on the Game_Item as `db.loaded` (0..`magazine_size`);
+each shot draws `ammo_per_shot` from `db.loaded` — never from the Supply bag. The
+`reload` action transfers `min(magazine_size − loaded, bag[ammo_type])` from the
+Supply bag's `ammo_type` into `db.loaded`. A freshly produced/picked‑up ranged
+weapon starts full. Energy weapons may additionally pay a per‑shot resource
+`ammo_cost` from `db.resources`. An empty magazine rejects the attack and notifies
+the player to reload.
+
+**Consumables & throwables.** `use` consumes one `consumable` and applies its
+`effect`: `heal` restores HP (clamped to `hp_max`); `buff` applies a timed modifier
+through the `PowerupSystem` (so it expires via the normal tick expiry, not a
+hand‑written dict). `throw` consumes one `throwable` and applies an `aoe_damage`
+effect at a target tile — targets within the effect `radius` are resolved via the
+planet coordinate index and damage is routed through the combat pipeline via a
+synthetic `_ThrowWeapon` (the same pattern turrets use), so target armor applies for
+free.
+
+### Carry weight & real storage
+
+- **Spend pool (unchanged).** `db.resources` remains the pool every cost check
+  reads (build, upgrade, research, `ammo_cost`). It is now bounded above by carry
+  weight, but its shape and all cost checks are untouched.
+- **Carry weight.** `carried_weight(player)` = Σ(`Item_Def.weight` × count) over
+  the Supply bag + Σ(`resource_weights[type]` × amount) over on‑person resources.
+  **Equipped Gear is excluded** (worn, not hauled). `carry_limit(player)` =
+  `BASE_CARRY_WEIGHT + get_stat_total("carry_capacity")`, or ∞ for admins
+  (Builder+). Per‑item `weight` is `ItemDef` data in `items.yaml`; per‑resource
+  weights are hot‑tunable `BalanceConfig.resource_weights` in `balance.yaml`.
+  Carried weight is computed **on demand at an inflow/action, never per tick.**
+- **Storage buildings.** `storage`‑capability buildings (Vault `VT`, HQ) gain a
+  real persistent `db.stored_resources: dict[str,int]` pool bounded by the now‑enforced
+  `storage_capacity` (was cosmetic; HQ's capacity is raised from 0 so a store exists
+  from level 1). `deposit`/`withdraw` move resources between a player's spend pool
+  and a co‑located store; harvester `DeliveryBehavior` deposits into the store
+  instead of the owner's person, and delivery‑target selection skips full stores.
+- **Over‑capacity spill.** `add_resource_capped(holder, resource, amount)` is the
+  single inflow choke point (drop pickup, harvester delivery deposit, admin
+  `@resource give`): it adds up to the limit and spawns the remainder as a
+  `ResourceDrop` at the holder's coordinates — resources are never destroyed.
+  Extractor output and presence‑harvest already spawn ground drops, so their cap
+  bites at pickup, keeping per‑tick weight computation off the production path.
+
+### The `EquipmentSystem` use‑case and its injected collaborators
+
+All mutating actions route through the framework‑free `EquipmentSystem`
+(`world/systems/equipment_system.py`) — `equip`, `unequip`, `use`, `throw`,
+`reload`, `deposit`, `withdraw`, `add_supply_drop`, `add_resource_capped` — which
+enforces rank gating, ammo, and carry/storage limits and emits every player‑facing
+string as a `PLAYER_NOTIFICATION` (the presenter owns the text). `EquipmentHandler`
+stays a pure storage mechanism. Consistent with the DI pass, the system reaches no
+service locator; its collaborators are injected at the composition root
+(`server/conf/game_init.py`) as callables/objects:
+
+| Injector | Collaborator | Used by |
+|---|---|---|
+| `set_area_damage_applier(lambda: combat_engine)` | Combat engine (synthetic‑weapon AoE) | `throw` |
+| `set_powerup_system(powerup_system)` | PowerupSystem timed‑buff entry point | `use` (buff) |
+| `set_supply_drop_spawner(…)` | Supply‑drop spawner | over‑stack/over‑weight supply pickup |
+| `set_resource_drop_spawner(…)` | Resource‑drop spawner (`ResourceSystem._spawn_resource_drop`) | over‑capacity resource inflow |
+
+This keeps `world/systems/` free of Evennia and the service locator, so the
+layering guard stays green.
 
 ---
 

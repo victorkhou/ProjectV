@@ -73,6 +73,15 @@ class _FakeBalance:
         self.building_vision_radius = bvr
 
 
+class _FakeEquipment:
+    """Minimal equipment handler exposing get_stat_total."""
+    def __init__(self, **stats):
+        self._stats = stats
+
+    def get_stat_total(self, stat_name):
+        return self._stats.get(stat_name, 0.0)
+
+
 class _FakePlayer:
     """Lightweight player stand-in."""
     def __init__(self, name="Player1", x=50, y=50, planet="earth"):
@@ -205,6 +214,27 @@ class TestGetVisibleTiles:
         tiles = fow.get_visible_tiles(player, [])
         # Radius 0 => just the center tile
         assert tiles == {(0, 0)}
+
+    def test_sight_range_bonus_extends_vision(self):
+        """An equipped sight_range stat adds to the player vision radius."""
+        fow = FogOfWarSystem(_FakeBalance(pvr=2, bvr=1))
+        player = _FakePlayer(x=5, y=5)
+        # A float bonus is coerced to int; radius 2 + 1 => 3
+        player.equipment = _FakeEquipment(sight_range=1.9)
+        tiles = fow.get_visible_tiles(player, [])
+        # Chebyshev radius 3 around (5,5) => 7x7 = 49 tiles
+        assert len(tiles) == 49
+        assert (8, 8) in tiles
+        assert (2, 2) in tiles
+        # Just outside the extended radius
+        assert (9, 5) not in tiles
+
+    def test_missing_equipment_falls_back_to_base_radius(self):
+        """A player without an equipment handler keeps the base radius."""
+        fow = FogOfWarSystem(_FakeBalance(pvr=2, bvr=1))
+        player = _FakePlayer(x=5, y=5)  # no .equipment attribute
+        tiles = fow.get_visible_tiles(player, [])
+        assert len(tiles) == 25
 
     def test_chebyshev_distance_not_euclidean(self):
         """Chebyshev radius 3 includes diagonal corners like (3,3)."""

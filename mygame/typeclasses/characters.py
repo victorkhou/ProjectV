@@ -161,6 +161,9 @@ PLAYER_DEFAULTS: dict[str, object] = {
     # Combat
     "combat_lockout_tick": 0,
     "combat_timer_expires": 0,
+    # Movement — earliest tick the player may next move while in combat
+    # (see CmdMove's in-combat movement lag). 0 = no pending lag.
+    "next_move_tick": 0,
     # Position
     "coord_x": 0,
     "coord_y": 0,

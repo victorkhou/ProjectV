@@ -94,7 +94,7 @@ VALID_ITEMS = {
         {
             "key": "kevlar_vest",
             "name": "Kevlar Vest",
-            "slot": "armor",
+            "slot": "torso",
             "stat_modifiers": {"damage_reduction": 5},
             "ammo_cost": None,
             "classification": "modern",

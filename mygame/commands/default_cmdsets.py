@@ -18,14 +18,16 @@ from evennia import default_cmds
 
 from commands.game_commands import (
     CmdMove, CmdHarvest, CmdBuild, CmdUpgrade, CmdDemolish,
-    CmdAttack, CmdEquip, CmdUnequip, CmdResearch, CmdPowerup,
+    CmdAttack, CmdEquip, CmdUnequip, CmdUse, CmdThrow, CmdReload,
+    CmdDeposit, CmdWithdraw,
+    CmdResearch, CmdPowerup,
     CmdScore, CmdEquipment, CmdBuildings, CmdScan, CmdTechnology,
     CmdInventory, CmdChat, CmdMessage, CmdSay, CmdLook, CmdMap,
     CmdLeave, CmdEnter, CmdCloseExit, CmdOpenExit, CmdStop, CmdWho, CmdGet,
 )
 from commands.agent_commands import CmdAgent
 from commands.admin_commands import (
-    CmdReloadData, CmdPurgeRooms, CmdTeleport, CmdClearFog, CmdMigrate,
+    CmdReboot, CmdPurgeRooms, CmdTeleport, CmdClearFog, CmdMigrate,
     CmdAdminBuilding, CmdAdminAgent, CmdAdminResource, CmdAdminPlayer,
 )
 
@@ -63,6 +65,11 @@ class CharacterCmdSet(default_cmds.CharacterCmdSet):
         self.add(CmdAttack())
         self.add(CmdEquip())
         self.add(CmdUnequip())
+        self.add(CmdUse())
+        self.add(CmdThrow())
+        self.add(CmdReload())
+        self.add(CmdDeposit())
+        self.add(CmdWithdraw())
         self.add(CmdResearch())
         self.add(CmdPowerup())
         self.add(CmdScore())
@@ -85,7 +92,7 @@ class CharacterCmdSet(default_cmds.CharacterCmdSet):
         # Agent commands
         self.add(CmdAgent())
         # Admin commands (lock-gated to Builder+)
-        self.add(CmdReloadData())
+        self.add(CmdReboot())
         self.add(CmdPurgeRooms())
         self.add(CmdTeleport())
         self.add(CmdClearFog())

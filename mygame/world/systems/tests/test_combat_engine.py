@@ -110,7 +110,8 @@ class FakeArmor:
     """Lightweight stand-in for an armor GameItem."""
     def __init__(self, damage_reduction=5, key="kevlar_vest"):
         self.key = key
-        self.slot = "armor"
+        self.slot = "torso"
+        self.category = "armor"
         self.stat_modifiers = {"damage_reduction": damage_reduction}
         self.ammo_cost = None
 
@@ -771,6 +772,365 @@ class TestAgentDefeatXP(unittest.TestCase):
         engine.queue_attack(attacker, victim)
         engine.resolve_tick()
         self.assertEqual(victim.db.hp, 100)
+
+
+# -------------------------------------------------------------- #
+#  Typed-weapon / gear fakes for the equipment combat touches
+#  (tasks 4.1-4.3). These extend the plain FakeWeapon above with the
+#  weapon typing and magazine fields the combat engine now reads.
+# -------------------------------------------------------------- #
+
+class _WeaponDB:
+    """A tiny ``.db`` bag exposing a mutable ``loaded`` count."""
+
+    def __init__(self, loaded=None):
+        self.loaded = loaded
+
+
+class FakeTypedWeapon:
+    """Weapon GameItem stand-in carrying weapon_type + a magazine.
+
+    Mirrors the fields the combat engine reads off a live GameItem:
+    ``weapon_type``/``ammo_type``/``ammo_per_shot`` (via ``_get_weapon_attr``),
+    ``db.loaded`` (via ``_get_loaded``/``_set_loaded``), and ``range``/``damage``
+    stats (via ``get_stat``).
+    """
+
+    def __init__(self, weapon_type="ranged", damage=25, weapon_range=1,
+                 ammo_type=None, ammo_per_shot=1, magazine_size=None,
+                 loaded=None, ammo_cost=None, key="typed_weapon"):
+        self.key = key
+        self.slot = "weapon"
+        self.weapon_type = weapon_type
+        self.ammo_type = ammo_type
+        self.ammo_per_shot = ammo_per_shot
+        self.magazine_size = magazine_size
+        self.ammo_cost = ammo_cost
+        self.stat_modifiers = {"damage": damage, "range": weapon_range}
+        self.db = _WeaponDB(loaded=loaded)
+
+    def get_stat(self, stat_name, default=0):
+        return float(self.stat_modifiers.get(stat_name, default))
+
+
+class FakeGear:
+    """Non-weapon gear GameItem contributing a single aggregated stat."""
+
+    def __init__(self, slot, stat_name, value, key=None):
+        self.key = key or f"{slot}_gear"
+        self.slot = slot
+        self.stat_modifiers = {stat_name: value}
+        self.ammo_cost = None
+
+    def get_stat(self, stat_name, default=0):
+        return float(self.stat_modifiers.get(stat_name, default))
+
+
+def _notification_sink(event_bus):
+    """Subscribe to PLAYER_NOTIFICATION and collect (player, kind, data)."""
+    from mygame.world.event_bus import PLAYER_NOTIFICATION
+    received = []
+    event_bus.subscribe(
+        PLAYER_NOTIFICATION,
+        lambda player, kind, data, **_kw: received.append((player, kind, data)),
+    )
+    return received
+
+
+# -------------------------------------------------------------- #
+#  Magazine draw (task 4.2, Req 5.3-5.6)
+# -------------------------------------------------------------- #
+
+class TestMagazineDraw(unittest.TestCase):
+    """Ranged magazine gating and per-shot draw."""
+
+    def _adjacent(self):
+        return (FakeTile(xyz=(0, 0, "earth")), FakeTile(xyz=(1, 0, "earth")))
+
+    def test_ranged_shot_decrements_loaded_by_ammo_per_shot(self):
+        atk_tile, tgt_tile = self._adjacent()
+        weapon = FakeTypedWeapon(
+            weapon_type="ranged", damage=25, weapon_range=5,
+            ammo_type="rifle_rounds", ammo_per_shot=3,
+            magazine_size=30, loaded=10,
+        )
+        engine, _ = _make_engine()
+        attacker = FakePlayer(name="Attacker", weapon=weapon, location=atk_tile)
+        target = FakePlayer(name="Target", location=tgt_tile)
+
+        ok, _ = engine.queue_attack(attacker, target)
+        self.assertTrue(ok)
+        # A single shot draws exactly ammo_per_shot from the magazine.
+        self.assertEqual(weapon.db.loaded, 7)
+
+    def test_empty_magazine_rejects_and_does_not_mutate_loaded(self):
+        atk_tile, tgt_tile = self._adjacent()
+        weapon = FakeTypedWeapon(
+            weapon_type="ranged", damage=25, weapon_range=5,
+            ammo_type="rifle_rounds", ammo_per_shot=3,
+            magazine_size=30, loaded=2,  # < ammo_per_shot
+        )
+        engine, event_bus = _make_engine()
+        received = _notification_sink(event_bus)
+        attacker = FakePlayer(name="Attacker", weapon=weapon, location=atk_tile)
+        target = FakePlayer(name="Target", location=tgt_tile)
+
+        ok, msg = engine.queue_attack(attacker, target)
+        self.assertFalse(ok)
+        # The empty-magazine feedback is delivered via the out_of_ammo
+        # notification (below), so the returned message is empty — the command
+        # layer suppresses it to avoid a duplicate line.
+        self.assertEqual(msg, "")
+        # Loaded is untouched on a rejected attack.
+        self.assertEqual(weapon.db.loaded, 2)
+        # Nothing is queued.
+        self.assertEqual(len(engine.pending_actions), 0)
+        # Attacker is notified to reload (out_of_ammo).
+        kinds = [kind for (_p, kind, _d) in received]
+        self.assertIn("out_of_ammo", kinds)
+
+    def test_exact_magazine_allows_a_final_shot(self):
+        atk_tile, tgt_tile = self._adjacent()
+        weapon = FakeTypedWeapon(
+            weapon_type="ranged", damage=25, weapon_range=5,
+            ammo_type="rifle_rounds", ammo_per_shot=5,
+            magazine_size=30, loaded=5,  # exactly ammo_per_shot
+        )
+        engine, _ = _make_engine()
+        attacker = FakePlayer(name="Attacker", weapon=weapon, location=atk_tile)
+        target = FakePlayer(name="Target", location=tgt_tile)
+
+        ok, _ = engine.queue_attack(attacker, target)
+        self.assertTrue(ok)
+        self.assertEqual(weapon.db.loaded, 0)
+
+
+# -------------------------------------------------------------- #
+#  Melee gating (task 4.2, Req 4.2, 4.4)
+# -------------------------------------------------------------- #
+
+class TestMeleeGating(unittest.TestCase):
+    """A melee weapon's effective range is always 1 and never uses ammo."""
+
+    def test_melee_ignores_range_stat_out_of_range(self):
+        weapon = FakeTypedWeapon(
+            weapon_type="melee", damage=25, weapon_range=10,  # big stat
+        )
+        engine, _ = _make_engine()
+        attacker = FakePlayer(name="Attacker", weapon=weapon,
+                              location=FakeTile(xyz=(0, 0, "earth")))
+        # Distance 3 > effective melee range 1 -> rejected despite range=10.
+        target = FakePlayer(name="Target",
+                            location=FakeTile(xyz=(3, 0, "earth")))
+        ok, msg = engine.queue_attack(attacker, target)
+        self.assertFalse(ok)
+        self.assertIn("out of range", msg)
+        self.assertIn("max 1", msg)
+
+    def test_melee_hits_adjacent_target(self):
+        weapon = FakeTypedWeapon(
+            weapon_type="melee", damage=25, weapon_range=10,
+        )
+        engine, _ = _make_engine()
+        attacker = FakePlayer(name="Attacker", weapon=weapon,
+                              location=FakeTile(xyz=(0, 0, "earth")))
+        target = FakePlayer(name="Target",
+                            location=FakeTile(xyz=(1, 0, "earth")))
+        ok, _ = engine.queue_attack(attacker, target)
+        self.assertTrue(ok)
+
+    def test_melee_never_touches_ammo(self):
+        # Even with a magazine and ammo_type present, melee skips all ammo
+        # handling: db.loaded is never read or decremented.
+        weapon = FakeTypedWeapon(
+            weapon_type="melee", damage=25, weapon_range=10,
+            ammo_type="rifle_rounds", ammo_per_shot=3,
+            magazine_size=30, loaded=5,
+        )
+        engine, _ = _make_engine()
+        attacker = FakePlayer(name="Attacker", weapon=weapon,
+                              location=FakeTile(xyz=(0, 0, "earth")))
+        target = FakePlayer(name="Target",
+                            location=FakeTile(xyz=(1, 0, "earth")))
+        ok, _ = engine.queue_attack(attacker, target)
+        self.assertTrue(ok)
+        self.assertEqual(weapon.db.loaded, 5)  # untouched
+
+
+# -------------------------------------------------------------- #
+#  Fresh ranged weapon starts full (task 4.3, Req 5.2, 11.7)
+# -------------------------------------------------------------- #
+
+class TestFreshRangedWeaponFull(unittest.TestCase):
+    """A freshly created ranged weapon arrives with a full magazine."""
+
+    def test_factory_initializes_loaded_to_magazine_size(self):
+        from mygame.world.systems.equipment_system import EquipmentSystem
+        from mygame.world.definitions import ItemDef
+
+        item_def = ItemDef(
+            key="rifle", name="Rifle", slot="weapon", category="weapon",
+            weapon_type="ranged", ammo_type="rifle_rounds",
+            ammo_per_shot=1, magazine_size=30,
+        )
+        owner = FakePlayer(name="Owner")
+        item = EquipmentSystem._default_create_item(item_def, owner)
+        self.assertEqual(item["loaded"], 30)
+
+    def test_factory_does_not_load_melee_weapon(self):
+        from mygame.world.systems.equipment_system import EquipmentSystem
+        from mygame.world.definitions import ItemDef
+
+        item_def = ItemDef(
+            key="blade", name="Blade", slot="weapon", category="weapon",
+            weapon_type="melee",
+        )
+        owner = FakePlayer(name="Owner")
+        item = EquipmentSystem._default_create_item(item_def, owner)
+        self.assertNotIn("loaded", item)
+
+
+# -------------------------------------------------------------- #
+#  Damage-bonus aggregation (task 4.1, Req 2.3)
+# -------------------------------------------------------------- #
+
+class TestDamageBonusAggregation(unittest.TestCase):
+    """Attacker damage includes the sum of gear damage_bonus (+ powerups)."""
+
+    def test_gear_damage_bonus_added_to_damage(self):
+        weapon = FakeTypedWeapon(weapon_type="ranged", damage=20,
+                                 weapon_range=5, key="rifle")
+        weapon.db.loaded = 100  # plenty; but no ammo_type -> no gating anyway
+        weapon.ammo_type = None
+        engine, _ = _make_engine()
+        attacker = FakePlayer(name="Attacker", weapon=weapon,
+                              location=FakeTile(xyz=(0, 0, "earth")))
+        # Two damage_bonus gear pieces in distinct slots.
+        attacker.equipment.equip(FakeGear("gloves", "damage_bonus", 5))
+        attacker.equipment.equip(FakeGear("accessory", "damage_bonus", 3))
+        target = FakePlayer(name="Target", hp=100,
+                            location=FakeTile(xyz=(1, 0, "earth")))
+        engine.queue_attack(attacker, target)
+        engine.resolve_tick()
+        # 20 base + (5 + 3) gear bonus = 28 damage.
+        self.assertEqual(target.db.hp, 72)
+
+    def test_gear_bonus_and_powerup_stack(self):
+        weapon = FakeTypedWeapon(weapon_type="ranged", damage=20,
+                                 weapon_range=5, ammo_type=None, key="rifle")
+        engine, _ = _make_engine()
+        attacker = FakePlayer(name="Attacker", weapon=weapon,
+                              location=FakeTile(xyz=(0, 0, "earth")))
+        attacker.equipment.equip(FakeGear("gloves", "damage_bonus", 4))
+        attacker.db.active_powerups = {
+            "rage": {"effect": {"effect_type": "damage_bonus",
+                                "effect_value": 6}},
+        }
+        target = FakePlayer(name="Target", hp=100,
+                            location=FakeTile(xyz=(1, 0, "earth")))
+        engine.queue_attack(attacker, target)
+        engine.resolve_tick()
+        # 20 base + 4 gear + 6 powerup = 30 damage.
+        self.assertEqual(target.db.hp, 70)
+
+
+# -------------------------------------------------------------- #
+#  Armor aggregation invariance (task 4.1, Req 2.2, 14.1)
+# -------------------------------------------------------------- #
+
+class TestArmorAggregation(unittest.TestCase):
+    """Target damage_reduction sums across all equipped gear."""
+
+    def test_multiple_armor_pieces_sum_reduction(self):
+        weapon = FakeTypedWeapon(weapon_type="ranged", damage=40,
+                                 weapon_range=5, ammo_type=None, key="rifle")
+        engine, _ = _make_engine()
+        attacker = FakePlayer(name="Attacker", weapon=weapon,
+                              location=FakeTile(xyz=(0, 0, "earth")))
+        target = FakePlayer(name="Target", hp=100,
+                            location=FakeTile(xyz=(1, 0, "earth")))
+        target.equipment.equip(FakeGear("torso", "damage_reduction", 6))
+        target.equipment.equip(FakeGear("legs", "damage_reduction", 4))
+        engine.queue_attack(attacker, target)
+        engine.resolve_tick()
+        # 40 - (6 + 4) = 30 damage.
+        self.assertEqual(target.db.hp, 70)
+
+
+class TestFinalizeHit(unittest.TestCase):
+    """The shared post-damage helper used by both resolve_tick and throw AoE.
+
+    Regression guard: the throwable AoE path calls ``_apply_damage`` +
+    ``_finalize_hit`` directly (bypassing ``resolve_tick``). Before the fix a
+    lethal bomb left a target at 0 HP but never defeated/destroyed. These tests
+    pin that ``_finalize_hit`` performs defeat/destruction, notification, and
+    the combat event so the throw path resolves a kill identically.
+    """
+
+    def _synthetic_weapon(self, damage):
+        # Mirrors the SyntheticWeapon shape used by throw AoE.
+        w = FakeTypedWeapon(weapon_type="ranged", damage=damage,
+                            weapon_range=3, ammo_type=None, key="frag grenade")
+        return w
+
+    def test_finalize_hit_defeats_zero_hp_player(self):
+        engine, event_bus = _make_engine()
+        received = _notification_sink(event_bus)
+        attacker = FakePlayer(name="Bomber", combat_xp=0,
+                              location=FakeTile(xyz=(0, 0, "earth")))
+        victim = FakePlayer(name="Victim", hp=10, hp_max=100, combat_xp=500,
+                            location=FakeTile(xyz=(1, 0, "earth")))
+        weapon = self._synthetic_weapon(40)
+
+        # Emulate the throw path: apply lethal damage, then finalize.
+        engine._apply_damage(victim, 40, attacker)
+        self.assertEqual(victim.db.hp, 0)
+        engine._finalize_hit(attacker, victim, weapon, 40, 0)
+
+        # Defeat handling ran: victim respawned to full HP, attacker got xp_kill.
+        self.assertEqual(victim.db.hp, victim.db.hp_max)
+        self.assertEqual(attacker.db.combat_xp,
+                         engine.registry.balance.xp_kill)
+        # Victim was notified they were attacked (weapon name = the bomb's).
+        kinds = [k for (_p, k, _d) in received]
+        self.assertIn("attacked", kinds)
+
+    def test_finalize_hit_destroys_zero_hp_building(self):
+        from world.event_bus import BUILDING_DESTROYED
+        engine, event_bus = _make_engine()
+        destroyed = []
+        event_bus.subscribe(BUILDING_DESTROYED, lambda **kw: destroyed.append(kw))
+        owner = FakePlayer(name="Owner", location=FakeTile(xyz=(9, 9, "earth")))
+        attacker = FakePlayer(name="Bomber",
+                              location=FakeTile(xyz=(0, 0, "earth")))
+        building = FakeBuilding(building_type="EX", owner=owner, hp=20,
+                                hp_max=300, location=FakeTile(xyz=(1, 0, "earth")))
+        weapon = self._synthetic_weapon(40)
+
+        engine._apply_damage(building, 40, attacker)
+        self.assertEqual(engine._get_hp(building), 0)
+        engine._finalize_hit(attacker, building, weapon, 40, 0)
+
+        # Destruction handling ran: building deleted and the event published.
+        self.assertTrue(building._deleted,
+                        "building at 0 HP should be destroyed via _finalize_hit")
+        self.assertTrue(destroyed,
+                        "BUILDING_DESTROYED should be published via _finalize_hit")
+
+    def test_finalize_hit_nonlethal_does_not_defeat(self):
+        engine, _ = _make_engine()
+        attacker = FakePlayer(name="Bomber",
+                              location=FakeTile(xyz=(0, 0, "earth")))
+        victim = FakePlayer(name="Victim", hp=100, hp_max=100, combat_xp=500,
+                            location=FakeTile(xyz=(1, 0, "earth")))
+        weapon = self._synthetic_weapon(30)
+
+        engine._apply_damage(victim, 30, attacker)
+        engine._finalize_hit(attacker, victim, weapon, 30, 0)
+
+        # Survived: HP reduced, not respawned; attacker earns no kill XP.
+        self.assertEqual(victim.db.hp, 70)
+        self.assertEqual(attacker.db.combat_xp, 0)
 
 
 if __name__ == "__main__":

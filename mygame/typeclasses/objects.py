@@ -142,9 +142,17 @@ class GameItem(GameEntity):
 
     Attributes set at creation from ItemDef:
         item_key (str) — references the ItemDef in DataRegistry
-        slot (str) — "weapon", "armor", "gadget", "consumable", etc.
+        slot (str) — one of EQUIPMENT_SLOTS (e.g. "weapon", "torso"); "" for Supplies
+        category (str) — armor|weapon|accessory|ammo|consumable|throwable
         stat_modifiers (dict) — {"damage": 25, "range": 3} etc.
+        weapon_type (str | None) — "melee" or "ranged" (weapon category)
+        ammo_type (str | None) — ammo item key the magazine holds (ranged)
+        ammo_per_shot (int) — rounds drawn from the magazine per shot
+        magazine_size (int | None) — magazine capacity (ranged)
         ammo_cost (dict | None) — {"iron": 1} or None
+        effect (dict | None) — {"type": ..., ...} for consumables/throwables
+        max_stack (int) — per-entry Supply_Bag stack cap
+        weight (float) — per-unit carried weight
         classification (str) — "modern" or "futuristic"
         required_rank (str | None) — rank name or None
 
@@ -153,7 +161,44 @@ class GameItem(GameEntity):
     _object_type_tag = "item"
 
     def at_get(self, getter, **kwargs):
-        """Clear coordinates when picked up."""
+        """Handle pickup.
+
+        A counted **Supply drop** (a GameItem carrying ``db.count`` + an
+        ``item_key`` — spawned by ``spawn_supply_drop`` when an over-capacity
+        pickup spills, see ``EquipmentSystem.add_supply_drop``) is routed into
+        the getter's Supply_Bag through the ``EquipmentSystem`` choke point so
+        the carry-weight / ``max_stack`` cap applies and any un-carryable
+        remainder spills back to a fresh ground drop (Req 10.5). The drop object
+        is then consumed. Falls back to leaving the object in inventory when no
+        equipment system is available so pickup never hard-breaks.
+
+        A plain equippable **Gear** GameItem (no ``db.count``) just has its
+        coordinates cleared, as before.
+        """
+        count = getattr(self.db, "count", None)
+        item_key = getattr(self.db, "item_key", None)
+        if count is not None and item_key:
+            from world.utils import get_system
+            equipment_system = get_system(getter, "equipment_system")
+            if equipment_system is not None and hasattr(
+                equipment_system, "add_supply_drop"
+            ):
+                added = 0
+                if count > 0:
+                    added = equipment_system.add_supply_drop(
+                        getter, item_key, int(count)
+                    )
+                if added > 0 and hasattr(getter, "msg"):
+                    getter.msg(f"Picked up {added} {self.key}.")
+                # Units are now accounted for in the Supply_Bag (and any
+                # remainder respawned as its own drop); consume this object.
+                self.db.count = 0
+                self.db.coord_x = None
+                self.db.coord_y = None
+                from evennia.utils import delay
+                delay(0, self.delete)
+                return
+        # Plain Gear item: clear coordinates when picked up.
         self.db.coord_x = None
         self.db.coord_y = None
 
@@ -203,6 +248,46 @@ class GameItem(GameEntity):
         """Return the required rank name, or None."""
         return self.attributes.get("required_rank", default=None)
 
+    @property
+    def category(self) -> str:
+        """Return the item category (armor/weapon/accessory/ammo/consumable/throwable)."""
+        return self.attributes.get("category", default="armor")
+
+    @property
+    def weapon_type(self) -> str | None:
+        """Return the weapon type (melee/ranged), or None for non-weapons."""
+        return self.attributes.get("weapon_type", default=None)
+
+    @property
+    def ammo_type(self) -> str | None:
+        """Return the ammo item key the magazine holds (ranged), or None."""
+        return self.attributes.get("ammo_type", default=None)
+
+    @property
+    def ammo_per_shot(self) -> int:
+        """Return the number of rounds drawn from the magazine per shot."""
+        return self.attributes.get("ammo_per_shot", default=1)
+
+    @property
+    def magazine_size(self) -> int | None:
+        """Return the magazine capacity (ranged), or None."""
+        return self.attributes.get("magazine_size", default=None)
+
+    @property
+    def effect(self) -> dict | None:
+        """Return the item effect dict for consumables/throwables, or None."""
+        return self.attributes.get("effect", default=None)
+
+    @property
+    def max_stack(self) -> int:
+        """Return the per-entry Supply_Bag stack cap."""
+        return self.attributes.get("max_stack", default=99)
+
+    @property
+    def weight(self) -> float:
+        """Return the per-unit carried weight (>= 0)."""
+        return self.attributes.get("weight", default=1.0)
+
     def get_stat(self, stat_name: str, default: float = 0) -> float:
         """Return the value of a stat modifier, or the default.
 
@@ -222,8 +307,16 @@ class GameItem(GameEntity):
             "item_key": self.attributes.get("item_key", default=""),
             "name": self.key if hasattr(self, "key") else "",
             "slot": self.slot,
+            "category": self.category,
             "stat_modifiers": self.stat_modifiers,
+            "weapon_type": self.weapon_type,
+            "ammo_type": self.ammo_type,
+            "ammo_per_shot": self.ammo_per_shot,
+            "magazine_size": self.magazine_size,
             "ammo_cost": self.ammo_cost,
+            "effect": self.effect,
+            "max_stack": self.max_stack,
+            "weight": self.weight,
             "classification": self.classification,
             "required_rank": self.required_rank,
         }
@@ -389,9 +482,27 @@ class ResourceDrop(GameEntity):
         amt = self.db.amount or 0
         rtype = self.db.resource_type or ""
         if amt > 0 and rtype and hasattr(getter, "add_resource"):
-            getter.add_resource(rtype, amt)
-            total = getter.get_resource(rtype) if hasattr(getter, "get_resource") else amt
-            getter.msg(f"Picked up {amt} {rtype} (total: {total}).")
+            # Route the pickup through the Equipment_System inflow choke point
+            # so the carry-weight cap applies and any un-carryable remainder
+            # spills back to a ground drop (Req 16.7). Fall back to a direct
+            # add when the system is unavailable so pickup never hard-breaks.
+            from world.utils import get_system
+            equipment_system = get_system(getter, "equipment_system")
+            if equipment_system is not None and hasattr(
+                equipment_system, "add_resource_capped"
+            ):
+                added = equipment_system.add_resource_capped(getter, rtype, amt)
+            else:
+                getter.add_resource(rtype, amt)
+                added = amt
+            # Reflect the amount actually taken — the cap may reduce it.
+            if added > 0:
+                total = (
+                    getter.get_resource(rtype)
+                    if hasattr(getter, "get_resource")
+                    else added
+                )
+                getter.msg(f"Picked up {added} {rtype} (total: {total}).")
         # Zero out so it can't be double-collected
         self.db.amount = 0
         # Delete after the command finishes processing
@@ -454,6 +565,123 @@ def spawn_resource_drop(location, resource_type, amount, x=None, y=None):
     )
     drop.db.resource_type = resource_type
     drop.db.amount = amount
+    if x is not None and y is not None:
+        drop.db.coord_x = x
+        drop.db.coord_y = y
+        # at_object_receive saw coord_x=None during create_object,
+        # so manually register in the coordinate index now.
+        if hasattr(location, "coord_index"):
+            location.coord_index.add(drop, x, y)
+    return drop
+
+
+def create_game_item(owner, item_def):
+    """Create a live ``GameItem`` for *owner* from an ``ItemDef`` (Gear production).
+
+    The production factory injected into ``EquipmentSystem`` at the composition
+    root (``game_init``). Where the framework-free
+    ``EquipmentSystem._default_create_item`` returns a lightweight dict for tests,
+    this spawns a real Evennia ``GameItem`` object in the owner's inventory so
+    produced Gear is equippable/usable end-to-end. Supplies are NOT created here —
+    they are routed into the Supply_Bag as counts by ``process_production``.
+
+    All metadata is copied onto the object's attributes so the ``GameItem``
+    property accessors resolve correctly, and a fresh ranged weapon starts with a
+    full magazine (``db.loaded = magazine_size``; Req 5.2, 11.7).
+
+    Args:
+        owner: The player/entity that produced the item (its new location).
+        item_def: The ``ItemDef`` to instantiate.
+
+    Returns:
+        The created ``GameItem``.
+    """
+    import evennia
+
+    item = evennia.create_object(
+        "typeclasses.objects.GameItem",
+        key=item_def.name,
+        location=owner,
+    )
+    item.db.item_key = item_def.key
+    item.db.slot = item_def.slot
+    item.db.category = item_def.category
+    item.db.stat_modifiers = dict(item_def.stat_modifiers)
+    item.db.weapon_type = item_def.weapon_type
+    item.db.ammo_type = item_def.ammo_type
+    item.db.ammo_per_shot = item_def.ammo_per_shot
+    item.db.magazine_size = item_def.magazine_size
+    item.db.ammo_cost = dict(item_def.ammo_cost) if item_def.ammo_cost else None
+    item.db.effect = dict(item_def.effect) if item_def.effect else None
+    item.db.max_stack = item_def.max_stack
+    item.db.weight = item_def.weight
+    item.db.classification = item_def.classification
+    item.db.required_rank = item_def.required_rank
+    # A freshly produced ranged weapon arrives with a full magazine so it is
+    # usable before the first reload (Req 5.2, 11.7).
+    if item_def.weapon_type == "ranged" and item_def.magazine_size is not None:
+        item.db.loaded = item_def.magazine_size
+    return item
+
+
+def spawn_supply_drop(location, item_key, count, x=None, y=None):
+    """Create or merge a counted Supply drop (``GameItem``) at *location*.
+
+    Supplies (``ammo``/``consumable``/``throwable``) normally live as a count
+    in a holder's Supply_Bag rather than as map objects. When an over-stack or
+    over-weight pickup cannot fully fit, ``EquipmentSystem.add_supply_drop``
+    spills the leftover here so the units are never destroyed (D9). The spill
+    is a ``GameItem`` carrying the supply ``item_key`` and a ``count`` — NOT a
+    :class:`ResourceDrop`, whose ``at_get`` would mis-file the units into the
+    holder's resource pool (``db.resources``); Supplies and resources are
+    distinct pools.
+
+    Mirrors :func:`spawn_resource_drop`: a supply drop of the same ``item_key``
+    at the same coordinates merges into one object (its ``count`` grows) instead
+    of spawning duplicates. Supply drops are identified by carrying a ``count``
+    attribute, distinguishing them from equippable Gear ``GameItem`` objects.
+
+    Args:
+        location: Room/tile to place the drop in (PlanetRoom or legacy room).
+        item_key: The Supply item key (references an ItemDef in DataRegistry).
+        count: Number of units in the spilled stack.
+        x: Optional x coordinate for PlanetRoom-based placement.
+        y: Optional y coordinate for PlanetRoom-based placement.
+
+    Returns:
+        The ``GameItem`` supply-drop object, or ``None`` when *count* <= 0.
+    """
+    if count <= 0:
+        return None
+
+    # Merge with an existing supply drop of the same item_key at the location.
+    if x is not None and y is not None and hasattr(location, "get_objects_at"):
+        for obj in location.get_objects_at(x, y, type_tag="item"):
+            if (
+                getattr(obj.db, "item_key", None) == item_key
+                and getattr(obj.db, "count", None) is not None
+            ):
+                obj.db.count = (obj.db.count or 0) + count
+                return obj
+    else:
+        for obj in GameItem.get_in_room(location):
+            if (
+                getattr(obj.db, "item_key", None) == item_key
+                and getattr(obj.db, "count", None) is not None
+            ):
+                obj.db.count = (obj.db.count or 0) + count
+                return obj
+
+    # Create a new supply drop.
+    import evennia
+
+    drop = evennia.create_object(
+        "typeclasses.objects.GameItem",
+        key=item_key,
+        location=location,
+    )
+    drop.db.item_key = item_key
+    drop.db.count = count
     if x is not None and y is not None:
         drop.db.coord_x = x
         drop.db.coord_y = y

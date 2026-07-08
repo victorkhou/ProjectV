@@ -141,3 +141,244 @@ class TestFormatTable:
         bus.publish(PLAYER_NOTIFICATION, player=_Player(), kind="unknown_xyz",
                     data={})
         assert n.sent == []
+
+
+# =========================================================================== #
+#  Task 5.2 — End-to-end presenter tests
+#
+#  Property 13: Presenter ownership.
+#    (a) Structural: no player-facing string is composed inside
+#        ``world/systems/`` — the systems route every message through
+#        ``self.notify(player, kind, **data)`` and never build the
+#        human-readable notification text (that lives here in the presenter).
+#    (b) Behavioral: every notification kind this feature added renders through
+#        an *attached* NotificationPresenter to the player's ``msg`` sink via
+#        the injected player notifier.
+#
+#  Validates: Requirements 12.12
+# =========================================================================== #
+
+import ast
+import os
+
+from mygame.world.adapters.evennia_player_notifier import EvenniaPlayerNotifier
+
+
+# Sample payloads for every notification kind this feature added. The 11 "new"
+# kinds called out by the task, plus the four the presenter also formats
+# (equipped / unequipped / use_failed / throw_failed).
+_FEATURE_KIND_SAMPLES = {
+    "equipped": {"item_name": "Kevlar Vest", "slot": "torso"},
+    "unequipped": {"item_name": "Kevlar Vest", "slot": "torso"},
+    "equip_denied": {"item_name": "Power Armor", "required_rank": "Sergeant",
+                     "current_rank": "Private"},
+    "use_failed": {"item_name": "Medkit", "reason": "not_held"},
+    "healed": {"amount": 20, "hp": 80, "hp_max": 100},
+    "buff_applied": {"stat": "damage_bonus", "amount": 5, "duration_ticks": 30},
+    "throw_failed": {"item_name": "Frag Grenade", "reason": "out_of_range",
+                     "distance": 9, "range": 4},
+    "bombed": {"count": 3, "x": 12, "y": 7},
+    "out_of_ammo": {"weapon_name": "Rifle", "ammo_name": "rifle_rounds"},
+    "reloaded": {"weapon_name": "Rifle", "loaded": 30, "magazine_size": 30,
+                 "remaining": 60, "ammo_name": "rifle_rounds"},
+    "reload_failed": {"reason": "no_ammo"},
+    "carry_full": {"item_name": "Rifle Rounds", "carried": 10, "dropped": 5},
+    "storage_full": {"building": "HQ", "stored": 100, "resource": "Iron",
+                     "dropped": 20},
+    "deposited": {"amount": 50, "resource": "Iron", "building": "HQ",
+                  "stored": 150, "capacity": 500},
+    "withdrew": {"amount": 25, "resource": "Iron", "carried": 25, "limit": 1000},
+}
+
+# The 11 kinds the task explicitly enumerates as "new".
+_ELEVEN_NEW_KINDS = [
+    "equip_denied", "out_of_ammo", "reloaded", "reload_failed", "healed",
+    "buff_applied", "bombed", "carry_full", "storage_full", "deposited",
+    "withdrew",
+]
+
+
+class _MsgPlayer:
+    """Fake player exposing the Evennia ``msg`` sink the real notifier uses."""
+
+    def __init__(self):
+        self.messages = []
+
+    def msg(self, text):
+        self.messages.append(text)
+
+
+def _systems_dir():
+    """Absolute path to ``mygame/world/systems``."""
+    here = os.path.dirname(os.path.abspath(__file__))          # .../presenters/tests
+    world = os.path.dirname(os.path.dirname(here))              # .../world
+    return os.path.join(world, "systems")
+
+
+def _system_source_files():
+    """Every non-test ``*.py`` module in the systems layer."""
+    root = _systems_dir()
+    files = []
+    for name in sorted(os.listdir(root)):
+        if not name.endswith(".py"):
+            continue
+        files.append(os.path.join(root, name))
+    return files
+
+
+def _iter_notify_calls(tree):
+    """Yield every ``self.notify(...)`` Call node in an AST."""
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        func = node.func
+        if (
+            isinstance(func, ast.Attribute)
+            and func.attr == "notify"
+            and isinstance(func.value, ast.Name)
+            and func.value.id == "self"
+        ):
+            yield node
+
+
+def _kind_node(call):
+    """Return the AST node for a notify call's ``kind`` argument, if present."""
+    if len(call.args) >= 2:
+        return call.args[1]
+    for kw in call.keywords:
+        if kw.arg == "kind":
+            return kw.value
+    return None
+
+
+def _prose_violations(path):
+    """Structural scan: report any player-facing prose composed at a notify call.
+
+    A violation is either an f-string argument (runtime string composition) or a
+    multi-word string literal argument — both signal that a human-readable
+    sentence is being built inside the system instead of in the presenter. Short
+    single-token literals (``"no_ammo"``, ``"torso"``, the ``kind`` itself) are
+    structured data and are fine. Command-layer ``return False, "..."`` strings
+    are not notify arguments, so they are never inspected here.
+    """
+    with open(path, "r", encoding="utf-8") as fh:
+        tree = ast.parse(fh.read(), filename=path)
+
+    violations = []
+    for call in _iter_notify_calls(tree):
+        nodes = []
+        kind = _kind_node(call)
+        if kind is not None:
+            nodes.append(kind)
+        # Any positional args beyond (player, kind) and every keyword value.
+        nodes.extend(call.args[2:])
+        nodes.extend(kw.value for kw in call.keywords if kw.arg != "kind")
+
+        for node in nodes:
+            if isinstance(node, ast.JoinedStr):
+                violations.append((path, call.lineno, "f-string composed at notify()"))
+            elif (
+                isinstance(node, ast.Constant)
+                and isinstance(node.value, str)
+                and " " in node.value.strip()
+            ):
+                violations.append(
+                    (path, call.lineno, f"prose literal {node.value!r} at notify()")
+                )
+    return violations
+
+
+def _emitted_kind_literals(path):
+    """Set of string-literal ``kind`` values a system emits via ``self.notify``."""
+    with open(path, "r", encoding="utf-8") as fh:
+        tree = ast.parse(fh.read(), filename=path)
+    kinds = set()
+    for call in _iter_notify_calls(tree):
+        kind = _kind_node(call)
+        if isinstance(kind, ast.Constant) and isinstance(kind.value, str):
+            kinds.add(kind.value)
+    return kinds
+
+
+class TestPresenterOwnershipStructural:
+    """Property 13(a): systems own no player-facing strings."""
+
+    def test_no_prose_composed_in_systems_notify_calls(self):
+        all_violations = []
+        for path in _system_source_files():
+            all_violations.extend(_prose_violations(path))
+        assert all_violations == [], (
+            "Player-facing text must be composed in the presenter, not in "
+            f"world/systems/. Offending notify() calls: {all_violations}"
+        )
+
+    def test_feature_systems_route_kinds_through_notify(self):
+        """The equipment/combat systems emit their feature kinds via notify()."""
+        systems = _systems_dir()
+        emitted = _emitted_kind_literals(
+            os.path.join(systems, "equipment_system.py")
+        ) | _emitted_kind_literals(os.path.join(systems, "combat_engine.py"))
+
+        # Kinds this feature's systems actually emit today (deposit/withdraw/
+        # storage_full are wired by a later task and are covered behaviorally).
+        expected_routed = {
+            "equipped", "unequipped", "equip_denied", "use_failed", "healed",
+            "buff_applied", "throw_failed", "bombed", "carry_full",
+            "out_of_ammo", "reloaded", "reload_failed",
+        }
+        missing = expected_routed - emitted
+        assert not missing, f"Feature kinds not routed through notify(): {missing}"
+
+
+class TestPresenterOwnershipBehavioral:
+    """Property 13(b): every feature kind renders to player.msg via the presenter."""
+
+    def test_all_feature_kinds_render_to_player_msg(self):
+        for kind, data in _FEATURE_KIND_SAMPLES.items():
+            bus = EventBus()
+            player = _MsgPlayer()
+            # Attach a real presenter backed by the real player notifier so the
+            # message is delivered through the player's msg() sink.
+            NotificationPresenter(bus, player_notifier=EvenniaPlayerNotifier())
+            bus.publish(PLAYER_NOTIFICATION, player=player, kind=kind, data=data)
+
+            assert len(player.messages) == 1, (
+                f"kind {kind!r} did not render exactly one message: "
+                f"{player.messages}"
+            )
+            msg = player.messages[0]
+            assert isinstance(msg, str) and msg.strip(), (
+                f"kind {kind!r} rendered an empty message"
+            )
+
+    def test_eleven_new_kinds_all_present_in_format_table(self):
+        table = NotificationPresenter._FORMATTERS
+        missing = [k for k in _ELEVEN_NEW_KINDS if k not in table]
+        assert not missing, f"Missing formatters for new kinds: {missing}"
+
+    def test_new_kinds_render_expected_content(self):
+        """Spot-check that key data surfaces in the rendered line."""
+        checks = {
+            "equip_denied": ["Power Armor", "Sergeant", "Private"],
+            "out_of_ammo": ["Rifle", "empty"],
+            "reloaded": ["Rifle", "30/30", "rifle_rounds"],
+            "reload_failed": ["No ammo"],
+            "healed": ["20", "80/100"],
+            "buff_applied": ["damage_bonus", "30"],
+            "bombed": ["3", "12", "7"],
+            "carry_full": ["Rifle Rounds", "10", "5"],
+            "storage_full": ["HQ", "Iron"],
+            "deposited": ["Iron", "HQ", "150/500"],
+            "withdrew": ["Iron", "25/1000"],
+        }
+        for kind, fragments in checks.items():
+            bus = EventBus()
+            player = _MsgPlayer()
+            NotificationPresenter(bus, player_notifier=EvenniaPlayerNotifier())
+            bus.publish(PLAYER_NOTIFICATION, player=player, kind=kind,
+                        data=_FEATURE_KIND_SAMPLES[kind])
+            msg = player.messages[0]
+            for frag in fragments:
+                assert frag in msg, (
+                    f"kind {kind!r} rendered {msg!r}, missing {frag!r}"
+                )

@@ -110,6 +110,28 @@ automatically by `evennia --initmissing`.
 - **Combat.** Real-time, tick-resolved PvP using equippable items (all items
   share one `GameItem` typeclass, differentiated by YAML slot/stat data).
   Turrets auto-attack in range. Defeats award/deduct Combat XP.
+- **Equipment & supplies.** Items fall into six categories. Three are **Gear**
+  (`armor`, `weapon`, `accessory`) — unique objects `equip`ped into one of eleven
+  body slots (`head`, `eyes`, `face`, `torso`, `arms`, `hands`, `legs`, `feet`,
+  `back`, `weapon`, `accessory`), whose stats aggregate across every slot
+  (armor, damage bonus, move speed, sight range, carry capacity). Three are
+  **Supplies** (`ammo`, `consumable`, `throwable`) — fungible counted stacks held
+  in a Supply bag. `use` a consumable to heal or apply a timed buff; `throw` a
+  grenade for area damage that respects target armor. Powerful gear can be
+  rank-gated.
+- **Weapons, ammo & reloading.** Weapons are `melee` (fixed range 1, no ammo) or
+  `ranged`. A ranged weapon fires from a loaded magazine; each shot draws from the
+  magazine, and `reload` refills it from the ammunition you carry. Fire an empty
+  weapon and combat tells you to reload. Energy weapons may also draw a per-shot
+  resource cost. A freshly acquired ranged weapon arrives with a full magazine.
+- **Carry weight & storage.** Everything you carry has weight — Supplies plus the
+  resources on your person (equipped Gear is free). Your total must stay under a
+  base carry limit (raised by `carry_capacity` gear such as a hauler pack); admins
+  are exempt. `db.resources` remains your **spend pool** for all costs. Surplus
+  goes into **Vault/HQ storage buildings**, which now hold a real capacity-bounded
+  pool: `deposit`/`withdraw` between your person and a co-located store, and
+  harvester agents deliver into it. Any inflow past a carry or storage limit drops
+  the remainder on the ground rather than destroying it.
 - **Ranks.** Twelve military ranks from Recruit to Marshal
   ([`mygame/data/definitions/ranks.yaml`](mygame/data/definitions/ranks.yaml)). XP gained from
   combat promotes you; dying can demote you. Rank gates technologies, powerups,
@@ -138,13 +160,18 @@ automatically by `evennia --initmissing`.
 | `leave` | `out` `outside` | Step outside the building you're in |
 | `closeexit` / `openexit` | | Close / open a building exit |
 | `attack <target>` | `at` `a` | Attack a player, building, or NPC |
-| `equip` / `unequip` | `eq` `gear` | Manage equipped items |
-| `inventory` | `inv` `i` | List carried items |
-| `get <item>` | `grab` `take` | Pick up an item |
+| `equip` / `unequip` | `eq` `gear` | Equip/remove Gear into one of the 11 body slots |
+| `use <item>` | | Use a consumable from your supplies (medkit heals, stim buffs) |
+| `throw <item> <target\|x y>` | | Throw a throwable (grenade) at a target or coordinates |
+| `reload` | | Reload your equipped ranged weapon from carried ammo |
+| `deposit <res> <amt>` | | Deposit resources into a co-located storage building |
+| `withdraw <res> <amt>` | | Withdraw resources from a co-located storage building |
+| `inventory` | `inv` `i` | List Gear, Supplies, resources, and carried weight vs limit |
+| `get <item>` | `grab` `take` | Pick up an item (weight- and stack-limited) |
 | `research <tech>` | `re` | Research a technology at a Lab |
 | `technology` | `tech` | View the tech tree |
 | `powerup` | `pu` | Activate / view powerups |
-| `equipment` | | View Armory equipment |
+| `equipment` | | Paperdoll: all 11 equipment slots, per-slot stats + totals |
 | `buildings` | `bl` | List your buildings |
 | `score` | `status` `st` `sc` | Show your stats, rank, and resources |
 | `stop` | `cancel` | Cancel your current action |
@@ -184,7 +211,7 @@ layout.
 @player rank <player> <rank>                        (Admin+)
 ```
 
-Plus standalone admin tools: `@teleport`, `@clearfog`, `@reloaddata` (hot-reload
+Plus standalone admin tools: `@teleport`, `@clearfog`, `@reboot` (hot-reload
 YAML definitions), `@purgerooms`, `@migrate`.
 
 ---
@@ -248,7 +275,7 @@ data/             YAML content: buildings, items, ranks, technologies,
 - **Procedural terrain.** Terrain is regenerated on demand from a seed, so no
   map data is persisted — maps are reproducible and cheap.
 - **Data-driven content.** All game content is YAML validated on load (with
-  cross-reference checks) and supports atomic hot-reload via `@reloaddata`.
+  cross-reference checks) and supports atomic hot-reload via `@reboot`.
 - **Centralised tick loop.** `GameTickScript` runs an ordered list of
   individually error-guarded steps each second, filtered to chunks near online
   players. Agent behaviour scripts have `interval = 0` and are driven by this

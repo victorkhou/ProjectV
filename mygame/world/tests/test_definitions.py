@@ -69,7 +69,7 @@ class TestItemDef:
         assert i.required_rank == "Private"
 
     def test_defaults(self):
-        i = ItemDef(key="basic_vest", name="Basic Vest", slot="armor")
+        i = ItemDef(key="basic_vest", name="Basic Vest", slot="torso")
         assert i.stat_modifiers == {}
         assert i.ammo_cost is None
         assert i.classification == "modern"
@@ -235,7 +235,7 @@ class TestDataclassContracts:
         assert len(fields(BuildingDef)) == 16
 
     def test_item_def_field_count(self):
-        assert len(fields(ItemDef)) == 7
+        assert len(fields(ItemDef)) == 15
 
     def test_rank_def_field_count(self):
         assert len(fields(RankDef)) == 6
@@ -255,8 +255,9 @@ class TestDataclassContracts:
     def test_balance_config_field_count(self):
         # 28 original balance fields + 16 migrated from world.constants
         # (training ×3, harvest/production ×6, upgrade/turret/demolish ×5,
-        #  plus vault ×2). Bump this when adding a balance tunable.
-        assert len(fields(BalanceConfig)) == 44
+        #  plus vault ×2) + 1 resource_weights (D7) + 2 equipment_production (D8).
+        # Bump this when adding a balance tunable.
+        assert len(fields(BalanceConfig)) == 47
 
     def test_coordinate_space_def_field_count(self):
         assert len(fields(CoordinateSpaceDef)) == 14

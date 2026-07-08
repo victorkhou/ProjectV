@@ -179,26 +179,8 @@ class NPC(CombatEntity, GameEntity):
         except (ImportError, AttributeError):
             return None
 
-    def _get_move_speed_modifier(self) -> int:
-        """Return the total ``move_speed`` bonus from equipped items.
-
-        A positive value speeds the NPC up (reduces its effective delay).
-        Returns ``0`` when the NPC has no equipment handler or no items
-        provide a ``move_speed`` stat (the common case), so movement is
-        unaffected by default.
-        """
-        equipment = getattr(self, "equipment", None)
-        if equipment is None or not hasattr(equipment, "get_stat_total"):
-            return 0
-        try:
-            return int(equipment.get_stat_total("move_speed"))
-        except Exception:
-            logger.debug(
-                "move_speed lookup failed for NPC %s; defaulting modifier to 0",
-                getattr(self, "id", "?"),
-                exc_info=True,
-            )
-            return 0
+    # ``_get_move_speed_modifier`` is inherited from CombatEntity so players
+    # and agents derive the equipment ``move_speed`` bonus identically.
 
     def _is_tile_passable(self, x: int, y: int) -> bool:
         """Check if a tile is passable for dynamic obstacle detection.

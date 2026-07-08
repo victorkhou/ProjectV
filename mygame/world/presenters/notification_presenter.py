@@ -99,6 +99,162 @@ def _fmt_ability_available(d: dict) -> str:
     )
 
 
+# --------------------------------------------------------------------------- #
+#  Equipment feature notification kinds
+# --------------------------------------------------------------------------- #
+
+
+def _fmt_equipped(d: dict) -> str:
+    return f"|g[Equip] Equipped {d.get('item_name', 'item')} in {d.get('slot', '?')}.|n"
+
+
+def _fmt_unequipped(d: dict) -> str:
+    return (
+        f"|y[Equip] Unequipped {d.get('item_name', 'item')} "
+        f"from {d.get('slot', '?')}.|n"
+    )
+
+
+def _fmt_equip_denied(d: dict) -> str:
+    return (
+        f"|r[Equip] {d.get('item_name', 'item')} requires rank "
+        f"{d.get('required_rank', '?')} (you are {d.get('current_rank', '?')}).|n"
+    )
+
+
+def _fmt_use_failed(d: dict) -> str:
+    item = d.get("item_name", "item")
+    reason = d.get("reason")
+    messages = {
+        "not_held": f"You aren't carrying {item}.",
+        "not_consumable": f"{item} can't be used.",
+        "unavailable": f"Can't use {item} right now.",
+        "no_effect": f"{item} has no effect.",
+    }
+    return f"|y[Use] {messages.get(reason, f'Cannot use {item}.')}|n"
+
+
+def _fmt_healed(d: dict) -> str:
+    return (
+        f"|g[Use] Healed {d.get('amount', 0)} HP "
+        f"({d.get('hp', 0)}/{d.get('hp_max', 0)}).|n"
+    )
+
+
+def _fmt_buff_applied(d: dict) -> str:
+    return (
+        f"|g[Use] +{d.get('amount', 0)} {d.get('stat', 'stat')} "
+        f"for {d.get('duration_ticks', 0)}s.|n"
+    )
+
+
+def _fmt_throw_failed(d: dict) -> str:
+    item = d.get("item_name", "item")
+    reason = d.get("reason")
+    messages = {
+        "not_held": f"You aren't carrying {item}.",
+        "not_throwable": f"{item} can't be thrown.",
+        "no_position": "You have no position to throw from.",
+        "out_of_range": (
+            f"{item} is out of range "
+            f"({d.get('distance', '?')} > {d.get('range', '?')})."
+        ),
+    }
+    return f"|y[Throw] {messages.get(reason, f'Cannot throw {item}.')}|n"
+
+
+def _fmt_bombed(d: dict) -> str:
+    return (
+        f"|y[Throw] Hit {d.get('count', 0)} target(s) "
+        f"at ({d.get('x', '?')},{d.get('y', '?')}).|n"
+    )
+
+
+def _fmt_out_of_ammo(d: dict) -> str:
+    return (
+        f"|r[Combat] {d.get('weapon_name', 'weapon')} is empty — "
+        f"reload to fire.|n"
+    )
+
+
+def _fmt_reloaded(d: dict) -> str:
+    return (
+        f"|g[Reload] {d.get('weapon_name', 'weapon')}: "
+        f"{d.get('loaded', 0)}/{d.get('magazine_size', 0)} "
+        f"({d.get('remaining', 0)} {d.get('ammo_name', 'ammo')} left).|n"
+    )
+
+
+def _fmt_reload_failed(d: dict) -> str:
+    reason = d.get("reason")
+    messages = {
+        "no_ammo": "No ammo left to reload.",
+        "already_loaded": "Magazine is already full.",
+        "no_ammo_weapon": "No ammo-using weapon equipped.",
+    }
+    return f"|y[Reload] {messages.get(reason, 'Cannot reload.')}|n"
+
+
+def _fmt_carry_full(d: dict) -> str:
+    return (
+        f"|y[Supply] Carried {d.get('carried', 0)} {d.get('item_name', 'item')}; "
+        f"{d.get('dropped', 0)} left behind (over carry weight).|n"
+    )
+
+
+def _fmt_storage_full(d: dict) -> str:
+    return (
+        f"|y[Storage] {d.get('building', 'Storage')} full; stored "
+        f"{d.get('stored', 0)} {d.get('resource', 'resource')}, "
+        f"{d.get('dropped', 0)} dropped.|n"
+    )
+
+
+def _fmt_deposited(d: dict) -> str:
+    return (
+        f"|g[Storage] Deposited {d.get('amount', 0)} {d.get('resource', 'resource')} "
+        f"→ {d.get('building', 'Storage')} "
+        f"({d.get('stored', 0)}/{d.get('capacity', 0)}).|n"
+    )
+
+
+def _fmt_withdrew(d: dict) -> str:
+    return (
+        f"|g[Storage] Withdrew {d.get('amount', 0)} {d.get('resource', 'resource')} "
+        f"(carrying {d.get('carried', 0)}/{d.get('limit', 0)}).|n"
+    )
+
+
+def _fmt_deposit_failed(d: dict) -> str:
+    res = d.get("resource", "resource")
+    reason = d.get("reason")
+    messages = {
+        "nothing_held": f"You have no {res} to deposit.",
+        "building_full": f"Storage is full — no room for {res}.",
+    }
+    return f"|y[Storage] {messages.get(reason, f'Cannot deposit {res}.')}|n"
+
+
+def _fmt_withdraw_failed(d: dict) -> str:
+    res = d.get("resource", "resource")
+    reason = d.get("reason")
+    messages = {
+        "nothing_stored": f"No {res} in storage.",
+        "carry_full": f"You can't carry any more {res} (over carry weight).",
+    }
+    return f"|y[Storage] {messages.get(reason, f'Cannot withdraw {res}.')}|n"
+
+
+def _fmt_unequip_failed(d: dict) -> str:
+    slot = d.get("slot", "slot")
+    reason = d.get("reason")
+    messages = {
+        "empty": f"Nothing equipped in your {slot} slot.",
+        "bad_slot": f"'{slot}' is not an equipment slot.",
+    }
+    return f"|y[Equip] {messages.get(reason, f'Cannot unequip {slot}.')}|n"
+
+
 class NotificationPresenter:
     """Formats ``PLAYER_NOTIFICATION`` events and delivers them to players."""
 
@@ -116,6 +272,25 @@ class NotificationPresenter:
         "ability_active": _fmt_ability_active,
         "ability_relocked": _fmt_ability_relocked,
         "ability_available": _fmt_ability_available,
+        # Equipment feature kinds.
+        "equipped": _fmt_equipped,
+        "unequipped": _fmt_unequipped,
+        "equip_denied": _fmt_equip_denied,
+        "use_failed": _fmt_use_failed,
+        "healed": _fmt_healed,
+        "buff_applied": _fmt_buff_applied,
+        "throw_failed": _fmt_throw_failed,
+        "bombed": _fmt_bombed,
+        "out_of_ammo": _fmt_out_of_ammo,
+        "reloaded": _fmt_reloaded,
+        "reload_failed": _fmt_reload_failed,
+        "carry_full": _fmt_carry_full,
+        "storage_full": _fmt_storage_full,
+        "deposited": _fmt_deposited,
+        "withdrew": _fmt_withdrew,
+        "deposit_failed": _fmt_deposit_failed,
+        "withdraw_failed": _fmt_withdraw_failed,
+        "unequip_failed": _fmt_unequip_failed,
     }
 
     def __init__(self, event_bus: EventBus, player_notifier: Any = None) -> None:

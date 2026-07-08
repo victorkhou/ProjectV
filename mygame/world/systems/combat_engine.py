@@ -73,9 +73,16 @@ class CombatEngine(BaseSystem):
         Validation:
             1. Attacker has a weapon equipped
             2. Target is not self
-            3. Target is in range (Manhattan distance <= weapon range)
-            4. If weapon has ammo_cost, attacker has sufficient resources
-            5. Deduct ammo on queue (not on resolve)
+            3. Target is in range (Manhattan distance <= weapon range;
+               a melee weapon's effective range is always 1)
+            4. Ammo (melee weapons never consume ammo):
+               - A ranged weapon that declares an ammo_type must have
+                 ``db.loaded >= ammo_per_shot`` (else the attack is rejected
+                 and the attacker is notified to reload).
+               - If the weapon declares a resource ammo_cost, the attacker must
+                 have sufficient resources; both checks coexist.
+            5. On a proceeding shot, deduct ``ammo_per_shot`` from the weapon's
+               magazine (never the Supply_Bag) and any resource ammo_cost.
 
         Returns:
             (success, message) tuple.
@@ -94,8 +101,20 @@ class CombatEngine(BaseSystem):
         if target_owner is not None and target_owner is attacker:
             return False, "You cannot attack your own buildings."
 
-        # 3. Range validation
-        weapon_range = self._get_stat(weapon_item, "range", 1)
+        # Weapon typing drives range and ammo handling. A weapon with no
+        # weapon_type (legacy/synthetic weapons, e.g. turrets and older test
+        # fixtures) keeps the previous behavior: range from the stat, no
+        # magazine, resource ammo_cost applied as before.
+        weapon_type = self._get_weapon_attr(weapon_item, "weapon_type", None)
+        is_melee = weapon_type == "melee"
+        is_ranged = weapon_type == "ranged"
+
+        # 3. Range validation. A melee weapon's effective range is always 1,
+        # ignoring any `range` stat on the item.
+        if is_melee:
+            weapon_range = 1
+        else:
+            weapon_range = self._get_stat(weapon_item, "range", 1)
         if not self._validate_range(attacker, target, weapon_range):
             a_coords = self._get_coords(attacker)
             if a_coords is None:
@@ -114,14 +133,48 @@ class CombatEngine(BaseSystem):
                 f"Target is out of range ({dist} tiles, max {weapon_range})."
             )
 
-        # 4. Ammo validation and deduction
-        ammo_cost = self._get_ammo_cost(weapon_item)
-        if ammo_cost:
-            err = self._validate_ammo(attacker, ammo_cost)
-            if err:
-                return False, err
-            # 5. Deduct ammo on queue
-            attacker.deduct_resources(ammo_cost)
+        # 4. Ammo validation and deduction.
+        #
+        # Melee weapons never consume ammo — skip ALL ammo handling (neither the
+        # magazine nor the resource ammo_cost is touched).
+        loaded = 0
+        ammo_per_shot = 0
+        magazine_draw = False
+        if not is_melee:
+            # 4a. Magazine gating for ranged weapons that declare an ammo_type.
+            # A shot draws from the weapon's loaded magazine (db.loaded); the
+            # Supply_Bag is NEVER touched on a shot (it is drawn only by reload).
+            ammo_type = self._get_weapon_attr(weapon_item, "ammo_type", None)
+            if is_ranged and ammo_type:
+                ammo_per_shot = int(
+                    self._get_weapon_attr(weapon_item, "ammo_per_shot", 1) or 1
+                )
+                loaded_val = self._get_loaded(weapon_item)
+                loaded = int(loaded_val) if loaded_val is not None else 0
+                if loaded < ammo_per_shot:
+                    # Empty magazine — reject and prompt reload. The player-facing
+                    # message is the presenter's ``out_of_ammo`` notification;
+                    # return an empty string so the command layer does not msg a
+                    # duplicate line (CmdAttack skips empty results).
+                    weapon_name = getattr(weapon_item, "key", str(weapon_item))
+                    self.notify(attacker, "out_of_ammo",
+                                weapon_name=weapon_name, ammo_name=ammo_type)
+                    return False, ""
+                magazine_draw = True
+
+            # 4b. Resource ammo_cost (energy weapons / legacy) — applied per
+            # shot, in addition to the magazine deduction when both are present.
+            ammo_cost = self._get_ammo_cost(weapon_item)
+            if ammo_cost:
+                err = self._validate_ammo(attacker, ammo_cost)
+                if err:
+                    return False, err
+                attacker.deduct_resources(ammo_cost)
+
+            # 5. Deduct the magazine on a proceeding shot (after all checks pass,
+            # so a rejected attack never mutates loaded rounds).
+            if magazine_draw:
+                self._set_loaded(weapon_item, loaded - ammo_per_shot)
 
         # Queue the action
         action = {
@@ -157,7 +210,6 @@ class CombatEngine(BaseSystem):
         self.pending_actions.clear()
 
         current_tick = self._current_tick_func()
-        lockout_ticks = self.registry.balance.combat_lockout_ticks
 
         for action in actions:
             attacker = action["attacker"]
@@ -170,31 +222,104 @@ class CombatEngine(BaseSystem):
             # Apply damage
             self._apply_damage(target, damage, attacker)
 
-            # Set combat lockout on attacker and target (if player)
-            lockout_until = current_tick + lockout_ticks
+            # Lockout + event + notify + defeat/destruction. Shared with the
+            # throw AoE path so both resolve hits identically.
+            self._finalize_hit(attacker, target, weapon_item, damage,
+                               current_tick, lockout_attacker=True)
+
+    def _finalize_hit(
+        self,
+        attacker: Any,
+        target: Any,
+        weapon_item: Any,
+        damage: int,
+        current_tick: int,
+        lockout_attacker: bool = True,
+    ) -> None:
+        """Resolve everything that follows applying damage to a target.
+
+        Shared by ``resolve_tick`` (queued attacks/turrets) and the throwable
+        AoE path (``EquipmentSystem._apply_aoe_damage``) so both resolve a hit
+        identically: combat lockout, the ``COMBAT_ACTION`` event, the target
+        notification, and defeat/destruction when HP reaches zero. The caller
+        must have already applied the damage via :meth:`_apply_damage`.
+
+        Args:
+            attacker: The entity that dealt the damage.
+            target: The entity that took it (HP already reduced).
+            weapon_item: The weapon/synthetic item used (for names/notifications).
+            damage: The damage that was applied (for the event/notification).
+            current_tick: The current game tick, for lockout timing.
+            lockout_attacker: Whether to place the attacker in combat lockout.
+                True for direct/queued attacks and throws; a turret is a
+                building and takes no lockout regardless.
+        """
+        lockout_ticks = self.registry.balance.combat_lockout_ticks
+        lockout_until = current_tick + lockout_ticks
+        if lockout_attacker:
             self._set_combat_lockout(attacker, lockout_until)
+        if self._is_player(target):
+            self._set_combat_lockout(target, lockout_until)
+
+        # Publish combat_action event (drives the combat timer subscriber).
+        self.event_bus.publish(
+            COMBAT_ACTION,
+            attacker=attacker,
+            target=target,
+            item=weapon_item,
+            damage=damage,
+        )
+
+        # Notify the target (or building owner) of the hit.
+        self._notify_target(target, attacker, weapon_item, damage)
+
+        # Defeat / destruction when HP has reached zero.
+        if self._get_hp(target) <= 0:
             if self._is_player(target):
-                self._set_combat_lockout(target, lockout_until)
+                self._handle_player_defeat(target, attacker)
+            elif self._is_building(target):
+                self._handle_building_destruction(target, attacker)
 
-            # Publish combat_action event
-            self.event_bus.publish(
-                COMBAT_ACTION,
-                attacker=attacker,
-                target=target,
-                item=weapon_item,
-                damage=damage,
-            )
+    def apply_direct_hit(
+        self,
+        attacker: Any,
+        target: Any,
+        weapon_item: Any,
+        include_attacker_bonus: bool = True,
+        current_tick: int | None = None,
+    ) -> int:
+        """Resolve a single, immediate hit end-to-end and return the damage.
 
-            # Notify target
-            self._notify_target(target, attacker, weapon_item, damage)
+        The public single-hit entry point (alongside ``queue_attack`` /
+        ``resolve_tick`` / ``process_turrets``): computes damage, applies it,
+        and runs the shared post-damage resolution (lockout, event, target
+        notification, defeat/destruction). Used by non-queued attackers such as
+        the throwable AoE path, so those callers depend on this contract rather
+        than the engine's private helpers.
 
-            # Check for defeat / destruction
-            target_hp = self._get_hp(target)
-            if target_hp <= 0:
-                if self._is_player(target):
-                    self._handle_player_defeat(target, attacker)
-                elif self._is_building(target):
-                    self._handle_building_destruction(target, attacker)
+        Args:
+            attacker: The attacking entity.
+            target: The target entity.
+            weapon_item: The weapon (or synthetic weapon) used.
+            include_attacker_bonus: Whether to add the attacker's aggregated
+                ``damage_bonus``. Wielded-weapon attacks pass True; a thrown
+                explosive passes False so the blast deals a flat
+                ``amount − armor`` (spec Property 12).
+            current_tick: The tick for lockout timing; defaults to the engine's
+                own clock when omitted.
+
+        Returns:
+            int: The damage actually applied.
+        """
+        if current_tick is None:
+            current_tick = self._current_tick_func()
+        damage = self._calculate_damage(
+            attacker, target, weapon_item,
+            include_attacker_bonus=include_attacker_bonus,
+        )
+        self._apply_damage(target, damage, attacker)
+        self._finalize_hit(attacker, target, weapon_item, damage, current_tick)
+        return damage
 
     # ------------------------------------------------------------------ #
     #  Process turrets
@@ -269,7 +394,11 @@ class CombatEngine(BaseSystem):
     # ------------------------------------------------------------------ #
 
     def _calculate_damage(
-        self, attacker: Any, target: Any, weapon_item: Any
+        self,
+        attacker: Any,
+        target: Any,
+        weapon_item: Any,
+        include_attacker_bonus: bool = True,
     ) -> int:
         """Calculate net damage for an attack.
 
@@ -280,6 +409,11 @@ class CombatEngine(BaseSystem):
             attacker: The attacking entity.
             target: The target entity.
             weapon_item: The weapon GameItem used.
+            include_attacker_bonus: Whether to add the attacker's aggregated
+                ``damage_bonus`` (equipment + powerups). True for wielded-weapon
+                attacks; thrown-explosive AoE passes False so the blast deals
+                its flat ``amount − armor`` (spec Property 12), independent of
+                what the thrower happens to be wearing.
 
         Returns:
             Net damage as an integer (minimum 0).
@@ -287,7 +421,7 @@ class CombatEngine(BaseSystem):
         base_damage = self._get_stat(weapon_item, "damage", 0)
 
         # Tech/powerup modifiers from attacker (additive bonus)
-        bonus = self._get_attacker_bonus(attacker)
+        bonus = self._get_attacker_bonus(attacker) if include_attacker_bonus else 0
 
         # Armor damage reduction from target
         armor_reduction = self._get_target_armor_reduction(target)
@@ -491,11 +625,40 @@ class CombatEngine(BaseSystem):
                 return cost
         return None
 
+    @staticmethod
+    def _get_weapon_attr(weapon_item: Any, name: str, default: Any = None) -> Any:
+        """Read a weapon field (weapon_type/ammo_type/ammo_per_shot/…).
+
+        Handles both a live ``GameItem`` (named property accessors) and a
+        dict-shaped test weapon. A missing field resolves to *default*, which is
+        how legacy/synthetic weapons (no ``weapon_type``) keep their old
+        behavior.
+        """
+        if isinstance(weapon_item, dict):
+            return weapon_item.get(name, default)
+        return getattr(weapon_item, name, default)
+
+    @staticmethod
+    def _get_loaded(weapon_item: Any) -> int:
+        """Read a ranged weapon's loaded-round count (0 when unset)."""
+        return get_loaded(weapon_item)
+
+    @staticmethod
+    def _set_loaded(weapon_item: Any, value: int) -> bool:
+        """Write a ranged weapon's loaded-round count; True on success."""
+        return set_loaded(weapon_item, value)
+
     def _get_attacker_bonus(self, attacker: Any) -> float:
-        """Get tech/powerup damage bonus for the attacker."""
-        # Tech/equipment bonuses are already folded into weapon damage; only
-        # active powerups contribute an extra multiplier here.
+        """Get tech/powerup/equipment damage bonus for the attacker."""
+        # Flat gear damage_bonus (gloves, accessory) aggregates across all
+        # equipped items here; active powerups add a further timed bonus.
         bonus = 0.0
+
+        # Aggregate flat damage_bonus across equipped gear (guard for a
+        # missing equipment handler, e.g. synthetic/turret attackers).
+        equipment = getattr(attacker, "equipment", None)
+        if equipment and hasattr(equipment, "get_stat_total"):
+            bonus += equipment.get_stat_total("damage_bonus")
 
         # Check active powerups for damage_bonus
         active_powerups = None
@@ -695,13 +858,74 @@ class CombatEngine(BaseSystem):
         return []
 
 
-class _TurretWeapon:
-    """Synthetic weapon item for turret auto-attacks."""
+def get_loaded(weapon: Any) -> int:
+    """Read a ranged weapon's loaded-round count, or 0 when unset.
 
-    def __init__(self, damage: int, weapon_range: int) -> None:
-        self.key = "Turret"
+    The single loaded-rounds accessor shared by combat (magazine draw) and
+    equipment (reload). Reads ``db.loaded`` on a live ``GameItem`` and falls
+    back to a ``"loaded"`` key/attribute for dict-shaped test weapons. Any
+    missing or non-integer value yields 0, matching how ``queue_attack``
+    treats a not-yet-loaded weapon.
+    """
+    if isinstance(weapon, dict):
+        raw = weapon.get("loaded", 0)
+    else:
+        db = getattr(weapon, "db", None)
+        raw = getattr(db, "loaded", None) if db is not None else \
+            getattr(weapon, "loaded", None)
+    try:
+        return int(raw) if raw is not None else 0
+    except (TypeError, ValueError):
+        return 0
+
+
+def set_loaded(weapon: Any, value: int) -> bool:
+    """Write a ranged weapon's loaded-round count; return True on success.
+
+    Counterpart to :func:`get_loaded`. Writes ``db.loaded`` on a live
+    ``GameItem`` and falls back to a ``"loaded"`` key/attribute for dict-shaped
+    test weapons. Returns ``False`` if a persistent write raised, so callers
+    (e.g. ``reload``) can avoid a half-mutation.
+    """
+    value = int(value)
+    if isinstance(weapon, dict):
+        weapon["loaded"] = value
+        return True
+    db = getattr(weapon, "db", None)
+    if db is not None:
+        try:
+            db.loaded = value
+            return True
+        except Exception:  # noqa: BLE001 - fall through to a plain-attr write
+            pass
+    try:
+        weapon.loaded = value
+        return True
+    except Exception:  # noqa: BLE001 - never let a write break combat/reload
+        return False
+
+
+class SyntheticWeapon:
+    """A weapon-shaped object for attackers that wield no real Game_Item.
+
+    Used by non-equipped attackers — turret auto-attacks and thrown-explosive
+    AoE — to route through the same damage pipeline as a wielded weapon. It
+    exposes just the surface the pipeline reads: ``key`` (for notifications),
+    ``stat_modifiers`` (``damage``/``range``), no ``ammo_cost``, and a
+    ``get_stat`` accessor.
+    """
+
+    def __init__(self, damage: int, weapon_range: int, name: str = "Attack") -> None:
+        self.key = name
         self.stat_modifiers = {"damage": damage, "range": weapon_range}
         self.ammo_cost = None
 
     def get_stat(self, stat_name: str, default: float = 0) -> float:
         return float(self.stat_modifiers.get(stat_name, default))
+
+
+class _TurretWeapon(SyntheticWeapon):
+    """Synthetic weapon item for turret auto-attacks."""
+
+    def __init__(self, damage: int, weapon_range: int) -> None:
+        super().__init__(damage, weapon_range, name="Turret")

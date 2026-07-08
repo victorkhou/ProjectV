@@ -671,16 +671,45 @@ class DeliveryBehavior(DefaultScript):
 
     @staticmethod
     def deposit_resources(npc: Any) -> None:
-        """Transfer carried_resources to owner's resource pool."""
+        """Deposit carried_resources into the target Storage_Building's pool.
+
+        Routes the carried load into the delivery-target building via
+        ``EquipmentSystem.add_resource_capped`` — the inflow choke point (task
+        9.2) — which stores up to the building's remaining capacity and spawns a
+        ground drop for any over-capacity remainder, so no resource is lost. The
+        target is the building the FSM navigated to (``db.delivery_target``, set
+        in ``_start_delivery``); it is re-selected here if unavailable.
+
+        Falls back to the owner's Spend_Pool (the legacy behavior) only when the
+        equipment system or a target building can't be resolved, so autonomous
+        delivery never hard-breaks.
+        """
         carried = getattr(npc.db, "carried_resources", None) or {}
         if not carried:
             return
 
-        owner = getattr(npc.db, "owner", None)
-        if owner is not None and hasattr(owner, "add_resource"):
+        # The Storage_Building the FSM selected and navigated to. Re-select at
+        # deposit time if the target was lost.
+        building = getattr(npc.db, "delivery_target", None)
+        if building is None:
+            building = DeliveryBehavior.select_delivery_target(npc)
+
+        from world.utils import get_system
+        equipment_system = get_system(npc, "equipment_system")
+
+        if equipment_system is not None and building is not None:
+            # Deposit into the building's pool, not the player's.
             for rtype, amount in carried.items():
                 if amount > 0:
-                    owner.add_resource(rtype, amount)
+                    equipment_system.add_resource_capped(building, rtype, amount)
+        else:
+            # Fallback: deposit into the owner's pool so delivery never
+            # hard-breaks when the equipment system/target is unavailable.
+            owner = getattr(npc.db, "owner", None)
+            if owner is not None and hasattr(owner, "add_resource"):
+                for rtype, amount in carried.items():
+                    if amount > 0:
+                        owner.add_resource(rtype, amount)
 
         npc.db.carried_resources = {}
 
@@ -733,9 +762,15 @@ class DeliveryBehavior(DefaultScript):
             ]
 
         from world.constants import STORAGE, PRIMARY_STORAGE
+        from world.systems import building_storage
         from world.utils import building_has_capability
         for bld in all_buildings:
             if not building_has_capability(bld, STORAGE):
+                continue
+
+            # Skip full storage buildings (0 remaining capacity) so a full
+            # building is never selected and never spills a whole load.
+            if building_storage.get_remaining_capacity(bld) <= 0:
                 continue
 
             bld_owner = _get_attr(bld, "owner")

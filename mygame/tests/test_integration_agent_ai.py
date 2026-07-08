@@ -196,7 +196,7 @@ class TestFullDeliveryLoop:
             "VT": BuildingDef(
                 name="Vault", abbreviation="VT", cost={"Stone": 25},
                 max_health=400, requires_hq=True, required_terrain=None,
-                category="storage", produces=None,
+                category="storage", produces=None, storage_capacity=1000,
                 capabilities=frozenset({"storage", "primary_storage"}),
             ),
             "EX": BuildingDef(

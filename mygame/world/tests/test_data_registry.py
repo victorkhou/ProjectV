@@ -84,7 +84,7 @@ VALID_ITEMS = {
         {
             "key": "kevlar_vest",
             "name": "Kevlar Vest",
-            "slot": "armor",
+            "slot": "torso",
             "stat_modifiers": {"damage_reduction": 5},
             "ammo_cost": None,
             "classification": "modern",
@@ -721,6 +721,7 @@ def data_dir_custom_economy():
     custom_balance.update(CUSTOM_ECONOMY)
     custom_balance["base_training_cost"] = {"Wood": 99, "Stone": 88, "Iron": 77}
     custom_balance["demolish_refund_rates"] = {"1": 0.11, "2": 0.22, "3": 0.33}
+    custom_balance["resource_weights"] = {"Wood": 0.9, "Nexium": 5.0}
     _write_yaml(os.path.join(conf, "balance.yaml"), custom_balance)
 
     yield tmpdir
@@ -757,6 +758,13 @@ class TestEconomyTunablesSourcedFromBalance:
         # YAML string keys must be coerced to int levels by _build_balance.
         assert reg.balance.demolish_refund_rates == {1: 0.11, 2: 0.22, 3: 0.33}
 
+    def test_resource_weights_map_loaded(self, data_dir_custom_economy):
+        reg = DataRegistry()
+        reg.load_all(data_dir_custom_economy)
+
+        # String resource keys stay verbatim; values load from balance.yaml.
+        assert reg.balance.resource_weights == {"Wood": 0.9, "Nexium": 5.0}
+
     def test_defaults_used_when_balance_absent(self, data_dir_no_balance):
         reg = DataRegistry()
         reg.load_all(data_dir_no_balance)
@@ -765,6 +773,10 @@ class TestEconomyTunablesSourcedFromBalance:
         assert reg.balance.upgrade_cost_base == 2
         assert reg.balance.base_training_cost == {"Wood": 15, "Stone": 10, "Iron": 5}
         assert reg.balance.demolish_refund_rates[5] == 0.80
+        assert reg.balance.resource_weights == {
+            "Wood": 0.5, "Stone": 1.0, "Iron": 1.0,
+            "Energy": 0.2, "Circuits": 0.3, "Nexium": 2.0,
+        }
 
     def test_reload_repicks_up_economy_values(self, data_dir_custom_economy):
         # The migrated values must be hot-reloadable like the rest of balance.

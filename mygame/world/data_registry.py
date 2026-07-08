@@ -82,6 +82,11 @@ class DataRegistry:
         self.buildings: dict[str, BuildingDef] = {}
         self.items: dict[str, ItemDef] = {}
         self.item_production_map: dict[str, list[str]] = {}
+        #: Memoized resolved ItemDef lists per building abbreviation, built
+        #: lazily by get_items_for_building and cleared on (re)load. The
+        #: production map and items are static between loads, so this avoids
+        #: rebuilding the list every tick per equipment building.
+        self._items_for_building_cache: dict[str, list[ItemDef]] = {}
         self.ranks: list[RankDef] = []
         self.technologies: dict[str, TechnologyDef] = {}
         self.powerups: dict[str, PowerupDef] = {}
@@ -191,6 +196,7 @@ class DataRegistry:
         self.buildings = temp.buildings
         self.items = temp.items
         self.item_production_map = temp.item_production_map
+        self._items_for_building_cache = {}  # invalidate memo on hot-reload
         self.ranks = temp.ranks
         self.technologies = temp.technologies
         self.powerups = temp.powerups
@@ -248,14 +254,23 @@ class DataRegistry:
     def _populate_items(self, data: dict) -> None:
         self.items = {}
         self.item_production_map = {}
+        self._items_for_building_cache = {}
         items_list = data.get("items", [])
         for entry in items_list:
             idef = ItemDef(
                 key=entry["key"],
                 name=entry["name"],
-                slot=entry["slot"],
+                slot=entry.get("slot", ""),
+                category=entry.get("category", "armor"),
                 stat_modifiers=entry.get("stat_modifiers", {}),
+                weapon_type=entry.get("weapon_type"),
+                ammo_type=entry.get("ammo_type"),
+                ammo_per_shot=entry.get("ammo_per_shot", 1),
+                magazine_size=entry.get("magazine_size"),
                 ammo_cost=entry.get("ammo_cost"),
+                effect=entry.get("effect"),
+                max_stack=entry.get("max_stack", 99),
+                weight=entry.get("weight", 1.0),
                 classification=entry.get("classification", "modern"),
                 required_rank=entry.get("required_rank"),
             )
@@ -377,7 +392,10 @@ class DataRegistry:
 
         # Fields needing custom key/type handling — excluded from the generic
         # scalar copy below and rebuilt explicitly.
-        special = {"production_scaling", "demolish_refund_rates", "base_training_cost"}
+        special = {
+            "production_scaling", "demolish_refund_rates", "base_training_cost",
+            "resource_weights",
+        }
 
         kwargs: dict[str, Any] = {}
         for f in fields(BalanceConfig):
@@ -405,6 +423,12 @@ class DataRegistry:
         btc_raw = raw.get("base_training_cost")
         kwargs["base_training_cost"] = (
             dict(btc_raw) if btc_raw is not None else defaults.base_training_cost
+        )
+
+        # resource_weights: resource-name keys stay as strings; float values.
+        rw_raw = raw.get("resource_weights")
+        kwargs["resource_weights"] = (
+            dict(rw_raw) if rw_raw is not None else defaults.resource_weights
         )
 
         return BalanceConfig(**kwargs)
@@ -492,12 +516,19 @@ class DataRegistry:
         return [idef for idef in self.items.values() if idef.slot == slot]
 
     def get_items_for_building(self, building_abbr: str) -> list[ItemDef]:
-        """Get all item definitions producible by a building."""
+        """Get all item definitions producible by a building.
+
+        Memoized per abbreviation: the production map and items are static
+        between loads, so the resolved list is cached and reused (the tick loop
+        calls this every tick per active equipment building). The cache is
+        cleared whenever definitions are (re)loaded.
+        """
+        cached = self._items_for_building_cache.get(building_abbr)
+        if cached is not None:
+            return cached
         item_keys = self.item_production_map.get(building_abbr, [])
-        result = []
-        for key in item_keys:
-            if key in self.items:
-                result.append(self.items[key])
+        result = [self.items[key] for key in item_keys if key in self.items]
+        self._items_for_building_cache[building_abbr] = result
         return result
 
     def get_rank_for_xp(self, xp: int) -> RankDef:

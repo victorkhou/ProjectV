@@ -50,6 +50,8 @@ def _ensure_evennia_stubs():
 _ensure_evennia_stubs()
 
 from mygame.world.systems.resource_system import ResourceSystem  # noqa: E402
+from mygame.world.systems.equipment_system import EquipmentSystem  # noqa: E402
+from mygame.world.systems.equipment_handler import EquipmentHandler  # noqa: E402
 from mygame.world.data_registry import DataRegistry  # noqa: E402
 from mygame.world.definitions import BalanceConfig, BuildingDef, TerrainDef  # noqa: E402
 from mygame.world.event_bus import EventBus  # noqa: E402
@@ -728,3 +730,102 @@ class TestProcessExtractorProduction(unittest.TestCase):
         system.process_extractor_production([building])
         self.assertEqual(len(events), 1)
         self.assertEqual(events[0]["resource_type"], "Wood")
+
+
+# -------------------------------------------------------------- #
+#  Spend_Pool invariant — db.resources still feeds every cost check
+# -------------------------------------------------------------- #
+
+class FakeSpendPoolPlayer:
+    """A player whose Spend_Pool (``db.resources``) is the SINGLE pool that the
+    weight-aware inflow choke point (``EquipmentSystem.add_resource_capped``)
+    writes and that every cost check (build/upgrade/research/ammo) reads.
+
+    The resource accessors and ``db.resources`` share one dict, so a test that
+    inflows through the choke point and then runs a cost check proves the two
+    read/write the same pool (Req 16.9, 16.10) — no separate weight pool was
+    introduced by the equipment/storage feature.
+    """
+
+    def __init__(self, resources=None):
+        self.key = "SpendPoolPlayer"
+        self.db = FakeDB(
+            level=1,
+            resources=dict(resources or {}),
+            combat_xp=0,
+            coord_x=0,
+            coord_y=0,
+        )
+        self.equipment = EquipmentHandler(self)
+
+    def get_resource(self, resource):
+        return int(self.db.resources.get(str(resource).title(), 0))
+
+    def add_resource(self, resource, amount):
+        key = str(resource).title()
+        self.db.resources[key] = self.db.resources.get(key, 0) + int(amount)
+
+    def has_resources(self, costs):
+        return all(self.get_resource(r) >= amt for r, amt in costs.items())
+
+    def deduct_resources(self, costs):
+        if not self.has_resources(costs):
+            return False
+        for r, amt in costs.items():
+            key = str(r).title()
+            self.db.resources[key] = self.db.resources.get(key, 0) - int(amt)
+        return True
+
+    def check_permstring(self, perm):
+        return False
+
+
+def _make_equipment_registry() -> DataRegistry:
+    """A registry with default balance (resource_weights) for the choke point."""
+    registry = DataRegistry()
+    registry.items = {}
+    registry.ranks = []
+    registry.powerups = {}
+    registry.balance = BalanceConfig()  # default resource_weights
+    return registry
+
+
+class TestSpendPoolCostCheckInvariant(unittest.TestCase):
+    """``db.resources`` remains the pool every cost check reads after the
+    weight-aware inflow choke point writes it (Req 16.9, 16.10)."""
+
+    def _system(self):
+        return EquipmentSystem(_make_equipment_registry(), EventBus())
+
+    def test_capped_inflow_feeds_the_cost_check_pool(self):
+        system = self._system()
+        player = FakeSpendPoolPlayer()
+        # Wood weight 0.5; 100 wood -> 50 weight, well under base limit 1000.
+        added = system.add_resource_capped(player, "Wood", 100)
+        self.assertEqual(added, 100)
+        # The inflow landed in db.resources...
+        self.assertEqual(player.db.resources["Wood"], 100)
+        # ...and is visible to the build/upgrade/research/ammo cost-check API.
+        self.assertTrue(player.has_resources({"Wood": 80}))
+        self.assertTrue(player.deduct_resources({"Wood": 80}))
+        self.assertEqual(player.get_resource("Wood"), 20)
+
+    def test_cost_check_and_carried_weight_read_the_same_pool(self):
+        system = self._system()
+        player = FakeSpendPoolPlayer(resources={"Wood": 40})
+        # A cost check and carried_weight both observe the same 40 Wood.
+        self.assertTrue(player.has_resources({"Wood": 40}))
+        self.assertFalse(player.has_resources({"Wood": 41}))
+        self.assertAlmostEqual(system.carried_weight(player), 40 * 0.5)
+
+    def test_multi_resource_cost_check_after_inflows(self):
+        system = self._system()
+        player = FakeSpendPoolPlayer()
+        # Iron weight 1.0, Stone weight 1.0 — both fit under the base limit.
+        system.add_resource_capped(player, "Iron", 200)
+        system.add_resource_capped(player, "Stone", 150)
+        # A composite build cost reads the same Spend_Pool.
+        self.assertTrue(player.has_resources({"Iron": 200, "Stone": 150}))
+        self.assertTrue(player.deduct_resources({"Iron": 50, "Stone": 40}))
+        self.assertEqual(player.get_resource("Iron"), 150)
+        self.assertEqual(player.get_resource("Stone"), 110)

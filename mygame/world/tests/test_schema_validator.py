@@ -154,6 +154,182 @@ class TestValidateItems:
         errs = self.v.validate_items(data)
         assert any("stat_modifiers must be a dict" in e for e in errs)
 
+    # ---- category (Req 3.4) --------------------------------------------- #
+    def test_bad_category_rejected(self):
+        data = {"items": [make_valid_item(category="banana")]}
+        errs = self.v.validate_items(data)
+        assert any("category 'banana'" in e for e in errs)
+
+    def test_valid_gear_category(self):
+        data = {"items": [make_valid_item(category="armor", slot="torso")]}
+        assert self.v.validate_items(data) == []
+
+    def test_valid_supply_category_no_slot(self):
+        # Supply items need no slot.
+        item = {"key": "medkit", "name": "Medkit", "category": "consumable"}
+        assert self.v.validate_items({"items": [item]}) == []
+
+    # ---- slot for Gear vs Supply (Req 3.5, 3.6) ------------------------- #
+    def test_gear_slot_not_in_equipment_slots(self):
+        data = {"items": [make_valid_item(category="armor", slot="gadget")]}
+        errs = self.v.validate_items(data)
+        assert any("not in EQUIPMENT_SLOTS" in e for e in errs)
+
+    def test_gear_missing_slot(self):
+        item = {"key": "vest", "name": "Vest", "category": "armor"}
+        errs = self.v.validate_items({"items": [item]})
+        assert any("slot is required" in e for e in errs)
+
+    def test_supply_slot_not_required(self):
+        item = {"key": "rounds", "name": "Rounds", "category": "ammo"}
+        assert self.v.validate_items({"items": [item]}) == []
+
+    # ---- weapon_type (Req 4.5) ------------------------------------------ #
+    def test_weapon_requires_valid_weapon_type(self):
+        data = {"items": [make_valid_item(category="weapon", weapon_type="laser")]}
+        errs = self.v.validate_items(data)
+        assert any("weapon_type must be one of" in e for e in errs)
+
+    def test_weapon_missing_weapon_type(self):
+        data = {"items": [make_valid_item(category="weapon")]}
+        errs = self.v.validate_items(data)
+        assert any("weapon_type must be one of" in e for e in errs)
+
+    def test_weapon_type_rejected_on_non_weapon(self):
+        data = {
+            "items": [make_valid_item(category="armor", slot="torso", weapon_type="melee")]
+        }
+        errs = self.v.validate_items(data)
+        assert any("only valid on weapon-category" in e for e in errs)
+
+    def test_valid_melee_weapon(self):
+        data = {
+            "items": [make_valid_item(category="weapon", slot="weapon", weapon_type="melee")]
+        }
+        assert self.v.validate_items(data) == []
+
+    # ---- ranged weapon ammo fields (Req 5.1) ---------------------------- #
+    def test_ranged_ammo_per_shot_not_positive(self):
+        data = {
+            "items": [
+                make_valid_item(
+                    category="weapon", slot="weapon", weapon_type="ranged",
+                    ammo_per_shot=0,
+                )
+            ]
+        }
+        errs = self.v.validate_items(data)
+        assert any("ammo_per_shot must be a positive integer" in e for e in errs)
+
+    def test_ranged_magazine_size_not_positive(self):
+        data = {
+            "items": [
+                make_valid_item(
+                    category="weapon", slot="weapon", weapon_type="ranged",
+                    magazine_size=-5,
+                )
+            ]
+        }
+        errs = self.v.validate_items(data)
+        assert any("magazine_size must be a positive integer" in e for e in errs)
+
+    def test_valid_ranged_weapon(self):
+        data = {
+            "items": [
+                make_valid_item(
+                    category="weapon", slot="weapon", weapon_type="ranged",
+                    ammo_type="rifle_rounds", ammo_per_shot=1, magazine_size=30,
+                )
+            ]
+        }
+        assert self.v.validate_items(data) == []
+
+    def test_ranged_ammo_type_without_magazine_rejected(self):
+        # A ranged weapon that consumes counted ammo must declare a magazine,
+        # else it seeds db.loaded=0 and can never fire (a load-time brick).
+        data = {
+            "items": [
+                make_valid_item(
+                    category="weapon", slot="weapon", weapon_type="ranged",
+                    ammo_type="rifle_rounds", ammo_per_shot=1,
+                    # magazine_size intentionally omitted
+                )
+            ]
+        }
+        errs = self.v.validate_items(data)
+        assert any("must declare a positive magazine_size" in e for e in errs)
+
+    def test_weapon_in_body_slot_rejected(self):
+        # A weapon must occupy the `weapon` slot; combat resolves it there, so a
+        # weapon in a body slot could never be used to attack.
+        data = {
+            "items": [
+                make_valid_item(
+                    category="weapon", slot="head", weapon_type="melee",
+                )
+            ]
+        }
+        errs = self.v.validate_items(data)
+        assert any("weapon items must use slot 'weapon'" in e for e in errs)
+
+    def test_accessory_in_body_slot_allowed(self):
+        # Accessory/armor gear may occupy any body slot (e.g. scope in eyes).
+        data = {
+            "items": [make_valid_item(category="accessory", slot="eyes")]
+        }
+        assert self.v.validate_items(data) == []
+
+    # ---- max_stack (Req 10.4) ------------------------------------------- #
+    def test_max_stack_not_positive(self):
+        item = {"key": "rounds", "name": "Rounds", "category": "ammo", "max_stack": 0}
+        errs = self.v.validate_items({"items": [item]})
+        assert any("max_stack must be a positive integer" in e for e in errs)
+
+    # ---- weight (Req 15.1) ---------------------------------------------- #
+    def test_negative_weight_rejected(self):
+        data = {"items": [make_valid_item(weight=-1.0)]}
+        errs = self.v.validate_items(data)
+        assert any("weight must be a number >= 0" in e for e in errs)
+
+    def test_zero_weight_allowed(self):
+        data = {"items": [make_valid_item(weight=0)]}
+        assert self.v.validate_items(data) == []
+
+    # ---- effect.type for consumable/throwable (Req 13.5) ---------------- #
+    def test_bad_effect_type_rejected(self):
+        item = {
+            "key": "medkit", "name": "Medkit", "category": "consumable",
+            "effect": {"type": "teleport", "amount": 10},
+        }
+        errs = self.v.validate_items({"items": [item]})
+        assert any("effect.type must be one of" in e for e in errs)
+
+    def test_valid_consumable_effect(self):
+        item = {
+            "key": "medkit", "name": "Medkit", "category": "consumable",
+            "effect": {"type": "heal", "amount": 30},
+        }
+        assert self.v.validate_items({"items": [item]}) == []
+
+    def test_valid_throwable_effect(self):
+        item = {
+            "key": "grenade", "name": "Grenade", "category": "throwable",
+            "effect": {"type": "aoe_damage", "amount": 40, "radius": 2},
+        }
+        assert self.v.validate_items({"items": [item]}) == []
+
+    # ---- max_hp / accuracy accepted as numeric stats (D6) --------------- #
+    def test_max_hp_and_accuracy_accepted_as_stats(self):
+        data = {
+            "items": [
+                make_valid_item(
+                    category="armor", slot="torso",
+                    stat_modifiers={"max_hp": 20, "accuracy": 1.5},
+                )
+            ]
+        }
+        assert self.v.validate_items(data) == []
+
 
 class TestValidateRanks:
     def setup_method(self):
@@ -469,6 +645,37 @@ class TestValidateBalance:
         })
         assert errs == []
 
+    def test_resource_weights_valid(self):
+        errs = self.v.validate_balance(
+            {"resource_weights": {"Wood": 0.5, "Iron": 1.0, "Nexium": 2.0}}
+        )
+        assert errs == []
+
+    def test_resource_weights_accepts_zero(self):
+        errs = self.v.validate_balance({"resource_weights": {"Wood": 0}})
+        assert errs == []
+
+    def test_resource_weights_rejects_unknown_resource(self):
+        errs = self.v.validate_balance({"resource_weights": {"Gold": 1.0}})
+        assert any("unknown resource" in e for e in errs)
+
+    def test_resource_weights_rejects_wrong_case_key(self):
+        """Membership is case-sensitive against title-case RESOURCE_TYPES."""
+        errs = self.v.validate_balance({"resource_weights": {"wood": 1.0}})
+        assert any("unknown resource" in e for e in errs)
+
+    def test_resource_weights_rejects_negative_value(self):
+        errs = self.v.validate_balance({"resource_weights": {"Wood": -1.0}})
+        assert any(">= 0" in e for e in errs)
+
+    def test_resource_weights_rejects_non_numeric_value(self):
+        errs = self.v.validate_balance({"resource_weights": {"Wood": "heavy"}})
+        assert any(">= 0" in e for e in errs)
+
+    def test_resource_weights_rejects_non_dict(self):
+        errs = self.v.validate_balance({"resource_weights": [0.5, 1.0]})
+        assert any("expected dict" in e for e in errs)
+
 
 class TestCrossValidate:
     """Test cross_validate using a mock registry object."""
@@ -747,3 +954,123 @@ class TestCrossValidate:
         reg.item_production_map = {}
         errs = self.v.cross_validate(reg)
         assert not any("unlocks" in e for e in errs)
+
+    # --- Item ammo_type FK → existing ammo-category item (Req 5.7) ---- #
+
+    def test_ammo_type_missing_item(self):
+        """A weapon whose ammo_type names no item is rejected."""
+        from mygame.world.definitions import ItemDef
+        reg = self._make_registry(items={
+            "rifle": ItemDef(
+                key="rifle", name="Rifle", slot="weapon", category="weapon",
+                weapon_type="ranged", ammo_type="nonexistent_rounds",
+                magazine_size=30,
+            ),
+        })
+        reg.item_production_map = {}
+        errs = self.v.cross_validate(reg)
+        assert any(
+            "ammo_type 'nonexistent_rounds'" in e
+            and "not found in item definitions" in e
+            for e in errs
+        )
+
+    def test_ammo_type_references_non_ammo_item(self):
+        """ammo_type pointing at a non-ammo item (e.g. armor) is rejected."""
+        from mygame.world.definitions import ItemDef
+        reg = self._make_registry(items={
+            "rifle": ItemDef(
+                key="rifle", name="Rifle", slot="weapon", category="weapon",
+                weapon_type="ranged", ammo_type="kevlar_vest",
+                magazine_size=30,
+            ),
+            "kevlar_vest": ItemDef(
+                key="kevlar_vest", name="Kevlar Vest", slot="torso",
+                category="armor",
+            ),
+        })
+        reg.item_production_map = {}
+        errs = self.v.cross_validate(reg)
+        assert any(
+            "ammo_type 'kevlar_vest'" in e
+            and "not an 'ammo'-category item" in e
+            for e in errs
+        )
+
+    def test_ammo_type_valid_reference_passes(self):
+        """A ranged weapon referencing a real ammo item cross-validates clean."""
+        from mygame.world.definitions import ItemDef
+        reg = self._make_registry(items={
+            "rifle": ItemDef(
+                key="rifle", name="Rifle", slot="weapon", category="weapon",
+                weapon_type="ranged", ammo_type="rifle_rounds",
+                magazine_size=30,
+            ),
+            "rifle_rounds": ItemDef(
+                key="rifle_rounds", name="Rifle Rounds", category="ammo",
+            ),
+        })
+        reg.item_production_map = {}
+        errs = self.v.cross_validate(reg)
+        assert not any("ammo_type" in e for e in errs)
+
+    # --- Melee weapons must not declare ammo fields (Req 5.8) --------- #
+
+    def test_melee_weapon_rejects_ammo_type(self):
+        from mygame.world.definitions import ItemDef
+        reg = self._make_registry(items={
+            "combat_knife": ItemDef(
+                key="combat_knife", name="Combat Knife", slot="weapon",
+                category="weapon", weapon_type="melee",
+                ammo_type="rifle_rounds",
+            ),
+            "rifle_rounds": ItemDef(
+                key="rifle_rounds", name="Rifle Rounds", category="ammo",
+            ),
+        })
+        reg.item_production_map = {}
+        errs = self.v.cross_validate(reg)
+        assert any(
+            "melee weapon must not declare ammo_type" in e for e in errs
+        )
+
+    def test_melee_weapon_rejects_magazine_size(self):
+        from mygame.world.definitions import ItemDef
+        reg = self._make_registry(items={
+            "combat_knife": ItemDef(
+                key="combat_knife", name="Combat Knife", slot="weapon",
+                category="weapon", weapon_type="melee", magazine_size=10,
+            ),
+        })
+        reg.item_production_map = {}
+        errs = self.v.cross_validate(reg)
+        assert any(
+            "melee weapon must not declare magazine_size" in e for e in errs
+        )
+
+    def test_melee_weapon_rejects_non_default_ammo_per_shot(self):
+        from mygame.world.definitions import ItemDef
+        reg = self._make_registry(items={
+            "combat_knife": ItemDef(
+                key="combat_knife", name="Combat Knife", slot="weapon",
+                category="weapon", weapon_type="melee", ammo_per_shot=3,
+            ),
+        })
+        reg.item_production_map = {}
+        errs = self.v.cross_validate(reg)
+        assert any(
+            "melee weapon must not declare ammo_per_shot" in e for e in errs
+        )
+
+    def test_melee_weapon_default_ammo_per_shot_passes(self):
+        """The ammo_per_shot default of 1 is not treated as a melee violation."""
+        from mygame.world.definitions import ItemDef
+        reg = self._make_registry(items={
+            "combat_knife": ItemDef(
+                key="combat_knife", name="Combat Knife", slot="weapon",
+                category="weapon", weapon_type="melee",
+            ),
+        })
+        reg.item_production_map = {}
+        errs = self.v.cross_validate(reg)
+        assert not any("melee weapon must not declare" in e for e in errs)

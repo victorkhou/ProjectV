@@ -6,6 +6,10 @@ to provide ``self.db.*`` (Evennia AttributeHandler).
 
 """
 
+import logging
+
+logger = logging.getLogger("evennia.typeclasses.combat_entity")
+
 # Default number of ticks an entity stays incapacitated before respawn.
 DEFAULT_RESPAWN_TICKS = 10
 
@@ -144,6 +148,32 @@ class CombatEntity:
             from world.systems.equipment_handler import EquipmentHandler
             self._equipment_handler = EquipmentHandler(self)
         return self._equipment_handler
+
+    def _get_move_speed_modifier(self) -> int:
+        """Return the total ``move_speed`` bonus from equipped items.
+
+        A positive value speeds the entity up (reduces its effective
+        movement delay via :func:`world.constants.compute_effective_delay`).
+        Returns ``0`` when the entity has no usable equipment handler or no
+        equipped item provides a ``move_speed`` stat (the common case), so
+        movement is unaffected by default.
+
+        Shared by NPCs (per-tick ``advance_movement``) and players (the
+        in-combat movement lag in ``CmdMove``) so both derive the modifier
+        from equipment identically.
+        """
+        equipment = getattr(self, "equipment", None)
+        if equipment is None or not hasattr(equipment, "get_stat_total"):
+            return 0
+        try:
+            return int(equipment.get_stat_total("move_speed"))
+        except Exception:
+            logger.debug(
+                "move_speed lookup failed for entity %s; defaulting modifier to 0",
+                getattr(self, "id", "?"),
+                exc_info=True,
+            )
+            return 0
 
     # ------------------------------------------------------------------ #
     #  Status queries

@@ -56,6 +56,57 @@ RESOURCE_TYPES: tuple[str, ...] = (
 )
 
 # ------------------------------------------------------------------ #
+#  Equipment & Items
+# ------------------------------------------------------------------ #
+
+#: The eleven canonical equipment slots (nine armor-bearing body slots plus
+#: ``weapon`` and ``accessory``). Single source of truth for the slot
+#: vocabulary: the schema validator requires every Gear item's ``slot`` to be a
+#: member of this tuple, and the equipment system rejects equipping into any
+#: slot outside it. Structural, not balance: adding a slot is a constant edit.
+EQUIPMENT_SLOTS = ("head", "eyes", "face", "torso", "arms", "hands",
+                   "legs", "feet", "back", "weapon", "accessory")
+
+#: Item categories stored as unique Game_Item objects in ``db.equipment_slots``
+#: (one per slot).
+GEAR_CATEGORIES = ("armor", "weapon", "accessory")
+
+#: Item categories stored as counted stacks in the Supply_Bag ``db.supplies``.
+SUPPLY_CATEGORIES = ("ammo", "consumable", "throwable")
+
+#: The full controlled vocabulary of item categories. The schema validator
+#: rejects any item whose ``category`` is outside this set.
+ITEM_CATEGORIES = GEAR_CATEGORIES + SUPPLY_CATEGORIES
+
+#: Valid ``weapon_type`` values for a ``weapon``-category item.
+WEAPON_TYPES = ("melee", "ranged")
+
+#: Stat keys that aggregate across gear via ``get_stat_total()``.
+#: NB: the ``carry_capacity`` GEAR STAT (a weight delta added to the limit) is
+#: unrelated to the per-agent ``npc.db.carry_capacity`` delivery-load COUNT
+#: budget in agent_scripts.py — same word, different unit and owner.
+AGGREGATED_STATS = ("damage_reduction", "damage_bonus", "move_speed",
+                    "sight_range", "carry_capacity", "max_hp", "accuracy")
+
+#: Valid Item_Effect ``type`` values for consumable/throwable items.
+#: NOT data-only: a new effect needs this tuple + a validator rule + a
+#: use/throw branch + (usually) a presenter kind. The three mechanics are
+#: genuinely different; a handler-registry would only relocate the branch, not
+#: remove it. See COMPLEXITY_REVIEW touchpoint row.
+EFFECT_TYPES = ("heal", "buff", "aoe_damage")
+
+#: Base carry weight (weight units); a holder's limit is
+#: ``BASE_CARRY_WEIGHT + Σ carry_capacity(gear)``. Structural (it gates the
+#: carry-limit correctness property), so it lives here rather than in balance.
+BASE_CARRY_WEIGHT = 1000
+
+#: Per-unit weight for a resource absent from ``BalanceConfig.resource_weights``.
+DEFAULT_RESOURCE_WEIGHT = 1.0
+
+#: Default throw range (Manhattan) for a throwable whose effect declares none.
+DEFAULT_THROW_RANGE = 4
+
+# ------------------------------------------------------------------ #
 #  Agent training
 # ------------------------------------------------------------------ #
 
@@ -126,6 +177,13 @@ MAX_PATROL_WAYPOINTS = 10
 #: Default resource carry capacity for harvesters (resource units)
 DEFAULT_CARRY_CAPACITY = 50
 
+#: Base movement lag (ticks between steps) applied to a PLAYER while in the
+#: combat state (``combat_timer_expires`` in the future). Out of combat,
+#: player movement is always instant (this lag does not apply). Equipment
+#: ``move_speed`` alleviates the lag via ``compute_effective_delay`` — the same
+#: equipment-derived mechanism agents use for their per-tick movement delay.
+COMBAT_MOVE_LAG_TICKS = 2
+
 
 def compute_effective_delay(base_delay: int, speed_modifier: int) -> int:
     """Compute effective movement delay accounting for an equipment speed modifier.
@@ -142,7 +200,8 @@ def compute_effective_delay(base_delay: int, speed_modifier: int) -> int:
         Effective delay: ``max(1, base_delay - speed_modifier)``.
 
     Notes:
-        Used by ``NPC.advance_movement``.
+        Used by ``NPC.advance_movement`` (per-tick agent stepping) and by
+        ``CmdMove`` for the in-combat player movement lag.
     """
     return max(1, base_delay - speed_modifier)
 

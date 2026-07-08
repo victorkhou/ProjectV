@@ -1,91 +1,292 @@
 # Item definitions for RTS Combat Overworld
 # Top-level keys: items (list) and production_map (dict)
+#
+# Weight reference (design §9): light gear 2-5; rifle/armor 8-15; heavy 25-40;
+# ammo ~0.1; consumables ~1-5; grenade ~3. Every item carries a `weight`.
+# resource_weights lives in balance.yaml (do not duplicate here).
 
 items:
+  # ------------------------------------------------------------------ #
+  #  Weapons (Gear, slot: weapon)
+  # ------------------------------------------------------------------ #
   - key: combat_knife
     name: Combat Knife
     slot: weapon
+    category: weapon
+    weapon_type: melee
     stat_modifiers:
       damage: 10
       range: 1
     ammo_cost: null
+    weight: 3.0
     classification: modern
     required_rank: null
 
   - key: assault_rifle
     name: Assault Rifle
     slot: weapon
+    category: weapon
+    weapon_type: ranged
     stat_modifiers:
       damage: 25
       range: 5
     ammo_cost:
       Iron: 1
+    weight: 10.0
     classification: modern
     required_rank: null
 
   - key: plasma_rifle
     name: Plasma Rifle
     slot: weapon
+    category: weapon
+    weapon_type: ranged
     stat_modifiers:
       damage: 40
       range: 6
     ammo_cost:
       Energy: 2
+    weight: 12.0
     classification: futuristic
     required_rank: Sergeant
 
   - key: sniper_rifle
     name: Sniper Rifle
     slot: weapon
+    category: weapon
+    weapon_type: ranged
     stat_modifiers:
       damage: 50
       range: 12
     ammo_cost:
       Iron: 2
+    weight: 14.0
     classification: modern
     required_rank: Corporal
 
+  # Magazine-based rifle exercising the reload model (D5): draws from the
+  # `rifle_rounds` Supply_Bag reserve via reload, fires from db.loaded.
+  - key: service_rifle
+    name: Service Rifle
+    slot: weapon
+    category: weapon
+    weapon_type: ranged
+    stat_modifiers:
+      damage: 22
+      range: 5
+    ammo_type: rifle_rounds
+    ammo_per_shot: 1
+    magazine_size: 30
+    ammo_cost: null
+    weight: 9.0
+    classification: modern
+    required_rank: null
+
+  # ------------------------------------------------------------------ #
+  #  Armor (Gear) — one piece per body slot
+  # ------------------------------------------------------------------ #
+  - key: combat_helmet
+    name: Combat Helmet
+    slot: head
+    category: armor
+    stat_modifiers:
+      damage_reduction: 3
+    ammo_cost: null
+    weight: 5.0
+    classification: modern
+    required_rank: null
+
   - key: kevlar_vest
     name: Kevlar Vest
-    slot: armor
+    slot: torso
+    category: armor
     stat_modifiers:
       damage_reduction: 5
     ammo_cost: null
+    weight: 8.0
     classification: modern
     required_rank: null
 
   - key: power_armor
     name: Power Armor
-    slot: armor
+    slot: torso
+    category: armor
     stat_modifiers:
       damage_reduction: 15
     ammo_cost: null
+    weight: 30.0
     classification: futuristic
     required_rank: Captain
 
+  - key: combat_gloves
+    name: Combat Gloves
+    slot: hands
+    category: armor
+    stat_modifiers:
+      damage_reduction: 2
+    ammo_cost: null
+    weight: 3.0
+    classification: modern
+    required_rank: null
+
+  - key: combat_greaves
+    name: Combat Greaves
+    slot: legs
+    category: armor
+    stat_modifiers:
+      damage_reduction: 4
+    ammo_cost: null
+    weight: 7.0
+    classification: modern
+    required_rank: null
+
+  - key: combat_boots
+    name: Combat Boots
+    slot: feet
+    category: armor
+    stat_modifiers:
+      damage_reduction: 2
+    ammo_cost: null
+    weight: 4.0
+    classification: modern
+    required_rank: null
+
+  # ------------------------------------------------------------------ #
+  #  Accessories (Gear)
+  # ------------------------------------------------------------------ #
   - key: scope
     name: Tactical Scope
-    slot: gadget
+    slot: eyes
+    category: accessory
     stat_modifiers:
       sight_range: 3
     ammo_cost: null
+    weight: 2.0
     classification: modern
     required_rank: null
 
   - key: jetpack
     name: Jetpack
-    slot: gadget
+    slot: back
+    category: accessory
     stat_modifiers:
       move_speed: 2.0
     ammo_cost: null
+    weight: 12.0
     classification: futuristic
     required_rank: Staff_Sergeant
 
+  # Cap-raiser: a hauler pack that lifts the weight limit via carry_capacity.
+  - key: hauler_pack
+    name: Hauler Pack
+    slot: back
+    category: accessory
+    stat_modifiers:
+      carry_capacity: 500
+    ammo_cost: null
+    weight: 5.0
+    classification: modern
+    required_rank: null
+
+  # ------------------------------------------------------------------ #
+  #  Ammo (Supply — no slot; counted stacks)
+  # ------------------------------------------------------------------ #
+  - key: rifle_rounds
+    name: Rifle Rounds
+    category: ammo
+    weight: 0.1
+    max_stack: 200
+    classification: modern
+    required_rank: null
+
+  - key: energy_cell
+    name: Energy Cell
+    category: ammo
+    weight: 0.1
+    max_stack: 200
+    classification: futuristic
+    required_rank: null
+
+  # ------------------------------------------------------------------ #
+  #  Consumables (Supply)
+  # ------------------------------------------------------------------ #
+  - key: medkit
+    name: Medkit
+    category: consumable
+    effect:
+      type: heal
+      amount: 30
+    weight: 2.0
+    max_stack: 20
+    classification: modern
+    required_rank: null
+
+  - key: combat_stim
+    name: Combat Stim
+    category: consumable
+    effect:
+      type: buff
+      stat: damage_bonus
+      amount: 10
+      duration_ticks: 30
+    weight: 1.0
+    max_stack: 20
+    classification: modern
+    required_rank: null
+
+  # ------------------------------------------------------------------ #
+  #  Throwables (Supply)
+  # ------------------------------------------------------------------ #
+  - key: frag_grenade
+    name: Frag Grenade
+    category: throwable
+    effect:
+      type: aoe_damage
+      amount: 40
+      radius: 2
+      range: 5
+    weight: 3.0
+    max_stack: 10
+    classification: modern
+    required_rank: null
+
+# Production routing by building (task 8.3).
+#
+# NOTE: There is no `AA` building — the sole equipment/Armory building is `AR`
+# (see buildings.yaml; abbreviations are HQ/EX/AC/LB/AR/TU/VT/RD/WL/BK/MB/RL).
+# The design's "AA -> armor" is therefore folded into `AR`, which produces all
+# MODERN gear + ammo (weapons, ammo, armor, accessories). Futuristic-class gear
+# and throwables route to the Lab (`LB`), consumables to the Medbay (`MB`).
+# Each item is produced by exactly one building (no crossover). cross_validate
+# requires every key to be a real building abbreviation and every listed item
+# to exist — both hold here.
+#
+# Task 8.4 must extend EQUIPMENT_BUILDING_TYPES (currently ("AA","AR")) in
+# world/systems/equipment_system.py to include "MB" and "LB" so production
+# actually runs for those buildings; this task only authors the data.
 production_map:
+  # Armory: modern weapons + ammo + modern armor + modern accessories
   AR:
     - combat_knife
     - assault_rifle
     - sniper_rifle
-    - plasma_rifle
+    - service_rifle
+    - rifle_rounds
+    - combat_helmet
     - kevlar_vest
+    - combat_gloves
+    - combat_greaves
+    - combat_boots
+    - scope
+    - hauler_pack
+  # Medbay: consumables
+  MB:
+    - medkit
+    - combat_stim
+  # Lab: futuristic gear + throwables
+  LB:
+    - plasma_rifle
     - power_armor
+    - jetpack
+    - energy_cell
+    - frag_grenade

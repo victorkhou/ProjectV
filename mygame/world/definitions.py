@@ -45,15 +45,33 @@ class BuildingDef:
 
 @dataclass
 class ItemDef:
-    """Definition for an equippable/usable item."""
+    """Definition for an equippable/usable item.
+
+    Every field beyond ``key``/``name`` is defaulted so existing
+    ``ItemDef(...)`` construction and ``GameItem`` attribute paths keep
+    working. ``slot`` is required for Gear (armor/weapon/accessory) and left
+    empty for Supplies (ammo/consumable/throwable).
+    """
 
     key: str
     name: str
-    slot: str
+    slot: str = ""  # required for Gear; "" for Supplies
+    category: str = "armor"  # armor|weapon|accessory|ammo|consumable|throwable
     stat_modifiers: dict[str, float] = field(default_factory=dict)
-    ammo_cost: dict[str, int] | None = None
+    # weapon
+    weapon_type: str | None = None  # melee|ranged (weapon category only)
+    ammo_type: str | None = None  # ammo item key the magazine holds (ranged)
+    ammo_per_shot: int = 1
+    magazine_size: int | None = None  # magazine capacity (ranged); weapon tracks db.loaded
+    ammo_cost: dict[str, int] | None = None  # resource-pool cost (energy weapons)
+    # supply
+    effect: dict | None = None  # {"type": ..., ...} for consumable/throwable
+    max_stack: int = 99  # per-entry cap in the Supply_Bag
+    # weight (carry capacity)
+    weight: float = 1.0  # per-unit carried weight (>=0); gear + supplies
+    # gating
+    required_rank: str | None = None  # enforced on equip/use/throw
     classification: str = "modern"
-    required_rank: str | None = None
 
 
 @dataclass
@@ -229,3 +247,24 @@ class BalanceConfig:
     })
     #: Default demolish refund rate for levels not in the table.
     demolish_refund_default: float = 0.40
+
+    # --- Carry-weight tuning (equipment/items feature, D7) ------------ #
+    #: Per-unit carried weight for each resource. Keys are the canonical
+    #: title-case ``RESOURCE_TYPES``; values are weights >= 0 (deliberately
+    #: light). A resource absent from this map defaults to
+    #: ``world.constants.DEFAULT_RESOURCE_WEIGHT``. Hot-tunable via balance.yaml.
+    resource_weights: dict[str, float] = field(default_factory=lambda: {
+        "Wood": 0.5, "Stone": 1.0, "Iron": 1.0,
+        "Energy": 0.2, "Circuits": 0.3, "Nexium": 2.0,
+    })
+
+    # --- Equipment production (equipment/items feature) --------------- #
+    #: Ticks between item yields for an equipment building (Armorer/Lab/
+    #: Medbay). Production is gated on this cooldown, mirroring the harvest
+    #: cooldown, so a building yields at most one item per this many ticks
+    #: rather than one every tick.
+    equipment_production_ticks: int = 30
+    #: Cap on the number of un-equipped items a single owner may accumulate
+    #: from production before it stalls, so an idle player's building cannot
+    #: grow the object table without bound. 0 disables the cap.
+    equipment_production_owner_cap: int = 50

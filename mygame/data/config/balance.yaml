@@ -64,3 +64,23 @@ demolish_refund_rates:           # refund fraction of invested cost by level
   3: 0.60
   4: 0.70
   5: 0.80
+
+# --- Carry-weight tuning (equipment/items feature, D7) ---
+# Per-unit carried weight for each resource (title-case keys, values >= 0).
+# Resources are deliberately light; a resource omitted here defaults to
+# DEFAULT_RESOURCE_WEIGHT. With BASE_CARRY_WEIGHT = 1000 a player can haul
+# "a lot, but not infinite" (e.g. ~2000 Wood or ~500 Nexium).
+resource_weights:
+  Wood: 0.5
+  Stone: 1.0
+  Iron: 1.0
+  Energy: 0.2
+  Circuits: 0.3
+  Nexium: 2.0
+
+# --- Equipment production (equipment/items feature) ---
+# An equipment building (Armorer/Lab/Medbay) yields at most one item every
+# this many ticks (mirrors harvest_cooldown_ticks), and stalls once an owner
+# already holds this many un-equipped produced items (0 disables the cap).
+equipment_production_ticks: 30
+equipment_production_owner_cap: 50

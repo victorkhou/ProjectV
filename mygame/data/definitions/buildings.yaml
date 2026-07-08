@@ -24,7 +24,7 @@
   category: headquarters
   produces: null
   requires_agent: false
-  storage_capacity: 0
+  storage_capacity: 200
   capabilities:
     - headquarters
     - storage

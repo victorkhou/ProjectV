@@ -117,7 +117,8 @@ class FakeArmor:
     """Lightweight stand-in for an armor GameItem."""
     def __init__(self, damage_reduction=5, key="test_armor"):
         self.key = key
-        self.slot = "armor"
+        self.slot = "torso"
+        self.category = "armor"
         self.stat_modifiers = {"damage_reduction": damage_reduction}
         self.ammo_cost = None
 
@@ -753,6 +754,251 @@ class TestProperty16FIFOOrdering(unittest.TestCase):
         self.assertEqual(len(events), num_actions)
         # Pending actions should be empty
         self.assertEqual(len(engine.pending_actions), 0)
+
+# -------------------------------------------------------------- #
+#  Typed-weapon / gear fakes for the equipment combat touches
+#  (tasks 4.1-4.2): weapon typing + magazine + aggregated gear stats.
+# -------------------------------------------------------------- #
+
+class _WeaponDB:
+    """A tiny ``.db`` bag exposing a mutable ``loaded`` count."""
+
+    def __init__(self, loaded=None):
+        self.loaded = loaded
+
+
+class FakeTypedWeapon:
+    """Weapon GameItem stand-in carrying weapon_type + a magazine."""
+
+    def __init__(self, weapon_type="ranged", damage=25, weapon_range=1,
+                 ammo_type=None, ammo_per_shot=1, magazine_size=None,
+                 loaded=None, ammo_cost=None, key="typed_weapon"):
+        self.key = key
+        self.slot = "weapon"
+        self.weapon_type = weapon_type
+        self.ammo_type = ammo_type
+        self.ammo_per_shot = ammo_per_shot
+        self.magazine_size = magazine_size
+        self.ammo_cost = ammo_cost
+        self.stat_modifiers = {"damage": damage, "range": weapon_range}
+        self.db = _WeaponDB(loaded=loaded)
+
+    def get_stat(self, stat_name, default=0):
+        return float(self.stat_modifiers.get(stat_name, default))
+
+
+class FakeGear:
+    """Non-weapon gear GameItem contributing a single aggregated stat."""
+
+    def __init__(self, slot, stat_name, value, key=None):
+        self.key = key or f"{slot}_gear"
+        self.slot = slot
+        self.stat_modifiers = {stat_name: value}
+        self.ammo_cost = None
+
+    def get_stat(self, stat_name, default=0):
+        return float(self.stat_modifiers.get(stat_name, default))
+
+
+# Distinct non-weapon slots to spread aggregated gear across (one item/slot).
+_GEAR_SLOTS = [
+    "head", "eyes", "torso", "legs", "boots",
+    "gloves", "accessory", "back", "shoulders", "hands",
+]
+
+# -------------------------------------------------------------- #
+#  Property 6: Melee range
+#  **Validates: Requirements 4.2, 4.4**
+# -------------------------------------------------------------- #
+
+class TestProperty6MeleeRange(unittest.TestCase):
+    """Property 6: Melee range.
+
+    A melee weapon's effective attack range is always 1, regardless of any
+    ``range`` stat on the item, and a melee attack never consumes ammo.
+
+    **Validates: Requirements 4.2, 4.4**
+    """
+
+    @given(
+        range_stat=st.integers(min_value=1, max_value=20),
+        dx=st.integers(min_value=0, max_value=10),
+        dy=st.integers(min_value=0, max_value=10),
+        loaded=st.integers(min_value=0, max_value=30),
+    )
+    @settings(max_examples=200)
+    def test_melee_effective_range_is_one(self, range_stat, dx, dy, loaded):
+        assume(dx + dy > 0)  # distinct tiles so attacker is not the target
+        weapon = FakeTypedWeapon(
+            weapon_type="melee", damage=25, weapon_range=range_stat,
+            ammo_type="rifle_rounds", ammo_per_shot=3,
+            magazine_size=30, loaded=loaded,
+        )
+        engine, _ = _make_engine()
+        attacker = FakePlayer(name="Attacker", weapon=weapon,
+                              location=FakeTile(xyz=(0, 0, "earth")))
+        target = FakePlayer(name="Target",
+                            location=FakeTile(xyz=(dx, dy, "earth")))
+
+        ok, _ = engine.queue_attack(attacker, target)
+
+        # Success iff within an effective range of 1, ignoring range_stat.
+        self.assertEqual(ok, (dx + dy) <= 1)
+        # Melee never touches the magazine, whether it hit or missed.
+        self.assertEqual(weapon.db.loaded, loaded)
+
+
+# -------------------------------------------------------------- #
+#  Property 7: Magazine draw conservation
+#  **Validates: Requirements 5.3, 5.4, 5.5, 5.6**
+# -------------------------------------------------------------- #
+
+class TestProperty7MagazineDraw(unittest.TestCase):
+    """Property 7: Magazine draw conservation.
+
+    A ranged shot decrements ``db.loaded`` by exactly ``ammo_per_shot``;
+    rounds are conserved (loaded_before == loaded_after + rounds_fired). An
+    empty magazine (loaded < ammo_per_shot) rejects the attack and does NOT
+    mutate ``db.loaded``.
+
+    **Validates: Requirements 5.3, 5.4, 5.5, 5.6**
+    """
+
+    @given(
+        magazine_size=st.integers(min_value=1, max_value=60),
+        loaded=st.integers(min_value=0, max_value=60),
+        ammo_per_shot=st.integers(min_value=1, max_value=10),
+    )
+    @settings(max_examples=200)
+    def test_shot_draws_exactly_ammo_per_shot_or_rejects(
+        self, magazine_size, loaded, ammo_per_shot
+    ):
+        assume(loaded <= magazine_size)
+        weapon = FakeTypedWeapon(
+            weapon_type="ranged", damage=25, weapon_range=5,
+            ammo_type="rifle_rounds", ammo_per_shot=ammo_per_shot,
+            magazine_size=magazine_size, loaded=loaded,
+        )
+        engine, event_bus = _make_engine()
+        received = []
+        from mygame.world.event_bus import PLAYER_NOTIFICATION
+        event_bus.subscribe(
+            PLAYER_NOTIFICATION,
+            lambda player, kind, data, **_kw: received.append(kind),
+        )
+        attacker = FakePlayer(name="Attacker", weapon=weapon,
+                              location=FakeTile(xyz=(0, 0, "earth")))
+        target = FakePlayer(name="Target",
+                            location=FakeTile(xyz=(1, 0, "earth")))
+
+        ok, _ = engine.queue_attack(attacker, target)
+
+        if loaded >= ammo_per_shot:
+            self.assertTrue(ok)
+            # Exactly ammo_per_shot drawn; rounds conserved.
+            self.assertEqual(weapon.db.loaded, loaded - ammo_per_shot)
+            self.assertEqual(weapon.db.loaded + ammo_per_shot, loaded)
+        else:
+            self.assertFalse(ok)
+            # Rejected attack never mutates the magazine.
+            self.assertEqual(weapon.db.loaded, loaded)
+            self.assertEqual(len(engine.pending_actions), 0)
+            self.assertIn("out_of_ammo", received)
+
+
+# -------------------------------------------------------------- #
+#  Property 3: Damage-bonus aggregation
+#  **Validates: Requirements 2.3**
+# -------------------------------------------------------------- #
+
+class TestProperty3DamageBonusAggregation(unittest.TestCase):
+    """Property 3: Damage-bonus aggregation.
+
+    Attacker damage includes the sum of ``damage_bonus`` across all equipped
+    gear (plus active powerups).
+
+    **Validates: Requirements 2.3**
+    """
+
+    @given(
+        weapon_damage=st.integers(min_value=1, max_value=200),
+        bonuses=st.lists(st.integers(min_value=0, max_value=20),
+                         min_size=0, max_size=len(_GEAR_SLOTS)),
+        powerup_bonus=st.integers(min_value=0, max_value=30),
+    )
+    @settings(max_examples=200)
+    def test_damage_includes_sum_of_gear_damage_bonus(
+        self, weapon_damage, bonuses, powerup_bonus
+    ):
+        weapon = FakeTypedWeapon(
+            weapon_type="ranged", damage=weapon_damage, weapon_range=10,
+            ammo_type=None, key="rifle",
+        )
+        engine, _ = _make_engine()
+        attacker = FakePlayer(name="Attacker", weapon=weapon,
+                              location=FakeTile(xyz=(0, 0, "earth")))
+        for slot, value in zip(_GEAR_SLOTS, bonuses):
+            attacker.equipment.equip(FakeGear(slot, "damage_bonus", value))
+        if powerup_bonus:
+            attacker.db.active_powerups = {
+                "buff": {"effect": {"effect_type": "damage_bonus",
+                                    "effect_value": powerup_bonus}},
+            }
+
+        target_hp = 1_000_000  # never defeated, so no respawn masking
+        target = FakePlayer(name="Target", hp=target_hp, hp_max=target_hp,
+                            location=FakeTile(xyz=(1, 0, "earth")))
+
+        engine.queue_attack(attacker, target)
+        engine.resolve_tick()
+
+        expected_damage = max(
+            0, weapon_damage + sum(bonuses) + powerup_bonus
+        )
+        self.assertEqual(target.db.hp, target_hp - expected_damage)
+
+
+# -------------------------------------------------------------- #
+#  Property 2: Armor aggregation invariance
+#  **Validates: Requirements 2.2, 14.1**
+# -------------------------------------------------------------- #
+
+class TestProperty2ArmorAggregation(unittest.TestCase):
+    """Property 2: Armor aggregation invariance.
+
+    Target ``damage_reduction`` is the sum over all equipped gear, and the
+    damage formula (weapon_damage - reduction, min 0) is unchanged.
+
+    **Validates: Requirements 2.2, 14.1**
+    """
+
+    @given(
+        weapon_damage=st.integers(min_value=1, max_value=200),
+        reductions=st.lists(st.integers(min_value=0, max_value=20),
+                            min_size=0, max_size=len(_GEAR_SLOTS)),
+    )
+    @settings(max_examples=200)
+    def test_reduction_is_sum_over_all_gear(self, weapon_damage, reductions):
+        weapon = FakeTypedWeapon(
+            weapon_type="ranged", damage=weapon_damage, weapon_range=10,
+            ammo_type=None, key="rifle",
+        )
+        engine, _ = _make_engine()
+        attacker = FakePlayer(name="Attacker", weapon=weapon,
+                              location=FakeTile(xyz=(0, 0, "earth")))
+
+        target_hp = 1_000_000
+        target = FakePlayer(name="Target", hp=target_hp, hp_max=target_hp,
+                            location=FakeTile(xyz=(1, 0, "earth")))
+        for slot, value in zip(_GEAR_SLOTS, reductions):
+            target.equipment.equip(FakeGear(slot, "damage_reduction", value))
+
+        engine.queue_attack(attacker, target)
+        engine.resolve_tick()
+
+        expected_damage = max(0, weapon_damage - sum(reductions))
+        self.assertEqual(target.db.hp, target_hp - expected_damage)
+
 
 if __name__ == "__main__":
     unittest.main()

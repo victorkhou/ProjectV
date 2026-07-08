@@ -8,11 +8,22 @@ Property 26: Schema validation catches invalid definitions
 - The validator ALWAYS returns an empty error list for valid input.
 """
 
+from types import SimpleNamespace
+
 from hypothesis import given, settings, assume
 from hypothesis import strategies as st
 
 from mygame.world.schema_validator import SchemaValidator
-from mygame.world.constants import MAX_BUILDING_LEVEL
+from mygame.world.constants import (
+    MAX_BUILDING_LEVEL,
+    EQUIPMENT_SLOTS,
+    GEAR_CATEGORIES,
+    ITEM_CATEGORIES,
+    WEAPON_TYPES,
+    EFFECT_TYPES,
+    RESOURCE_TYPES,
+)
+from mygame.world.definitions import ItemDef
 
 validator = SchemaValidator()
 
@@ -57,10 +68,12 @@ def valid_building_dict():
 # ------------------------------------------------------------------ #
 
 def valid_item_dict():
+    # A minimal valid Gear item: category defaults to "armor" (a Gear
+    # category), so `slot` is required and must be a canonical EQUIPMENT_SLOT.
     return st.fixed_dictionaries({
         "key": st.text(min_size=1, max_size=20, alphabet=st.characters(whitelist_categories=("L", "N"))),
         "name": st.text(min_size=1, max_size=20),
-        "slot": st.sampled_from(["weapon", "armor", "gadget", "consumable"]),
+        "slot": st.sampled_from(list(EQUIPMENT_SLOTS)),
     })
 
 
@@ -467,3 +480,288 @@ class TestProperty26RankXPOrdering:
         ranks[-1]["xp_threshold"] = ranks[-2]["xp_threshold"]
         errors = validator.validate_ranks(ranks)
         assert len(errors) > 0, "Duplicate xp_thresholds should produce error"
+
+
+# ================================================================== #
+#  PROPERTY 14 — Schema fail-fast (equipment-items feature)
+#
+#  **Validates: Requirements 3.4, 3.5, 3.6, 4.5, 5.7, 5.8, 13.5,
+#  15.1, 15.2**
+#
+#  The validator reports an error IF AND ONLY IF an item/balance config
+#  violates one of the item/balance schema rules:
+#    - a bad `category`                                    (Req 3.4)
+#    - a Gear item with a slot not in EQUIPMENT_SLOTS      (Req 3.5, 3.6)
+#    - a weapon with weapon_type not in {melee, ranged}    (Req 4.5)
+#    - an `ammo_type` not referencing an ammo item         (Req 5.7)
+#    - `ammo_type`/`magazine_size` on a melee weapon       (Req 5.8)
+#    - a negative `weight`                                 (Req 15.1)
+#    - an `effect.type` not in EFFECT_TYPES                (Req 13.5)
+#    - a `resource_weights` key not in RESOURCE_TYPES /
+#      a negative value                                    (Req 15.2)
+#
+#  Rules are validated by three collaborating methods:
+#    - validate_items       (per-item category/slot/weapon_type/weight/effect)
+#    - cross_validate       (ammo_type FK + melee ammo-field rejection)
+#    - validate_balance     (resource_weights)
+# ================================================================== #
+
+_ITEM_KEY = st.text(
+    min_size=1, max_size=12,
+    alphabet=st.characters(whitelist_categories=("L", "N")),
+)
+_ITEM_NAME = st.text(min_size=1, max_size=20)
+
+# Category strings guaranteed to be OUTSIDE the controlled vocabulary.
+_BAD_CATEGORIES = ["gadget", "junk", "tool", "misc", "food", "material"]
+# A slot string guaranteed to be outside EQUIPMENT_SLOTS.
+_BAD_SLOT = "not_a_real_slot"
+
+
+@st.composite
+def clean_item_dict(draw):
+    """A single item dict the validator MUST accept (no validate_items error)."""
+    category = draw(st.sampled_from(list(ITEM_CATEGORIES)))
+    item = {
+        "key": draw(_ITEM_KEY),
+        "name": draw(_ITEM_NAME),
+        "category": category,
+    }
+    if category in GEAR_CATEGORIES:
+        # A weapon must occupy the `weapon` slot (combat resolves it there);
+        # armor/accessory gear may occupy any body slot.
+        if category == "weapon":
+            item["slot"] = "weapon"
+        else:
+            item["slot"] = draw(st.sampled_from(list(EQUIPMENT_SLOTS)))
+    if category == "weapon":
+        wt = draw(st.sampled_from(list(WEAPON_TYPES)))
+        item["weapon_type"] = wt
+        if wt == "ranged":
+            if draw(st.booleans()):
+                item["magazine_size"] = draw(st.integers(min_value=1, max_value=100))
+            if draw(st.booleans()):
+                item["ammo_per_shot"] = draw(st.integers(min_value=1, max_value=10))
+    if category in ("consumable", "throwable") and draw(st.booleans()):
+        item["effect"] = {"type": draw(st.sampled_from(list(EFFECT_TYPES)))}
+    if draw(st.booleans()):
+        item["weight"] = draw(
+            st.floats(min_value=0, max_value=100, allow_nan=False, allow_infinity=False)
+        )
+    return item
+
+
+@st.composite
+def item_and_validity(draw):
+    """Yield ``(item_dict, expect_error)`` for the validate_items iff test.
+
+    With ~50% probability a single guaranteed-invalid mutation is injected;
+    otherwise the item is left clean. ``expect_error`` records which.
+    """
+    item = draw(clean_item_dict())
+    if not draw(st.booleans()):
+        return item, False
+
+    category = item["category"]
+    defects = ["bad_category", "negative_weight"]
+    if category in GEAR_CATEGORIES:
+        defects.append("bad_slot")
+    if category == "weapon":
+        defects.append("bad_weapon_type")
+    else:
+        defects.append("weapon_type_on_nonweapon")
+    if category in ("consumable", "throwable"):
+        defects.append("bad_effect_type")
+
+    defect = draw(st.sampled_from(defects))
+    if defect == "bad_category":
+        item["category"] = draw(st.sampled_from(_BAD_CATEGORIES))
+    elif defect == "negative_weight":
+        item["weight"] = draw(
+            st.floats(min_value=-100, max_value=-0.01, allow_nan=False, allow_infinity=False)
+        )
+    elif defect == "bad_slot":
+        item["slot"] = _BAD_SLOT
+    elif defect == "bad_weapon_type":
+        item["weapon_type"] = draw(st.sampled_from(["gun", "sword", "laser", ""]))
+    elif defect == "weapon_type_on_nonweapon":
+        item["weapon_type"] = draw(st.sampled_from(list(WEAPON_TYPES)))
+    elif defect == "bad_effect_type":
+        item["effect"] = {"type": draw(st.sampled_from(["explode", "freeze", "", "damage"]))}
+    return item, True
+
+
+def _make_registry(items_dict):
+    """A minimal DataRegistry-shaped object for cross_validate.
+
+    Every collection except ``items`` is empty, so only the ammo_type FK and
+    melee ammo-field rules can produce errors (all ItemDefs use the default
+    ``required_rank=None``/``ammo_cost=None``).
+    """
+    return SimpleNamespace(
+        terrain={},
+        ranks=[],
+        buildings={},
+        items=items_dict,
+        technologies={},
+        powerups={},
+        item_production_map={},
+        planets={},
+    )
+
+
+@st.composite
+def ammo_fk_case(draw):
+    """Yield ``(items_dict, expect_error)`` exercising the ammo_type FK (Req 5.7)."""
+    ammo_key = draw(_ITEM_KEY)
+    weapon_key = draw(_ITEM_KEY)
+    assume(ammo_key != weapon_key)
+
+    if not draw(st.booleans()):
+        # Valid: ranged weapon references an existing ammo-category item.
+        items = {
+            ammo_key: ItemDef(key=ammo_key, name="ammo", category="ammo", slot=""),
+            weapon_key: ItemDef(
+                key=weapon_key, name="rifle", category="weapon",
+                weapon_type="ranged", slot="weapon",
+                ammo_type=ammo_key, magazine_size=10,
+            ),
+        }
+        return items, False
+
+    # Invalid: either a dangling reference or a reference to a non-ammo item.
+    mode = draw(st.sampled_from(["dangling", "wrong_category"]))
+    items = {
+        weapon_key: ItemDef(
+            key=weapon_key, name="rifle", category="weapon",
+            weapon_type="ranged", slot="weapon",
+            ammo_type=ammo_key, magazine_size=10,
+        ),
+    }
+    if mode == "wrong_category":
+        other = draw(st.sampled_from(["armor", "consumable", "throwable", "accessory", "weapon"]))
+        items[ammo_key] = ItemDef(key=ammo_key, name="x", category=other, slot="")
+    # (dangling: ammo_key intentionally absent from items)
+    return items, True
+
+
+@st.composite
+def melee_ammo_case(draw):
+    """Yield ``(items_dict, expect_error)`` exercising melee ammo-field rejection (Req 5.8)."""
+    weapon_key = draw(_ITEM_KEY)
+
+    if not draw(st.booleans()):
+        # Valid melee weapon: no ammo_type, no magazine_size, default ammo_per_shot.
+        items = {
+            weapon_key: ItemDef(
+                key=weapon_key, name="knife", category="weapon",
+                weapon_type="melee", slot="weapon",
+            ),
+        }
+        return items, False
+
+    # Invalid: a melee weapon that declares one of the forbidden ammo fields.
+    defect = draw(st.sampled_from(["ammo_type", "magazine_size", "ammo_per_shot"]))
+    weapon = ItemDef(
+        key=weapon_key, name="knife", category="weapon",
+        weapon_type="melee", slot="weapon",
+    )
+    items = {weapon_key: weapon}
+    if defect == "ammo_type":
+        ammo_key = draw(_ITEM_KEY)
+        assume(ammo_key != weapon_key)
+        # A real ammo item exists so the FK passes; only the melee rule fires.
+        items[ammo_key] = ItemDef(key=ammo_key, name="ammo", category="ammo", slot="")
+        weapon.ammo_type = ammo_key
+    elif defect == "magazine_size":
+        weapon.magazine_size = draw(st.integers(min_value=1, max_value=50))
+    else:  # ammo_per_shot != 1
+        weapon.ammo_per_shot = draw(st.integers(min_value=2, max_value=10))
+    return items, True
+
+
+@st.composite
+def resource_weights_case(draw):
+    """Yield ``(balance_dict, expect_error)`` exercising resource_weights (Req 15.2)."""
+    if not draw(st.booleans()):
+        # Valid: keys subset of RESOURCE_TYPES, values >= 0.
+        keys = draw(st.lists(
+            st.sampled_from(list(RESOURCE_TYPES)),
+            unique=True, max_size=len(RESOURCE_TYPES),
+        ))
+        rw = {
+            k: draw(st.floats(min_value=0, max_value=100, allow_nan=False, allow_infinity=False))
+            for k in keys
+        }
+        return {"resource_weights": rw}, False
+
+    mode = draw(st.sampled_from(["bad_key", "negative_value"]))
+    if mode == "bad_key":
+        bad = draw(
+            st.text(min_size=1, max_size=10).filter(lambda s: s not in RESOURCE_TYPES)
+        )
+        rw = {bad: draw(st.floats(min_value=0, max_value=10, allow_nan=False, allow_infinity=False))}
+    else:
+        k = draw(st.sampled_from(list(RESOURCE_TYPES)))
+        rw = {k: draw(
+            st.floats(min_value=-100, max_value=-0.01, allow_nan=False, allow_infinity=False)
+        )}
+    return {"resource_weights": rw}, True
+
+
+class TestProperty14SchemaFailFast:
+    """Property 14: the validator flags an item/balance config iff it violates a rule."""
+
+    @given(case=item_and_validity())
+    @settings(max_examples=300)
+    def test_validate_items_iff(self, case):
+        """validate_items errors iff a per-item rule is violated.
+
+        Covers bad category (Req 3.4), Gear slot (Req 3.5/3.6), weapon_type
+        (Req 4.5), negative weight (Req 15.1), and effect.type (Req 13.5).
+        """
+        item, expect_error = case
+        data = {"items": [item], "production_map": {}}
+        errors = validator.validate_items(data)
+        assert bool(errors) == expect_error, (
+            f"expected error={expect_error}, got errors={errors} for item={item}"
+        )
+
+    @given(case=ammo_fk_case())
+    @settings(max_examples=200)
+    def test_cross_validate_ammo_type_fk_iff(self, case):
+        """cross_validate errors iff a weapon's ammo_type does not reference an ammo item.
+
+        **Validates: Requirements 5.7**
+        """
+        items, expect_error = case
+        errors = validator.cross_validate(_make_registry(items))
+        assert bool(errors) == expect_error, (
+            f"expected error={expect_error}, got errors={errors} for items={items}"
+        )
+
+    @given(case=melee_ammo_case())
+    @settings(max_examples=200)
+    def test_cross_validate_melee_ammo_fields_iff(self, case):
+        """cross_validate errors iff a melee weapon declares ammo fields.
+
+        **Validates: Requirements 5.8**
+        """
+        items, expect_error = case
+        errors = validator.cross_validate(_make_registry(items))
+        assert bool(errors) == expect_error, (
+            f"expected error={expect_error}, got errors={errors} for items={items}"
+        )
+
+    @given(case=resource_weights_case())
+    @settings(max_examples=200)
+    def test_validate_balance_resource_weights_iff(self, case):
+        """validate_balance errors iff resource_weights has a bad key or negative value.
+
+        **Validates: Requirements 15.2**
+        """
+        data, expect_error = case
+        errors = validator.validate_balance(data)
+        assert bool(errors) == expect_error, (
+            f"expected error={expect_error}, got errors={errors} for data={data}"
+        )

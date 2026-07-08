@@ -31,6 +31,9 @@ count* is the complexity meter. All `file:line` references are current.
 | A schema field on a definition | 3 | 3 | 🟡 C | C |
 | A world system | 3 | 8 | 🟡 C | C |
 | A tunable balance value | 1 | 1 | 🟢 A | A |
+| **An equipment slot / item category** | 1 | 1–2 | 🟢 A | new — data‑only (constant + data) |
+| **A resource weight** | 1 | 1 | 🟢 A | new — `balance.yaml` |
+| **An item EFFECT type** | 3–4 | 4 | 🟡 C | new — tuple + validator + use/throw branch + presenter |
 | **Restyle a player notification** | 1 | 1 | 🟢 A | 🟡 C (was inline in systems) |
 | **A framework/DB swap for a port** | 1 | 1 | 🟢 A | 🔴 (was woven through systems) |
 
@@ -163,6 +166,34 @@ compatibility.
 `_resolve` (key **or** name, case/underscore-insensitive, `None` on miss), so
 player-facing commands accept either the abbreviation or the human name for any
 of these types.
+
+### 2f. Equipment / items touchpoints (from the equipment-items feature) 🟢/🟡
+
+The equipment layer was designed so the *common* extensions stay data-only, and
+the one genuinely cross-cutting extension is honestly flagged as not:
+
+- **Add an equipment slot or item category — 🟢 data-only.** A slot is one entry
+  in the `EQUIPMENT_SLOTS` tuple ([`world/constants.py`](world/constants.py)); a
+  category is one entry in `ITEM_CATEGORIES` (plus `GEAR_CATEGORIES`/`SUPPLY_CATEGORIES`).
+  The schema validator, the paperdoll, and `get_stat_total` all iterate the
+  constant, so the new slot/category is picked up everywhere; individual items are
+  then authored in [`items.yaml`](data/definitions/items.yaml). Constant + data,
+  no logic edit.
+
+- **Add a resource weight — 🟢 `balance.yaml`.** Per-resource carry weight is a
+  hot-tunable entry in `BalanceConfig.resource_weights`
+  ([`data/config/balance.yaml`](data/config/balance.yaml)); a resource absent from
+  the map defaults to `DEFAULT_RESOURCE_WEIGHT`. One tunable value, no code.
+
+- **Add an item EFFECT type — 🟡 *not* data-only.** Unlike a slot or category, a
+  new `effect.type` (`heal`/`buff`/`aoe_damage` today) needs **four** edits: the
+  `EFFECT_TYPES` tuple in [`constants.py`](world/constants.py), a validator rule for
+  its effect payload in [`schema_validator.py`](world/schema_validator.py), a
+  `use`/`throw` branch in [`equipment_system.py`](world/systems/equipment_system.py)
+  that actually applies it, and (usually) a presenter kind for the outcome message.
+  This is inherent: the three effect mechanics are genuinely different, so a
+  handler-registry would only relocate the branch, not remove it. Flagged 🟡 rather
+  than pretending it is data-only.
 
 ---
 
