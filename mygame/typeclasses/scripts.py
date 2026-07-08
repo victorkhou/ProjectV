@@ -176,20 +176,44 @@ class GameTickScript(DefaultScript):
     def _get_all_buildings(self):
         """Return all Building objects in the game world.
 
-        Uses Evennia's tag-based search to find objects tagged as
-        buildings. Falls back to an empty list if unavailable.
+        Uses Evennia's tag-based search to find objects tagged as buildings.
+        The result is cached on the script and reused across ticks: the tag
+        search runs only when the building-index generation advances (a
+        building was created or destroyed — see ``world.building_index``),
+        instead of issuing a full DB query every second. Falls back to an empty
+        list if the search is unavailable.
 
         Returns:
             list of Building objects.
         """
         try:
+            from world import building_index
+            generation = building_index.generation()
+        except Exception:  # noqa: BLE001 - if the counter is unavailable, don't cache
+            generation = None
+
+        # Serve the cache while the world's building set is unchanged.
+        if (
+            generation is not None
+            and getattr(self, "_buildings_cache_gen", None) == generation
+            and getattr(self, "_buildings_cache", None) is not None
+        ):
+            return self._buildings_cache
+
+        try:
             from evennia.utils.search import search_object_by_tag
 
-            return list(search_object_by_tag(
+            buildings = list(search_object_by_tag(
                 key="building", category="object_type"
             ))
         except Exception:
             return []
+
+        # Cache against the generation we observed (skip caching if unknown).
+        if generation is not None:
+            self._buildings_cache = buildings
+            self._buildings_cache_gen = generation
+        return buildings
 
     def _compute_active_data(self, chunking, online_players):
         """Compute active buildings from chunk filtering.

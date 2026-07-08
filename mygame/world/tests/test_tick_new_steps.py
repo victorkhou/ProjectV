@@ -316,5 +316,55 @@ class TestStepOrdering(unittest.TestCase):
         self.assertIn("combat_timer_decrement", step_names)
 
 
+class TestBuildingCacheInvalidation(unittest.TestCase):
+    """_get_all_buildings caches the tag search and re-runs it only when a
+    building is created/destroyed (the building-index generation advances)."""
+
+    def setUp(self):
+        from world import building_index
+        self._building_index = building_index
+        self.calls = 0
+
+        # _get_all_buildings imports `from evennia.utils.search import
+        # search_object_by_tag`. The lightweight test env stubs evennia.utils as
+        # a plain module, so register a counting search module for the import.
+        self._had_search = "evennia.utils.search" in sys.modules
+        self._orig_search_mod = sys.modules.get("evennia.utils.search")
+        search_mod = types.ModuleType("evennia.utils.search")
+
+        def _counting_search(key=None, category=None):
+            self.calls += 1
+            return ["b1", "b2"]
+
+        search_mod.search_object_by_tag = _counting_search
+        sys.modules["evennia.utils.search"] = search_mod
+        # Advance the generation so the cache from any prior test is stale.
+        building_index.bump()
+
+    def tearDown(self):
+        if self._had_search:
+            sys.modules["evennia.utils.search"] = self._orig_search_mod
+        else:
+            sys.modules.pop("evennia.utils.search", None)
+
+    def test_repeated_calls_hit_cache_until_bump(self):
+        script = GameTickScript()
+        first = script._get_all_buildings()
+        script._get_all_buildings()
+        script._get_all_buildings()
+        # Three calls, no building create/destroy -> one DB search.
+        self.assertEqual(self.calls, 1)
+        self.assertEqual(first, ["b1", "b2"])
+
+        # A building create/destroy bumps the generation -> one re-search.
+        self._building_index.bump()
+        script._get_all_buildings()
+        self.assertEqual(self.calls, 2)
+
+        # Steady state again — no further searches.
+        script._get_all_buildings()
+        self.assertEqual(self.calls, 2)
+
+
 if __name__ == "__main__":
     unittest.main()

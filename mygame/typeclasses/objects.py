@@ -341,6 +341,34 @@ class Building(GameEntity):
     _object_type_tag = "building"
 
     # ------------------------------------------------------------------ #
+    #  Lifecycle — keep the tick loop's building-index cache fresh
+    # ------------------------------------------------------------------ #
+
+    def at_object_creation(self):
+        """Tag/init as a GameEntity, then invalidate the building-index cache."""
+        super().at_object_creation()
+        self._bump_building_index()
+
+    def at_object_delete(self):
+        """Clean up the coordinate index, then invalidate the building cache."""
+        result = super().at_object_delete()
+        self._bump_building_index()
+        return result
+
+    @staticmethod
+    def _bump_building_index() -> None:
+        """Advance the building-index generation so the tick loop re-searches.
+
+        Guarded so a building create/delete never fails if the counter module
+        is somehow unavailable (defensive; it is a pure-stdlib module).
+        """
+        try:
+            from world import building_index
+            building_index.bump()
+        except Exception:  # noqa: BLE001 - cache freshness must not block lifecycle
+            pass
+
+    # ------------------------------------------------------------------ #
     #  Properties
     # ------------------------------------------------------------------ #
 
