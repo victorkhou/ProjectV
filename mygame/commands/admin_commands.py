@@ -110,12 +110,18 @@ class CmdAdminBuilding(AdminSubcommandRouter):
     """Manage buildings on the overworld.
 
     Usage:
-        @building spawn <type> [owner=<name>] [level=<N>]
-        @building destroy
+      @building spawn <type> [owner=<name>] [level=<N>]
+      @building destroy
+
+    Options:
+      <type>         building abbreviation (EX) or full name (extractor)
+      [owner=<name>] owner to assign; 'none' for an unowned building
+                     (defaults to you)
+      [level=<N>]    starting level 1-5 (defaults to 1)
 
     Subcommands:
-        spawn   — Spawn a building at your current tile (Builder+)
-        destroy — Destroy the building at your current tile (Builder+)
+      spawn   — Spawn a building at your current tile (Builder+)
+      destroy — Destroy the building at your current tile (Builder+)
 
     """
 
@@ -157,17 +163,30 @@ class CmdAdminBuilding(AdminSubcommandRouter):
                     caller.msg("Level must be a number 1-5.")
                     return
 
-        # Validate building type exists
+        # Validate building type exists. Accept an abbreviation (EX) or a full
+        # name (extractor) — same as the player 'build' command — via the
+        # registry's typo-tolerant resolver, falling back to abbreviation.
         registry = _get_registry(caller)
         if registry:
-            try:
-                bdef = registry.get_building(btype)
-            except KeyError:
+            bdef = None
+            resolver = getattr(registry, "resolve_building", None)
+            if callable(resolver):
+                bdef = resolver(parts[0])
+            if bdef is None:
+                try:
+                    bdef = registry.get_building(btype)
+                except KeyError:
+                    bdef = None
+            if bdef is None:
+                # List the real, current abbreviations from the registry rather
+                # than a hardcoded string that can drift from buildings.yaml.
+                valid = ", ".join(sorted(getattr(registry, "buildings", {}) or {}))
                 caller.msg(
-                    f"Unknown building type '{btype}'. "
-                    "Valid: HQ, MM, QQ, II, LL, KK, AA, AR, VV, TL, HV"
+                    f"Unknown building type '{parts[0]}'. "
+                    f"Valid: {valid or 'none loaded'}"
                 )
                 return
+            btype = bdef.abbreviation
         else:
             bdef = None
 
@@ -869,15 +888,20 @@ class CmdTeleport(BaseCommand):
     """Teleport to coordinates on the overworld.
 
     Usage:
-        teleport <x>,<y>,<planet>
-        teleport <x>,<y>
+      @teleport <x> <y> [planet]
 
-    If planet is omitted, uses your current planet.
-    Updates coordinates via PlanetRoom.move_entity.
+    Options:
+      <x> <y>   destination coordinates (spaces or commas: "25 25" or "25,25")
+      [planet]  optional target planet by name, prefix, or z-level (0/1/2);
+                defaults to your current planet
 
     Examples:
-        teleport 50,50,earth_planet
-        teleport 25,25
+      @teleport 25 25
+      @teleport 25,25
+      @teleport 50 50 earth
+
+    Notes:
+      Aliases: @tel. Builder+ only.
     """
 
     key = "@teleport"
@@ -885,16 +909,21 @@ class CmdTeleport(BaseCommand):
     locks = "cmd:perm(Builder);view:perm(Builder)"
     help_category = "Admin"
 
+    _USAGE = "Usage: teleport <x> <y> [planet]  (commas optional: <x>,<y>)"
+
     def func(self):
         caller = self.caller
         args = self.args.strip()
         if not args:
-            caller.msg("Usage: teleport <x>,<y>[,<planet|z_level>]")
+            caller.msg(self._USAGE)
             return
 
-        parts = [p.strip() for p in args.split(",")]
+        # Accept commas or spaces interchangeably between all parts, so
+        # "25 25", "25,25", "50 50 earth", and "50,50,earth" all parse — the
+        # same coordinate convention the 'throw' command uses.
+        parts = args.replace(",", " ").split()
         if len(parts) < 2:
-            caller.msg("Usage: teleport <x>,<y>[,<planet|z_level>]")
+            caller.msg(self._USAGE)
             return
 
         try:
@@ -995,13 +1024,15 @@ class CmdClearFog(BaseCommand):
 class CmdPurgeRooms(BaseCommand):
     """Delete all legacy OverworldRoom objects from the database.
 
-    Removes all remaining OverworldRoom objects as migration cleanup.
-    Run @migraterooms first to move buildings and resources to PlanetRoom.
+    Removes leftover OverworldRoom objects as a one-time migration cleanup
+    (the game now uses a single PlanetRoom per planet).
 
     Usage:
-        @purgerooms
+      @purgerooms
 
-    Restricted to Builder+ permission level.
+    Notes:
+      Builder+ only. This is a destructive, irreversible cleanup — run it
+      only when you know the legacy rooms are no longer needed.
     """
 
     key = "@purgerooms"

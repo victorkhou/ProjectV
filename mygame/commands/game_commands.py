@@ -509,10 +509,17 @@ class CmdMove(GameCommand):
 
 
 class CmdHarvest(GameCommand):
-    """Gather a resource from the current tile.
+    """Gather the resource on your current tile.
 
     Usage:
-        harvest
+      harvest
+
+    Notes:
+      Alias: ha. You keep gathering every few seconds while you stay on the
+      tile — moving or acting stops it. Standing on an Extractor harvests
+      much faster, and a harvester agent assigned to one does it for you.
+      Watched by your carry weight: a full pack drops the overflow on the
+      ground. See 'help resources'.
     """
 
     key = "harvest"
@@ -537,15 +544,27 @@ class CmdHarvest(GameCommand):
 
 
 class CmdBuild(GameCommand):
-    """Construct a building on the current tile.
+    """Construct a building on your current tile.
 
     Usage:
-        build <type>
+      build <type>
+      build
 
-    Example: build HQ
+    Options:
+      <type>  which building to construct, by abbreviation (EX) or full
+              name (extractor). Examples: HQ, EX, AC, AR, LB, TU, VT, WL.
+      (none)  with no argument: resumes your unfinished building on this
+              tile if there is one, otherwise lists what you can build now.
 
-    If you're on a tile with your own incomplete building, typing
-    ``build`` (no arguments) resumes construction.
+    Examples:
+      build HQ
+      build extractor
+      build
+
+    Notes:
+      Alias: bu. Stay on the tile while it builds, or assign an Engineer
+      agent to finish it. Your HQ must exist before most other buildings.
+      See 'help buildings' for the full type list and what each does.
     """
 
     key = "build"
@@ -783,10 +802,23 @@ class CmdDemolish(GameCommand):
 
 
 class CmdAttack(GameCommand):
-    """Queue an attack against a target.
+    """Attack a player, building, or agent.
 
     Usage:
-        attack <target>
+      attack <target>
+
+    Options:
+      <target>  name of something on or near your tile to attack
+
+    Examples:
+      attack goblin
+      attack turret
+
+    Notes:
+      Aliases: at, a. Damage is your equipped weapon's power plus bonuses,
+      minus the target's armor. Melee weapons only reach the adjacent tile;
+      ranged weapons reach further and fire from a loaded magazine (see
+      'reload'). Equip a weapon first with 'equip'. See 'help combat'.
     """
 
     key = "attack"
@@ -823,10 +855,24 @@ class CmdAttack(GameCommand):
 
 
 class CmdEquip(GameCommand):
-    """Equip an item from your inventory.
+    """Wear an item from your inventory in its slot.
 
     Usage:
-        equip <item>
+      equip <item>
+
+    Options:
+      <item>  name of a piece of gear you are carrying (weapon, armor, or
+              accessory). It goes into its own slot automatically.
+
+    Examples:
+      equip combat helmet
+      equip assault rifle
+
+    Notes:
+      Equipping into an occupied slot swaps out the old item. Powerful gear
+      may require a minimum rank — you'll be told if you're not high enough.
+      See your full loadout with 'equipment' and take gear off with 'unequip'.
+      See 'help equipment'.
     """
 
     key = "equip"
@@ -854,29 +900,85 @@ class CmdEquip(GameCommand):
 
 
 class CmdUnequip(GameCommand):
-    """Unequip an item from a slot.
+    """Take off a piece of equipment.
 
     Usage:
-        unequip <slot>
+      unequip <item>
+      unequip <slot>
+
+    Options:
+      <item>  name of the equipped item to remove (e.g. "assault rifle")
+      <slot>  or the slot to clear directly. One of:
+              head, eyes, face, torso, arms, hands, legs, feet, back,
+              weapon, accessory
+
+    Examples:
+      unequip assault rifle
+      unequip weapon
+      unequip head
+
+    Notes:
+      Accepts either the item's name or its slot — whichever is easier. See
+      what's in each slot with 'equipment'. See 'help equipment'.
     """
 
     key = "unequip"
     help_category = "Game"
 
     def func(self):
-        slot = self.args.strip().lower()
-        if not slot:
-            self.caller.msg("Usage: unequip <slot>")
+        arg = self.args.strip()
+        if not arg:
+            self.caller.msg("Usage: unequip <item> (or <slot>)")
             return
 
         equipment_system = self.require_system("equipment_system")
         if equipment_system is None:
             return
 
+        slot = _resolve_unequip_slot(self.caller, arg)
+        if slot is None:
+            self.caller.msg(
+                f"You have nothing equipped matching '{arg}'. "
+                f"Try 'equipment' to see your slots."
+            )
+            return
+
         # The system validates the slot and emits the player-facing
         # notification (unequipped) via the presenter on success; the command
         # composes no success/failure string here.
         equipment_system.unequip(self.caller, slot)
+
+
+def _resolve_unequip_slot(caller, arg):
+    """Resolve an ``unequip`` argument to an occupied equipment slot.
+
+    Accepts either a canonical slot name (``weapon``, ``head``, …) or the name
+    of an equipped item (``assault rifle``, ``assault_rifle``). Returns the slot
+    string to clear, or ``None`` when nothing matches.
+
+    A slot name is honoured only if that slot is actually occupied, so the
+    item-name path can still match when a player types something ambiguous.
+    """
+    from world.constants import EQUIPMENT_SLOTS
+
+    handler = getattr(caller, "equipment", None)
+    if handler is None:
+        return None
+    equipped = handler.get_all_equipped()  # slot -> item
+    token = arg.strip().lower()
+
+    # 1) Direct slot name (only if that slot holds something).
+    if token in EQUIPMENT_SLOTS and token in equipped:
+        return token
+
+    # 2) Match by item name/key, case- and separator-insensitive.
+    norm = token.replace("_", " ")
+    for slot, item in equipped.items():
+        for attr in ("name", "key"):
+            val = getattr(item, attr, None)
+            if val and str(val).replace("_", " ").lower() == norm:
+                return slot
+    return None
 
 
 def _resolve_item_key(caller, token):
@@ -904,13 +1006,39 @@ def _is_int_token(token):
     return body.isdigit()
 
 
+def _parse_coords(text):
+    """Parse a trailing coordinate pair, accepting ``x y`` or ``x,y``.
+
+    Standardises coordinate entry across commands (throw, teleport): commas
+    and whitespace are interchangeable, so ``12 8``, ``12,8`` and ``12, 8`` all
+    parse. Returns ``(x, y)`` as ints, or ``None`` if *text* is not exactly two
+    integer tokens.
+    """
+    tokens = text.replace(",", " ").split()
+    if len(tokens) == 2 and _is_int_token(tokens[0]) and _is_int_token(tokens[1]):
+        return int(tokens[0]), int(tokens[1])
+    return None
+
+
 class CmdUse(GameCommand):
-    """Use a consumable from your Supply_Bag.
+    """Use a consumable from your supply bag.
 
     Usage:
-        use <item>
+      use <item>
 
-    Example: use medkit
+    Options:
+      <item>  a consumable you carry, by name or key. Consumables include:
+              medkit       — restore health
+              combat_stim  — a temporary combat buff
+
+    Examples:
+      use medkit
+      use combat stim
+
+    Notes:
+      Consumables are counted supplies, not worn gear — make them at a
+      Medbay. Uses one unit; a medkit at full health is refused (not wasted).
+      See 'help equipment'.
     """
 
     key = "use"
@@ -939,22 +1067,34 @@ class CmdUse(GameCommand):
 
 
 class CmdThrow(GameCommand):
-    """Throw a throwable at a target or coordinates.
+    """Throw a throwable at a target or a map location.
 
     Usage:
-        throw <item> <target>
-        throw <item> <x> <y>
+      throw <item> <target>
+      throw <item> <x> <y>
+      throw <item> <x>,<y>
+
+    Options:
+      <item>    a throwable you carry (e.g. frag_grenade)
+      <target>  a nearby thing to center the blast on
+      <x> <y>   explicit coordinates (space- or comma-separated)
 
     Examples:
-        throw grenade goblin
-        throw frag_grenade 12 8
+      throw frag_grenade goblin
+      throw frag_grenade 12 8
+      throw frag_grenade 12,8
+
+    Notes:
+      Alias: th. Area damage hits everything in range — including your own
+      agents and buildings, so mind your placement. Throwables come from a
+      Lab. See 'help combat'.
     """
 
     key = "throw"
     aliases = ["th"]
     help_category = "Game"
 
-    _USAGE = "Usage: throw <item> <target>|<x> <y>"
+    _USAGE = "Usage: throw <item> <target> (or <x> <y>)"
 
     def func(self):
         caller = self.caller
@@ -978,13 +1118,24 @@ class CmdThrow(GameCommand):
         if self.require_coords() is None:
             return
 
-        # Target parse: trailing "<x> <y>" integer pair is explicit
-        # coordinates; otherwise the final token is a target name resolved to
-        # its coordinates via caller.search.
-        if len(tokens) >= 3 and _is_int_token(tokens[-2]) and _is_int_token(tokens[-1]):
-            tx, ty = int(tokens[-2]), int(tokens[-1])
-            item_str = " ".join(tokens[:-2])
-        else:
+        # Target parse: trailing coordinates as "<x> <y>" or "<x>,<y>" are
+        # explicit; otherwise the final token is a target name resolved to its
+        # coordinates via caller.search.
+        tx = ty = None
+        # "<x> <y>" — last two tokens are a coordinate pair (needs item + 2).
+        if len(tokens) >= 3:
+            pair = _parse_coords(" ".join(tokens[-2:]))
+            if pair is not None:
+                tx, ty = pair
+                item_str = " ".join(tokens[:-2])
+        # "<x>,<y>" — single trailing comma token is a coordinate pair.
+        if tx is None and len(tokens) >= 2:
+            pair = _parse_coords(tokens[-1])
+            if pair is not None:
+                tx, ty = pair
+                item_str = " ".join(tokens[:-1])
+
+        if tx is None:
             target_name = tokens[-1]
             item_str = " ".join(tokens[:-1])
             target = caller.search(target_name) if hasattr(caller, "search") else None
@@ -1017,10 +1168,16 @@ class CmdThrow(GameCommand):
 
 
 class CmdReload(GameCommand):
-    """Reload your equipped ranged weapon from your Supply_Bag.
+    """Refill your equipped ranged weapon's magazine.
 
     Usage:
-        reload
+      reload
+
+    Notes:
+      Alias: rl. Transfers matching ammo from your supply bag into the
+      equipped ranged weapon until the magazine is full. Keep ammo stocked
+      (make it at an Armory or Lab). 'equipment' shows your loaded count.
+      Melee weapons and full magazines need no reload. See 'help combat'.
     """
 
     key = "reload"
@@ -1066,16 +1223,28 @@ def _parse_resource_amount(args):
 
 
 class CmdDeposit(GameCommand):
-    """Deposit resources into a co-located storage building.
+    """Move resources from you into your storage building.
 
     Usage:
-        deposit <resource> [<amount>|all]
+      deposit <resource> <amount>
+      deposit <resource> all
+      deposit <resource>
 
-    Examples: deposit iron 100 · deposit iron all · deposit iron
+    Options:
+      <resource>  which resource to store (wood, stone, iron, energy, …)
+      <amount>    how many units; a positive number
+      all         deposit everything you hold of that resource
+      (no amount) same as 'all'
 
-    Moves resources from your person into a storage building (HQ, Vault) on
-    your current tile, up to the building's remaining capacity. With no amount
-    (or ``all``), deposits everything you hold of that resource.
+    Examples:
+      deposit iron 100
+      deposit iron all
+      deposit wood
+
+    Notes:
+      Alias: dep. Stand on a storage building you own (your HQ or a Vault).
+      Deposits fill up to the building's remaining capacity; the rest stays
+      on you. You can only use storage you own. See 'help storage'.
     """
 
     key = "deposit"
@@ -1116,16 +1285,28 @@ class CmdDeposit(GameCommand):
 
 
 class CmdWithdraw(GameCommand):
-    """Withdraw resources from a co-located storage building.
+    """Take resources from your storage building onto you.
 
     Usage:
-        withdraw <resource> [<amount>|all]
+      withdraw <resource> <amount>
+      withdraw <resource> all
+      withdraw <resource>
 
-    Examples: withdraw iron 100 · withdraw iron all · withdraw iron
+    Options:
+      <resource>  which resource to take (wood, stone, iron, energy, …)
+      <amount>    how many units; a positive number
+      all         take as much as the building stores
+      (no amount) same as 'all'
 
-    Moves resources from a storage building (HQ, Vault) on your current tile
-    onto your person, up to your remaining carry weight. With no amount (or
-    ``all``), withdraws as much as the building stores (capped by carry weight).
+    Examples:
+      withdraw iron 100
+      withdraw energy all
+      withdraw wood
+
+    Notes:
+      Alias: wd. Stand on a storage building you own (your HQ or a Vault).
+      Capped by your remaining carry weight — the rest stays in storage. You
+      can only use storage you own. See 'help storage'.
     """
 
     key = "withdraw"
@@ -1164,10 +1345,20 @@ class CmdWithdraw(GameCommand):
 
 
 class CmdResearch(GameCommand):
-    """Start researching a technology at your Tech Lab.
+    """Start researching a technology at your Lab.
 
     Usage:
-        research <tech_key>
+      research <tech>
+
+    Options:
+      <tech>  key of the technology to research
+
+    Examples:
+      research improved_armor
+
+    Notes:
+      Alias: re. Requires a Lab (with an Engineer agent to progress it). List
+      what you've researched and what's available with 'technology'.
     """
 
     key = "research"
@@ -1189,10 +1380,21 @@ class CmdResearch(GameCommand):
 
 
 class CmdPowerup(GameCommand):
-    """Activate a powerup.
+    """Activate one of your powerups.
 
     Usage:
-        powerup <key>
+      powerup <key>
+
+    Options:
+      <key>  key of the powerup to activate
+
+    Examples:
+      powerup rapid_fire
+
+    Notes:
+      Alias: pu. Powerups give a timed combat boost and then go on cooldown.
+      Higher-rank powerups unlock as you progress. 'score' lists your active
+      powerups.
     """
 
     key = "powerup"
@@ -1428,16 +1630,17 @@ class CmdScore(GameCommand):
 
 
 class CmdEquipment(GameCommand):
-    """Display your current equipment loadout with stats.
-
-    A full paperdoll: every one of the eleven Equipment_Slots is listed
-    (empty slots included), each occupied slot shows its item and stat
-    modifiers, the equipped ranged weapon shows its loaded/magazine
-    ammunition count, and aggregated totals are shown for armor, damage,
-    move speed, and sight range.
+    """Show your full equipment loadout (paperdoll).
 
     Usage:
-        equipment
+      equipment
+
+    Notes:
+      Aliases: eq, gear. Lists all eleven slots (empties included), each
+      item's stat bonuses, your ranged weapon's loaded/magazine count, and
+      combined totals for armor, damage, move speed, and sight range. To put
+      gear on use 'equip <item>'; to take it off use 'unequip <item>'. See
+      'help equipment'.
     """
 
     key = "equipment"
@@ -1527,10 +1730,15 @@ class CmdEquipment(GameCommand):
 
 
 class CmdBuildings(GameCommand):
-    """List your owned buildings.
+    """List every building you own.
 
     Usage:
-        buildings
+      buildings
+
+    Notes:
+      Alias: bl. Shows each building's type, level, coordinates, health, and
+      whether it's still under construction. See 'help buildings' to learn
+      what each type does.
     """
 
     key = "buildings"
@@ -1570,10 +1778,15 @@ class CmdBuildings(GameCommand):
 
 
 class CmdScan(GameCommand):
-    """Show visible entities within sight range.
+    """List players, agents, and buildings within your sight range.
 
     Usage:
-        scan
+      scan
+
+    Notes:
+      Alias: sn. Reports every player, agent, and building within your vision
+      radius (extended by sight gear like a scope), nearest first, with each
+      one's coordinates and distance. To see terrain too, use 'map'.
     """
 
     key = "scan"
@@ -1581,66 +1794,99 @@ class CmdScan(GameCommand):
     help_category = "Game"
 
     def func(self):
-        loc = self.caller.location
+        from world.utils import is_player, is_building
+
+        caller = self.caller
+        loc = caller.location
         if loc is None:
-            self.caller.msg("You have no location.")
+            caller.msg("You have no location.")
             return
 
-        caller_x = getattr(self.caller.db, "coord_x", None)
-        caller_y = getattr(self.caller.db, "coord_y", None)
+        cx = getattr(caller.db, "coord_x", None)
+        cy = getattr(caller.db, "coord_y", None)
+        if cx is None or cy is None:
+            caller.msg("Cannot determine your position.")
+            return
+        cx, cy = int(cx), int(cy)
 
-        # Gather players at the same coordinates
-        players = []
-        if caller_x is not None and caller_y is not None and hasattr(loc, "get_players_at"):
-            for obj in loc.get_players_at(int(caller_x), int(caller_y)):
-                if obj is self.caller:
-                    continue
-                players.append(obj)
-        else:
-            # Legacy fallback: filter contents by coordinates
-            for obj in getattr(loc, "contents", []):
-                if obj is self.caller:
-                    continue
-                if hasattr(obj, "db") and hasattr(obj.db, "combat_xp"):
-                    if caller_x is not None and caller_y is not None:
-                        ox = getattr(obj.db, "coord_x", None)
-                        oy = getattr(obj.db, "coord_y", None)
-                        if ox is None or oy is None:
-                            continue
-                        if int(ox) != int(caller_x) or int(oy) != int(caller_y):
-                            continue
-                    players.append(obj)
+        radius = self._vision_radius(caller)
 
-        # Get buildings at player's coordinates from PlanetRoom
-        buildings = []
-        if caller_x is not None and caller_y is not None and hasattr(loc, "get_buildings_at"):
-            buildings = loc.get_buildings_at(int(caller_x), int(caller_y))
+        # Query everything in the vision box, then keep what's within the
+        # (Chebyshev) vision circle. Falls back to the caller's own tile if the
+        # room can't do an area lookup.
+        candidates = []
+        getter = getattr(loc, "get_objects_in_area", None)
+        if callable(getter):
+            candidates = list(getter(cx - radius, cy - radius, cx + radius, cy + radius))
+        elif hasattr(loc, "get_objects_at"):
+            candidates = list(loc.get_objects_at(cx, cy))
 
-        lines = ["|wScan Results:|n"]
+        players, buildings = [], []
+        for obj in candidates:
+            if obj is caller:
+                continue
+            ox = getattr(getattr(obj, "db", None), "coord_x", None)
+            oy = getattr(getattr(obj, "db", None), "coord_y", None)
+            if ox is None or oy is None:
+                continue
+            dist = max(abs(int(ox) - cx), abs(int(oy) - cy))  # Chebyshev
+            if dist > radius:
+                continue
+            if is_building(obj):
+                buildings.append((dist, int(ox), int(oy), obj))
+            elif is_player(obj):
+                players.append((dist, int(ox), int(oy), obj))
+
+        players.sort(key=lambda t: t[0])
+        buildings.sort(key=lambda t: t[0])
+
+        lines = [f"|wScan|n (within {radius} tiles):"]
         if players:
-            lines.append("  Players:")
-            for p in players:
-                lines.append(f"    {getattr(p, 'key', '?')}")
+            lines.append("  |wPlayers & agents:|n")
+            for dist, ox, oy, p in players:
+                lines.append(f"    {getattr(p, 'key', '?')} at ({ox},{oy}) — {dist} away")
         if buildings:
-            lines.append("  Buildings:")
-            for b in buildings:
+            lines.append("  |wBuildings:|n")
+            for dist, ox, oy, b in buildings:
                 btype = getattr(b, "building_type", None)
                 if btype is None and hasattr(b, "db"):
                     btype = getattr(b.db, "building_type", "??")
                 owner = getattr(b, "owner", None)
                 owner_name = getattr(owner, "key", "?") if owner else "?"
-                lines.append(f"    {btype} (owner: {owner_name})")
+                lines.append(
+                    f"    {btype} at ({ox},{oy}) — {dist} away (owner: {owner_name})"
+                )
         if not players and not buildings:
-            lines.append("  Nothing visible nearby.")
+            lines.append("  Nothing else visible nearby.")
 
-        self.caller.msg("\n".join(lines))
+        caller.msg("\n".join(lines))
+
+    @staticmethod
+    def _vision_radius(caller):
+        """The caller's scan radius: base player vision + equipped sight bonus."""
+        radius = 10
+        registry = _get_system(caller, "registry")
+        balance = getattr(registry, "balance", None) if registry else None
+        if balance is not None:
+            radius = int(getattr(balance, "player_vision_radius", radius))
+        equipment = getattr(caller, "equipment", None)
+        if equipment is not None:
+            try:
+                radius += int(equipment.get_stat_total("sight_range"))
+            except (TypeError, ValueError):
+                pass
+        return max(1, radius)
 
 
 class CmdTechnology(GameCommand):
-    """List researched and available technologies.
+    """List technologies you've researched and can research.
 
     Usage:
-        technology
+      technology
+
+    Notes:
+      Alias: tech. Shows completed research and what's currently available.
+      Start new research with 'research <tech>' at a Lab.
     """
 
     key = "technology"
@@ -1673,10 +1919,16 @@ class CmdTechnology(GameCommand):
 
 
 class CmdInventory(GameCommand):
-    """Display your resources and equipped items.
+    """Show what you're carrying.
 
     Usage:
-        inventory
+      inventory
+
+    Notes:
+      Aliases: inv, i. Lists your resources, equipped gear by slot, your
+      supplies (ammo, medkits, grenades), and your current carry weight
+      against your limit. See 'help storage' for how carry weight works and
+      'equipment' for a full gear paperdoll.
     """
 
     key = "inventory"
@@ -1752,10 +2004,22 @@ class CmdChat(GameCommand):
 
 
 class CmdMessage(GameCommand):
-    """Send a direct message to another player.
+    """Send a private message to another player.
 
     Usage:
-        message <player> <text>
+      message <player> <text>
+
+    Options:
+      <player>  the recipient's name (they need not be nearby)
+      <text>    the message to send
+
+    Examples:
+      message Ada meet me at the vault
+      tell Ada on my way
+
+    Notes:
+      Aliases: msg, dm, page, tell, whisper. For your current tile use 'say';
+      for everyone online use 'chat'.
     """
 
     key = "message"
@@ -1782,10 +2046,17 @@ class CmdMessage(GameCommand):
 
 
 class CmdSay(GameCommand):
-    """Say something to everyone in your current location.
+    """Speak to everyone on your current tile.
 
     Usage:
-        say <message>
+      say <message>
+
+    Examples:
+      say anyone selling iron?
+
+    Notes:
+      Only players on the same tile hear you. Use 'chat' for the public
+      channel, or 'message <player>' for a private message.
     """
 
     key = "say"
@@ -1959,14 +2230,23 @@ def _show_building_interior(caller, building):
 
 
 class CmdCloseExit(GameCommand):
-    """Close an exit in a building you own.
+    """Close one exit of the building you're inside.
 
     Usage:
-        closeexit <direction>
-        close <direction>
+      closeexit <direction>
 
-    Prevents anyone from entering or leaving through that direction.
-    Admin users are not affected by closed exits.
+    Options:
+      <direction>  north, south, east, west (or n, s, e, w)
+
+    Examples:
+      closeexit north
+      close e
+
+    Notes:
+      Alias: close. You must be inside a building you own. Closing blocks
+      movement through that side. You must leave at least one exit open (so
+      at most three can be closed). Re-open with 'openexit'. Admins are not
+      blocked by closed exits.
     """
 
     key = "closeexit"
@@ -2013,11 +2293,21 @@ class CmdCloseExit(GameCommand):
 
 
 class CmdOpenExit(GameCommand):
-    """Open a closed exit in a building you own.
+    """Re-open a closed exit of the building you're inside.
 
     Usage:
-        openexit <direction>
-        open <direction>
+      openexit <direction>
+
+    Options:
+      <direction>  north, south, east, west (or n, s, e, w)
+
+    Examples:
+      openexit north
+      open e
+
+    Notes:
+      Alias: open. You must be inside a building you own. Reverses
+      'closeexit'.
     """
 
     key = "openexit"
@@ -2059,6 +2349,77 @@ class CmdOpenExit(GameCommand):
         caller.msg(f"Opened the {direction} exit.")
 
 
+def _resolve_exit_command(cmd, action):
+    """Shared setup for the exit commands: parse direction and owned building.
+
+    Returns ``(building, direction, closed_set)`` on success, or ``None`` after
+    messaging the caller. *action* is the verb shown in the usage/error text
+    ("close", "open", or "toggle").
+    """
+    caller = cmd.caller
+    direction = cmd.args.strip().lower()
+    dir_map = {"n": "north", "s": "south", "e": "east", "w": "west"}
+    direction = dir_map.get(direction, direction)
+
+    if direction not in _CARDINAL_DIRS:
+        caller.msg(f"Usage: {cmd.key} <north, south, east, or west>")
+        return None
+    if not getattr(caller.db, "inside_building", False):
+        caller.msg(f"You must be inside a building to {action} an exit.")
+        return None
+    building = cmd._building_at_caller(caller)
+    if building is None:
+        caller.msg("No building here.")
+        return None
+    if not is_owner(caller, get_building_attr(building, "owner")):
+        caller.msg("You do not own this building.")
+        return None
+    return building, direction, get_closed_exits(building)
+
+
+class CmdExit(GameCommand):
+    """Toggle one exit of the building you're inside open or closed.
+
+    Usage:
+      exit <direction>
+
+    Options:
+      <direction>  north, south, east, west (or n, s, e, w)
+
+    Examples:
+      exit north
+      exit e
+
+    Notes:
+      You must be inside a building you own. If the exit is open it closes,
+      and vice versa — one command instead of separate 'closeexit'/'openexit'
+      (which still work). You must leave at least one exit open. Admins are
+      not blocked by closed exits.
+    """
+
+    key = "exit"
+    aliases = ["door"]
+    help_category = "Game"
+
+    def func(self):
+        resolved = _resolve_exit_command(self, "toggle")
+        if resolved is None:
+            return
+        building, direction, closed = resolved
+
+        if direction in closed:
+            closed.discard(direction)
+            building.attributes.add("closed_exits", list(closed))
+            self.caller.msg(f"Opened the {direction} exit.")
+        else:
+            if len(closed) >= 3:
+                self.caller.msg("You must leave at least one exit open.")
+                return
+            closed.add(direction)
+            building.attributes.add("closed_exits", list(closed))
+            self.caller.msg(f"Closed the {direction} exit.")
+
+
 class CmdStop(GameCommand):
     """Stop your current activity and return to idle.
 
@@ -2097,11 +2458,14 @@ class CmdStop(GameCommand):
 
 
 class CmdLeave(GameCommand):
-    """Leave the building you're currently inside.
+    """Step out of the building you're inside, onto its tile.
 
     Usage:
-        leave
-        outside
+      leave
+
+    Notes:
+      Aliases: out, outside, exit building. You stay on the same tile — step
+      back in with 'enter'. (Moving off the tile also leaves.)
     """
 
     key = "leave"
@@ -2191,13 +2555,25 @@ class CmdEnter(GameCommand):
 
 
 class CmdGet(GameCommand):
-    """Pick up an object at your current tile.
+    """Pick up something on your current tile.
 
     Usage:
-        get <object>
+      get <object>
+      get all
 
-    Only picks up objects at your coordinates. Objects at other
-    tiles in the same PlanetRoom are not accessible.
+    Options:
+      <object>  name of an item or resource drop on your tile
+      all       pick up everything gettable on the tile at once
+
+    Examples:
+      get medkit
+      get all
+
+    Notes:
+      Aliases: grab, take. Only picks up things at your exact coordinates —
+      objects on other tiles aren't reachable. Picking up resources is
+      subject to your carry weight; overflow stays on the ground. See
+      'help storage'.
     """
 
     key = "get"

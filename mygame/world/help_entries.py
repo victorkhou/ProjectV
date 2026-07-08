@@ -1,5 +1,5 @@
 """
-File-based help entries. These complements command-based help and help entries
+File-based help entries. These complement command-based help and help entries
 added in the database using the `sethelp` command in-game.
 
 Control where Evennia reads these entries with `settings.FILE_HELP_ENTRY_MODULES`,
@@ -22,9 +22,17 @@ Each dict is on the form
                           #           'read' is used for the index. If unset, everyone
                           #           can read/view the entry.
 
+Authoring style: follow ``mygame/HELP_STYLE.md`` — bold title, plain intro,
+``#`` section headings, commands in ``|w..|n`` and game nouns in ``|c..|n``,
+and a ``# See Also`` cross-link block at the end of every topic. Keep content
+in sync with the real data files (buildings.yaml, items.yaml, agent roles).
+
 """
 
 HELP_ENTRY_DICTS = [
+    # ----------------------------------------------------------------- #
+    #  Onboarding
+    # ----------------------------------------------------------------- #
     {
         "key": "tutorial",
         "aliases": ["new", "start", "getting started", "newbie", "beginner"],
@@ -32,79 +40,137 @@ HELP_ENTRY_DICTS = [
         "text": """
             |wWelcome, Commander.|n
 
-            You've been dropped on |cTerra|n with a handful of resources and
-            a mission: build a base, train agents, and expand across the
-            galaxy. Here's how to get started.
+            You've been dropped on |cTerra|n with a handful of resources and a
+            mission: build a base, train agents, arm yourself, and expand
+            across the galaxy. This is a real-time strategy game — the world
+            keeps ticking whether you act or not. Here's how to get started.
 
-            # Getting Started
+            # Step 1 — Find Your Spot
 
-            ## Step 1: Find Your Spot
+            Type |wmap|n to see the terrain around you. Look for tiles with
+            resources: |gForest|n (|G&&|n) gives |cWood|n, |wRock|n (|w##|n)
+            gives |cStone|n, and |WMountain|n (|W/\\|n) gives |cIron|n.
 
-            Use |wmap|n to see the terrain around you. Look for tiles with
-            resources — |gForest|n (|G&&|n) gives Wood, |wRock|n (|w##|n)
-            gives Stone, and |WMountain|n (|W/\\|n) gives Iron.
+            Set up near at least two resource types. Move with |wnorth|n,
+            |wsouth|n, |weast|n, |wwest|n (or just |wn|n, |ws|n, |we|n, |ww|n).
 
-            You want to set up near at least two different resource types.
-            Move with |wnorth|n, |wsouth|n, |weast|n, |wwest|n (or just
-            |wn|n, |ws|n, |we|n, |ww|n).
+            # Step 2 — Build a Headquarters
 
-            ## Step 2: Build a Headquarters
+            On a good tile, type |wbuild HQ|n and stay put while it builds.
+            Your |cHeadquarters|n is your home base and respawn point —
+            everything else requires it. See |whelp buildings|n.
 
-            Once you've found a good spot, type |wbuild HQ|n. Stay on the
-            tile while it constructs. This is your home base — everything
-            else requires it.
+            # Step 3 — Set Up Extractors
 
-            ## Step 3: Set Up Extractors
+            An |cExtractor|n multiplies harvesting on a resource tile. Walk to a
+            Forest or Rock tile and |wbuild EX|n. Build two if you can.
 
-            Extractors boost your harvesting when placed on resource tiles.
-            Walk to a Forest or Rock tile and |wbuild EX|n. You have enough
-            to build two, but you might need to harvest a bit for the second.
+            # Step 4 — Harvest
 
-            ## Step 4: Learn to Harvest
+            Stand on a resource tile and type |wharvest|n. You gather while you
+            stay put — much faster on an Extractor. See |whelp resources|n.
 
-            Stand on any resource tile and type |wharvest|n. You'll gather
-            resources as long as you stay put. Harvesting at an Extractor
-            is significantly faster than on raw terrain.
+            # Step 5 — Train an Agent
 
-            ## Step 5: Build an Academy
+            Build an |cAcademy|n (|wbuild AC|n), step inside, and type
+            |wagent train|n. Agents are NPC workers that scale your base.
 
-            You'll need an Academy to train agents. It costs more than your
-            starting resources, so you'll need to gather from your Extractors
-            first. Type |wbuild AC|n when you're ready.
+            # Step 6 — Put It to Work
 
-            ## Step 6: Train Your First Agent
+            Walk to an Extractor and type |wagent assign 2|n (use the id from
+            |wagent list|n). It harvests on its own from now on. See
+            |whelp agents|n.
 
-            Step inside your Academy and type |wtrain|n. Training takes time
-            and resources. Once your agent is ready, you can assign it to
-            work for you.
+            # Step 7 — Arm Yourself
 
-            ## Step 7: Put Your Agent to Work
-
-            Walk to one of your Extractors and type |wassign 2|n. Your agent
-            will start harvesting autonomously — no more standing around.
-            Type |wagents|n to see your roster.
+            Build an |cArmory|n (|wbuild AR|n) to produce weapons and armor, or
+            a |cMedbay|n (|wbuild MB|n) for medkits. |wequip|n gear, |wreload|n
+            weapons, and check your loadout with |wequipment|n. See
+            |whelp equipment|n and |whelp combat|n.
 
             # What's Next
 
-            With passive income flowing, you can start expanding. Upgrade
-            buildings with |wupgrade|n (costs and time grow fast at higher
-            levels). Explore further. Build defenses. Train more agents.
+            With passive income flowing, expand: |wupgrade|n buildings (costs
+            grow fast), stockpile surplus in a |cVault|n (|whelp storage|n),
+            explore, and climb the ranks to unlock new planets and tech.
 
-            Eventually you'll unlock new planets with tougher terrain and
-            rarer resources. But that's a story for another rank.
+            # See Also
 
-            # Useful Commands
-
-            |wmap|n — see the overworld around you
-            |wscore|n — your stats, rank, and resources
-            |winventory|n — what you're carrying
-            |wbuildings|n — list your buildings
-            |wagents|n — list your agents
-            |wscan|n — see who's nearby
-            |whelp <command>|n — detailed help on any command
-
+            |whelp commands|n · |whelp resources|n · |whelp buildings|n ·
+            |whelp agents|n · |whelp equipment|n · |whelp combat|n ·
+            |whelp storage|n
         """,
     },
+    # ----------------------------------------------------------------- #
+    #  Command index
+    # ----------------------------------------------------------------- #
+    {
+        "key": "commands",
+        "aliases": ["command list", "command", "cmds"],
+        "category": "Game",
+        "text": """
+            |wCommand Reference|n
+
+            A map of what you can do. Type |whelp <command>|n for full detail on
+            any one (e.g. |whelp build|n). Typing any unambiguous prefix works
+            too — |wsco|n runs |wscore|n, |weq|n runs |wequipment|n.
+
+            # Moving & Looking
+
+            |wmove <dir>|n / |wn|n |ws|n |we|n |ww|n — move one tile
+            |wlook|n (|wl|n) — look at your tile / a thing
+            |wmap|n (|wm|n) — the fog-of-war overworld map
+            |wscan|n — who and what is on your tile
+            |wenter|n / |wleave|n — step into / out of a building
+
+            # Economy & Base
+
+            |wharvest|n — gather the resource under you
+            |wbuild <type>|n — construct a building (bare |wbuild|n lists types)
+            |wupgrade|n — upgrade the building you're on
+            |wdemolish|n — tear down for a partial refund
+            |wbuildings|n (|wbl|n) — list your buildings
+            |wdeposit|n / |wwithdraw|n — move resources to/from storage
+            |wget <obj>|n — pick up something on your tile
+
+            # Combat & Equipment
+
+            |wattack <target>|n (|wa|n) — attack a player, building, or agent
+            |wequip <item>|n / |wunequip <slot>|n — manage worn gear
+            |wequipment|n (|weq|n) — your full loadout (paperdoll)
+            |wuse <item>|n — use a consumable (medkit, stim)
+            |wthrow <item> …|n — throw a grenade at a target or coords
+            |wreload|n — refill your ranged weapon's magazine
+
+            # Agents
+
+            |wagent list|n — your roster
+            |wagent train|n — train a new agent (inside an Academy)
+            |wagent assign <id> [role]|n — put an agent to work
+            (see |whelp agents|n for the rest)
+
+            # Progression & Info
+
+            |wscore|n (|wst|n) — full character sheet
+            |winventory|n (|wi|n) — resources, gear, supplies, carry weight
+            |wtechnology|n / |wresearch <tech>|n — the tech tree
+            |wpowerup <key>|n — activate a powerup
+
+            # Social
+
+            |wsay <msg>|n — speak to your tile
+            |wchat <msg>|n — the public channel
+            |wmessage <player> <msg>|n — private message
+            |wwho|n — who's online
+
+            # See Also
+
+            |whelp tutorial|n · |whelp buildings|n · |whelp equipment|n
+        """,
+    },
+    # ----------------------------------------------------------------- #
+    #  Resources
+    # ----------------------------------------------------------------- #
     {
         "key": "resources",
         "aliases": ["resource", "gathering", "harvesting guide"],
@@ -112,33 +178,43 @@ HELP_ENTRY_DICTS = [
         "text": """
             |wResources|n
 
-            There are 6 resources in the game. Where you find them depends
-            on which planet you're on.
+            Six resources fuel everything you build, research, and fire. Where
+            you find each depends on the planet you're on.
 
-            |cWood|n — from Forest terrain. Used in most early buildings.
-            |cStone|n — from Rock and Permafrost terrain. Walls and defenses.
-            |cIron|n — from Mountain, Scrapyard, and other rocky terrain.
-            |cEnergy|n — from Power Grids and Magma Vents. Mid-game tech.
-            |cCircuits|n — from Circuit Fields and Control Rooms. Advanced tech.
-            |cNexium|n — only from Citadel's Vault Rooms. Endgame material.
+            |cWood|n — Forest terrain. Most early buildings.
+            |cStone|n — Rock and Permafrost. Walls and defenses.
+            |cIron|n — Mountain, Scrapyard, and rocky terrain.
+            |cEnergy|n — Power Grids and Magma Vents. Mid-game tech.
+            |cCircuits|n — Circuit Fields and Control Rooms. Advanced tech.
+            |cNexium|n — only Citadel Vault Rooms. Endgame material.
 
-            # How to Gather
+            # Gathering
 
-            Stand on a resource tile and type |wharvest|n. You'll gather
-            automatically every few seconds as long as you stay put.
+            Stand on a resource tile and type |wharvest|n — you gather every
+            few seconds while you stay put. Building an |cExtractor|n
+            (|wbuild EX|n) on the tile multiplies the yield; assigning a
+            |charvester|n agent to it makes it fully automatic.
 
-            Building an |wExtractor|n on a resource tile multiplies your
-            yield. Assigning a |wHarvester agent|n to an Extractor makes
-            it fully automatic.
+            # Carrying & Storing
+
+            Everything you carry has |cweight|n, and you can only carry so much
+            — resources are light but not free. Stockpile the overflow in a
+            |cVault|n or your |cHQ|n with |wdeposit|n, and pull it back with
+            |wwithdraw|n. See |whelp storage|n.
 
             # Tips
 
-            Terra has Wood, Stone, and Iron — enough to get started.
-            You'll need to reach Forge for Energy and Circuits.
-            Plan your base location around the resources you need most.
+            Terra has Wood, Stone, and Iron — enough to start. Energy and
+            Circuits await on Forge. Plan your base around what you need most.
 
+            # See Also
+
+            |whelp storage|n · |whelp buildings|n · |whelp agents|n
         """,
     },
+    # ----------------------------------------------------------------- #
+    #  Agents
+    # ----------------------------------------------------------------- #
     {
         "key": "agents",
         "aliases": ["agent guide", "agent help"],
@@ -146,41 +222,57 @@ HELP_ENTRY_DICTS = [
         "text": """
             |wAgents|n
 
-            Agents are NPCs you train and assign to do work for you.
-            They're the key to scaling your base beyond what you can
-            do manually.
+            Agents are NPC workers you train and assign. They're how you scale
+            past what you can do by hand. All agent actions go through the
+            |wagent|n command — type |wagent|n alone to see its subcommands.
 
             # Training
 
-            Build an |wAcademy|n, step inside, and type |wtrain|n.
-            Each agent costs more than the last. Training takes time.
+            Build an |cAcademy|n (|wbuild AC|n), step inside, and type
+            |wagent train|n. Each agent costs more than the last, and training
+            takes time. Watch progress with |wagent list|n.
 
             # Roles
 
-            Assign agents to buildings or your army:
+            Assign an agent |winside|n a building and its role is chosen for you;
+            or name an army role explicitly.
 
-            |wHarvester|n — assign to an Extractor for passive resource income
-            |wEngineer|n — assign to a building to progress construction/upgrades
-            |wGuard|n — assign to a Turret to activate auto-defense
-            |wScout|n — assign to a Radar to extend vision
-            |wSoldier|n — joins your army for raids
-            |wMedic|n — heals after combat, reduces respawn time
+            |cHarvester|n — at an |cExtractor|n: passive resource income
+            |cEngineer|n — at an |cArmory|n or |cLab|n: builds/researches
+            |cGuard|n — at a |cTurret|n: powers auto-defense
+            |cScout|n — at a |cRadar|n: recon patrols
+            |cSoldier|n — army role for raids (in development)
+            |cMedic|n — at a |cMedbay|n: healing (in development)
 
-            # Commands
+            # Key Commands
 
-            |wagents|n — list all your agents
-            |wassign <id>|n — assign agent (inside a building, role is automatic)
-            |wassign <id> <role>|n — assign to an army role
-            |wunassign <id>|n — return agent to HQ
+            |wagent list|n — your roster and ids
+            |wagent assign <id>|n — assign by the building you're standing in
+            |wagent assign <id> <role>|n — assign to a named army role
+            |wagent unassign <id>|n — send the agent back to HQ
+            |wagent patrol <id> <x,y> …|n — set a guard/scout patrol route
+            |wagent ability <id> [<key> on || off]|n — view/toggle gated abilities
+
+            # Abilities
+
+            Some agents unlock abilities at higher levels. |cdelivery|n lets a
+            harvester haul from its Extractor to a Vault/HQ on its own — enable
+            it with |wagent ability <id> delivery on|n once the agent qualifies.
 
             # Agent Cap
 
-            Your rank determines how many agents you can have. Getting
-            demoted puts excess agents in reserve — they keep working
-            but can't be reassigned until you rank back up.
+            Your rank sets how many agents you can command. A demotion puts the
+            excess into reserve — they keep working but can't be reassigned
+            until you rank back up.
 
+            # See Also
+
+            |whelp buildings|n · |whelp resources|n · |whelp tutorial|n
         """,
     },
+    # ----------------------------------------------------------------- #
+    #  Buildings
+    # ----------------------------------------------------------------- #
     {
         "key": "buildings",
         "aliases": ["building guide", "building help", "construction"],
@@ -188,41 +280,210 @@ HELP_ENTRY_DICTS = [
         "text": """
             |wBuildings|n
 
-            Buildings are the backbone of your base. Each type serves a
-            different purpose, and all can be upgraded to level 5.
+            Buildings are your base. Each type has a purpose, most need your
+            |cHeadquarters|n first, and all upgrade to level 5.
 
-            # Building
+            # Building & Upgrading
 
-            Stand on a tile and type |wbuild <type>|n. You need to stay
-            on the tile while it constructs. An Engineer agent can do
-            this for you.
+            Stand on a tile and type |wbuild <type>|n (by abbreviation like
+            |wEX|n or full name like |wextractor|n). Stay on the tile while it
+            builds — or let an |cEngineer|n agent finish it. |wbuild|n with no
+            argument lists what you can build right now.
 
-            # Upgrading
+            |wupgrade|n improves the building you're standing on; costs and
+            times climb steeply. |wdemolish|n tears one down for a partial
+            refund (40% at L1 up to 80% at L5).
 
-            Stand on a building and type |wupgrade|n. Upgrade costs and
-            times grow exponentially — this is where your agents and
-            resources really get tested.
+            # Building Types
 
-            # Types
+            Each line: |wABBR|n |cName|n — purpose (unlocks at level N).
 
-            |wHQ|n — required first. Your respawn point.
-            |wExtractor|n — place on resource terrain for boosted harvesting
-            |wAcademy|n — train new agents here
-            |wWall|n — blocks enemy movement
-            |wBarracks|n — increases army capacity
-            |wArmory|n — craft equipment (needs Engineer)
-            |wLab|n — research tech (needs Engineer)
-            |wTurret|n — auto-attacks enemies (needs Guard)
-            |wRadar|n — extends vision (needs Scout)
-            |wVault|n — protects resources from raids
-            |wMedbay|n — reduces respawn time (enhanced by Medic)
-            |wRelay|n — boosts nearby Turret damage
+            |wHQ|n |cHeadquarters|n — home base, respawn point, holds storage.
+                Required before most other buildings. (L1)
+            |wEX|n |cExtractor|n — boosts harvesting; must sit on resource
+                terrain. Harvester agents work here. (L1)
+            |wAC|n |cAcademy|n — train agents here (|wagent train|n inside). (L1)
+            |wWL|n |cWall|n — a barrier that blocks passage. (L11)
+            |wBK|n |cBarracks|n — army capacity. (L11)
+            |wAR|n |cArmory|n — produces weapons, armor, and ammo; needs an
+                Engineer. (L21)
+            |wLB|n |cLab|n — research technologies; needs an Engineer. (L26)
+            |wRD|n |cRadar|n — extends vision; needs a Scout. (L31)
+            |wTU|n |cTurret|n — auto-attacks enemies; needs a Guard. (L31)
+            |wVT|n |cVault|n — high-capacity resource storage, protected while
+                you're offline; harvesters prefer to deliver here. (L36)
+            |wRL|n |cRelay|n — boosts nearby Turret damage. (L41)
+            |wMB|n |cMedbay|n — produces medkits and stims; reduces respawn
+                time. (L46)
 
-            Higher-rank buildings unlock as you progress. Check |wscore|n
-            to see your current rank and what's available.
+            Higher-level buildings unlock as you climb ranks. Check |wscore|n
+            for your current level, and |wbuild|n to see what's available now.
 
+            # See Also
+
+            |whelp resources|n · |whelp agents|n · |whelp storage|n ·
+            |whelp equipment|n
         """,
     },
+    # ----------------------------------------------------------------- #
+    #  Equipment
+    # ----------------------------------------------------------------- #
+    {
+        "key": "equipment",
+        "aliases": ["gear", "equip guide", "weapons", "armor", "items"],
+        "category": "Game",
+        "text": """
+            |wEquipment|n
+
+            Gear makes you tougher and deadlier. You have eleven equipment
+            |cslots|n covering you head to toe, plus a weapon and an accessory
+            slot. Every equipped piece adds armor and other bonuses.
+
+            # Getting Gear
+
+            Build an |cArmory|n (|wbuild AR|n) to produce weapons, armor, and
+            ammo, a |cLab|n (|wbuild LB|n) for advanced gear, or a |cMedbay|n
+            (|wbuild MB|n) for medkits and stims. Produced items land in your
+            inventory over time. Pick up dropped items with |wget|n.
+
+            # Slots
+
+            |chead eyes face torso arms hands legs feet back|n — armor and
+            utility. |cweapon|n — your active weapon. |caccessory|n — a utility
+            item (scope, hauler pack). One item per slot; equipping a new one
+            swaps out the old.
+
+            # Wearing Gear
+
+            |wequip <item>|n — wear an item from your inventory
+            |wunequip <slot>|n — take off what's in a slot (e.g. |wunequip head|n)
+            |wequipment|n (|weq|n) — full paperdoll: every slot, its item, stat
+                bonuses, your loaded weapon's ammo, and combined totals
+
+            Powerful gear may require a |crank|n — |wequip|n tells you if you're
+            not high enough.
+
+            # Consumables & Throwables
+
+            These live in your |csupply bag|n (counted, not slotted):
+            |wuse medkit|n — restore health
+            |wuse combat_stim|n — a temporary combat buff
+            |wthrow frag_grenade <x> <y>|n — area damage at a location
+
+            # Carry Weight
+
+            Every item and resource has weight, and you can carry only so much.
+            Equipped gear is free — it's worn, not hauled — but supplies and
+            resources on you count. A |chauler pack|n raises your limit. See
+            |whelp storage|n. |winventory|n shows your current load.
+
+            # See Also
+
+            |whelp combat|n · |whelp storage|n · |whelp buildings|n
+        """,
+    },
+    # ----------------------------------------------------------------- #
+    #  Combat
+    # ----------------------------------------------------------------- #
+    {
+        "key": "combat",
+        "aliases": ["combat guide", "fighting", "attack guide", "ammo"],
+        "category": "Game",
+        "text": """
+            |wCombat|n
+
+            Combat is real-time and resolves on the game tick. Damage is your
+            weapon's power plus bonuses, minus the target's armor.
+
+            # Attacking
+
+            |wattack <target>|n (|wa|n) — attack a player, building, or agent in
+            range. Your equipped |cweapon|n decides your damage and reach:
+            melee weapons hit only the tile next to you; ranged weapons reach
+            further. Equip a weapon first (|whelp equipment|n).
+
+            # Ammo & Reloading
+
+            Ranged weapons fire from a loaded |cmagazine|n. When it runs dry
+            you'll be told to reload. |wreload|n refills the magazine from the
+            matching |cammo|n in your supply bag — so keep ammo stocked (make it
+            at an |cArmory|n or |cLab|n). |wequipment|n shows your loaded count.
+
+            # Armor & Defense
+
+            Every armor piece you |wequip|n reduces incoming damage, and they
+            stack across all slots. |cTurrets|n (with a Guard agent) auto-attack
+            intruders; |cWalls|n block movement. A |cVault|n protects your
+            stored resources while you're offline.
+
+            # Grenades
+
+            |wthrow frag_grenade <x> <y>|n hits everything in a radius — hostile
+            or not, so mind your own agents and buildings. Throwables come from
+            a |cLab|n.
+
+            # After a Fight
+
+            Losing costs XP and sends you back to your |cHQ|n. A |cMedbay|n
+            shortens respawn time. Winning awards XP toward your next rank.
+
+            # See Also
+
+            |whelp equipment|n · |whelp agents|n · |whelp buildings|n
+        """,
+    },
+    # ----------------------------------------------------------------- #
+    #  Storage & carry weight
+    # ----------------------------------------------------------------- #
+    {
+        "key": "storage",
+        "aliases": ["carry weight", "carry", "weight", "deposit", "vault"],
+        "category": "Game",
+        "text": """
+            |wStorage & Carry Weight|n
+
+            You can carry a lot, but not an unlimited amount. Storage buildings
+            let you stockpile far more than you can hold on your person.
+
+            # Carry Weight
+
+            Every item and resource has weight. What you carry on your person —
+            loose resources and supplies (ammo, medkits, grenades) — counts
+            toward your carry limit. Equipped gear does |wnot|n count; it's worn.
+            |winventory|n and |wscore|n show your current weight against your
+            limit. A |chauler pack|n (accessory) raises the limit.
+
+            If your pack is full when resources come in (from harvesting or a
+            delivery agent), the overflow drops on the ground rather than being
+            lost — pick it up with |wget|n once you've made room.
+
+            # Storage Buildings
+
+            Your |cHeadquarters|n has storage from the start, and a |cVault|n
+            (|wbuild VT|n) holds much more and is protected while you're offline.
+            Stand on the building and:
+
+            |wdeposit <resource> [<amount> || all]|n — move from you into storage
+            |wwithdraw <resource> [<amount> || all]|n — take from storage back to you
+
+            With no amount (or |wall|n), deposit moves everything you hold and
+            withdraw takes as much as fits under your carry limit. You can only
+            use storage you |cown|n.
+
+            # Examples
+
+            |wdeposit iron 100|n — bank 100 Iron
+            |wdeposit wood|n — bank all your Wood
+            |wwithdraw energy all|n — take all the Energy that fits
+
+            # See Also
+
+            |whelp resources|n · |whelp buildings|n · |whelp equipment|n
+        """,
+    },
+    # ----------------------------------------------------------------- #
+    #  Framework (dev only)
+    # ----------------------------------------------------------------- #
     {
         "key": "evennia",
         "aliases": ["ev"],

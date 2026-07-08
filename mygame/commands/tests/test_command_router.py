@@ -728,17 +728,12 @@ class TestCharacterCmdSetRegistration(unittest.TestCase):
         """Old CmdAgents key is not registered (replaced by agent router)."""
         self.assertNotIn("agents", self.registered_keys)
 
-    def test_old_assign_not_registered(self):
-        """Old CmdAssign key is not registered (replaced by agent router)."""
-        self.assertNotIn("assign", self.registered_keys)
-
-    def test_old_unassign_not_registered(self):
-        """Old CmdUnassign key is not registered (replaced by agent router)."""
-        self.assertNotIn("unassign", self.registered_keys)
-
-    def test_old_train_not_registered(self):
-        """Old CmdTrain key is not registered (replaced by agent router)."""
-        self.assertNotIn("train", self.registered_keys)
+    def test_assign_shorthand_registered(self):
+        """assign/train/unassign are convenience shorthands (UX #3) that
+        delegate to the agent router — re-added as thin forwarders, not the
+        old standalone implementations."""
+        for key in ("assign", "unassign", "train"):
+            self.assertIn(key, self.registered_keys)
 
     def test_old_patrol_not_registered(self):
         """Old CmdPatrol key is not registered (replaced by agent router)."""

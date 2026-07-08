@@ -23,9 +23,14 @@ from commands.game_commands import (
     CmdResearch, CmdPowerup,
     CmdScore, CmdEquipment, CmdBuildings, CmdScan, CmdTechnology,
     CmdInventory, CmdChat, CmdMessage, CmdSay, CmdLook, CmdMap,
-    CmdLeave, CmdEnter, CmdCloseExit, CmdOpenExit, CmdStop, CmdWho, CmdGet,
+    CmdLeave, CmdEnter, CmdCloseExit, CmdOpenExit, CmdExit, CmdStop, CmdWho, CmdGet,
 )
-from commands.agent_commands import CmdAgent
+from commands.agent_commands import (
+    CmdAgent,
+    CmdTrain,
+    CmdAssign,
+    CmdUnassign,
+)
 from commands.admin_commands import (
     CmdReboot, CmdPurgeRooms, CmdTeleport, CmdClearFog, CmdMigrate,
     CmdAdminBuilding, CmdAdminAgent, CmdAdminResource, CmdAdminPlayer,
@@ -89,8 +94,12 @@ class CharacterCmdSet(default_cmds.CharacterCmdSet):
         self.add(CmdStop())
         self.add(CmdCloseExit())
         self.add(CmdOpenExit())
+        self.add(CmdExit())
         # Agent commands
         self.add(CmdAgent())
+        self.add(CmdTrain())
+        self.add(CmdAssign())
+        self.add(CmdUnassign())
         # Admin commands (lock-gated to Builder+)
         self.add(CmdReboot())
         self.add(CmdPurgeRooms())

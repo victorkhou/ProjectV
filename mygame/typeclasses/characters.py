@@ -341,6 +341,19 @@ class CombatCharacter(CombatEntity, DefaultCharacter):
         # Map is now shown via CmdLook which Evennia triggers
         # automatically after login (super().at_post_login calls look).
 
+        # First-time nudge toward the tutorial. Shown once (flagged on the
+        # character) so veterans aren't spammed on every login; nothing in
+        # the game directed new players to help before this.
+        try:
+            if not self.db.seen_welcome:
+                self.msg(
+                    "\n|wNew here?|n Type |whelp tutorial|n to get started, "
+                    "or |whelp commands|n for the full command list.\n"
+                )
+                self.db.seen_welcome = True
+        except Exception:
+            pass
+
         try:
             from world.event_bus import event_bus, PLAYER_LOGIN
             event_bus.publish(PLAYER_LOGIN, player=self)

@@ -941,5 +941,42 @@ class TestAgentAbilityEndToEnd(unittest.TestCase):
         self.assertIn("#999", output)
 
 
+# -------------------------------------------------------------- #
+#  Top-level shorthands delegate to the agent router (UX #3)
+# -------------------------------------------------------------- #
+
+class TestAgentShorthands(unittest.TestCase):
+    """train/assign/unassign forward to the matching CmdAgent subcommand."""
+
+    def _run(self, cmd_class, args):
+        from mygame.commands.agent_commands import (
+            CmdTrain, CmdAssign, CmdUnassign,
+        )
+        classes = {"train": CmdTrain, "assign": CmdAssign, "unassign": CmdUnassign}
+        agent_sys = FakeAgentSystem()
+        caller = FakeCaller(systems={"agent_system": agent_sys})
+        cmd = classes[cmd_class]()
+        cmd.caller = caller
+        cmd.args = args
+        cmd.cmdstring = cmd.key
+        cmd.func()
+        return caller, agent_sys
+
+    def test_train_forwards(self):
+        # 'train' outside a building reaches sub_train, which asks for an
+        # Academy — proving the shorthand delegated to the router.
+        caller, _ = self._run("train", "")
+        self.assertTrue(any("Academy" in m for m in caller._messages))
+
+    def test_unassign_forwards_with_id(self):
+        caller, agent_sys = self._run("unassign", "3")
+        # Delegated to sub_unassign, which returned the fake's result message.
+        self.assertTrue(any("Unassigned" in m for m in caller._messages))
+
+    def test_assign_no_args_shows_usage(self):
+        caller, _ = self._run("assign", "")
+        self.assertTrue(any("Usage" in m for m in caller._messages))
+
+
 if __name__ == "__main__":
     unittest.main()

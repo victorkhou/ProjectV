@@ -6,6 +6,7 @@ Agent management commands — train, assign, unassign, list, patrol, stop agents
 from __future__ import annotations
 
 from commands.command_router import GameSubcommandRouter
+from commands.game_commands import GameCommand
 from world.systems.agent_system import BUILDING_ROLE_MAP
 
 
@@ -365,3 +366,90 @@ class CmdAgent(GameSubcommandRouter):
         "stop": (sub_stop, "Stop an agent's current action", ""),
         "ability": (sub_ability, "Enable/disable or view a gated ability", ""),
     }
+
+
+# ------------------------------------------------------------------ #
+#  Top-level shorthands for the most-used agent verbs (UX #3)
+# ------------------------------------------------------------------ #
+
+class _AgentShorthand(GameCommand):
+    """Base for top-level agent shorthands that delegate to ``CmdAgent``.
+
+    Assigning and training are the daily actions, so ``train``/``assign``/
+    ``unassign`` are exposed as bare commands instead of only
+    ``agent <verb>``. Each simply forwards to the ``CmdAgent`` router's
+    matching subcommand, so there is one implementation of the behavior.
+    """
+
+    #: The agent subcommand this shorthand maps to (set by subclasses).
+    _agent_verb = ""
+
+    def func(self):
+        router = CmdAgent()
+        router.caller = self.caller
+        router.session = getattr(self, "session", None)
+        router.cmdstring = self._agent_verb
+        rest = self.args.strip()
+        router.args = f"{self._agent_verb} {rest}".strip()
+        router.func()
+
+
+class CmdTrain(_AgentShorthand):
+    """Train a new agent at your Academy.
+
+    Usage:
+      train
+
+    Notes:
+      Shorthand for 'agent train' — step inside an Academy first. See
+      'help agents'.
+    """
+
+    key = "train"
+    help_category = "Game"
+    _agent_verb = "train"
+
+
+class CmdAssign(_AgentShorthand):
+    """Assign an agent to a role.
+
+    Usage:
+      assign <id> [role]
+
+    Options:
+      <id>    the agent number from 'agent list'
+      [role]  an army role to assign; omit it while standing inside a
+              building to take that building's role automatically
+
+    Examples:
+      assign 2          (inside an Extractor -> harvester)
+      assign 3 soldier
+
+    Notes:
+      Shorthand for 'agent assign'. See 'help agents'.
+    """
+
+    key = "assign"
+    help_category = "Game"
+    _agent_verb = "assign"
+
+
+class CmdUnassign(_AgentShorthand):
+    """Send an agent back to your HQ, off its current job.
+
+    Usage:
+      unassign <id>
+
+    Options:
+      <id>  the agent number from 'agent list'
+
+    Examples:
+      unassign 2
+
+    Notes:
+      Shorthand for 'agent unassign'. See 'help agents'.
+    """
+
+    key = "unassign"
+    help_category = "Game"
+    _agent_verb = "unassign"

@@ -102,7 +102,7 @@ from mygame.commands.game_commands import (  # noqa: E402
     CmdResearch, CmdPowerup,
     CmdScore, CmdEquipment, CmdBuildings, CmdScan, CmdTechnology,
     CmdInventory, CmdMessage, CmdSay, CmdMap,
-    CmdCloseExit, CmdOpenExit, CmdGet,
+    CmdCloseExit, CmdOpenExit, CmdExit, CmdGet,
 )
 
 # -------------------------------------------------------------- #
@@ -183,6 +183,21 @@ class FakeLocation:
     def get_objects_at(self, x, y, type_tag=None):
         """Return objects at (x, y), optionally filtered by type_tag."""
         return list(self._objects_by_coord.get((x, y), []))
+
+    def get_objects_in_area(self, x1, y1, x2, y2):
+        """Return contents whose coords fall in the [x1,x2]x[y1,y2] box.
+
+        Mirrors PlanetRoom.get_objects_in_area for area lookups like 'scan'.
+        """
+        result = []
+        for obj in self.contents:
+            ox = getattr(getattr(obj, "db", None), "coord_x", None)
+            oy = getattr(getattr(obj, "db", None), "coord_y", None)
+            if ox is None or oy is None:
+                continue
+            if x1 <= int(ox) <= x2 and y1 <= int(oy) <= y2:
+                result.append(obj)
+        return result
 
 class FakeCaller:
     """Simulates a player character (caller)."""
@@ -743,7 +758,14 @@ class TestCmdUnequip(unittest.TestCase):
         cmd.func()
         self.assertTrue(any("unavailable" in m for m in caller._messages))
 
-    def test_delegates_to_equipment_system(self):
+    @staticmethod
+    def _equip_item(caller, slot, name, key=None):
+        """Put a simple item into an occupied slot on the fake caller."""
+        item = types.SimpleNamespace(slot=slot, name=name, key=key or name)
+        caller.equipment.equip(item)
+        return item
+
+    def test_delegates_by_slot_name(self):
         calls = []
 
         class FakeEquipmentSystem:
@@ -752,16 +774,12 @@ class TestCmdUnequip(unittest.TestCase):
                 return True
 
         caller = FakeCaller(systems={"equipment_system": FakeEquipmentSystem()})
+        self._equip_item(caller, "weapon", "Assault Rifle", "assault_rifle")
         cmd = _make_cmd(CmdUnequip, caller, " weapon")
         cmd.func()
         self.assertEqual(calls, [(caller, "weapon")])
 
-    def test_slot_normalized_to_lowercase(self):
-        """The slot token is lower-cased before delegation (Req 12.2).
-
-        `EQUIPMENT_SLOTS` are lower-case, so `unequip WEAPON` must reach the
-        system as `"weapon"` for the slot-membership check to succeed.
-        """
+    def test_slot_name_case_insensitive(self):
         calls = []
 
         class FakeEquipmentSystem:
@@ -770,9 +788,40 @@ class TestCmdUnequip(unittest.TestCase):
                 return True
 
         caller = FakeCaller(systems={"equipment_system": FakeEquipmentSystem()})
+        self._equip_item(caller, "weapon", "Assault Rifle", "assault_rifle")
         cmd = _make_cmd(CmdUnequip, caller, " WEAPON")
         cmd.func()
         self.assertEqual(calls, [(caller, "weapon")])
+
+    def test_delegates_by_item_name(self):
+        # UX #1: accept the item's name, resolving it to its slot.
+        calls = []
+
+        class FakeEquipmentSystem:
+            def unequip(self, player, slot):
+                calls.append((player, slot))
+                return True
+
+        caller = FakeCaller(systems={"equipment_system": FakeEquipmentSystem()})
+        self._equip_item(caller, "weapon", "Assault Rifle", "assault_rifle")
+        # By display name (case/space-insensitive) and by key both resolve.
+        _make_cmd(CmdUnequip, caller, " assault rifle").func()
+        _make_cmd(CmdUnequip, caller, " assault_rifle").func()
+        self.assertEqual(calls, [(caller, "weapon"), (caller, "weapon")])
+
+    def test_no_match_reports_and_does_not_delegate(self):
+        calls = []
+
+        class FakeEquipmentSystem:
+            def unequip(self, player, slot):
+                calls.append((player, slot))
+                return True
+
+        caller = FakeCaller(systems={"equipment_system": FakeEquipmentSystem()})
+        # Nothing equipped in 'head', and no item named 'boots'.
+        _make_cmd(CmdUnequip, caller, " boots").func()
+        self.assertEqual(calls, [])
+        self.assertTrue(any("nothing equipped" in m.lower() for m in caller._messages))
 
 
 class _FakeItemDef:
@@ -1366,12 +1415,13 @@ class TestCmdScan(unittest.TestCase):
         cmd = _make_cmd(CmdScan, caller)
         cmd.func()
         output = "\n".join(caller._messages)
-        self.assertIn("Nothing visible", output)
+        self.assertIn("Nothing else visible", output)
 
-    def test_scan_with_player(self):
+    def test_scan_shows_player_in_range(self):
+        # UX #2: scan reports entities within the vision radius (not just the
+        # caller's own tile). Enemy a few tiles away is now visible.
         other = FakeCaller(name="Enemy")
-        # Set matching coordinates so the player passes the filter
-        other.db.coord_x = 5
+        other.db.coord_x = 8   # caller is at (5,5); 3 tiles away, within radius
         other.db.coord_y = 5
         caller = FakeCaller()
         caller.location.contents = [other]
@@ -1379,9 +1429,10 @@ class TestCmdScan(unittest.TestCase):
         cmd.func()
         output = "\n".join(caller._messages)
         self.assertIn("Enemy", output)
+        self.assertIn("(8,5)", output)
 
-    def test_scan_filters_players_by_coords(self):
-        """Players at different coordinates should not appear in scan."""
+    def test_scan_excludes_beyond_vision_radius(self):
+        """Entities past the vision radius are not reported."""
         other = FakeCaller(name="FarAway")
         other.db.coord_x = 99
         other.db.coord_y = 99
@@ -1391,7 +1442,7 @@ class TestCmdScan(unittest.TestCase):
         cmd.func()
         output = "\n".join(caller._messages)
         self.assertNotIn("FarAway", output)
-        self.assertIn("Nothing visible", output)
+        self.assertIn("Nothing else visible", output)
 
 class TestCmdTechnology(unittest.TestCase):
     def test_shows_researched(self):
@@ -1621,6 +1672,30 @@ class TestExitCommands(unittest.TestCase):
         cmd = _make_cmd(CmdCloseExit, caller, "north")
         cmd.func()
         self.assertIn("No building here", " ".join(caller._messages))
+
+    def test_exit_toggles_closed_then_open(self):
+        # UX #5: 'exit <dir>' closes an open exit and opens a closed one.
+        cmd, caller, building = self._setup(CmdExit, "north")
+        cmd.func()  # open -> closed
+        self.assertIn("Closed the north exit", " ".join(caller._messages))
+        self.assertIn("north", building.attributes.get("closed_exits"))
+
+        # A second toggle re-opens it.
+        cmd2 = _make_cmd(CmdExit, caller, "north")
+        cmd2.func()
+        self.assertIn("Opened the north exit", " ".join(caller._messages))
+        self.assertNotIn("north", building.attributes.get("closed_exits"))
+
+    def test_exit_accepts_abbreviated_direction(self):
+        cmd, caller, building = self._setup(CmdExit, "e")
+        cmd.func()
+        self.assertIn("east", building.attributes.get("closed_exits"))
+
+    def test_exit_requires_ownership(self):
+        cmd, caller, building = self._setup(CmdExit, "north")
+        caller.id = 999  # not the owner (id 7)
+        cmd.func()
+        self.assertIn("do not own", " ".join(caller._messages))
 
 
 class _FakeDrop:
