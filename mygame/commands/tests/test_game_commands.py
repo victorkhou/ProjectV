@@ -745,6 +745,65 @@ class TestCmdEquip(unittest.TestCase):
         cmd.func()
         self.assertEqual(calls, [(caller, item)])
 
+    def test_wear_alias_registered(self):
+        self.assertIn("wear", CmdEquip.aliases)
+
+    def test_equip_all_equips_every_loose_item(self):
+        calls = []
+
+        class FakeEquipmentSystem:
+            def equip(self, player, item):
+                calls.append(item)
+                return True
+
+        caller = FakeCaller(systems={"equipment_system": FakeEquipmentSystem()})
+        rifle = types.SimpleNamespace(
+            key="Assault Rifle",
+            db=types.SimpleNamespace(item_key="assault_rifle", count=None),
+        )
+        helmet = types.SimpleNamespace(
+            key="Combat Helmet",
+            db=types.SimpleNamespace(item_key="combat_helmet", count=None),
+        )
+        caller.contents = [rifle, helmet]
+        _make_cmd(CmdEquip, caller, " all").func()
+        self.assertEqual(calls, [rifle, helmet])
+
+    def test_equip_all_excludes_supply_drops(self):
+        calls = []
+
+        class FakeEquipmentSystem:
+            def equip(self, player, item):
+                calls.append(item)
+                return True
+
+        caller = FakeCaller(systems={"equipment_system": FakeEquipmentSystem()})
+        rifle = types.SimpleNamespace(
+            key="Assault Rifle",
+            db=types.SimpleNamespace(item_key="assault_rifle", count=None),
+        )
+        ammo_drop = types.SimpleNamespace(
+            key="Ammo",
+            db=types.SimpleNamespace(item_key="rifle_rounds", count=30),
+        )
+        caller.contents = [rifle, ammo_drop]
+        _make_cmd(CmdEquip, caller, " all").func()
+        self.assertEqual(calls, [rifle])  # counted supply drop skipped
+
+    def test_equip_all_when_nothing_carried(self):
+        calls = []
+
+        class FakeEquipmentSystem:
+            def equip(self, player, item):
+                calls.append(item)
+                return True
+
+        caller = FakeCaller(systems={"equipment_system": FakeEquipmentSystem()})
+        caller.contents = []
+        _make_cmd(CmdEquip, caller, " all").func()
+        self.assertEqual(calls, [])
+        self.assertTrue(any("no carried gear" in m.lower() for m in caller._messages))
+
 class TestCmdUnequip(unittest.TestCase):
     def test_no_args(self):
         caller = FakeCaller()
@@ -822,6 +881,67 @@ class TestCmdUnequip(unittest.TestCase):
         _make_cmd(CmdUnequip, caller, " boots").func()
         self.assertEqual(calls, [])
         self.assertTrue(any("nothing equipped" in m.lower() for m in caller._messages))
+
+    def test_delegates_by_partial_item_name(self):
+        # The fix: "unequip assault" resolves to the Assault Rifle's slot,
+        # matching the leniency of "equip assault".
+        calls = []
+
+        class FakeEquipmentSystem:
+            def unequip(self, player, slot):
+                calls.append((player, slot))
+                return True
+
+        caller = FakeCaller(systems={"equipment_system": FakeEquipmentSystem()})
+        self._equip_item(caller, "weapon", "Assault Rifle", "assault_rifle")
+        _make_cmd(CmdUnequip, caller, " assault").func()
+        self.assertEqual(calls, [(caller, "weapon")])
+
+    def test_ambiguous_partial_name_reports_and_does_not_delegate(self):
+        calls = []
+
+        class FakeEquipmentSystem:
+            def unequip(self, player, slot):
+                calls.append((player, slot))
+                return True
+
+        caller = FakeCaller(systems={"equipment_system": FakeEquipmentSystem()})
+        # Two equipped items both start with "combat".
+        self._equip_item(caller, "head", "Combat Helmet", "combat_helmet")
+        self._equip_item(caller, "torso", "Combat Vest", "combat_vest")
+        _make_cmd(CmdUnequip, caller, " combat").func()
+        self.assertEqual(calls, [])
+        self.assertTrue(any("more than one" in m.lower() for m in caller._messages))
+
+    def test_unequip_all_clears_every_slot(self):
+        calls = []
+
+        class FakeEquipmentSystem:
+            def unequip(self, player, slot):
+                calls.append(slot)
+                return True
+
+        caller = FakeCaller(systems={"equipment_system": FakeEquipmentSystem()})
+        self._equip_item(caller, "weapon", "Assault Rifle", "assault_rifle")
+        self._equip_item(caller, "head", "Combat Helmet", "combat_helmet")
+        _make_cmd(CmdUnequip, caller, " all").func()
+        self.assertEqual(sorted(calls), ["head", "weapon"])
+
+    def test_unequip_all_when_nothing_equipped(self):
+        calls = []
+
+        class FakeEquipmentSystem:
+            def unequip(self, player, slot):
+                calls.append(slot)
+                return True
+
+        caller = FakeCaller(systems={"equipment_system": FakeEquipmentSystem()})
+        _make_cmd(CmdUnequip, caller, " all").func()
+        self.assertEqual(calls, [])
+        self.assertTrue(any("nothing equipped" in m.lower() for m in caller._messages))
+
+    def test_remove_alias_registered(self):
+        self.assertIn("remove", CmdUnequip.aliases)
 
 
 class _FakeItemDef:

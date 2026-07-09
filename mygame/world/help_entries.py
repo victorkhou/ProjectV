@@ -121,7 +121,7 @@ HELP_ENTRY_DICTS = [
             # Combat & Equipment
 
             |wattack <target>|n (|wa|n) — attack a player, building, or agent
-            |wequip <item>|n / |wunequip <slot>|n — manage worn gear
+            |wequip <item>|n / |wunequip <slot>|n — manage worn gear (or |wall|n)
             |wequipment|n (|weq|n) — your full loadout (paperdoll)
             |wuse <item>|n — use a consumable (medkit, stim)
             |wthrow <item> …|n — throw a grenade at a target or coords
@@ -302,8 +302,10 @@ HELP_ENTRY_DICTS = [
 
             # Wearing Gear
 
-            |wequip <item>|n — wear an item from your inventory
-            |wunequip <slot>|n — take off what's in a slot (e.g. |wunequip head|n)
+            |wequip <item>|n — wear an item from your inventory (a partial name works, e.g. |wequip assault|n). Alias: |wwear|n.
+            |wequip all|n — wear every piece of carried gear at once
+            |wunequip <item>|n — take off gear by name (|wunequip assault|n) or by slot (|wunequip head|n). Alias: |wremove|n.
+            |wunequip all|n — take off everything
             |wequipment|n (|weq|n) — full paperdoll: every slot, its item, stat bonuses, your loaded weapon's ammo, and combined totals
 
             Powerful gear may require a |crank|n — |wequip|n tells you if you're not high enough.

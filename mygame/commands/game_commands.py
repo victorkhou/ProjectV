@@ -859,31 +859,45 @@ class CmdEquip(GameCommand):
 
     Usage:
       equip <item>
+      equip all
 
     Options:
       <item>  name of a piece of gear you are carrying (weapon, armor, or
-              accessory). It goes into its own slot automatically.
+              accessory) — a partial name works (e.g. "assault"). It goes into
+              its own slot automatically.
+      all     wear every piece of carried gear at once.
 
     Examples:
       equip combat helmet
-      equip assault rifle
+      equip assault
+      equip all
 
     Notes:
-      Equipping into an occupied slot swaps out the old item. Powerful gear
-      may require a minimum rank — you'll be told if you're not high enough.
-      See your full loadout with 'equipment' and take gear off with 'unequip'.
-      See 'help equipment'.
+      Alias: wear. Equipping into an occupied slot swaps out the old item.
+      Powerful gear may require a minimum rank — you'll be told if you're not
+      high enough. See your full loadout with 'equipment' and take gear off
+      with 'unequip'. See 'help equipment'.
     """
 
     key = "equip"
+    aliases = ["wear"]
     help_category = "Game"
 
     def func(self):
         item_name = self.args.strip()
         if not item_name:
-            self.caller.msg("Usage: equip <item>")
+            self.caller.msg("Usage: equip <item> (or 'equip all')")
             return
 
+        if item_name.lower() == "all":
+            equipment_system = self.require_system("equipment_system")
+            if equipment_system is None:
+                return
+            self._equip_all(equipment_system)
+            return
+
+        # Resolve the item first so a bad name gets a clear "Could not find"
+        # message even before we touch the system.
         item = self.caller.search(item_name) if hasattr(self.caller, "search") else None
         if item is None:
             self.caller.msg(f"Could not find item '{item_name}'.")
@@ -898,6 +912,21 @@ class CmdEquip(GameCommand):
         # command composes no success/failure string here.
         equipment_system.equip(self.caller, item)
 
+    def _equip_all(self, equipment_system):
+        """Equip every piece of loose (carried, unequipped) gear.
+
+        Each item routes through the system, so per-item notifications
+        (equipped / equip_denied for rank-gated gear) still fire. When multiple
+        carried items share a slot, later ones simply swap out earlier ones, as
+        a manual sequence of equips would. Reports when there's nothing to do.
+        """
+        loose = _carried_gear_items(self.caller)
+        if not loose:
+            self.caller.msg("You have no carried gear to equip.")
+            return
+        for item in loose:
+            equipment_system.equip(self.caller, item)
+
 
 class CmdUnequip(GameCommand):
     """Take off a piece of equipment.
@@ -905,37 +934,53 @@ class CmdUnequip(GameCommand):
     Usage:
       unequip <item>
       unequip <slot>
+      unequip all
 
     Options:
-      <item>  name of the equipped item to remove (e.g. "assault rifle")
+      <item>  name of the equipped item to remove — a partial name works
+              (e.g. "assault" for "Assault Rifle").
       <slot>  or the slot to clear directly. One of:
               head, eyes, face, torso, arms, hands, legs, feet, back,
               weapon, accessory
+      all     take off everything you have equipped.
 
     Examples:
-      unequip assault rifle
+      unequip assault
       unequip weapon
       unequip head
+      unequip all
 
     Notes:
-      Accepts either the item's name or its slot — whichever is easier. See
-      what's in each slot with 'equipment'. See 'help equipment'.
+      Alias: remove. Accepts the item's name (full or partial) or its slot —
+      whichever is easier. See what's in each slot with 'equipment'. See
+      'help equipment'.
     """
 
     key = "unequip"
+    aliases = ["remove"]
     help_category = "Game"
 
     def func(self):
         arg = self.args.strip()
         if not arg:
-            self.caller.msg("Usage: unequip <item> (or <slot>)")
+            self.caller.msg("Usage: unequip <item> (or <slot>, or 'unequip all')")
             return
 
         equipment_system = self.require_system("equipment_system")
         if equipment_system is None:
             return
 
+        if arg.lower() == "all":
+            self._unequip_all(equipment_system)
+            return
+
         slot = _resolve_unequip_slot(self.caller, arg)
+        if slot == "__ambiguous__":
+            self.caller.msg(
+                f"'{arg}' matches more than one equipped item — be more "
+                f"specific. Try 'equipment' to see your slots."
+            )
+            return
         if slot is None:
             self.caller.msg(
                 f"You have nothing equipped matching '{arg}'. "
@@ -948,13 +993,33 @@ class CmdUnequip(GameCommand):
         # composes no success/failure string here.
         equipment_system.unequip(self.caller, slot)
 
+    def _unequip_all(self, equipment_system):
+        """Clear every occupied equipment slot.
+
+        Each slot routes through the system so the per-item ``unequipped``
+        notification still fires. Reports when nothing is equipped.
+        """
+        handler = getattr(self.caller, "equipment", None)
+        equipped = handler.get_all_equipped() if handler is not None else {}
+        if not equipped:
+            self.caller.msg("You have nothing equipped.")
+            return
+        # Snapshot the slot list first — unequip mutates the underlying store.
+        for slot in list(equipped.keys()):
+            equipment_system.unequip(self.caller, slot)
+
 
 def _resolve_unequip_slot(caller, arg):
     """Resolve an ``unequip`` argument to an occupied equipment slot.
 
     Accepts either a canonical slot name (``weapon``, ``head``, …) or the name
-    of an equipped item (``assault rifle``, ``assault_rifle``). Returns the slot
-    string to clear, or ``None`` when nothing matches.
+    of an equipped item — full or a partial prefix (``assault`` → "Assault
+    Rifle"), matching the leniency of ``equip``'s ``caller.search``. Returns:
+
+    * the slot string to clear (a single unambiguous match),
+    * ``"__ambiguous__"`` when a partial name matches more than one item (the
+      caller is told to be more specific), or
+    * ``None`` when nothing matches.
 
     A slot name is honoured only if that slot is actually occupied, so the
     item-name path can still match when a player types something ambiguous.
@@ -971,13 +1036,31 @@ def _resolve_unequip_slot(caller, arg):
     if token in EQUIPMENT_SLOTS and token in equipped:
         return token
 
-    # 2) Match by item name/key, case- and separator-insensitive.
+    # 2) Match by item name/key, case- and separator-insensitive. Prefer an
+    #    exact match; otherwise accept a prefix, then a substring — so
+    #    "unequip assault" clears the Assault Rifle just like "equip assault"
+    #    wears it. Collect matches to detect ambiguity.
     norm = token.replace("_", " ")
+    exact, prefix, substr = [], [], []
     for slot, item in equipped.items():
         for attr in ("name", "key"):
             val = getattr(item, attr, None)
-            if val and str(val).replace("_", " ").lower() == norm:
-                return slot
+            if not val:
+                continue
+            name = str(val).replace("_", " ").lower()
+            if name == norm:
+                exact.append(slot)
+            elif name.startswith(norm):
+                prefix.append(slot)
+            elif norm in name:
+                substr.append(slot)
+    for tier in (exact, prefix, substr):
+        # De-dupe (name and key may both match the same slot).
+        slots = list(dict.fromkeys(tier))
+        if len(slots) == 1:
+            return slots[0]
+        if len(slots) > 1:
+            return "__ambiguous__"
     return None
 
 
@@ -1465,24 +1548,21 @@ def _append_supplies_section(caller, lines):
     return True
 
 
-def _append_carried_gear_section(caller, lines):
-    """Append a ``Carried gear:`` section (loose, unequipped Gear) to *lines*.
+def _carried_gear_items(caller):
+    """Return the loose (carried-but-unequipped) Gear items *caller* holds.
 
-    Lists equippable :class:`GameItem` objects the caller is holding but has NOT
-    equipped — e.g. a weapon just produced, spawned, or picked up. Without this
-    such items are invisible to ``inventory`` even though ``equip <item>`` finds
-    them (they live in ``caller.contents``), which reads as "my item vanished".
-
-    A carried Gear item is a GameItem carrying an ``item_key`` that is (a) not a
-    counted supply drop (those carry ``db.count`` and belong to the Supplies
-    section) and (b) not currently equipped in a slot. No section is added when
-    nothing loose is carried. Returns True when a section was appended.
+    A loose Gear item is a :class:`GameItem` in the caller's contents carrying
+    an ``item_key`` that is (a) not a counted supply drop (those carry
+    ``db.count`` and live in the Supply_Bag) and (b) not currently equipped in a
+    slot. Returns the item objects (used by ``inventory`` for display and by
+    ``equip all`` to know what to wear). Empty list when the caller has no
+    contents or no loose gear.
     """
     contents = getattr(caller, "contents", None)
     if not contents:
-        return False
+        return []
 
-    # Slots hold the currently-equipped items; exclude them so we only list loose gear.
+    # Slots hold the currently-equipped items; exclude them from "loose".
     equipped_items = set()
     handler = getattr(caller, "equipment", None)
     if handler is not None and hasattr(handler, "get_all_equipped"):
@@ -1491,27 +1571,43 @@ def _append_carried_gear_section(caller, lines):
         except Exception:
             equipped_items = set()
 
-    registry = _get_system(caller, "registry")
     loose = []
     for obj in contents:
         db = getattr(obj, "db", None)
         if db is None:
             continue
-        item_key = getattr(db, "item_key", None)
-        if not item_key:
+        if not getattr(db, "item_key", None):
             continue
         # Skip counted supply drops (shown under Supplies) and equipped items.
         if getattr(db, "count", None) is not None:
             continue
         if id(obj) in equipped_items:
             continue
-        loose.append(_item_display_name(registry, item_key))
+        loose.append(obj)
+    return loose
 
+
+def _append_carried_gear_section(caller, lines):
+    """Append a ``Carried gear:`` section (loose, unequipped Gear) to *lines*.
+
+    Lists equippable :class:`GameItem` objects the caller is holding but has NOT
+    equipped — e.g. a weapon just produced, spawned, or picked up. Without this
+    such items are invisible to ``inventory`` even though ``equip <item>`` finds
+    them (they live in ``caller.contents``), which reads as "my item vanished".
+    No section is added when nothing loose is carried. Returns True when a
+    section was appended.
+    """
+    loose = _carried_gear_items(caller)
     if not loose:
         return False
 
+    registry = _get_system(caller, "registry")
     lines.append("  Carried gear:")
-    for name in sorted(loose):
+    names = [
+        _item_display_name(registry, getattr(obj.db, "item_key", None))
+        for obj in loose
+    ]
+    for name in sorted(names):
         lines.append(f"    {name}")
     return True
 
