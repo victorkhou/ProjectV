@@ -301,6 +301,9 @@ def _fmt_craft_failed(d: dict) -> str:
         "bag_full": (
             f"Your supply bag is full of {item} — use or drop some first."
         ),
+        "craft_error": (
+            f"Something went wrong making {item}; your resources were refunded."
+        ),
     }
     return f"|r[Craft] {messages.get(reason, f'Cannot craft {item}.')}|n"
 

@@ -1373,6 +1373,34 @@ class TestProductionRouting(unittest.TestCase):
         self.assertEqual(player.get_resource("Wood"), before)
         self.assertEqual(created, [])
 
+    def test_production_gear_factory_raise_refunds(self):
+        """A raising gear factory during passive production refunds the owner.
+
+        Regression: _route_produced_item now contains the exception and reports
+        failure, so the refund fires and the tick loop isn't handed an escaping
+        error mid-building.
+        """
+        registry = _make_registry()
+        registry.items["kevlar_vest"] = ItemDef(
+            key="kevlar_vest", name="Kevlar Vest", slot="torso",
+            category="armor", stat_modifiers={"damage_reduction": 5},
+            craft_cost={"Iron": 20, "Stone": 10},
+        )
+        registry.item_production_map = {"AR": ["kevlar_vest"]}
+        event_bus = EventBus()
+
+        def boom(idef, owner):
+            raise RuntimeError("create_object failed")
+
+        system = EquipmentSystem(registry, event_bus, create_item_func=boom)
+        player = self._rich_player()
+        before_iron = player.get_resource("Iron")
+        building = FakeProductionBuilding("AR", owner=player)
+
+        # Must not raise; the spend is refunded, nothing produced.
+        system.process_production([building])
+        self.assertEqual(player.get_resource("Iron"), before_iron)
+
     def test_production_requires_assigned_agent(self):
         """An equipment building with no assigned agent produces nothing."""
         system, created = self._make({"MB": ["medkit"]})
@@ -1431,7 +1459,7 @@ class TestProductionRouting(unittest.TestCase):
 class TestCraft(unittest.TestCase):
     """Manual crafting at an equipment building (craft command backend)."""
 
-    def _make(self):
+    def _make(self, create_item_func=None):
         registry = _make_registry()
         registry.items["kevlar_vest"] = ItemDef(
             key="kevlar_vest", name="Kevlar Vest", slot="torso",
@@ -1444,10 +1472,10 @@ class TestCraft(unittest.TestCase):
         created = []
         sink = NotificationSink()
         event_bus.subscribe(PLAYER_NOTIFICATION, sink)
-        system = EquipmentSystem(
-            registry, event_bus,
-            create_item_func=lambda idef, owner: created.append(idef.key),
+        factory = create_item_func or (
+            lambda idef, owner: created.append(idef.key)
         )
+        system = EquipmentSystem(registry, event_bus, create_item_func=factory)
         return system, created, sink
 
     def _player(self, **res):
@@ -1538,6 +1566,28 @@ class TestCraft(unittest.TestCase):
         kind, data = sink.last()
         self.assertEqual(kind, "craft_failed")
         self.assertEqual(data.get("reason"), "bag_full")
+
+    def test_craft_gear_factory_raise_is_contained_and_refunds(self):
+        """If the gear factory raises, craft() refunds and doesn't propagate.
+
+        Regression: an unguarded factory raise escaped past the refund block,
+        leaving resources deducted with no item — and broke the 'never raises
+        into the command layer' contract.
+        """
+        def boom(idef, owner):
+            raise RuntimeError("create_object failed")
+
+        system, _created, sink = self._make(create_item_func=boom)
+        player = self._player(Iron=100, Stone=100)
+        ar = FakeProductionBuilding("AR", owner=player)
+
+        # Must not raise; kevlar_vest is gear (craft_cost Iron 20 / Stone 10).
+        self.assertFalse(system.craft(player, "kevlar_vest", ar))
+        self.assertEqual(player.get_resource("Iron"), 100)  # refunded
+        self.assertEqual(player.get_resource("Stone"), 100)
+        kind, data = sink.last()
+        self.assertEqual(kind, "craft_failed")
+        self.assertEqual(data.get("reason"), "craft_error")
 
 
 if __name__ == "__main__":

@@ -382,9 +382,21 @@ class EquipmentSystem(CarryWeightMixin, StorageMixin, BaseSystem):
             added = handler.add_supply(item_def.key, 1, max_stack=max_stack)
             return bool(added)
 
-        # Gear -> a unique Game_Item slot object via the factory.
+        # Gear -> a unique Game_Item slot object via the factory. The injected
+        # factory calls evennia.create_object, which can raise (DB error, etc.).
+        # Contain it and report failure so the caller refunds — an escaping
+        # exception would leave the cost deducted with no item and no refund.
+        # (Note: a falsy return is NOT treated as failure — the default dict
+        # factory and test factories legitimately return None on success.)
         if category in GEAR_CATEGORIES:
-            self._create_item_func(item_def, owner)
+            try:
+                self._create_item_func(item_def, owner)
+            except Exception:
+                logger.exception(
+                    "Failed to create gear %s for %s",
+                    item_def.key, getattr(owner, "key", "?"),
+                )
+                return False
             return True
 
         # Unrecognized category — content is load-validated to one of the six,
@@ -944,13 +956,16 @@ class EquipmentSystem(CarryWeightMixin, StorageMixin, BaseSystem):
             return False
 
         if not self._route_produced_item(item_def, player):
-            # Routing failed — refund so the spend isn't lost. For a real
-            # player (who always has an equipment handler) the reachable cause
-            # is a Supply_Bag already at max_stack, so report that rather than a
-            # misleading "wrong building".
+            # Routing failed — refund so the spend isn't lost. The reachable
+            # cause depends on category: a full Supply_Bag (max_stack) for
+            # supplies, or a gear-factory error for gear. Report each accurately
+            # rather than the misleading "wrong building" (gate 3 already
+            # confirmed the building was right).
             for res, amt in craft_cost.items():
                 player.add_resource(res, amt)
-            self.notify(player, "craft_failed", reason="bag_full",
+            reason = ("bag_full" if item_def.category in SUPPLY_CATEGORIES
+                      else "craft_error")
+            self.notify(player, "craft_failed", reason=reason,
                         item_name=item_name)
             return False
 
