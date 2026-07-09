@@ -104,12 +104,14 @@ class FakeWeapon:
     """Stand-in for an equipped weapon GameItem tracking db.loaded."""
 
     def __init__(self, key="rifle", ammo_type=None, magazine_size=None,
-                 loaded=0):
+                 loaded=0, weapon_type=None, ammo_cost=None):
         self.key = key
         self.name = key
         self.slot = "weapon"
         self.ammo_type = ammo_type
         self.magazine_size = magazine_size
+        self.weapon_type = weapon_type
+        self.ammo_cost = ammo_cost
         self.stat_modifiers = {}
         self.db = DB(loaded=loaded)
 
@@ -618,6 +620,20 @@ class TestReload(unittest.TestCase):
         kind, data = sink.last()
         self.assertEqual(kind, "reload_failed")
         self.assertEqual(data.get("reason"), "no_ammo_weapon")
+
+    def test_reload_resource_fed_ranged_weapon_reports_no_magazine(self):
+        """A ranged weapon that fires from resources (ammo_cost, no ammo_type)
+        has no magazine to reload — it reports 'no_magazine', not the
+        misleading 'no_ammo_weapon' (the assault-rifle case)."""
+        system, _, sink = _make_system()
+        player = FakePlayer(level=1)
+        rifle = FakeWeapon("assault_rifle", ammo_type=None, magazine_size=None,
+                           weapon_type="ranged", ammo_cost={"Iron": 1})
+        player.equipment.equip(rifle)
+        self.assertFalse(system.reload(player))
+        kind, data = sink.last()
+        self.assertEqual(kind, "reload_failed")
+        self.assertEqual(data.get("reason"), "no_magazine")
 
 
 # -------------------------------------------------------------- #

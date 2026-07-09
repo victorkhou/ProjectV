@@ -191,6 +191,10 @@ def _fmt_reload_failed(d: dict) -> str:
         "no_ammo": "No ammo left to reload.",
         "already_loaded": "Magazine is already full.",
         "no_ammo_weapon": "No ammo-using weapon equipped.",
+        "no_magazine": (
+            "Your weapon has no magazine to reload — it fires straight from "
+            "your resource stockpile. Just attack."
+        ),
     }
     return f"|y[Reload] {messages.get(reason, 'Cannot reload.')}|n"
 

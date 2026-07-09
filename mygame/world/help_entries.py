@@ -344,7 +344,7 @@ HELP_ENTRY_DICTS = [
 
             # Ammo & Reloading
 
-            Ranged weapons fire from a loaded |cmagazine|n. When it runs dry you'll be told to reload. |wreload|n refills the magazine from the matching |cammo|n in your supply bag — so keep ammo stocked (make it at an |cArmory|n or |cLab|n). |wequipment|n shows your loaded count.
+            Ranged weapons feed their ammo one of two ways. Most (like the |cassault rifle|n) fire straight from your |cresource stockpile|n — each shot spends a little Iron, Energy, or similar, so there's nothing to reload; just keep the resource stocked. Magazine weapons (like the |cservice rifle|n) fire from a loaded |cmagazine|n and run dry: |wreload|n refills the magazine from the matching |cammo|n in your supply bag (make it at an |cArmory|n or |cLab|n). |wequipment|n shows a magazine weapon's loaded count.
 
             # Armor & Defense
 

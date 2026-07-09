@@ -742,7 +742,20 @@ class EquipmentSystem(CarryWeightMixin, StorageMixin, BaseSystem):
             self._item_attr(weapon, "ammo_type", None) if weapon is not None else None
         )
         if weapon is None or not ammo_type:
-            self.notify(player, "reload_failed", reason="no_ammo_weapon")
+            # Distinguish the two "can't reload" cases so the message isn't
+            # misleading. A ranged weapon that fires from the resource
+            # stockpile (declares ``ammo_cost`` but no magazine ``ammo_type``)
+            # simply has nothing to reload — say so, rather than claiming it
+            # isn't an "ammo-using weapon" (it is; it just draws resources per
+            # shot). Only a truly non-ammo weapon (none equipped, or a melee /
+            # magazine-less item) gets ``no_ammo_weapon``.
+            fires_from_resources = (
+                weapon is not None
+                and self._item_attr(weapon, "weapon_type", None) == "ranged"
+                and self._item_attr(weapon, "ammo_cost", None)
+            )
+            reason = "no_magazine" if fires_from_resources else "no_ammo_weapon"
+            self.notify(player, "reload_failed", reason=reason)
             return False
 
         weapon_name = self._item_name(weapon)

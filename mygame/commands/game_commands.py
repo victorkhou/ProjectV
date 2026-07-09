@@ -1260,7 +1260,9 @@ class CmdReload(GameCommand):
       Alias: rl. Transfers matching ammo from your supply bag into the
       equipped ranged weapon until the magazine is full. Keep ammo stocked
       (make it at an Armory or Lab). 'equipment' shows your loaded count.
-      Melee weapons and full magazines need no reload. See 'help combat'.
+      Only magazine weapons reload. Melee weapons, full magazines, and
+      weapons that fire straight from your resource stockpile (e.g. the
+      assault rifle) need no reload. See 'help combat'.
     """
 
     key = "reload"

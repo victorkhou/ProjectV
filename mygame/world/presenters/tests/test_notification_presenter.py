@@ -382,3 +382,15 @@ class TestPresenterOwnershipBehavioral:
                 assert frag in msg, (
                     f"kind {kind!r} rendered {msg!r}, missing {frag!r}"
                 )
+
+    def test_reload_no_magazine_reason_renders_distinct_message(self):
+        """A resource-fed ranged weapon's 'no_magazine' reason reads as 'no
+        magazine to reload', not the misleading 'No ammo-using weapon'."""
+        bus = EventBus()
+        player = _MsgPlayer()
+        NotificationPresenter(bus, player_notifier=EvenniaPlayerNotifier())
+        bus.publish(PLAYER_NOTIFICATION, player=player, kind="reload_failed",
+                    data={"reason": "no_magazine"})
+        msg = player.messages[0]
+        assert "no magazine" in msg.lower()
+        assert "No ammo-using weapon" not in msg
