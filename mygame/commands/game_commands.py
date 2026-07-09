@@ -2452,8 +2452,15 @@ class CmdLook(GameCommand):
         if not self.args:
             _render_and_send_map(caller)
 
-        # Show tile summary (objects at player's coordinates) after the map
-        if not self.args and hasattr(target, "get_objects_at"):
+        # Show tile summary (objects at player's coordinates) after the map.
+        # Skip it when inside a building: the building interior above already
+        # lists the tile's contents (buildings, resources, agents, players), so
+        # running the summary too would double-list them.
+        if (
+            not self.args
+            and hasattr(target, "get_objects_at")
+            and not getattr(caller.db, "inside_building", False)
+        ):
             _show_tile_summary(caller, target)
 
     # _show_tile_summary is now a module-level function

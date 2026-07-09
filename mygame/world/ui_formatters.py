@@ -170,6 +170,19 @@ def format_building_interior(looker: Any, building: Any, registry: Any = None) -
         if tile_agents:
             lines.append(f"  Agents here: {', '.join(tile_agents)}")
 
+    # Show other players at the building's tile (excluding the looker), so
+    # entering a building reveals who is inside — matching the overworld
+    # tile summary. Without this, auto-enter never listed co-located players
+    # and you only saw them on an explicit 'look'.
+    if tile is not None and bx is not None and by is not None and hasattr(tile, "get_players_at"):
+        others = [
+            getattr(p, "key", "?")
+            for p in tile.get_players_at(int(bx), int(by))
+            if p is not looker
+        ]
+        if others:
+            lines.append(f"  Players here: {', '.join(others)}")
+
     lines.append("")
     lines.append(f"  Exits: {', '.join(exit_parts)}")
 
