@@ -1456,6 +1456,144 @@ class TestProductionRouting(unittest.TestCase):
         self.assertEqual(player.equipment.get_supply("medkit"), 3)
 
 
+class TestOwnerProducedCount(unittest.TestCase):
+    """_owner_produced_count bounds ACCUMULATION: supplies + un-equipped gear.
+
+    Equipped gear must NOT count — equipment slots are bounded and equipping is
+    how a player relieves the production stall.
+    """
+
+    class _GearObj:
+        """A carried Game_Item object (as _owner_produced_count sees it)."""
+        _object_type_tag = "item"
+
+        def __init__(self, key, slot):
+            self.key = key
+            self.name = key
+            self.slot = slot
+            self.stat_modifiers = {}
+
+        def get_stat(self, stat_name, default=0):
+            return float(self.stat_modifiers.get(stat_name, default))
+
+    class _Owner:
+        """Owner with a real EquipmentHandler and a carried-object list."""
+        def __init__(self):
+            self.key = "Owner"
+            self.db = DB()
+            self.equipment = EquipmentHandler(self)
+            self.contents = []
+
+    def test_equipped_gear_not_counted(self):
+        owner = self._Owner()
+        vest = self._GearObj("kevlar_vest", "torso")
+        helmet = self._GearObj("helmet", "head")
+        owner.contents = [vest, helmet]
+        # Both carried, un-equipped -> both count.
+        self.assertEqual(EquipmentSystem._owner_produced_count(owner), 2)
+
+        # Equip the vest; it stays in contents but must drop out of the count.
+        ok, _msg = owner.equipment.equip(vest)
+        self.assertTrue(ok)
+        self.assertEqual(EquipmentSystem._owner_produced_count(owner), 1)
+
+    def test_supplies_and_unequipped_gear_summed(self):
+        owner = self._Owner()
+        owner.equipment.add_supply("medkit", 4, max_stack=20)
+        owner.contents = [self._GearObj("kevlar_vest", "torso")]
+        # 4 supply units + 1 un-equipped gear object = 5.
+        self.assertEqual(EquipmentSystem._owner_produced_count(owner), 5)
+
+    def test_equipping_relieves_production_stall(self):
+        """A player at the cap resumes production after equipping gear.
+
+        Regression: equipped gear used to count, so a fully-kitted player could
+        permanently starve their own equipment building.
+        """
+        registry = _make_registry()
+        registry.items["kevlar_vest"] = ItemDef(
+            key="kevlar_vest", name="Kevlar Vest", slot="torso",
+            category="armor", craft_cost={"Iron": 1},
+        )
+        registry.item_production_map = {"AR": ["kevlar_vest"]}
+        registry.balance.equipment_production_ticks = 1
+        registry.balance.equipment_production_owner_cap = 1
+        event_bus = EventBus()
+
+        owner = self._Owner()
+        owner.db.resources = {"Iron": 100}
+        # Resource-pool shims (production reads has_resources/deduct_resources).
+        owner.has_resources = lambda costs: all(
+            owner.db.resources.get(str(r).title(), 0) >= a
+            for r, a in costs.items())
+
+        def _deduct(costs):
+            if not owner.has_resources(costs):
+                return False
+            for r, a in costs.items():
+                owner.db.resources[str(r).title()] -= a
+            return True
+        owner.deduct_resources = _deduct
+        owner.add_resource = lambda r, a: owner.db.resources.__setitem__(
+            str(r).title(), owner.db.resources.get(str(r).title(), 0) + a)
+
+        # Factory that appends a real carried gear object to contents.
+        def factory(idef, o):
+            o.contents.append(self._GearObj(idef.key, idef.slot))
+
+        system = EquipmentSystem(registry, event_bus, create_item_func=factory)
+        building = FakeProductionBuilding("AR", owner=owner)
+
+        # First tick produces one vest -> count hits the cap (1) -> stalls.
+        system.process_production([building])
+        self.assertEqual(len(owner.contents), 1)
+        system.process_production([building])
+        self.assertEqual(len(owner.contents), 1)  # stalled at cap
+
+        # Equip the vest; the cap frees up and production resumes.
+        owner.equipment.equip(owner.contents[0])
+        system.process_production([building])
+        self.assertEqual(len(owner.contents), 2)
+
+
+class TestHasAssignedAgent(unittest.TestCase):
+    """_has_assigned_agent tolerates the db and Attribute-handler shapes."""
+
+    class _AttrHandler:
+        def __init__(self, values):
+            self._values = dict(values)
+
+        def get(self, key, default=None):
+            return self._values.get(key, default)
+
+    def test_db_shape_agent_present(self):
+        building = types.SimpleNamespace(db=DB(assigned_agent="engineer"))
+        self.assertTrue(EquipmentSystem._has_assigned_agent(building))
+
+    def test_db_shape_agent_absent(self):
+        building = types.SimpleNamespace(db=DB(assigned_agent=None))
+        self.assertFalse(EquipmentSystem._has_assigned_agent(building))
+
+    def test_attributes_handler_fallback_present(self):
+        # No db attribute at all -> falls through to the attributes handler.
+        building = types.SimpleNamespace(
+            attributes=self._AttrHandler({"assigned_agent": "engineer"})
+        )
+        self.assertTrue(EquipmentSystem._has_assigned_agent(building))
+
+    def test_attributes_handler_fallback_cleared(self):
+        # A cleared assignment (None) via the attributes handler reads as absent.
+        building = types.SimpleNamespace(
+            attributes=self._AttrHandler({"assigned_agent": None})
+        )
+        self.assertFalse(EquipmentSystem._has_assigned_agent(building))
+
+    def test_no_db_no_attributes(self):
+        self.assertFalse(
+            EquipmentSystem._has_assigned_agent(types.SimpleNamespace())
+        )
+
+
 class TestCraft(unittest.TestCase):
     """Manual crafting at an equipment building (craft command backend)."""
 

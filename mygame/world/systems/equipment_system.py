@@ -317,9 +317,12 @@ class EquipmentSystem(CarryWeightMixin, StorageMixin, BaseSystem):
     def _owner_produced_count(owner: Any) -> int:
         """Count *owner*'s un-equipped produced items (Supply units + Gear objs).
 
-        Sums the owner's Supply_Bag counts and the number of carried (not yet
-        equipped) Game_Item objects, giving the accumulation the owner cap
-        bounds. Returns 0 when the owner exposes no equipment handler.
+        Sums the owner's Supply_Bag counts and the number of carried, NOT-yet-
+        equipped Game_Item objects, giving the accumulation the owner cap bounds.
+        Equipped gear is excluded: equipment slots are inherently bounded, and
+        equipping is how a player relieves the stall — counting equipped items
+        would let a fully-kitted player permanently starve their own production.
+        Returns 0 when the owner exposes no equipment handler.
         """
         handler = getattr(owner, "equipment", None)
         if handler is None:
@@ -330,11 +333,19 @@ class EquipmentSystem(CarryWeightMixin, StorageMixin, BaseSystem):
         except Exception:  # noqa: BLE001 - handler without supplies in a stub
             pass
         # Carried, un-equipped Game_Item objects in the owner's inventory.
+        # Exclude items currently equipped in a slot (matched by identity, the
+        # same way the inventory's carried-gear section filters them).
+        equipped_ids = set()
+        try:
+            equipped_ids = {id(it) for it in handler.get_all_equipped().values()}
+        except Exception:  # noqa: BLE001 - handler without equipped accessor in a stub
+            equipped_ids = set()
         contents = getattr(owner, "contents", None)
         if contents:
             total += sum(
                 1 for obj in contents
                 if getattr(obj, "_object_type_tag", None) == "item"
+                and id(obj) not in equipped_ids
             )
         return total
 
