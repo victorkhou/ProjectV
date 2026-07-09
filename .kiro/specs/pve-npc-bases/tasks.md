@@ -39,21 +39,21 @@ and immediately benefits PvP as well as PvE.
     - Can stub `owner_has_active_hq` to always return True for now; Phase 2 wires the real check
     - _Requirements: 1.5_
 
-- [ ] 2. Base-deactivation predicate (Phase 2)
-  - [ ] 2.1 Implement `owner_has_active_hq(owner, planet)` in `world/utils.py`
+- [x] 2. Base-deactivation predicate (Phase 2)
+  - [x] 2.1 Implement `owner_has_active_hq(owner, planet)` in `world/utils.py`
     - Queries the owner's buildings for a headquarters capability on the given planet
     - _Requirements: 2.1, 2.5_
-  - [ ] 2.2 Gate `process_turrets` on `owner_has_active_hq` (replace Phase 1 placeholder)
+  - [x] 2.2 Gate `process_turrets` on `owner_has_active_hq` (replace Phase 1 placeholder)
     - _Requirements: 1.5, 2.2_
-  - [ ] 2.3 Gate `EquipmentSystem.process_production` — skip buildings whose owner fails the check
+  - [x] 2.3 Gate `EquipmentSystem.process_production` — skip buildings whose owner fails the check
     - _Requirements: 2.2_
-  - [ ] 2.4 Gate building commands (craft, research, deposit, withdraw, closeexit, openexit, assign, unassign) — reject with "Your base is deactivated — rebuild an HQ."
+  - [x] 2.4 Gate building commands (craft, research, deposit, withdraw, closeexit, openexit, assign, unassign) — reject with "Your base is deactivated — rebuild an HQ."
     - _Requirements: 2.2_
-  - [ ] 2.5 Add `base_deactivated` notification (fires in the existing `_handle_building_destruction` when a player HQ is destroyed)
+  - [x] 2.5 Add `base_deactivated` notification (fires in the existing `_handle_building_destruction` when a player HQ is destroyed)
     - _Requirements: 10.4_
-  - [ ] 2.6 Add `base_reactivated` notification (fires when HQ construction completes for a player whose base was inert)
+  - [x] 2.6 Add `base_reactivated` notification (fires when HQ construction completes for a player whose base was inert)
     - _Requirements: 10.5, 2.3_
-  - [ ] 2.7 Tests: deactivation predicate unit tests, gated systems reject when no HQ, reactivation on HQ rebuild, notification assertions
+  - [x] 2.7 Tests: deactivation predicate unit tests, gated systems reject when no HQ, reactivation on HQ rebuild, notification assertions
     - _Requirements: 12.6_
 
 - [ ] 3. Guard combat AI (Phase 3)
