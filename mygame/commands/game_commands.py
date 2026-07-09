@@ -955,7 +955,8 @@ class CmdEquip(GameCommand):
       <item>  name of a piece of gear you are carrying (weapon, armor, or
               accessory) — a partial name works (e.g. "assault"). It goes into
               its own slot automatically.
-      all     wear every piece of carried gear at once.
+      all     wear one piece of carried gear per empty slot (predictable,
+              skips occupied slots — never swaps).
 
     Examples:
       equip combat helmet
@@ -963,7 +964,9 @@ class CmdEquip(GameCommand):
       equip all
 
     Notes:
-      Alias: wear. Equipping into an occupied slot swaps out the old item.
+      Alias: wear. Equipping a specific item into an occupied slot swaps out
+      the old item (you're told what was unequipped first). 'equip all' fills
+      only empty slots — it never displaces gear you already have on.
       Powerful gear may require a minimum rank — you'll be told if you're not
       high enough. See your full loadout with 'equipment' and take gear off
       with 'unequip'. See 'help equipment'.
@@ -1003,19 +1006,22 @@ class CmdEquip(GameCommand):
         equipment_system.equip(self.caller, item)
 
     def _equip_all(self, equipment_system):
-        """Equip every piece of loose (carried, unequipped) gear.
+        """Fill empty equipment slots with carried gear (first per slot wins).
 
-        Each item routes through the system, so per-item notifications
-        (equipped / equip_denied for rank-gated gear) still fire. When multiple
-        carried items share a slot, later ones simply swap out earlier ones, as
-        a manual sequence of equips would. Reports when there's nothing to do.
+        Iterates loose items in a deterministic order (sorted by item_key) and
+        for each, equips only if the target slot is still empty. Items whose
+        slot is already occupied are skipped — no swapping. Per-item
+        notifications (equipped / equip_denied) still fire for each item that
+        lands. Reports when there's nothing to do.
         """
         loose = _carried_gear_items(self.caller)
         if not loose:
             self.caller.msg("You have no carried gear to equip.")
             return
-        for item in loose:
-            equipment_system.equip(self.caller, item)
+        # Sort deterministically by item_key for predictable slot assignment
+        # when multiple items target the same slot.
+        loose.sort(key=lambda obj: getattr(getattr(obj, "db", None), "item_key", "") or "")
+        equipment_system.equip_all(self.caller, loose)
 
 
 class CmdUnequip(GameCommand):

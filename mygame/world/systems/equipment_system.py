@@ -470,10 +470,59 @@ class EquipmentSystem(CarryWeightMixin, StorageMixin, BaseSystem):
         if handler is None:
             logger.warning("Cannot equip %s: player has no equipment handler", item_name)
             return False
+
+        # Detect a swap: if the slot already holds a DIFFERENT item, the handler
+        # auto-unequips it back to inventory. Capture it so we can tell the
+        # player they took the old one off BEFORE announcing the new one.
+        displaced = None
+        if hasattr(handler, "get_equipped"):
+            current = handler.get_equipped(slot)
+            if current is not None and current is not item:
+                displaced = current
+
         ok, _msg = handler.equip(item)
         if ok:
+            # Unequip message first, then the equip message — the order the
+            # player experiences the swap.
+            if displaced is not None:
+                self.notify(player, "unequipped",
+                            item_name=self._item_name(displaced), slot=slot)
             self.notify(player, "equipped", item_name=item_name, slot=slot)
         return bool(ok)
+
+    def equip_all(self, player: Any, loose_items: list) -> int:
+        """Equip loose gear into empty slots — one item per slot, deterministic.
+
+        Iterates *loose_items* (already carried, unequipped gear in a stable
+        order) and for each item whose target slot is still *empty*, equips it
+        via :meth:`equip`. Items whose slot is already occupied (either from the
+        start or claimed earlier in this pass) are **skipped** — no swapping.
+        This gives a predictable "fill what's empty" behavior for ``equip all``.
+
+        Args:
+            player: The equipping entity.
+            loose_items: Carried, unequipped gear (from ``_carried_gear_items``),
+                in a deterministic order (caller must sort if desired).
+
+        Returns:
+            The number of items successfully equipped.
+        """
+        handler = getattr(player, "equipment", None)
+        if handler is None or not hasattr(handler, "get_all_equipped"):
+            return 0
+        # Snapshot of slots already occupied at the start. Items equip into this
+        # set — one per slot, first in sequence wins — so later same-slot items
+        # are naturally skipped.
+        filled: set[str] = set(handler.get_all_equipped().keys())
+        count = 0
+        for item in loose_items:
+            slot = self._item_attr(item, "slot", "")
+            if not slot or slot in filled:
+                continue
+            if self.equip(player, item):
+                filled.add(slot)
+                count += 1
+        return count
 
     def unequip(self, player: Any, slot: str) -> bool:
         """Unequip whatever occupies *slot* for *player*.

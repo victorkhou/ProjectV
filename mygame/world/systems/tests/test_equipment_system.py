@@ -354,6 +354,76 @@ class TestEquip(unittest.TestCase):
             ["weapon"],
         )
 
+    def test_reequip_emits_unequipped_then_equipped(self):
+        """Swapping an occupied slot notifies unequip-old then equip-new."""
+        system, _, sink = _make_system()
+        player = FakePlayer(level=60)
+        old = FakeItem("knife", "weapon", {"damage": 10})
+        new = FakeItem("rifle", "weapon", {"damage": 25})
+        system.equip(player, old)
+        sink.events.clear()
+
+        system.equip(player, new)
+
+        kinds = [k for k, _ in sink.events]
+        # unequipped fires first, then equipped.
+        self.assertEqual(kinds, ["unequipped", "equipped"])
+        # The unequipped notification names the displaced item.
+        _, udata = sink.events[0]
+        self.assertIn("knife", udata.get("item_name", ""))
+
+    def test_equip_into_empty_slot_no_unequipped_notification(self):
+        """Equipping into a free slot fires only 'equipped', never 'unequipped'."""
+        system, _, sink = _make_system()
+        player = FakePlayer(level=60)
+        item = FakeItem("helmet", "head", {"damage_reduction": 3})
+        system.equip(player, item)
+        self.assertEqual([k for k, _ in sink.events], ["equipped"])
+
+
+class TestEquipAll(unittest.TestCase):
+    """equip_all fills empty slots only (first per slot wins, no swap)."""
+
+    def test_fills_empty_slots_skips_occupied(self):
+        system, _, sink = _make_system()
+        player = FakePlayer(level=60)
+        # Pre-equip a weapon.
+        knife = FakeItem("knife", "weapon", {"damage": 10})
+        system.equip(player, knife)
+        sink.events.clear()
+
+        # Offer two weapons and one helmet.
+        rifle = FakeItem("rifle", "weapon", {"damage": 25})
+        helmet = FakeItem("helmet", "head", {"damage_reduction": 3})
+        count = system.equip_all(player, [rifle, helmet])
+
+        # Only the helmet (empty slot) was equipped; weapon was skipped.
+        self.assertEqual(count, 1)
+        self.assertIs(player.equipment.get_equipped("weapon"), knife)
+        self.assertIs(player.equipment.get_equipped("head"), helmet)
+        # Only 'equipped' for helmet — no swap, no unequipped.
+        self.assertEqual([k for k, _ in sink.events], ["equipped"])
+
+    def test_first_item_wins_for_a_shared_slot(self):
+        system, _, sink = _make_system()
+        player = FakePlayer(level=60)
+
+        # Two weapons offered; first in list claims the slot.
+        knife = FakeItem("knife", "weapon", {"damage": 10})
+        rifle = FakeItem("rifle", "weapon", {"damage": 25})
+        count = system.equip_all(player, [knife, rifle])
+
+        self.assertEqual(count, 1)
+        self.assertIs(player.equipment.get_equipped("weapon"), knife)
+        # Only one equipped notification.
+        self.assertEqual([k for k, _ in sink.events], ["equipped"])
+
+    def test_empty_list_equips_nothing(self):
+        system, _, sink = _make_system()
+        player = FakePlayer(level=60)
+        self.assertEqual(system.equip_all(player, []), 0)
+        self.assertEqual(sink.events, [])
+
 
 # -------------------------------------------------------------- #
 #  unequip

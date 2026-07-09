@@ -901,34 +901,43 @@ class TestCmdEquip(unittest.TestCase):
     def test_wear_alias_registered(self):
         self.assertIn("wear", CmdEquip.aliases)
 
-    def test_equip_all_equips_every_loose_item(self):
+    def test_equip_all_delegates_sorted_loose_items(self):
+        """equip all delegates to equipment_system.equip_all with items
+        sorted deterministically by item_key (not contents order)."""
         calls = []
 
         class FakeEquipmentSystem:
             def equip(self, player, item):
-                calls.append(item)
                 return True
+            def equip_all(self, player, items):
+                calls.append(items)
+                return len(items)
 
         caller = FakeCaller(systems={"equipment_system": FakeEquipmentSystem()})
-        rifle = types.SimpleNamespace(
-            key="Assault Rifle",
-            db=types.SimpleNamespace(item_key="assault_rifle", count=None),
-        )
+        # NOTE: contents order is helmet-then-rifle, but item_key sort makes
+        # assault_rifle < combat_helmet, so the delegate receives rifle first.
         helmet = types.SimpleNamespace(
             key="Combat Helmet",
             db=types.SimpleNamespace(item_key="combat_helmet", count=None),
         )
-        caller.contents = [rifle, helmet]
+        rifle = types.SimpleNamespace(
+            key="Assault Rifle",
+            db=types.SimpleNamespace(item_key="assault_rifle", count=None),
+        )
+        caller.contents = [helmet, rifle]
         _make_cmd(CmdEquip, caller, " all").func()
-        self.assertEqual(calls, [rifle, helmet])
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(calls[0], [rifle, helmet])  # sorted by item_key
 
     def test_equip_all_excludes_supply_drops(self):
         calls = []
 
         class FakeEquipmentSystem:
             def equip(self, player, item):
-                calls.append(item)
                 return True
+            def equip_all(self, player, items):
+                calls.append(items)
+                return len(items)
 
         caller = FakeCaller(systems={"equipment_system": FakeEquipmentSystem()})
         rifle = types.SimpleNamespace(
@@ -941,7 +950,8 @@ class TestCmdEquip(unittest.TestCase):
         )
         caller.contents = [rifle, ammo_drop]
         _make_cmd(CmdEquip, caller, " all").func()
-        self.assertEqual(calls, [rifle])  # counted supply drop skipped
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(calls[0], [rifle])  # counted supply drop excluded
 
     def test_equip_all_when_nothing_carried(self):
         calls = []
