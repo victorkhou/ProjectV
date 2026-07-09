@@ -320,8 +320,14 @@ class TestHpRegenStep(unittest.TestCase):
     """The hp_regen tick step feeds RegenSystem players + agents (not buildings)."""
 
     class _FakeRegen:
-        def __init__(self):
+        def __init__(self, should_regen=True):
             self.calls = []  # (entities, tick_number)
+            self._should_regen = should_regen
+            self.gate_checks = []  # tick_numbers passed to should_regen_this_tick
+
+        def should_regen_this_tick(self, tick_number):
+            self.gate_checks.append(tick_number)
+            return self._should_regen
 
         def process_tick(self, entities, tick_number):
             self.calls.append((list(entities), tick_number))
@@ -375,6 +381,39 @@ class TestHpRegenStep(unittest.TestCase):
         self.assertIn(agent, entities)
         self.assertEqual(tick, 4)
 
+    def test_regen_skips_agent_scan_off_interval(self):
+        """On an off-interval tick the step returns before enumerating agents.
+
+        The interval gate is checked BEFORE get_all_agents(), so a tick where
+        should_regen_this_tick is False must not touch the (expensive) roster.
+        """
+        agent_system = self._FakeAgentSystemWithRoster([object()])
+        agent_system.get_all_agents_called = 0
+        _orig = agent_system.get_all_agents
+
+        def _counting():
+            agent_system.get_all_agents_called += 1
+            return _orig()
+
+        agent_system.get_all_agents = _counting
+
+        regen = self._FakeRegen(should_regen=False)
+        script = GameTickScript()
+        script._get_online_players = lambda: []
+        systems = {
+            "regen_system": regen,
+            "agent_system": agent_system,
+            "event_bus": FakeEventBus(),
+        }
+        steps = dict(script._build_tick_steps(systems, tick_number=3))
+        steps["active_chunks"]()
+        steps["hp_regen"]()
+
+        # Gate consulted, but no regen work and no roster scan.
+        self.assertEqual(regen.gate_checks, [3])
+        self.assertEqual(len(regen.calls), 0)
+        self.assertEqual(agent_system.get_all_agents_called, 0)
+
 
 class TestBuildingCacheInvalidation(unittest.TestCase):
     """_get_all_buildings caches the tag search and re-runs it only when a
@@ -424,6 +463,49 @@ class TestBuildingCacheInvalidation(unittest.TestCase):
         # Steady state again — no further searches.
         script._get_all_buildings()
         self.assertEqual(self.calls, 2)
+
+
+class TestAgentCacheInvalidation(unittest.TestCase):
+    """_get_all_agents caches agent_system.get_all_agents() and re-queries only
+    when an agent NPC is created/deleted (the agent-index generation advances)."""
+
+    class _CountingAgentSystem:
+        def __init__(self):
+            self.calls = 0
+
+        def get_all_agents(self):
+            self.calls += 1
+            return ["a1", "a2"]
+
+    def setUp(self):
+        from world import agent_index
+        self._agent_index = agent_index
+        # Advance the generation so any cache from a prior test is stale.
+        agent_index.bump()
+
+    def test_repeated_calls_hit_cache_until_bump(self):
+        script = GameTickScript()
+        agent_system = self._CountingAgentSystem()
+
+        first = script._get_all_agents(agent_system)
+        script._get_all_agents(agent_system)
+        script._get_all_agents(agent_system)
+        # Three calls, no agent create/destroy -> one roster query.
+        self.assertEqual(agent_system.calls, 1)
+        self.assertEqual(first, ["a1", "a2"])
+
+        # An agent create/destroy bumps the generation -> one re-query.
+        self._agent_index.bump()
+        script._get_all_agents(agent_system)
+        self.assertEqual(agent_system.calls, 2)
+
+        # Steady state again — no further queries.
+        script._get_all_agents(agent_system)
+        self.assertEqual(agent_system.calls, 2)
+
+    def test_none_agent_system_returns_empty(self):
+        script = GameTickScript()
+        self.assertEqual(script._get_all_agents(None), [])
 
 
 if __name__ == "__main__":

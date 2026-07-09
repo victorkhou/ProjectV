@@ -113,6 +113,45 @@ class TestRegenBasics(unittest.TestCase):
         system.process_tick([ent], tick_number=1)
         self.assertEqual(ent.db.hp, 20)
 
+    def test_accumulator_reset_at_cap_no_burst_after_damage(self):
+        """Surplus is dropped when capping, so a later hit can't burst-heal.
+
+        Regression for the reviewer-flagged gap: if the accumulator retained
+        the surplus at cap instead of resetting to 0.0, a subsequent damage
+        event would let a big banked remainder heal back instantly.
+        """
+        system = _make(percent=50.0, interval=1)  # 50 HP/interval
+        ent = _Entity(hp=90, hp_max=100)
+        system.process_tick([ent], tick_number=1)  # 90 -> cap 100, surplus 40
+        self.assertEqual(ent.db.hp, 100)
+        # The surplus must NOT be banked (else it would be ~40).
+        self.assertEqual(ent.db.hp_regen_accumulator, 0.0)
+        # Take damage, then regen one interval: heals only one interval's worth
+        # (50), not 90 (= 50 + a retained 40 surplus).
+        ent.db.hp = 20
+        system.process_tick([ent], tick_number=2)
+        self.assertEqual(ent.db.hp, 70)
+
+
+class TestShouldRegenThisTick(unittest.TestCase):
+    """The interval/enabled gate the tick loop consults before enumerating."""
+
+    def test_true_on_interval_boundary(self):
+        system = _make(percent=1.0, interval=2)
+        self.assertTrue(system.should_regen_this_tick(4))
+
+    def test_false_off_interval(self):
+        system = _make(percent=1.0, interval=2)
+        self.assertFalse(system.should_regen_this_tick(3))
+
+    def test_false_when_percent_disabled(self):
+        system = _make(percent=0.0, interval=2)
+        self.assertFalse(system.should_regen_this_tick(4))
+
+    def test_false_when_interval_non_positive(self):
+        system = _make(percent=1.0, interval=0)
+        self.assertFalse(system.should_regen_this_tick(4))
+
 
 class TestFractionalAccumulation(unittest.TestCase):
     def test_sub_one_hp_rate_accumulates_then_heals(self):

@@ -69,6 +69,28 @@ class NPC(CombatEntity, GameEntity):
         # when an owner is actually assigned, since owner is None here.
         self.tags.add("agent", category="npc_type")
 
+        # Invalidate the tick loop's cached agent roster (mirrors Building).
+        self._bump_agent_index()
+
+    def at_object_delete(self):
+        """Clean up (via GameEntity), then invalidate the agent-roster cache."""
+        result = super().at_object_delete()
+        self._bump_agent_index()
+        return result
+
+    @staticmethod
+    def _bump_agent_index() -> None:
+        """Advance the agent-index generation so the tick loop re-searches.
+
+        Guarded so an NPC create/delete never fails if the counter module is
+        somehow unavailable (defensive; it is a pure-stdlib module).
+        """
+        try:
+            from world import agent_index
+            agent_index.bump()
+        except Exception:  # noqa: BLE001 - cache freshness must not block lifecycle
+            pass
+
     # ------------------------------------------------------------------ #
     #  Movement Engine
     # ------------------------------------------------------------------ #

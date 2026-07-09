@@ -59,6 +59,23 @@ class RegenSystem(BaseSystem):
     #  Tick processing
     # ------------------------------------------------------------------ #
 
+    def should_regen_this_tick(self, tick_number: int) -> bool:
+        """Return True if passive regen applies on *tick_number*.
+
+        True only when regen is enabled (positive percent and interval) AND
+        *tick_number* lands on the ``hp_regen_interval_ticks`` boundary. The
+        tick loop calls this BEFORE enumerating the (potentially large) agent
+        roster, so an off-interval tick skips that DB scan entirely rather than
+        doing the work and discarding it. This is the single source of truth
+        for the timing gate — ``process_tick`` consults it too.
+        """
+        balance = getattr(self.registry, "balance", None)
+        percent = float(getattr(balance, "hp_regen_percent", 0.0) or 0.0)
+        interval = int(getattr(balance, "hp_regen_interval_ticks", 0) or 0)
+        if percent <= 0 or interval <= 0:
+            return False
+        return tick_number % interval == 0
+
     def process_tick(self, entities: Iterable[Any], tick_number: int) -> None:
         """Regenerate HP for each eligible entity in *entities*.
 
@@ -67,20 +84,20 @@ class RegenSystem(BaseSystem):
         incapacitated, and below ``hp_max``. Dead/incapacitated entities heal
         through respawn, not passive regen, so they are skipped.
 
+        Callers may pre-check :meth:`should_regen_this_tick` to avoid assembling
+        *entities* on off-interval ticks; this method re-checks the same gate so
+        it stays correct when called unconditionally (e.g. in tests).
+
         Args:
             entities: The players and/or agents to consider (buildings are
                 intentionally not passed by the tick loop).
             tick_number: The current game tick.
         """
+        if not self.should_regen_this_tick(tick_number):
+            return
+
         balance = getattr(self.registry, "balance", None)
         percent = float(getattr(balance, "hp_regen_percent", 0.0) or 0.0)
-        interval = int(getattr(balance, "hp_regen_interval_ticks", 0) or 0)
-
-        # Disabled (0% or non-positive interval), or not on the interval tick.
-        if percent <= 0 or interval <= 0:
-            return
-        if tick_number % interval != 0:
-            return
 
         for entity in entities or ():
             try:

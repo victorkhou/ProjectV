@@ -216,6 +216,47 @@ class GameTickScript(DefaultScript):
             self._buildings_cache_gen = generation
         return buildings
 
+    def _get_all_agents(self, agent_system):
+        """Return the full agent roster, cached against the agent-index gen.
+
+        Mirrors :meth:`_get_all_buildings`: ``agent_system.get_all_agents()``
+        runs a DB tag-search, and the roster only changes when an agent NPC is
+        created or deleted (see ``world.agent_index``). Reuse the cached list
+        while the generation is unchanged so passive systems (HP regen) don't
+        re-scan every interval. Falls back to a live (uncached) query if the
+        counter is unavailable.
+
+        Args:
+            agent_system: the AgentSystem exposing ``get_all_agents()``.
+
+        Returns:
+            list of agent NPC objects (empty on any failure).
+        """
+        if agent_system is None:
+            return []
+        try:
+            from world import agent_index
+            generation = agent_index.generation()
+        except Exception:  # noqa: BLE001 - if the counter is unavailable, don't cache
+            generation = None
+
+        if (
+            generation is not None
+            and getattr(self, "_agents_cache_gen", None) == generation
+            and getattr(self, "_agents_cache", None) is not None
+        ):
+            return self._agents_cache
+
+        try:
+            agents = list(agent_system.get_all_agents())
+        except Exception:
+            return []
+
+        if generation is not None:
+            self._agents_cache = agents
+            self._agents_cache_gen = generation
+        return agents
+
     def _compute_active_data(self, chunking, online_players):
         """Compute active buildings from chunk filtering.
 
@@ -376,13 +417,17 @@ class GameTickScript(DefaultScript):
         regen_system = systems.get("regen_system")
         if regen_system:
             def process_hp_regen():
+                # Skip on off-interval ticks BEFORE the agent-roster scan — the
+                # gate is cheap, enumerating every agent (a DB tag search) is
+                # not, and process_tick would only discard the result anyway.
+                if not regen_system.should_regen_this_tick(tick_number):
+                    return
                 # Players and agents only — buildings do NOT passively heal.
+                # The agent roster is cached against the agent-index generation
+                # (see _get_all_agents), so this is a DB scan only when an agent
+                # was created/deleted since the last interval tick.
                 entities = list(tick_data["online_players"])
-                if agent_system is not None:
-                    try:
-                        entities.extend(agent_system.get_all_agents())
-                    except Exception:
-                        pass
+                entities.extend(self._get_all_agents(agent_system))
                 regen_system.process_tick(entities, tick_number)
             registered["hp_regen"] = process_hp_regen
 
