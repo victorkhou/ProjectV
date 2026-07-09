@@ -486,7 +486,7 @@ class TestCmdMove(unittest.TestCase):
     #  Closed exits are symmetric: a closed face blocks entry too
     # ---------------------------------------------------------- #
 
-    def _make_building_with_closed_exits(self, closed):
+    def _make_building_with_closed_exits(self, closed, owner=None):
         class _AttrStore:
             def __init__(self):
                 self._data = {}
@@ -501,6 +501,7 @@ class TestCmdMove(unittest.TestCase):
                 self.attributes = _AttrStore()
                 self.attributes.add("building_type", "HQ")
                 self.attributes.add("closed_exits", set(closed))
+                self.attributes.add("owner", owner)
         return Building()
 
     def test_entering_through_closed_side_blocked(self):
@@ -534,12 +535,14 @@ class TestCmdMove(unittest.TestCase):
 
         Building at (5,6) with only its NORTH exit closed. Moving north crosses
         the (open) south face -> steps on and auto-enters. Proves closing one
-        side doesn't seal the others.
+        side doesn't seal the others. Auto-enter is owner-gated, so the caller
+        owns this building.
         """
         building = self._make_building_with_closed_exits({"north"})
         systems = self._make_wall_systems(building)
         loc = self._make_wall_location(building, target_x=5, target_y=6)
         caller = FakeCaller(systems=systems, location=loc)
+        building.attributes.add("owner", caller)  # caller owns it (auto-enter gate)
 
         cmd = _make_cmd(CmdMove, caller, " north")
         cmd.func()
@@ -561,6 +564,26 @@ class TestCmdMove(unittest.TestCase):
         cmd.func()
 
         self.assertEqual(caller.db.coord_y, 6)  # moved onto the tile (crossed south)
+
+    def test_non_owner_walks_onto_tile_without_auto_entering(self):
+        """Walking onto someone else's building tile does NOT auto-enter.
+
+        The player steps onto the tile (buildings don't block passage on their
+        own) but stays outside — entry is owner-only.
+        """
+        other = type("Owner", (), {"id": 777})()
+        building = self._make_building_with_closed_exits(set(), owner=other)
+        systems = self._make_wall_systems(building)
+        loc = self._make_wall_location(building, target_x=5, target_y=6)
+        caller = FakeCaller(systems=systems, location=loc)
+        caller.id = 1  # not the owner
+
+        cmd = _make_cmd(CmdMove, caller, " north")
+        cmd.func()
+
+        # Moved onto the tile, but did not enter the building.
+        self.assertEqual((caller.db.coord_x, caller.db.coord_y), (5, 6))
+        self.assertFalse(getattr(caller.db, "inside_building", False))
 
     # ---------------------------------------------------------- #
     #  Active-presence pauses on movement (Req 6.6, 6.7)
@@ -1348,11 +1371,13 @@ class TestCmdCraft(unittest.TestCase):
 class TestCmdEnterLeave(unittest.TestCase):
     """enter / leave a building without moving off the tile."""
 
-    def _building(self, offline=False):
+    def _building(self, offline=False, owner=None):
         return types.SimpleNamespace(
             key="Armory",
             is_offline=offline,
-            db=types.SimpleNamespace(building_type="AR", closed_exits=None),
+            db=types.SimpleNamespace(
+                building_type="AR", closed_exits=None, owner=owner
+            ),
         )
 
     def _caller_on_building(self, building):
@@ -1361,6 +1386,10 @@ class TestCmdEnterLeave(unittest.TestCase):
         caller.db.coord_y = 5
         caller.db.inside_building = False
         caller.location._buildings_by_coord[(5, 5)] = [building]
+        # Buildings are enter/leave-gated to their owner; make the caller own it
+        # (is_owner falls back to `owner is caller` when neither has an id).
+        if getattr(building.db, "owner", None) is None:
+            building.db.owner = caller
         return caller
 
     def test_enter_does_not_crash_and_sets_flag(self):
@@ -1396,6 +1425,41 @@ class TestCmdEnterLeave(unittest.TestCase):
         caller.db.inside_building = True
         _make_cmd(CmdEnter, caller, "").func()
         self.assertTrue(any("already inside" in m.lower() for m in caller._messages))
+
+    def test_enter_non_owner_blocked(self):
+        """A non-owner cannot enter someone else's building."""
+        other = types.SimpleNamespace(id=999)  # a different owner
+        building = self._building(owner=other)
+        caller = self._caller_on_building(building)  # owner already set -> kept
+        caller.id = 1  # not the owner
+        _make_cmd(CmdEnter, caller, "").func()
+        self.assertFalse(caller.db.inside_building)
+        self.assertTrue(
+            any("your own buildings" in m.lower() for m in caller._messages)
+        )
+
+    def test_leave_non_owner_blocked(self):
+        """A non-owner somehow inside cannot use the door (strict symmetry)."""
+        other = types.SimpleNamespace(id=999)
+        building = self._building(owner=other)
+        caller = self._caller_on_building(building)
+        caller.id = 1  # not the owner
+        caller.db.inside_building = True  # simulate stale inside state
+        _make_cmd(CmdLeave, caller, "").func()
+        self.assertTrue(caller.db.inside_building)  # still inside (blocked)
+        self.assertTrue(
+            any("your own buildings" in m.lower() for m in caller._messages)
+        )
+
+    def test_admin_can_enter_non_owned_building(self):
+        """Admins bypass the owner gate on entry."""
+        other = types.SimpleNamespace(id=999)
+        building = self._building(owner=other)
+        caller = self._caller_on_building(building)
+        caller.id = 1
+        caller.check_permstring = lambda perm: True  # is_admin()
+        _make_cmd(CmdEnter, caller, "").func()
+        self.assertTrue(caller.db.inside_building)
 
 
 class _StorageCommandBase(unittest.TestCase):

@@ -400,10 +400,14 @@ class CmdMove(GameCommand):
             pass
         caller.msg(f"You move {direction} to ({tx}, {ty}){terrain_label}.")
 
-        # Auto-enter building if present
+        # Auto-enter building if present — but only into your OWN building
+        # (admins bypass). Non-owners stand on the tile without going inside.
         if buildings_at_target:
             building = buildings_at_target[0]
-            if not getattr(building, "is_offline", False):
+            owns = is_admin(caller) or is_owner(
+                caller, get_building_attr(building, "owner")
+            )
+            if owns and not getattr(building, "is_offline", False):
                 opposite = _OPPOSITE_DIR.get(direction, direction)
                 if is_admin(caller) or not is_exit_closed(building, opposite):
                     caller.db.inside_building = True
@@ -2775,7 +2779,8 @@ class CmdLeave(GameCommand):
 
     Notes:
       Aliases: out, outside, exit building. You stay on the same tile — step
-      back in with 'enter'. (Moving off the tile also leaves.)
+      back in with 'enter'. (Moving off the tile also leaves.) Only the
+      building's owner can use its door.
     """
 
     key = "leave"
@@ -2786,6 +2791,17 @@ class CmdLeave(GameCommand):
         caller = self.caller
         if not getattr(caller.db, "inside_building", False):
             caller.msg("You are not inside a building.")
+            return
+        # Only the owner (or an admin) may use the building's door — symmetric
+        # with 'enter'. Entry is already owner-gated, so a non-owner should
+        # never be inside; this blocks any edge-case stale state as well.
+        building = self._building_at_caller(caller)
+        if (
+            building is not None
+            and not is_admin(caller)
+            and not is_owner(caller, get_building_attr(building, "owner"))
+        ):
+            caller.msg("You can only leave your own buildings.")
             return
         caller.db.inside_building = False
         caller.msg("You step outside.")
@@ -2826,8 +2842,10 @@ class CmdEnter(GameCommand):
         in
 
     The mirror of ``leave``: step into the building you are standing on
-    (e.g. after using ``leave`` while still on its tile). Movement onto a
-    building's tile still auto-enters; this re-enters without moving.
+    (e.g. after using ``leave`` while still on its tile). Walking onto your
+    own building's tile still auto-enters; this re-enters without moving.
+    Only the building's owner can go inside — walking onto someone else's
+    building leaves you standing on the tile.
     """
 
     key = "enter"
@@ -2844,6 +2862,13 @@ class CmdEnter(GameCommand):
         building = self._building_at_caller(caller)
         if building is None:
             caller.msg("There is no building here to enter.")
+            return
+
+        # Only the building's owner (or an admin) may go inside.
+        if not is_admin(caller) and not is_owner(
+            caller, get_building_attr(building, "owner")
+        ):
+            caller.msg("You can only enter your own buildings.")
             return
 
         if getattr(building, "is_offline", False):

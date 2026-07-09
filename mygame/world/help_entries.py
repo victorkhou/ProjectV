@@ -106,7 +106,7 @@ HELP_ENTRY_DICTS = [
             |wlook|n (|wl|n) — look at your tile / a thing
             |wmap|n (|wm|n) — the fog-of-war overworld map
             |wscan|n — who and what is on your tile
-            |wenter|n / |wleave|n — step into / out of a building
+            |wenter|n / |wleave|n — step into / out of a building you own
 
             # Economy & Base
 
