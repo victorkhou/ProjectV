@@ -349,6 +349,18 @@ class CmdMove(GameCommand):
             if getattr(building, "is_offline", False):
                 caller.msg("That tile is blocked by an offline building.")
                 return
+            # Closed-exit check: stepping onto a building's tile crosses the
+            # exit on the face toward you (the OPPOSITE of your move direction).
+            # A closed exit is impassable in BOTH directions — the same face you
+            # can't leave through, you can't enter through — so block the step
+            # onto the tile entirely (not just auto-enter). Without this you'd
+            # be left standing on the tile and could slip in with 'enter',
+            # bypassing the closed side by walking around the building.
+            if not is_admin(caller):
+                crossing = _OPPOSITE_DIR.get(direction, direction)
+                if is_exit_closed(building, crossing):
+                    caller.msg(f"The {crossing} exit is closed.")
+                    return
             # Wall passage check: block owner during combat timer
             from world.constants import COMBAT_BARRIER
             from world.utils import building_has_capability
@@ -2533,10 +2545,11 @@ class CmdCloseExit(GameCommand):
       close e
 
     Notes:
-      Alias: close. You must be inside a building you own. Closing blocks
-      movement through that side. You must leave at least one exit open (so
-      at most three can be closed). Re-open with 'openexit'. Admins are not
-      blocked by closed exits.
+      Alias: close. You must be inside a building you own. A closed side blocks
+      movement BOTH ways — you can't leave through it, and no one can step onto
+      the tile (or enter) from that side. Open sides still work normally. You
+      must leave at least one exit open (so at most three can be closed).
+      Re-open with 'openexit'. Admins are not blocked by closed exits.
     """
 
     key = "closeexit"

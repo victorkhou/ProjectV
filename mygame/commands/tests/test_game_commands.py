@@ -483,6 +483,86 @@ class TestCmdMove(unittest.TestCase):
         self.assertEqual(caller.db.coord_y, 6)
 
     # ---------------------------------------------------------- #
+    #  Closed exits are symmetric: a closed face blocks entry too
+    # ---------------------------------------------------------- #
+
+    def _make_building_with_closed_exits(self, closed):
+        class _AttrStore:
+            def __init__(self):
+                self._data = {}
+            def get(self, key, default=None, **kw):
+                return self._data.get(key, default)
+            def add(self, key, value, **kw):
+                self._data[key] = value
+
+        class Building:
+            is_offline = False
+            def __init__(self):
+                self.attributes = _AttrStore()
+                self.attributes.add("building_type", "HQ")
+                self.attributes.add("closed_exits", set(closed))
+        return Building()
+
+    def test_entering_through_closed_side_blocked(self):
+        """Stepping onto a building's tile through its closed face is blocked.
+
+        Building at (5,6) with its SOUTH exit closed. Moving north (from below)
+        crosses the building's south face -> refused, and the player does not
+        move onto the tile (so they can't then 'enter' by walking around).
+        Closes the loophole where a combat-locked owner could re-enter from the
+        opposite side. (Moving north checks the opposite/south face — you enter
+        from the side you approach, mirroring the auto-enter check.)
+        """
+        building = self._make_building_with_closed_exits({"south"})
+        systems = self._make_wall_systems(building)
+        loc = self._make_wall_location(building, target_x=5, target_y=6)
+        caller = FakeCaller(systems=systems, location=loc)
+        old_x, old_y = caller.db.coord_x, caller.db.coord_y
+
+        cmd = _make_cmd(CmdMove, caller, " north")
+        cmd.func()
+
+        # Did not step onto the tile, did not enter.
+        self.assertEqual((caller.db.coord_x, caller.db.coord_y), (old_x, old_y))
+        self.assertFalse(getattr(caller.db, "inside_building", False))
+        self.assertTrue(
+            any("south exit is closed" in m.lower() for m in caller._messages)
+        )
+
+    def test_entering_through_open_side_allowed(self):
+        """An OPEN face still admits entry — closing one side seals only it.
+
+        Building at (5,6) with only its NORTH exit closed. Moving north crosses
+        the (open) south face -> steps on and auto-enters. Proves closing one
+        side doesn't seal the others.
+        """
+        building = self._make_building_with_closed_exits({"north"})
+        systems = self._make_wall_systems(building)
+        loc = self._make_wall_location(building, target_x=5, target_y=6)
+        caller = FakeCaller(systems=systems, location=loc)
+
+        cmd = _make_cmd(CmdMove, caller, " north")
+        cmd.func()
+
+        # Stepped onto the tile and auto-entered through the open south face.
+        self.assertEqual((caller.db.coord_x, caller.db.coord_y), (5, 6))
+        self.assertTrue(caller.db.inside_building)
+
+    def test_admin_bypasses_closed_side_on_entry(self):
+        """Admins are not blocked by a closed face (parity with leave/enter)."""
+        building = self._make_building_with_closed_exits({"south"})
+        systems = self._make_wall_systems(building)
+        loc = self._make_wall_location(building, target_x=5, target_y=6)
+        caller = FakeCaller(systems=systems, location=loc)
+        # is_admin() checks check_permstring("Builder").
+        caller.check_permstring = lambda perm: True
+
+        cmd = _make_cmd(CmdMove, caller, " north")
+        cmd.func()
+
+        self.assertEqual(caller.db.coord_y, 6)  # moved onto the tile (crossed south)
+
+    # ---------------------------------------------------------- #
     #  Active-presence pauses on movement (Req 6.6, 6.7)
     # ---------------------------------------------------------- #
 
