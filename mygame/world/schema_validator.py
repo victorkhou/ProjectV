@@ -605,7 +605,7 @@ class SchemaValidator:
             "xp_damage", "tick_interval",
             "academy_training_reduction_per_level", "extractor_level_bonus",
             "turret_level_bonus", "demolish_refund_default",
-            "hp_regen_percent",
+            "hp_regen_percent", "repair_cost_fraction",
         ]
         bool_fields = ["metrics_enabled"]
         # Resource->int maps: keys are resource names, values positive ints

@@ -29,6 +29,12 @@ combat_lockout_ticks: 5
 hp_regen_percent: 1.0
 hp_regen_interval_ticks: 2
 
+# Building repair (the 'repair' command). Buildings do NOT passively heal;
+# repairing restores a damaged building to full HP for resources. Cost scales
+# with the fraction of HP missing: fully repairing from 0 HP costs
+# repair_cost_fraction of the building's full construction cost.
+repair_cost_fraction: 0.5
+
 tick_interval: 1.0
 chunk_size: 10
 save_interval: 30

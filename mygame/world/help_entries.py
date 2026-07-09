@@ -113,6 +113,7 @@ HELP_ENTRY_DICTS = [
             |wharvest|n — gather the resource under you
             |wbuild <type>|n — construct a building (bare |wbuild|n lists types)
             |wupgrade|n — upgrade the building you're on
+            |wrepair|n — restore a damaged building's HP for resources
             |wdemolish|n — tear down for a partial refund
             |wbuildings|n (|wbl|n) — list your buildings
             |wdeposit|n / |wwithdraw|n — move resources to/from storage
@@ -255,7 +256,7 @@ HELP_ENTRY_DICTS = [
 
             Stand on a tile and type |wbuild <type>|n (by abbreviation like |wEX|n or full name like |wextractor|n). Stay on the tile while it builds — or let an |cEngineer|n agent finish it. |wbuild|n with no argument lists what you can build right now.
 
-            |wupgrade|n improves the building you're standing on; costs and times climb steeply. |wdemolish|n tears one down for a partial refund (40% at L1 up to 80% at L5).
+            |wupgrade|n improves the building you're standing on; costs and times climb steeply. |wrepair|n restores a damaged building to full HP for resources (buildings don't heal on their own — the cost scales with how damaged it is, and a building knocked offline comes back online when repaired). |wdemolish|n tears one down for a partial refund (40% at L1 up to 80% at L5).
 
             # Building Types
 
@@ -361,7 +362,7 @@ HELP_ENTRY_DICTS = [
 
             # Armor & Defense
 
-            Every armor piece you |wequip|n reduces incoming damage, and they stack across all slots. |cTurrets|n (with a Guard agent) auto-attack intruders; |cWalls|n block movement. A |cVault|n protects your stored resources while you're offline.
+            Every armor piece you |wequip|n reduces incoming damage, and they stack across all slots. |cTurrets|n (with a Guard agent) auto-attack intruders; |cWalls|n block movement. A |cVault|n protects your stored resources while you're offline. You and your agents heal over time, but |cbuildings do not|n — repair a damaged building with |wrepair|n (see |whelp buildings|n).
 
             # Grenades
 

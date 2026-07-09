@@ -754,20 +754,23 @@ class BuildingSystem(BaseSystem):
     # ------------------------------------------------------------------ #
 
     def get_repair_cost(self, building: Any) -> dict[str, int]:
-        """Return the repair cost for an offline building (50% of base cost).
+        """Return the resource cost to repair *building* to full HP.
+
+        Cost scales with the fraction of HP missing: fully repairing from 0 HP
+        costs ``balance.repair_cost_fraction`` of the building's full
+        construction cost, and lesser damage costs proportionally less. A
+        building at (or above) full HP costs nothing. Each resource line is
+        rounded up so any repair of a resource costs at least 1 of it.
 
         Args:
             building: The building object to repair.
 
         Returns:
-            Dict of resource_type -> amount (50% of base construction cost).
+            Dict of resource_type -> amount (empty if undamaged/unknown type).
         """
-        building_type = None
-        if hasattr(building, "attributes"):
-            building_type = building.attributes.get("building_type", default=None)
-        elif hasattr(building, "db"):
-            building_type = getattr(building.db, "building_type", None)
+        import math
 
+        building_type = self._get_building_attr(building, "building_type")
         if building_type is None:
             return {}
 
@@ -776,10 +779,84 @@ class BuildingSystem(BaseSystem):
         except KeyError:
             return {}
 
+        hp = int(self._get_building_attr(building, "hp", 0) or 0)
+        hp_max = int(self._get_building_attr(building, "hp_max", 0) or 0)
+        if hp_max <= 0:
+            return {}
+        missing_ratio = max(0.0, min(1.0, (hp_max - hp) / hp_max))
+        if missing_ratio <= 0:
+            return {}
+
+        fraction = float(getattr(self.registry.balance, "repair_cost_fraction", 0.5))
         return {
-            resource: max(1, amount // 2)
+            resource: max(1, math.ceil(amount * fraction * missing_ratio))
             for resource, amount in building_def.cost.items()
         }
+
+    def repair(self, player: Any, building: Any) -> tuple[bool, str]:
+        """Repair a damaged building the player owns, restoring it to full HP.
+
+        Buildings do not passively regenerate (unlike players/agents), so this
+        is the only way to restore building HP. Instant and resource-costed:
+
+            1. Owner check.
+            2. Reject if the building is already at full HP (nothing to do).
+            3. Charge the HP-proportional :meth:`get_repair_cost` (insufficient
+               resources → shared have/need breakdown).
+            4. Set HP to hp_max and clear the offline state if it was set.
+
+        Returns:
+            (success, message) tuple.
+        """
+        from world.utils import is_owner
+
+        owner = self._get_building_attr(building, "owner")
+        if not is_owner(player, owner):
+            return False, "You do not own this building."
+
+        building_type = self._get_building_attr(building, "building_type")
+        if building_type is None:
+            return False, "Cannot determine building type."
+
+        # Don't repair a building still under construction — finish it instead.
+        if self._get_building_attr(building, "under_construction", False):
+            return False, "This building is still under construction."
+
+        hp = int(self._get_building_attr(building, "hp", 0) or 0)
+        hp_max = int(self._get_building_attr(building, "hp_max", 0) or 0)
+        if hp_max <= 0:
+            return False, "This building cannot be repaired."
+        if hp >= hp_max:
+            return False, "This building is already at full health."
+
+        cost = self.get_repair_cost(building)
+        err = self._validate_resources(player, cost)
+        if err:
+            return False, err
+
+        player.deduct_resources(cost)
+
+        self._set_building_attr(building, "hp", hp_max)
+        # A building knocked offline (HP hit 0) comes back online once repaired.
+        was_offline = bool(self._get_building_attr(building, "offline", False))
+        if was_offline:
+            self._set_building_attr(building, "offline", False)
+
+        name = self._building_name(building_type)
+        cost_str = ", ".join(f"{amt} {res}" for res, amt in cost.items())
+        restored = hp_max - hp
+        online_note = " It is back online." if was_offline else ""
+        return True, (
+            f"Repaired {name} +{restored} HP to {hp_max}/{hp_max} "
+            f"(cost: {cost_str}).{online_note}"
+        )
+
+    def _building_name(self, building_type: str) -> str:
+        """Return the display name for a building type, or the type itself."""
+        try:
+            return self.registry.get_building(building_type).name
+        except KeyError:
+            return building_type
 
     # ------------------------------------------------------------------ #
     #  Internal helpers

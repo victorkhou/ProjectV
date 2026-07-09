@@ -17,7 +17,7 @@ own cmdsets by inheriting from them or directly from `evennia.CmdSet`.
 from evennia import default_cmds
 
 from commands.game_commands import (
-    CmdMove, CmdHarvest, CmdBuild, CmdUpgrade, CmdDemolish,
+    CmdMove, CmdHarvest, CmdBuild, CmdUpgrade, CmdDemolish, CmdRepair,
     CmdAttack, CmdEquip, CmdUnequip, CmdUse, CmdThrow, CmdReload, CmdCraft,
     CmdDeposit, CmdWithdraw,
     CmdResearch, CmdPowerup,
@@ -106,6 +106,7 @@ class CharacterCmdSet(default_cmds.CharacterCmdSet):
         self.add(CmdBuild())
         self.add(CmdUpgrade())
         self.add(CmdDemolish())
+        self.add(CmdRepair())
         self.add(CmdAttack())
         self.add(CmdEquip())
         self.add(CmdUnequip())

@@ -801,6 +801,52 @@ class CmdDemolish(GameCommand):
             caller.msg(f"Demolished {name} ({btype}).")
 
 
+class CmdRepair(GameCommand):
+    """Repair the damaged building you're standing on.
+
+    Usage:
+      repair
+
+    Options:
+      (none)  repairs the building you own on your current tile.
+
+    Examples:
+      repair
+
+    Notes:
+      Alias: rep. Buildings don't heal on their own (unlike you and your
+      agents) — 'repair' restores one to full HP for resources. The cost
+      scales with how damaged it is, so patching light damage is cheap. A
+      building knocked offline comes back online once repaired. You must own
+      it and be on its tile. See 'help buildings' and 'help combat'.
+    """
+
+    key = "repair"
+    aliases = ["rep"]
+    help_category = "Game"
+
+    def func(self):
+        caller = self.caller
+
+        building_system = self.require_system("building_system")
+        if building_system is None:
+            return
+
+        coords = self.require_coords()
+        if coords is None:
+            return
+        x, y = coords
+
+        buildings = self.buildings_here(x, y)
+        if not buildings:
+            caller.msg("No building on this tile.")
+            return
+
+        building = buildings[0]
+        success, msg = building_system.repair(caller, building)
+        caller.msg(msg)
+
+
 class CmdAttack(GameCommand):
     """Attack a player, building, or agent.
 

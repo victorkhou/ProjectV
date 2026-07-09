@@ -96,7 +96,7 @@ def _ensure_evennia_stubs():
 _ensure_evennia_stubs()
 
 from mygame.commands.game_commands import (  # noqa: E402
-    CmdMove, CmdHarvest, CmdBuild, CmdUpgrade,
+    CmdMove, CmdHarvest, CmdBuild, CmdUpgrade, CmdRepair,
     CmdAttack, CmdEquip, CmdUnequip, CmdUse, CmdThrow, CmdReload, CmdCraft,
     CmdDeposit, CmdWithdraw,
     CmdResearch, CmdPowerup,
@@ -696,6 +696,40 @@ class TestCmdUpgrade(unittest.TestCase):
         cmd = _make_cmd(CmdUpgrade, caller, "")
         cmd.func()
         self.assertTrue(any("No building" in m for m in caller._messages))
+
+class TestCmdRepair(unittest.TestCase):
+    def test_system_unavailable(self):
+        caller = FakeCaller()
+        _make_cmd(CmdRepair, caller, "").func()
+        self.assertTrue(any("unavailable" in m for m in caller._messages))
+
+    def test_no_building_on_tile(self):
+        caller = FakeCaller(systems={"building_system": object()})
+        caller.db.coord_x = 5
+        caller.db.coord_y = 5
+        _make_cmd(CmdRepair, caller, "").func()
+        self.assertTrue(any("No building" in m for m in caller._messages))
+
+    def test_delegates_to_building_system(self):
+        calls = []
+
+        class FakeBuildingSystem:
+            def repair(self, player, building):
+                calls.append((player, building))
+                return True, "Repaired HQ +100 HP to 500/500 (cost: 5 Iron)."
+
+        caller = FakeCaller(systems={"building_system": FakeBuildingSystem()})
+        caller.db.coord_x = 5
+        caller.db.coord_y = 5
+        building = types.SimpleNamespace(key="HQ", db=types.SimpleNamespace(building_type="HQ"))
+        caller.location._buildings_by_coord[(5, 5)] = [building]
+        _make_cmd(CmdRepair, caller, "").func()
+        self.assertEqual(calls, [(caller, building)])
+        self.assertTrue(any("Repaired HQ" in m for m in caller._messages))
+
+    def test_rep_alias_registered(self):
+        self.assertIn("rep", CmdRepair.aliases)
+
 
 class TestCmdAttack(unittest.TestCase):
     def test_no_args(self):
