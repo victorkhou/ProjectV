@@ -634,6 +634,26 @@ class SchemaValidator:
                     f"balance.{field}: expected bool, got {type(val).__name__}"
                 )
 
+        # Range checks: these tunables must be non-negative. The runtime treats
+        # 0/non-positive as "disabled" (regen off; free repairs), so a NEGATIVE
+        # value is a misconfiguration that would silently disable the feature
+        # instead of erroring — catch it here. NaN also fails (nan >= 0 is
+        # False), so a malformed float can't slip through the type check.
+        non_negative_fields = [
+            "hp_regen_percent", "hp_regen_interval_ticks", "repair_cost_fraction",
+        ]
+        for field in non_negative_fields:
+            val = data.get(field)
+            if (
+                val is not None
+                and isinstance(val, (int, float))
+                and not isinstance(val, bool)
+                and not (val >= 0)
+            ):
+                errors.append(
+                    f"balance.{field}: must be >= 0, got {val!r}"
+                )
+
         # Resource->positive-int maps (e.g. base_training_cost)
         for field in resource_map_fields:
             val = data.get(field)
