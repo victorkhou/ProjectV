@@ -102,7 +102,7 @@ from mygame.commands.game_commands import (  # noqa: E402
     CmdResearch, CmdPowerup,
     CmdScore, CmdEquipment, CmdBuildings, CmdScan, CmdTechnology,
     CmdInventory, CmdMessage, CmdSay, CmdMap,
-    CmdCloseExit, CmdOpenExit, CmdExit, CmdGet,
+    CmdCloseExit, CmdOpenExit, CmdExit, CmdGet, CmdEnter, CmdLeave,
 )
 
 # -------------------------------------------------------------- #
@@ -1211,6 +1211,59 @@ class TestCmdCraft(unittest.TestCase):
 
     def test_make_alias_registered(self):
         self.assertIn("make", CmdCraft.aliases)
+
+
+class TestCmdEnterLeave(unittest.TestCase):
+    """enter / leave a building without moving off the tile."""
+
+    def _building(self, offline=False):
+        return types.SimpleNamespace(
+            key="Armory",
+            is_offline=offline,
+            db=types.SimpleNamespace(building_type="AR", closed_exits=None),
+        )
+
+    def _caller_on_building(self, building):
+        caller = FakeCaller()
+        caller.db.coord_x = 5
+        caller.db.coord_y = 5
+        caller.db.inside_building = False
+        caller.location._buildings_by_coord[(5, 5)] = [building]
+        return caller
+
+    def test_enter_does_not_crash_and_sets_flag(self):
+        """Regression: 'enter' used to call CmdMove._update_fog_and_render,
+        which doesn't exist on CmdEnter, raising AttributeError."""
+        caller = self._caller_on_building(self._building())
+        _make_cmd(CmdEnter, caller, "").func()
+        self.assertTrue(caller.db.inside_building)
+
+    def test_enter_then_leave_then_reenter(self):
+        """The full leave -> re-enter cycle from the bug report works."""
+        building = self._building()
+        caller = self._caller_on_building(building)
+        _make_cmd(CmdEnter, caller, "").func()
+        self.assertTrue(caller.db.inside_building)
+        _make_cmd(CmdLeave, caller, "").func()
+        self.assertFalse(caller.db.inside_building)
+        _make_cmd(CmdEnter, caller, "").func()  # must not raise
+        self.assertTrue(caller.db.inside_building)
+
+    def test_enter_no_building_here(self):
+        caller = FakeCaller()
+        caller.db.coord_x = 5
+        caller.db.coord_y = 5
+        caller.db.inside_building = False
+        _make_cmd(CmdEnter, caller, "").func()
+        self.assertFalse(caller.db.inside_building)
+        self.assertTrue(any("no building here" in m.lower() for m in caller._messages))
+
+    def test_enter_when_already_inside(self):
+        building = self._building()
+        caller = self._caller_on_building(building)
+        caller.db.inside_building = True
+        _make_cmd(CmdEnter, caller, "").func()
+        self.assertTrue(any("already inside" in m.lower() for m in caller._messages))
 
 
 class _StorageCommandBase(unittest.TestCase):

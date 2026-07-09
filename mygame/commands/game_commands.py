@@ -2793,7 +2793,10 @@ class CmdEnter(GameCommand):
                 return
 
         caller.db.inside_building = True
-        self._update_fog_and_render(caller, show_map=False)
+        # Entering doesn't move you (same tile), so fog/visibility is already
+        # current from when you arrived — just show the interior and refresh the
+        # client map. (The old code called self._update_fog_and_render, which
+        # only exists on CmdMove, raising AttributeError on 'enter'.)
         _show_building_interior(caller, building)
         _send_map_update(caller)
 
