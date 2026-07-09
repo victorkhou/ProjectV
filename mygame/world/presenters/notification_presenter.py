@@ -281,6 +281,19 @@ def _fmt_combat_started(d: dict) -> str:
     )
 
 
+def _fmt_base_deactivated(d: dict) -> str:
+    # Fired when a player's HQ is destroyed — the base goes inert until rebuilt.
+    return (
+        "|r[Alert] Your HQ was destroyed! Base deactivated — "
+        "rebuild an HQ to restore operations.|n"
+    )
+
+
+def _fmt_base_reactivated(d: dict) -> str:
+    # Fired when a player completes a new HQ, restoring an inert base.
+    return "|g[Alert] HQ rebuilt! Base systems are back online.|n"
+
+
 def _fmt_craft_failed(d: dict) -> str:
     item = d.get("item_name", "item")
     reason = d.get("reason")
@@ -348,6 +361,8 @@ class NotificationPresenter:
         "craft_failed": _fmt_craft_failed,
         "produced": _fmt_produced,
         "combat_started": _fmt_combat_started,
+        "base_deactivated": _fmt_base_deactivated,
+        "base_reactivated": _fmt_base_reactivated,
     }
 
     def __init__(self, event_bus: EventBus, player_notifier: Any = None) -> None:

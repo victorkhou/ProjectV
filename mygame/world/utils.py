@@ -344,31 +344,82 @@ def is_admin(caller: Any) -> bool:
     return False
 
 
-def owner_has_active_hq(owner: Any, planet: Any = None) -> bool:
-    """Return True if *owner* has a live (non-destroyed) HQ on *planet*.
+def _building_planet(building: Any) -> Any:
+    """Best-effort planet key for a *building*.
+
+    A building does not store its own planet; it is derived from its location
+    (the ``PlanetRoom``, which exposes ``planet_name``). Falls back to a
+    ``coord_planet`` attribute if one is present. Returns ``None`` when the
+    planet cannot be determined (callers treat ``None`` planet as "any planet").
+    """
+    loc = getattr(building, "location", None)
+    if loc is not None:
+        pn = getattr(loc, "planet_name", None)
+        if pn:
+            return pn
+    return get_obj_attr(building, "coord_planet")
+
+
+def owner_has_active_hq(owner: Any, planet: Any = None, provider: Any = None) -> bool:
+    """Return True if *owner* has a live (non-under-construction) HQ on *planet*.
 
     This is the "no HQ = base inert" predicate: it gates turret auto-fire,
     guard combat AI, equipment production, and building-specific commands, so
     that destroying a base's HQ deactivates the whole base until an HQ is
-    rebuilt (PvP) — or, for an NPC base, until it is wiped (PvE).
+    rebuilt (PvP) — or, for an NPC base, until it is wiped (PvE). It is a live
+    query with no stored state: the moment a new HQ finishes construction, this
+    flips back to True and every gated system reactivates on the next tick.
 
-    .. note::
-        **Phase 1 stub.** This currently always returns ``True`` so the
-        turret-fix phase can land the deactivation *gate* (call sites) without
-        the enumeration logic. Phase 2 replaces the body with the real check:
-        enumerate ``owner.get_buildings()``, filter to *planet* (the
-        enumeration is NOT planet-scoped), and return whether any has the
-        ``HEADQUARTERS`` capability — sharing one helper with
-        ``BuildingSystem._player_has_hq`` to avoid logic drift.
+    Shares the ``get_buildings`` enumeration + ``HEADQUARTERS`` capability check
+    with :func:`_owner_hq_buildings`, which ``BuildingSystem._player_has_hq``
+    also uses (Req 12.5), so the "does this owner have an HQ" logic lives in one
+    place. Unlike ``_player_has_hq`` (which counts an HQ under construction, to
+    enforce one-HQ-per-planet at build time), this predicate ignores an HQ that
+    is still ``under_construction`` — a half-built HQ does not power the base.
 
     Args:
         owner: The building/agent owner (a Character, or an NPC Sentinel).
-        planet: The planet key to scope the HQ search to (unused in the stub).
+        planet: Planet key to scope the search to. ``None`` means any planet.
+        provider: Optional DefinitionsProvider for the capability lookup
+            (injected in tests); defaults to the live registry.
 
     Returns:
-        ``True`` while stubbed; the real predicate in Phase 2.
+        ``True`` if *owner* has at least one completed HQ (optionally on
+        *planet*); ``False`` otherwise.
     """
-    return True
+    for hq in _owner_hq_buildings(owner, planet=planet, provider=provider):
+        if not get_obj_attr(hq, "under_construction", False):
+            return True
+    return False
+
+
+def _owner_hq_buildings(owner: Any, planet: Any = None, provider: Any = None):
+    """Yield *owner*'s HQ-capability buildings (optionally scoped to *planet*).
+
+    The single enumeration used by both :func:`owner_has_active_hq` and
+    ``BuildingSystem._player_has_hq`` (Req 12.5). Enumerates ``owner``'s
+    buildings via ``get_buildings()`` (NOT planet-scoped — it returns every
+    planet's buildings), filters to those declaring the ``HEADQUARTERS``
+    capability, and — when *planet* is given — to those on that planet.
+
+    Yields building objects; callers decide whether to further filter (e.g. on
+    ``under_construction``). Safe outside a full Evennia env: an owner with no
+    ``get_buildings`` yields nothing.
+    """
+    from world.constants import HEADQUARTERS
+
+    if owner is None or not hasattr(owner, "get_buildings"):
+        return
+    try:
+        buildings = owner.get_buildings()
+    except Exception:
+        return
+    for b in buildings or ():
+        if not building_has_capability(b, HEADQUARTERS, provider=provider):
+            continue
+        if planet is not None and _building_planet(b) not in (None, planet):
+            continue
+        yield b
 
 
 # ------------------------------------------------------------------ #

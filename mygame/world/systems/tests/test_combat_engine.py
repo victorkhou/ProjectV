@@ -261,8 +261,37 @@ def _make_registry() -> DataRegistry:
             category="defense", produces=None,
             capabilities=frozenset({"turret"}),
         ),
+        # HQ so a turret owner can "have an active HQ" (deactivation gate).
+        "HQ": BuildingDef(
+            name="Headquarters", abbreviation="HQ", cost={"Wood": 10},
+            max_health=500, requires_hq=False, required_terrain=None,
+            category="headquarters", produces=None,
+            capabilities=frozenset({"headquarters"}),
+        ),
     }
     return registry
+
+
+class _HqBuilding:
+    """A minimal HQ-capability building for an owner's get_buildings()."""
+    def __init__(self, planet="earth"):
+        self.attributes = FakeAttributes({"building_type": "HQ"})
+        self.location = type("_L", (), {"planet_name": planet})()
+        self.db = type("_D", (), {"building_type": "HQ",
+                                  "under_construction": False})()
+
+
+def _hq_owner(name="Owner", planet="earth", oid=None):
+    """A turret/base owner that has a completed HQ (passes owner_has_active_hq).
+
+    Turret auto-fire is gated on the owner having an active HQ (the PvP
+    'no HQ = base inert' rule), so a firing turret's owner must own one.
+    """
+    owner = FakePlayer(name=name)
+    owner.get_buildings = lambda: [_HqBuilding(planet)]
+    if oid is not None:
+        owner.id = oid
+    return owner
 
 def _make_engine(registry=None, event_bus=None, current_tick=0):
     """Create a CombatEngine with test defaults."""
@@ -618,7 +647,7 @@ class TestProcessTurrets(unittest.TestCase):
 
     def test_turret_targets_nearest_hostile(self):
         engine, _ = _make_engine()
-        owner = FakePlayer(name="Owner")
+        owner = _hq_owner()  # owner has an HQ, so its turret is active
         near_player = FakePlayer(name="Near",
                                  location=FakeTile(xyz=(2, 0, "earth")))
         far_player = FakePlayer(name="Far",
@@ -632,6 +661,21 @@ class TestProcessTurrets(unittest.TestCase):
         engine.process_turrets([turret])
         self.assertEqual(len(engine.pending_actions), 1)
         self.assertEqual(engine.pending_actions[0]["target"], near_player)
+
+    def test_turret_does_not_fire_when_owner_has_no_hq(self):
+        """The deactivation rule in production form: an owner with no HQ (a
+        plain FakePlayer whose get_buildings returns nothing) has an inert
+        turret, even with a hostile in range."""
+        engine, _ = _make_engine()
+        owner = FakePlayer(name="Owner")  # no get_buildings -> no HQ
+        hostile = FakePlayer(name="Hostile",
+                             location=FakeTile(xyz=(1, 0, "earth")))
+        turret_tile = FakeTile(xyz=(0, 0, "earth"), nearby_players=[hostile])
+        turret = FakeBuilding(building_type="TU", owner=owner,
+                              hp=300, hp_max=300, location=turret_tile)
+
+        engine.process_turrets([turret])
+        self.assertEqual(len(engine.pending_actions), 0)
 
     def test_turret_ignores_owner(self):
         engine, _ = _make_engine()
@@ -712,8 +756,7 @@ class TestProcessTurrets(unittest.TestCase):
         player object sharing the owner's .id (e.g. a re-fetched proxy after a
         reload) is treated as the owner and not fired upon."""
         engine, _ = _make_engine()
-        owner = FakePlayer(name="Owner")
-        owner.id = 7
+        owner = _hq_owner(oid=7)  # has an HQ, so the turret is active
         # A DISTINCT object with the SAME id as the owner (reload/proxy).
         owner_proxy = FakePlayer(name="OwnerProxy",
                                  location=FakeTile(xyz=(1, 0, "earth")))
@@ -730,8 +773,7 @@ class TestProcessTurrets(unittest.TestCase):
         """Conversely, a hostile whose .id differs from the owner's IS fired
         upon (the id comparison classifies non-owners as hostile)."""
         engine, _ = _make_engine()
-        owner = FakePlayer(name="Owner")
-        owner.id = 7
+        owner = _hq_owner(oid=7)  # has an HQ, so the turret is active
         hostile = FakePlayer(name="Hostile",
                              location=FakeTile(xyz=(1, 0, "earth")))
         hostile.id = 99  # different id -> hostile
@@ -748,9 +790,10 @@ class TestProcessTurrets(unittest.TestCase):
         """The deactivation gate: when owner_has_active_hq returns False, an
         in-range hostile is NOT fired upon. Locks in the gate's wiring in
         process_turrets before Phase 2 replaces the always-True stub."""
-        import mygame.world.systems.combat_engine as ce_mod
         engine, _ = _make_engine()
-        owner = FakePlayer(name="Owner")
+        # Owner HAS an HQ (would normally fire), so a False from the predicate
+        # can only come from the gate consulting it — not from a missing HQ.
+        owner = _hq_owner()
         hostile = FakePlayer(name="Hostile",
                              location=FakeTile(xyz=(1, 0, "earth")))
         turret_tile = FakeTile(xyz=(0, 0, "earth"),
@@ -762,7 +805,7 @@ class TestProcessTurrets(unittest.TestCase):
         # so patch it on the world.utils module (the import source).
         import world.utils as wu
         original = wu.owner_has_active_hq
-        wu.owner_has_active_hq = lambda owner, planet=None: False
+        wu.owner_has_active_hq = lambda owner, planet=None, provider=None: False
         try:
             engine.process_turrets([turret])
         finally:
@@ -818,8 +861,9 @@ class TestProcessTurrets(unittest.TestCase):
         index.add(far, 40, 0)
 
         engine, _ = _make_engine()
-        # Turret owner is a separate object so near/far are hostile.
-        owner = FakePlayer(name="Owner")
+        # Turret owner is a separate object so near/far are hostile; it has an
+        # HQ so the turret is active (deactivation gate).
+        owner = _hq_owner()
         turret = FakeBuilding(building_type="TU", owner=owner,
                               hp=300, hp_max=300, location=room)
         # A real Building carries its own coords (db.coord_x/y); the room has
@@ -865,6 +909,41 @@ class TestBuildingDamage(unittest.TestCase):
         engine.resolve_tick()
         self.assertTrue(len(other_player._messages) > 0)
         self.assertIn("Attacker", other_player._messages[0])
+
+    def test_hq_destruction_notifies_owner_base_deactivated(self):
+        """Destroying a player's HQ fires the base_deactivated alert to the
+        owner (the PvP 'no HQ = base inert' consequence)."""
+        weapon = FakeWeapon(damage=999, weapon_range=5)
+        engine, _ = _make_engine()
+        attacker = FakePlayer(name="Raider", weapon=weapon,
+                              location=FakeTile(xyz=(0, 0, "earth")))
+        victim = FakePlayer(name="Victim")  # player -> _is_player(owner) True
+        hq = FakeBuilding(building_type="HQ", owner=victim,
+                          hp=1, hp_max=500,
+                          location=FakeTile(xyz=(1, 0, "earth")))
+        engine.queue_attack(attacker, hq)
+        engine.resolve_tick()
+        self.assertTrue(
+            any("deactivated" in m.lower() for m in victim._messages),
+            victim._messages,
+        )
+
+    def test_non_hq_destruction_does_not_deactivate(self):
+        """Destroying a non-HQ building does NOT fire base_deactivated."""
+        weapon = FakeWeapon(damage=999, weapon_range=5)
+        engine, _ = _make_engine()
+        attacker = FakePlayer(name="Raider", weapon=weapon,
+                              location=FakeTile(xyz=(0, 0, "earth")))
+        victim = FakePlayer(name="Victim")
+        building = FakeBuilding(building_type="MM", owner=victim,
+                                hp=1, hp_max=200,
+                                location=FakeTile(xyz=(1, 0, "earth")))
+        engine.queue_attack(attacker, building)
+        engine.resolve_tick()
+        self.assertFalse(
+            any("deactivated" in m.lower() for m in victim._messages),
+            victim._messages,
+        )
 
 # -------------------------------------------------------------- #
 #  Agent Combat XP / Death Loss Tests (Req 5.4, 6.1)

@@ -369,10 +369,11 @@ class CombatEngine(BaseSystem):
                 continue
 
             # A turret whose owner's base is deactivated (no active HQ) does not
-            # fire — mirrors the PvP "no HQ = base inert" rule. (Phase 1: the
-            # predicate is stubbed True; Phase 2 wires the real HQ check.)
+            # fire — mirrors the PvP "no HQ = base inert" rule. Resolve the HQ
+            # capability against the injected registry (hermetic in tests), like
+            # _is_turret above.
             planet = getattr(building_loc, "planet_name", None)
-            if not owner_has_active_hq(owner, planet):
+            if not owner_has_active_hq(owner, planet, provider=self.registry):
                 continue
 
             # Find nearest non-owner player within radius via the room's
@@ -410,15 +411,13 @@ class CombatEngine(BaseSystem):
                 }
                 self.pending_actions.append(turret_action)
 
-    def _is_turret(self, building: Any) -> bool:
-        """Return True if *building*'s definition declares the turret capability.
+    def _building_has_cap(self, building: Any, capability: str) -> bool:
+        """Return True if *building*'s def declares *capability*.
 
-        Resolves the building_type against the injected registry (keeping tests
+        Resolves the building_type against the INJECTED registry (keeping tests
         hermetic) rather than the global default provider. Safe when the type is
         unknown or the registry lacks it — returns False.
         """
-        from world.constants import TURRET
-
         building_type = self._get_building_type(building)
         if not building_type:
             return False
@@ -426,7 +425,17 @@ class CombatEngine(BaseSystem):
             bdef = self.registry.resolve_building(building_type)
         except Exception:
             return False
-        return bdef is not None and bdef.has_capability(TURRET)
+        return bdef is not None and bdef.has_capability(capability)
+
+    def _is_turret(self, building: Any) -> bool:
+        """Return True if *building* declares the turret capability."""
+        from world.constants import TURRET
+        return self._building_has_cap(building, TURRET)
+
+    def _is_headquarters(self, building: Any) -> bool:
+        """Return True if *building* declares the headquarters capability."""
+        from world.constants import HEADQUARTERS
+        return self._building_has_cap(building, HEADQUARTERS)
 
     @staticmethod
     def _nearby_players(location: Any, x: int, y: int, radius: int) -> list:
@@ -591,6 +600,14 @@ class CombatEngine(BaseSystem):
             building=building,
             tile=tile,
         )
+
+        # Losing your HQ deactivates the whole base until you rebuild one (the
+        # PvP "no HQ = base inert" rule). Tell the owner. Only for a player-owned
+        # HQ — an NPC base's HQ destruction is handled by the base-elimination
+        # path (Phase 5), not this deactivation notice.
+        if owner is not None and self._is_headquarters(building) \
+                and self._is_player(owner):
+            self.notify(owner, "base_deactivated")
 
         # Remove building
         if hasattr(building, "delete"):

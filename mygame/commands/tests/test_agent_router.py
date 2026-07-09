@@ -109,9 +109,48 @@ from mygame.world.systems.agent_system import (  # noqa: E402
     ABILITY_SCRIPT_KEYS,
 )
 from mygame.world.data_registry import DataRegistry  # noqa: E402
-from mygame.world.definitions import AbilityGateDef  # noqa: E402
+from mygame.world.definitions import AbilityGateDef, BuildingDef  # noqa: E402
 from mygame.world.event_bus import EventBus  # noqa: E402
 from mygame.world.constants import DeliveryState  # noqa: E402
+
+
+def setUpModule():
+    """Register a DataRegistry singleton with an HQ def so agent assign/unassign
+    — gated on the caller having an active HQ (owner_has_active_hq resolves the
+    headquarters capability via the singleton) — is allowed by default. The
+    shared FakeCaller owns an HQ; this lets the capability lookup succeed.
+
+    NOTE: this file imports ``DataRegistry`` via ``mygame.world.data_registry``,
+    but the capability lookup runs under the ``world.*`` import path
+    (``world.adapters.registry_definitions_provider`` → ``world.data_registry``)
+    — a DIFFERENT module object with its OWN singleton. Set BOTH so the
+    provider's ``get_instance()`` sees our registry.
+    """
+    hq = BuildingDef(
+        name="Headquarters", abbreviation="HQ", cost={"Wood": 10},
+        max_health=500, requires_hq=False, required_terrain=None,
+        category="headquarters", produces=None,
+        capabilities=frozenset({"headquarters"}),
+    )
+    registry = DataRegistry()
+    registry.buildings = {"HQ": hq}
+    DataRegistry.set_instance(registry)
+    try:
+        import world.data_registry as _wdr
+        reg2 = _wdr.DataRegistry()
+        reg2.buildings = {"HQ": hq}
+        _wdr.DataRegistry.set_instance(reg2)
+    except Exception:
+        pass
+
+
+def tearDownModule():
+    DataRegistry.set_instance(None)
+    try:
+        import world.data_registry as _wdr
+        _wdr.DataRegistry.set_instance(None)
+    except Exception:
+        pass
 
 
 # -------------------------------------------------------------- #
@@ -140,8 +179,20 @@ class FakeDB:
             self._data[key] = value
 
 
+class _HqBuilding:
+    """HQ-capability building for a caller's get_buildings() (base is active)."""
+    def __init__(self, planet="earth"):
+        self.db = FakeDB(building_type="HQ", under_construction=False)
+        self.location = type("_L", (), {"planet_name": planet})()
+
+
 class FakeCaller:
-    """Fake caller for game commands (no perm check needed)."""
+    """Fake caller for game commands (no perm check needed).
+
+    Owns a completed HQ by default (``get_buildings``) so agent assign/unassign
+    — gated on the caller having an active HQ — is allowed. Set
+    ``self._buildings = []`` on an instance to model a deactivated base.
+    """
 
     def __init__(self, name="Player1", systems=None):
         self.key = name
@@ -149,9 +200,13 @@ class FakeCaller:
         self.db = FakeDB()
         self._messages = []
         self.location = None
+        self._buildings = [_HqBuilding()]
 
     def check_permstring(self, perm):
         return True
+
+    def get_buildings(self):
+        return list(self._buildings)
 
     def msg(self, text=None, **kwargs):
         if text is not None:
@@ -514,6 +569,18 @@ class TestAgentAssign(unittest.TestCase):
         cmd = _make_cmd(caller, " assign")
         cmd.func()
         self.assertTrue(any("Usage" in m for m in caller._messages))
+
+    def test_assign_blocked_when_base_deactivated(self):
+        """No agent assignment while the caller's base has no HQ."""
+        agent_sys = FakeAgentSystem()
+        agent_sys._assign_result = (True, "should not be reached")
+        caller = FakeCaller(systems={"agent_system": agent_sys})
+        caller._buildings = []  # HQ destroyed -> base deactivated
+        cmd = _make_cmd(caller, " assign 1 soldier")
+        cmd.func()
+        self.assertTrue(
+            any("deactivated" in m.lower() for m in caller._messages)
+        )
 
 
 # -------------------------------------------------------------- #

@@ -20,6 +20,7 @@ from world.utils import (
     is_exit_closed,
     is_owner,
     is_admin,
+    owner_has_active_hq,
     format_dm_message,
 )
 
@@ -252,6 +253,23 @@ class GameCommand(BaseCommand):
             return expiry > _get_current_tick()
         except Exception:
             return True
+
+    _DEACTIVATED_MSG = "Your base is deactivated — rebuild an HQ."
+
+    def _base_active(self, owner) -> bool:
+        """Return True if *owner*'s base is active (has a completed HQ).
+
+        The command-layer gate for the PvP "no HQ = base inert" rule: a
+        building-specific action (craft/research/deposit/withdraw/exit toggles/
+        agent assign) is rejected while the owner has no HQ. Scoped to the
+        owner's current planet. When *owner* is ``None`` (e.g. no building
+        resolved) this returns ``True`` so callers don't mistake "no building
+        here" for "deactivated" — callers guard the building-None case first.
+        """
+        if owner is None:
+            return True
+        planet = getattr(getattr(owner, "db", None), "coord_planet", None)
+        return owner_has_active_hq(owner, planet)
 
     def find_storage_building(self, x=None, y=None):
         """Return the first co-located ``storage``-capability building, or None.
@@ -1420,6 +1438,14 @@ class CmdCraft(GameCommand):
             self._list_craftable(building)
             return
 
+        # No crafting while this base is deactivated (owner lost their HQ).
+        # Guard building-None first so "nothing here" isn't read as "deactivated".
+        if building is not None and not self._base_active(
+            get_building_attr(building, "owner")
+        ):
+            self.caller.msg(self._DEACTIVATED_MSG)
+            return
+
         # The system validates the building/ownership/rank/cost gates and emits
         # the player-facing notification (crafted / craft_failed) via the
         # presenter; the command composes no action-outcome string here.
@@ -1547,6 +1573,11 @@ class CmdDeposit(GameCommand):
             self.caller.msg("You do not own this building.")
             return
 
+        # No banking while the base is deactivated (owner lost their HQ).
+        if not self._base_active(get_building_attr(building, "owner")):
+            self.caller.msg(self._DEACTIVATED_MSG)
+            return
+
         # The system caps by what the player holds and the building's remaining
         # capacity, deducts only what was actually stored, and emits the
         # player-facing notification (deposited / storage_full) via the
@@ -1607,6 +1638,11 @@ class CmdWithdraw(GameCommand):
             self.caller.msg("You do not own this building.")
             return
 
+        # No banking while the base is deactivated (owner lost their HQ).
+        if not self._base_active(get_building_attr(building, "owner")):
+            self.caller.msg(self._DEACTIVATED_MSG)
+            return
+
         # The system caps by what the building stores and the player's remaining
         # carry-weight room, adds only the fitting amount, and emits the
         # player-facing notification (withdrew) via the presenter — including
@@ -1644,6 +1680,12 @@ class CmdResearch(GameCommand):
 
         tech_system = self.require_system("tech_system", "Tech system unavailable.")
         if tech_system is None:
+            return
+
+        # Research runs at the Lab — no research while the base is deactivated.
+        # Player-scoped (no building resolved here): gate on the caller.
+        if not self._base_active(self.caller):
+            self.caller.msg(self._DEACTIVATED_MSG)
             return
 
         success, msg = tech_system.start_research(self.caller, tech_key)
@@ -2622,6 +2664,11 @@ class CmdCloseExit(GameCommand):
             caller.msg("You do not own this building.")
             return
 
+        # No exit changes while the base is deactivated (owner lost their HQ).
+        if not self._base_active(owner):
+            caller.msg(self._DEACTIVATED_MSG)
+            return
+
         closed = get_closed_exits(building)
 
         if direction in closed:
@@ -2681,6 +2728,11 @@ class CmdOpenExit(GameCommand):
         owner = get_building_attr(building, "owner")
         if not is_owner(caller, owner):
             caller.msg("You do not own this building.")
+            return
+
+        # No exit changes while the base is deactivated (owner lost their HQ).
+        if not self._base_active(owner):
+            caller.msg(self._DEACTIVATED_MSG)
             return
 
         closed = get_closed_exits(building)

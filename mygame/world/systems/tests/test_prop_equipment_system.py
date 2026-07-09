@@ -105,6 +105,15 @@ class FakePlayer:
     def inventory(self):
         return list(self._inventory)
 
+    def get_buildings(self):
+        # Owns a completed HQ so passive production isn't blocked by the
+        # base-deactivation gate (production stops with no active HQ).
+        return [type("_HQ", (), {
+            "db": type("_D", (), {"building_type": "HQ",
+                                  "under_construction": False})(),
+            "location": None,
+        })()]
+
     def get_resource(self, resource):
         return int(self._resources.get(str(resource).title(), 0))
 
@@ -211,6 +220,14 @@ SAMPLE_BUILDING_DEFS = {
         cost={"Wood": 25}, max_health=200,
         requires_hq=True, required_terrain=None,
         category="research", produces=None,
+    ),
+    # HQ so a production owner passes the base-deactivation gate.
+    "HQ": BuildingDef(
+        name="Headquarters", abbreviation="HQ",
+        cost={"Wood": 10}, max_health=500,
+        requires_hq=False, required_terrain=None,
+        category="headquarters", produces=None,
+        capabilities=frozenset({"headquarters"}),
     ),
 }
 

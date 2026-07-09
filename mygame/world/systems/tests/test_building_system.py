@@ -811,6 +811,46 @@ class TestProcessConstructionTick(unittest.TestCase):
         # The presenter formatted and delivered the completion line.
         self.assertTrue(any("construction finished" in m for m in messages))
 
+    def test_completing_new_hq_fires_base_reactivated_on_rebuild(self):
+        """Finishing a NEW HQ reactivates a base that still has OTHER buildings
+        (a genuine rebuild after HQ loss) — base_reactivated fires."""
+        from mygame.world.presenters.test_support import attach_presenter
+
+        system, player, building, tile, event_bus = self._setup_construction(build_time=2)
+        # A surviving structure from before the HQ was destroyed, so this is a
+        # rebuild (not a first-ever HQ). get_buildings must include it + the HQ.
+        survivor = FakeBuilding(building_type="MM", owner=player,
+                                level=1, hp=100, hp_max=100)
+        player._buildings = [survivor, building]
+        attach_presenter(event_bus)
+        messages = []
+        player.msg = lambda m: messages.append(m)
+        for _ in range(2):
+            system.process_construction_tick(player)
+        self.assertTrue(
+            any("online" in m.lower() or "rebuilt" in m.lower() for m in messages),
+            messages,
+        )
+
+    def test_first_ever_hq_does_not_fire_base_reactivated(self):
+        """A brand-new player's FIRST HQ (no other buildings) gets only the
+        normal completion message — not the misleading 'rebuilt' alert."""
+        from mygame.world.presenters.test_support import attach_presenter
+
+        system, player, building, tile, event_bus = self._setup_construction(build_time=2)
+        player._buildings = [building]  # owns ONLY the just-built HQ
+        attach_presenter(event_bus)
+        messages = []
+        player.msg = lambda m: messages.append(m)
+        for _ in range(2):
+            system.process_construction_tick(player)
+        self.assertFalse(
+            any("online" in m.lower() or "rebuilt" in m.lower() for m in messages),
+            messages,
+        )
+        # The normal completion line still fires.
+        self.assertTrue(any("finished" in m.lower() for m in messages))
+
     def test_tick_pauses_when_player_moves_away(self):
         system, player, building, tile, _ = self._setup_construction(build_time=5)
         # Tick once (progress = 1)

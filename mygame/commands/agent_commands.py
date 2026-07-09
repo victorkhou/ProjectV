@@ -156,6 +156,11 @@ class CmdAgent(GameSubcommandRouter):
         if agent_system is None:
             return
 
+        # No agent assignment while the caller's base is deactivated (no HQ).
+        if not self._base_active(caller):
+            caller.msg(self._DEACTIVATED_MSG)
+            return
+
         parts = args.strip().split()
         if not parts:
             caller.msg("Usage: agent assign <id> [role]")
@@ -206,6 +211,11 @@ class CmdAgent(GameSubcommandRouter):
         caller = self.caller
         agent_system = self.require_system("agent_system")
         if agent_system is None:
+            return
+
+        # No agent (un)assignment while the caller's base is deactivated (no HQ).
+        if not self._base_active(caller):
+            caller.msg(self._DEACTIVATED_MSG)
             return
 
         args = args.strip()

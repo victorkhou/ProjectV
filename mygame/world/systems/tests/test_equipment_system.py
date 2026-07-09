@@ -276,9 +276,36 @@ def _make_registry():
     registry.items = dict(ITEMS)
     registry.ranks = list(RANKS)
     registry.powerups = {}
+    # HQ def so a production building's owner can pass the base-deactivation
+    # gate (production stops while the owner has no active HQ).
+    registry.buildings = {
+        "HQ": BuildingDef(
+            name="Headquarters", abbreviation="HQ", cost={"Wood": 10},
+            max_health=500, requires_hq=False, required_terrain=None,
+            category="headquarters", produces=None,
+            capabilities=frozenset({"headquarters"}),
+        ),
+    }
     # Yield one item per production call (cooldown gate covered separately).
     registry.balance = BalanceConfig(equipment_production_ticks=1)
     return registry
+
+
+def _hq_building():
+    """An HQ-capability building for a production owner's get_buildings()."""
+    return type("_HQ", (), {
+        "db": DB(building_type="HQ", under_construction=False),
+        "location": None,
+    })()
+
+
+def _give_hq(owner):
+    """Give a production/base owner a completed HQ (passes owner_has_active_hq).
+
+    Equipment production is gated on the owner having an active HQ (the PvP
+    'no HQ = base inert' rule)."""
+    owner.get_buildings = lambda: [_hq_building()]
+    return owner
 
 
 def _make_system(registry=None):
@@ -1339,11 +1366,14 @@ class TestProductionRouting(unittest.TestCase):
     @staticmethod
     def _rich_player():
         """A player with plenty of every resource, so craft_cost is affordable
-        and the tests below exercise routing/rate/cap, not the resource gate."""
-        return FakePlayer(level=1, resources={
+        and the tests below exercise routing/rate/cap, not the resource gate.
+
+        Also owns an HQ so passive production isn't blocked by the
+        base-deactivation gate (production stops with no active HQ)."""
+        return _give_hq(FakePlayer(level=1, resources={
             r: 100000 for r in
             ("Wood", "Stone", "Iron", "Energy", "Circuits", "Nexium")
-        })
+        }))
 
     def test_supply_category_lands_in_bag_not_as_object(self):
         system, created = self._make({"MB": ["medkit"]})
@@ -1354,6 +1384,20 @@ class TestProductionRouting(unittest.TestCase):
 
         # A counted stack in the Supply_Bag; no Game_Item object created.
         self.assertEqual(player.equipment.get_supply("medkit"), 1)
+        self.assertEqual(created, [])
+
+    def test_production_stops_when_owner_has_no_hq(self):
+        """Phase 2: an equipment building produces nothing while its owner has
+        no active HQ (the 'no HQ = base inert' deactivation rule)."""
+        system, created = self._make({"MB": ["medkit"]})
+        player = self._rich_player()
+        player.get_buildings = lambda: []  # HQ destroyed -> base deactivated
+        building = FakeProductionBuilding("MB", owner=player)
+
+        for _ in range(5):
+            system.process_production([building])
+
+        self.assertEqual(player.equipment.get_supply("medkit"), 0)
         self.assertEqual(created, [])
 
     def test_gear_category_becomes_object_not_bag_entry(self):
@@ -1606,6 +1650,7 @@ class TestOwnerProducedCount(unittest.TestCase):
         owner.deduct_resources = _deduct
         owner.add_resource = lambda r, a: owner.db.resources.__setitem__(
             str(r).title(), owner.db.resources.get(str(r).title(), 0) + a)
+        _give_hq(owner)  # owner has an HQ so production isn't deactivation-gated
 
         # Factory that appends a real carried gear object to contents.
         def factory(idef, o):

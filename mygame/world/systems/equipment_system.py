@@ -245,6 +245,14 @@ class EquipmentSystem(CarryWeightMixin, StorageMixin, BaseSystem):
             if owner is None:
                 continue
 
+            # Deactivation gate: an equipment building stops producing while its
+            # owner has no active HQ (the PvP "no HQ = base inert" rule). Resolve
+            # the HQ capability against the injected registry (hermetic in tests).
+            from world.utils import owner_has_active_hq
+            planet = getattr(getattr(building, "location", None), "planet_name", None)
+            if not owner_has_active_hq(owner, planet, provider=self.registry):
+                continue
+
             # Owner accumulation cap: stall production once the owner is holding
             # too many un-equipped produced items, so an idle player's building
             # cannot grow the object table without bound.

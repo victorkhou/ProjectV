@@ -863,20 +863,20 @@ class BuildingSystem(BaseSystem):
     # ------------------------------------------------------------------ #
 
     def _player_has_hq(self, player: Any) -> bool:
-        """Check if the player owns a headquarters-capability building."""
-        buildings = self._get_player_buildings(player)
-        for b in buildings:
-            btype = None
-            if hasattr(b, "attributes"):
-                btype = b.attributes.get("building_type", default=None)
-            elif hasattr(b, "db"):
-                btype = getattr(b.db, "building_type", None)
-            if not btype:
-                continue
-            bdef = self.registry.resolve_building(btype)
-            if bdef is not None and bdef.has_capability(HEADQUARTERS):
-                return True
-        return False
+        """Check if the player owns a headquarters-capability building.
+
+        Shares the ``get_buildings`` + ``HEADQUARTERS`` enumeration with
+        :func:`world.utils.owner_has_active_hq` via ``_owner_hq_buildings``
+        (Req 12.5). Semantics are unchanged from the previous inline loop: NOT
+        planet-scoped (an HQ anywhere counts, for the one-HQ build gate) and it
+        COUNTS an HQ still under construction — unlike ``owner_has_active_hq``,
+        which excludes a half-built HQ. Passes ``self.registry`` as the
+        capability provider so the check stays hermetic in tests.
+        """
+        from world.utils import _owner_hq_buildings
+        return any(
+            _owner_hq_buildings(player, planet=None, provider=self.registry)
+        )
 
     def _get_player_buildings(self, player: Any) -> list:
         """Return all buildings owned by the player."""
@@ -953,6 +953,30 @@ class BuildingSystem(BaseSystem):
         else:
             # New construction complete
             self.notify(player, "building_complete", building_type=building_type, target_level=None)
+
+            # Completing a NEW HQ reactivates a base that was inert (its previous
+            # HQ was destroyed). Reactivation only makes sense when an HQ itself
+            # finishes — a non-HQ build never restores base operations — so this
+            # needs no stored "was deactivated" flag: the event that flips the
+            # base back to active IS a fresh HQ completing. (An HQ *upgrade*
+            # takes the target_level branch above; the base was already active.)
+            #
+            # Only fire for a genuine REBUILD — a base that still has other
+            # buildings whose HQ was destroyed — not a brand-new player's
+            # first-ever HQ (which owns no other structures yet; "rebuilt" would
+            # read wrong). Distinguished cheaply by whether the player owns any
+            # building besides this HQ.
+            try:
+                bdef = self.registry.resolve_building(building_type)
+            except Exception:
+                bdef = None
+            if bdef is not None and bdef.has_capability(HEADQUARTERS):
+                others = [
+                    b for b in self._get_player_buildings(player)
+                    if b is not building
+                ]
+                if others:
+                    self.notify(player, "base_reactivated")
 
         # Clear construction timer
         self._set_building_attr(building, "construction_total", 0)

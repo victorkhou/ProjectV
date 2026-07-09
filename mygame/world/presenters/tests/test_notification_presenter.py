@@ -406,3 +406,24 @@ class TestPresenterOwnershipBehavioral:
         msg = player.messages[0]
         assert "full" in msg.lower()
         assert "Rifle Rounds" in msg
+
+    def test_base_deactivated_renders_alert(self):
+        """Losing the HQ tells the player their base is deactivated."""
+        bus = EventBus()
+        player = _MsgPlayer()
+        NotificationPresenter(bus, player_notifier=EvenniaPlayerNotifier())
+        bus.publish(PLAYER_NOTIFICATION, player=player,
+                    kind="base_deactivated", data={})
+        msg = player.messages[0]
+        assert "deactivated" in msg.lower()
+        assert "hq" in msg.lower()
+
+    def test_base_reactivated_renders_alert(self):
+        """Rebuilding the HQ tells the player the base is back online."""
+        bus = EventBus()
+        player = _MsgPlayer()
+        NotificationPresenter(bus, player_notifier=EvenniaPlayerNotifier())
+        bus.publish(PLAYER_NOTIFICATION, player=player,
+                    kind="base_reactivated", data={})
+        msg = player.messages[0]
+        assert "online" in msg.lower() or "rebuilt" in msg.lower()

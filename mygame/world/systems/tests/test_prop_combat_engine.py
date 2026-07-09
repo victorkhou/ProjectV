@@ -237,8 +237,29 @@ def _make_registry(balance=None) -> DataRegistry:
             category="defense", produces=None,
             capabilities=frozenset({"turret"}),
         ),
+        # HQ so a turret owner can "have an active HQ" (deactivation gate).
+        "HQ": BuildingDef(
+            name="Headquarters", abbreviation="HQ", cost={"Wood": 10},
+            max_health=500, requires_hq=False, required_terrain=None,
+            category="headquarters", produces=None,
+            capabilities=frozenset({"headquarters"}),
+        ),
     }
     return registry
+
+
+def _hq_owner(name="Owner", planet="earth"):
+    """A turret owner that has a completed HQ (passes owner_has_active_hq),
+    so its turret is active under the 'no HQ = base inert' gate."""
+    owner = FakePlayer(name=name)
+    _loc = type("_L", (), {"planet_name": planet})()
+    _hq = type("_HQ", (), {})()
+    _hq.attributes = FakeAttributes({"building_type": "HQ"})
+    _hq.location = _loc
+    _hq.db = type("_D", (), {"building_type": "HQ",
+                             "under_construction": False})()
+    owner.get_buildings = lambda: [_hq]
+    return owner
 
 def _make_engine(registry=None, event_bus=None, current_tick=0):
     """Create a CombatEngine with test defaults."""
@@ -431,7 +452,7 @@ class TestProperty13TurretTargeting(unittest.TestCase):
         balance = BalanceConfig(turret_radius=turret_radius, turret_damage=15)
         engine, _ = _make_engine(registry=_make_registry(balance))
 
-        owner = FakePlayer(name="Owner")
+        owner = _hq_owner()  # owner has an HQ, so its turret is active
 
         # Generate players at various distances
         players = []

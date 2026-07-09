@@ -256,6 +256,41 @@ def _make_cmd(cmd_class, caller, args=""):
     cmd.cmdstring = cmd.key
     return cmd
 
+
+def _hq_building(planet="earth_planet"):
+    """An HQ-capability building for a caller's get_buildings() (base is active).
+
+    Building-specific commands (deposit/withdraw/craft/research/exit toggles/
+    agent assign) are gated on the owner having an active HQ. A test caller that
+    should pass that gate needs one; attach via _give_hq(caller).
+    """
+    return types.SimpleNamespace(
+        db=types.SimpleNamespace(building_type="HQ", under_construction=False),
+        location=types.SimpleNamespace(planet_name=planet),
+    )
+
+
+def _give_hq(caller, planet="earth_planet"):
+    """Give *caller* a completed HQ so owner_has_active_hq(caller) is True.
+
+    Also requires the active DataRegistry singleton to have an HQ def with the
+    headquarters capability (the command-layer gate resolves via the global
+    provider). Returns the caller for chaining.
+    """
+    caller.get_buildings = lambda: [_hq_building(planet)]
+    return caller
+
+
+def _hq_building_def():
+    """A headquarters-capability BuildingDef for test registries."""
+    from world.definitions import BuildingDef
+    return BuildingDef(
+        name="Headquarters", abbreviation="HQ", cost={"Wood": 10},
+        max_health=500, requires_hq=False, required_terrain=None,
+        category="headquarters", produces=None,
+        capabilities=frozenset({"headquarters"}),
+    )
+
 # -------------------------------------------------------------- #
 #  Tests
 # -------------------------------------------------------------- #
@@ -1509,6 +1544,8 @@ class _StorageCommandBase(unittest.TestCase):
                 category="storage", produces=None,
                 capabilities=frozenset({"storage"}),
             ),
+            # HQ so the storage owner passes the base-deactivation gate.
+            "HQ": _hq_building_def(),
         }
         DataRegistry.set_instance(registry)
 
@@ -1528,6 +1565,7 @@ class _StorageCommandBase(unittest.TestCase):
         loc = FakeLocation()
         caller = FakeCaller(systems={"equipment_system": system}, location=loc)
         caller.id = 7
+        _give_hq(caller)  # owner has an active HQ (base not deactivated)
         building = self._storage_building(btype, owner=caller)
         loc._buildings_by_coord[(5, 5)] = [building]
         return caller, building
@@ -1589,6 +1627,20 @@ class TestCmdDeposit(_StorageCommandBase):
         cmd.func()
         self.assertEqual(calls, [])
         self.assertTrue(any("do not own" in m for m in caller._messages))
+
+    def test_blocked_when_base_deactivated(self):
+        """No depositing while the owner's base has no HQ (deactivated)."""
+        calls = []
+        caller, _building = self._caller_with_storage(
+            self._FakeEquipmentSystem(calls)
+        )
+        caller.get_buildings = lambda: []  # HQ destroyed -> deactivated
+        cmd = _make_cmd(CmdDeposit, caller, " iron 100")
+        cmd.func()
+        self.assertEqual(calls, [])  # system not called
+        self.assertTrue(
+            any("deactivated" in m.lower() for m in caller._messages)
+        )
 
     def test_delegates_and_title_cases_resource(self):
         calls = []
@@ -1773,6 +1825,18 @@ class TestCmdEquipment(unittest.TestCase):
         self.assertIn("Sight range: +1", out)
 
 class TestCmdResearch(unittest.TestCase):
+    def setUp(self):
+        # research is gated on the caller having an active HQ; register an HQ
+        # def so owner_has_active_hq resolves the capability via the singleton.
+        from world.data_registry import DataRegistry
+        registry = DataRegistry()
+        registry.buildings = {"HQ": _hq_building_def()}
+        DataRegistry.set_instance(registry)
+
+    def tearDown(self):
+        from world.data_registry import DataRegistry
+        DataRegistry.set_instance(None)
+
     def test_no_args(self):
         caller = FakeCaller()
         cmd = _make_cmd(CmdResearch, caller, "")
@@ -1783,10 +1847,21 @@ class TestCmdResearch(unittest.TestCase):
         class FakeTechSystem:
             def start_research(self, player, key):
                 return True, f"Started researching {key}."
-        caller = FakeCaller(systems={"tech_system": FakeTechSystem()})
+        caller = _give_hq(FakeCaller(systems={"tech_system": FakeTechSystem()}))
         cmd = _make_cmd(CmdResearch, caller, " adv_armor")
         cmd.func()
         self.assertTrue(any("Started" in m for m in caller._messages))
+
+    def test_blocked_when_base_deactivated(self):
+        """No research while the caller's base has no HQ."""
+        class FakeTechSystem:
+            def start_research(self, player, key):
+                raise AssertionError("should not research when deactivated")
+        caller = FakeCaller(systems={"tech_system": FakeTechSystem()})
+        # No get_buildings HQ -> deactivated.
+        cmd = _make_cmd(CmdResearch, caller, " adv_armor")
+        cmd.func()
+        self.assertTrue(any("deactivated" in m.lower() for m in caller._messages))
 
 class TestCmdPowerup(unittest.TestCase):
     def test_no_args(self):
@@ -2119,6 +2194,18 @@ class TestExitCommands(unittest.TestCase):
     position" even when inside an owned building.
     """
 
+    def setUp(self):
+        # Exit toggles are gated on the owner having an active HQ; register an
+        # HQ def so owner_has_active_hq resolves the capability via the singleton.
+        from world.data_registry import DataRegistry
+        registry = DataRegistry()
+        registry.buildings = {"HQ": _hq_building_def()}
+        DataRegistry.set_instance(registry)
+
+    def tearDown(self):
+        from world.data_registry import DataRegistry
+        DataRegistry.set_instance(None)
+
     def _make_owned_building(self, owner):
         class _AttrStore:
             def __init__(self):
@@ -2137,7 +2224,10 @@ class TestExitCommands(unittest.TestCase):
         return Building(owner)
 
     def _setup(self, cmd_class, args):
+        # Owner has a completed HQ so its base is active (exit toggles allowed).
         owner = type("Owner", (), {"id": 7})()
+        owner.db = types.SimpleNamespace(coord_planet="earth_planet")
+        owner.get_buildings = lambda: [_hq_building()]
         building = self._make_owned_building(owner)
         loc = FakeLocation()
         loc._buildings_by_coord[(5, 5)] = [building]  # caller default coords

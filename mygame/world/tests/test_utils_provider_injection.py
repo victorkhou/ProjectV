@@ -99,20 +99,86 @@ class TestGetRankNameInjection:
         assert _get_rank_name(self._player(lvl), provider=provider) == f"Rank {rank_num}"
 
 
-class TestOwnerHasActiveHqStub:
-    """Phase 1 stub contract: owner_has_active_hq always returns True.
+class _Loc:
+    """A PlanetRoom stand-in exposing planet_name."""
 
-    Phase 2 replaces the body with the real HQ enumeration; this test pins the
-    documented stub behavior so the Phase 1 deactivation gate is a no-op until
-    then (turrets/guards are not spuriously silenced before the real check
-    exists).
-    """
+    def __init__(self, planet):
+        self.planet_name = planet
 
-    def test_stub_returns_true(self):
+
+class _OwnedBuilding:
+    """A building with a building_type, a location (for planet), and optional
+    under_construction flag — enough for owner_has_active_hq to inspect."""
+
+    def __init__(self, building_type, planet="earth", under_construction=False):
+        self.db = _Db(
+            building_type=building_type,
+            under_construction=under_construction,
+        )
+        self.location = _Loc(planet) if planet is not None else None
+
+
+class _OwnerWithBuildings:
+    """An owner exposing get_buildings() (like the game Character)."""
+
+    def __init__(self, buildings, oid=1):
+        self.id = oid
+        self._buildings = list(buildings)
+
+    def get_buildings(self):
+        return list(self._buildings)
+
+
+# HQ carries the headquarters capability; EX does not.
+_HQ_PROVIDER = FakeProvider(buildings={
+    "HQ": _Cap({"headquarters"}),
+    "EX": _Cap({"harvestable"}),
+})
+
+
+class TestOwnerHasActiveHq:
+    """The real 'no HQ = base inert' predicate (Phase 2)."""
+
+    def _call(self, owner, planet=None):
         from mygame.world.utils import owner_has_active_hq
+        return owner_has_active_hq(owner, planet, provider=_HQ_PROVIDER)
 
-        class _Owner:
-            id = 1
+    def test_true_when_owner_has_a_completed_hq(self):
+        owner = _OwnerWithBuildings([_OwnedBuilding("HQ", planet="earth")])
+        assert self._call(owner, "earth") is True
 
-        assert owner_has_active_hq(_Owner(), "earth") is True
-        assert owner_has_active_hq(None) is True  # planet arg optional
+    def test_false_when_owner_has_no_hq(self):
+        owner = _OwnerWithBuildings([_OwnedBuilding("EX", planet="earth")])
+        assert self._call(owner, "earth") is False
+
+    def test_false_when_owner_has_no_buildings(self):
+        assert self._call(_OwnerWithBuildings([]), "earth") is False
+
+    def test_false_when_hq_still_under_construction(self):
+        owner = _OwnerWithBuildings([
+            _OwnedBuilding("HQ", planet="earth", under_construction=True),
+        ])
+        assert self._call(owner, "earth") is False
+
+    def test_planet_scoping_excludes_hq_on_another_planet(self):
+        owner = _OwnerWithBuildings([_OwnedBuilding("HQ", planet="mars")])
+        assert self._call(owner, "earth") is False
+        assert self._call(owner, "mars") is True
+
+    def test_planet_none_matches_any_planet(self):
+        owner = _OwnerWithBuildings([_OwnedBuilding("HQ", planet="mars")])
+        assert self._call(owner, None) is True
+
+    def test_hq_with_undeterminable_planet_counts_for_any_query(self):
+        # A building whose location yields no planet is not excluded by scoping
+        # (planet None on the building -> matches any queried planet).
+        owner = _OwnerWithBuildings([_OwnedBuilding("HQ", planet=None)])
+        assert self._call(owner, "earth") is True
+
+    def test_owner_without_get_buildings_is_false(self):
+        class _Bare:
+            id = 9
+        assert self._call(_Bare(), "earth") is False
+
+    def test_none_owner_is_false(self):
+        assert self._call(None, "earth") is False
