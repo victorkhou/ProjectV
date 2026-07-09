@@ -104,6 +104,7 @@ from mygame.commands.admin_commands import (  # noqa: E402
     CmdAdminBuilding,
     CmdAdminAgent,
     CmdAdminResource,
+    CmdAdminItem,
     CmdAdminPlayer,
 )
 
@@ -637,6 +638,193 @@ class TestAdminLogging(unittest.TestCase):
         log_output = "\n".join(cm.output)
         self.assertIn("AdminUser", log_output)
         self.assertIn("level", log_output)
+
+
+# -------------------------------------------------------------- #
+#  CmdAdminItem tests
+# -------------------------------------------------------------- #
+
+class FakeItemDef:
+    """Minimal ItemDef stand-in for @item spawn/list tests."""
+
+    def __init__(self, key, name, category, slot="", max_stack=99, weight=1.0):
+        self.key = key
+        self.name = name
+        self.category = category
+        self.slot = slot
+        self.max_stack = max_stack
+        self.weight = weight
+
+
+class FakeItemRegistry:
+    """Registry exposing resolve_item / get_item / items for item tests."""
+
+    def __init__(self, defs):
+        self.items = {d.key: d for d in defs}
+
+    def resolve_item(self, token):
+        t = token.lower()
+        for d in self.items.values():
+            if d.key.lower() == t or d.name.lower() == t:
+                return d
+        return None
+
+    def get_item(self, key):
+        return self.items[key]
+
+
+class FakeEquipment:
+    """Supply_Bag stand-in honoring the per-entry max_stack cap."""
+
+    def __init__(self):
+        self.supplies = {}
+
+    def add_supply(self, item_key, count, max_stack=99):
+        current = self.supplies.get(item_key, 0)
+        added = max(0, min(count, max_stack - current))
+        self.supplies[item_key] = current + added
+        return added
+
+
+# A rifle (Gear) and grenades (Supply) cover both spawn branches.
+_RIFLE = FakeItemDef("assault_rifle", "Assault Rifle", "weapon", slot="weapon", weight=10.0)
+_GRENADE = FakeItemDef("frag_grenade", "Frag Grenade", "throwable", max_stack=5, weight=3.0)
+
+
+def _item_caller(perm_level="Builder"):
+    registry = FakeItemRegistry([_RIFLE, _GRENADE])
+    return FakeCaller(perm_level=perm_level, systems={"registry": registry})
+
+
+class TestItemSpawnGear(unittest.TestCase):
+    """@item spawn <gear> creates equippable objects in the recipient's inv."""
+
+    def test_spawn_gear_creates_objects(self):
+        import unittest.mock as mock
+
+        target = FakeTarget(name="Bob")
+        caller = _item_caller()
+        caller._search_results["Bob"] = target
+
+        created = []
+        fake_objects = types.ModuleType("typeclasses.objects")
+        fake_objects.create_game_item = lambda owner, idef: created.append((owner, idef))
+        with mock.patch.dict(sys.modules, {
+            "typeclasses": types.ModuleType("typeclasses"),
+            "typeclasses.objects": fake_objects,
+        }):
+            cmd = _make_cmd(CmdAdminItem, caller, " spawn assault_rifle 2 Bob")
+            cmd.func()
+
+        self.assertEqual(len(created), 2)
+        self.assertTrue(all(idef is _RIFLE and owner is target for owner, idef in created))
+        self.assertTrue(any("Spawned 2x Assault Rifle" in m for m in caller._messages))
+
+    def test_spawn_gear_defaults_to_caller(self):
+        import unittest.mock as mock
+
+        caller = _item_caller()
+        created = []
+        fake_objects = types.ModuleType("typeclasses.objects")
+        fake_objects.create_game_item = lambda owner, idef: created.append((owner, idef))
+        with mock.patch.dict(sys.modules, {
+            "typeclasses": types.ModuleType("typeclasses"),
+            "typeclasses.objects": fake_objects,
+        }):
+            # No count/player → defaults to 1 for the caller.
+            cmd = _make_cmd(CmdAdminItem, caller, " spawn assault_rifle")
+            cmd.func()
+
+        self.assertEqual(len(created), 1)
+        self.assertIs(created[0][0], caller)  # defaults to caller
+
+
+class TestItemSpawnSupply(unittest.TestCase):
+    """@item spawn <supply> adds counts to the recipient's Supply_Bag."""
+
+    def test_spawn_supply_adds_to_bag(self):
+        target = FakeTarget(name="Bob")
+        target.equipment = FakeEquipment()
+        caller = _item_caller()
+        caller._search_results["Bob"] = target
+
+        cmd = _make_cmd(CmdAdminItem, caller, " spawn frag_grenade 3 Bob")
+        cmd.func()
+
+        self.assertEqual(target.equipment.supplies.get("frag_grenade"), 3)
+        self.assertTrue(any("Spawned 3x Frag Grenade" in m for m in caller._messages))
+
+    def test_spawn_supply_respects_stack_cap(self):
+        target = FakeTarget(name="Bob")
+        target.equipment = FakeEquipment()
+        caller = _item_caller()
+        caller._search_results["Bob"] = target
+
+        # max_stack=5, request 8 → 5 added, 3 reported as exceeding the cap.
+        cmd = _make_cmd(CmdAdminItem, caller, " spawn frag_grenade 8 Bob")
+        cmd.func()
+
+        self.assertEqual(target.equipment.supplies.get("frag_grenade"), 5)
+        self.assertTrue(any("exceeded the stack cap" in m for m in caller._messages))
+
+
+class TestItemSpawnErrors(unittest.TestCase):
+    """@item spawn input validation."""
+
+    def test_spawn_no_args_shows_usage(self):
+        caller = _item_caller()
+        cmd = _make_cmd(CmdAdminItem, caller, " spawn")
+        cmd.func()
+        self.assertTrue(any("Usage" in m for m in caller._messages))
+
+    def test_spawn_unknown_item(self):
+        caller = _item_caller()
+        cmd = _make_cmd(CmdAdminItem, caller, " spawn nonexistent")
+        cmd.func()
+        self.assertTrue(any("Unknown item" in m for m in caller._messages))
+
+    def test_spawn_unknown_player(self):
+        caller = _item_caller()
+        cmd = _make_cmd(CmdAdminItem, caller, " spawn frag_grenade 1 Nobody")
+        cmd.func()
+        self.assertTrue(any("Could not find player" in m for m in caller._messages))
+
+
+class TestItemList(unittest.TestCase):
+    """@item list enumerates definitions, optionally filtered."""
+
+    def test_list_all(self):
+        caller = _item_caller()
+        cmd = _make_cmd(CmdAdminItem, caller, " list")
+        cmd.func()
+        output = "\n".join(caller._messages)
+        self.assertIn("assault_rifle", output)
+        self.assertIn("frag_grenade", output)
+
+    def test_list_filter_by_category(self):
+        caller = _item_caller()
+        cmd = _make_cmd(CmdAdminItem, caller, " list weapon")
+        cmd.func()
+        output = "\n".join(caller._messages)
+        self.assertIn("assault_rifle", output)
+        self.assertNotIn("frag_grenade", output)
+
+    def test_list_filter_no_match(self):
+        caller = _item_caller()
+        cmd = _make_cmd(CmdAdminItem, caller, " list bogus")
+        cmd.func()
+        self.assertTrue(any("No items match" in m for m in caller._messages))
+
+
+class TestItemPermissions(unittest.TestCase):
+    """@item subcommands require Builder+."""
+
+    def test_spawn_denied_for_player(self):
+        registry = FakeItemRegistry([_RIFLE, _GRENADE])
+        caller = FakeCaller(perm_level="Player", systems={"registry": registry})
+        cmd = _make_cmd(CmdAdminItem, caller, " spawn frag_grenade")
+        cmd.func()
+        self.assertTrue(any("Permission denied" in m for m in caller._messages))
 
 
 if __name__ == "__main__":

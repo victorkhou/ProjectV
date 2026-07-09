@@ -593,6 +593,10 @@ def _setup_default_cmds_stubs():
 
     general_mod = types.ModuleType("evennia.commands.default.general")
     general_mod.CmdWhisper = type("CmdWhisper", (), {"key": "whisper"})
+    general_mod.CmdPose = type("CmdPose", (), {"key": "pose"})
+    general_mod.CmdSetDesc = type("CmdSetDesc", (), {"key": "setdesc"})
+    general_mod.CmdGive = type("CmdGive", (), {"key": "give"})
+    general_mod.CmdHome = type("CmdHome", (), {"key": "home"})
     sys.modules["evennia.commands.default.general"] = general_mod
 
     comms_mod = types.ModuleType("evennia.commands.default.comms")
@@ -601,6 +605,15 @@ def _setup_default_cmds_stubs():
 
     building_mod = types.ModuleType("evennia.commands.default.building")
     building_mod.CmdOpen = type("CmdOpen", (), {"key": "@open"})
+    building_mod.CmdDig = type("CmdDig", (), {"key": "@dig"})
+    building_mod.CmdTunnel = type("CmdTunnel", (), {"key": "@tunnel"})
+    building_mod.CmdLink = type("CmdLink", (), {"key": "@link"})
+    building_mod.CmdUnLink = type("CmdUnLink", (), {"key": "unlink"})
+    building_mod.CmdSetHome = type("CmdSetHome", (), {"key": "@sethome"})
+    building_mod.CmdCreate = type("CmdCreate", (), {"key": "@create"})
+    building_mod.CmdSpawn = type("CmdSpawn", (), {"key": "@spawn"})
+    building_mod.CmdCopy = type("CmdCopy", (), {"key": "@copy"})
+    building_mod.CmdTeleport = type("CmdTeleport", (), {"key": "@teleport"})
     sys.modules["evennia.commands.default.building"] = building_mod
 
 
@@ -641,6 +654,10 @@ class TestCharacterCmdSetRegistration(unittest.TestCase):
         """CmdAdminResource (@resource) is registered."""
         self.assertIn("@resource", self.registered_keys)
 
+    def test_admin_item_router_registered(self):
+        """CmdAdminItem (@item) is registered."""
+        self.assertIn("@item", self.registered_keys)
+
     def test_admin_player_router_registered(self):
         """CmdAdminPlayer (@player) is registered."""
         self.assertIn("@player", self.registered_keys)
@@ -667,6 +684,38 @@ class TestCharacterCmdSetRegistration(unittest.TestCase):
         """Evennia's room-exit CmdOpen is removed so 'open' hits CmdOpenExit."""
         from evennia.commands.default.building import CmdOpen
         self.assertIn(CmdOpen, self.cmdset._removed)
+
+    # --- Stock commands irrelevant to this game's model are removed ---
+
+    def test_builtin_teleport_removed(self):
+        """Stock room CmdTeleport is removed (dup key with our @teleport)."""
+        from evennia.commands.default.building import CmdTeleport
+        self.assertIn(CmdTeleport, self.cmdset._removed)
+
+    def test_room_graph_builders_removed(self):
+        """Room-graph builders (dig/tunnel/link/unlink/sethome/home) removed."""
+        from evennia.commands.default.building import (
+            CmdDig, CmdTunnel, CmdLink, CmdUnLink, CmdSetHome,
+        )
+        from evennia.commands.default.general import CmdHome
+        for cmd in (CmdDig, CmdTunnel, CmdLink, CmdUnLink, CmdSetHome, CmdHome):
+            self.assertIn(cmd, self.cmdset._removed)
+
+    def test_generic_object_builders_removed(self):
+        """Generic object builders (@create, @spawn, @copy) removed."""
+        from evennia.commands.default.building import (
+            CmdCreate, CmdSpawn, CmdCopy,
+        )
+        for cmd in (CmdCreate, CmdSpawn, CmdCopy):
+            self.assertIn(cmd, self.cmdset._removed)
+
+    def test_rp_social_commands_removed(self):
+        """RP/social commands (pose, setdesc, give) removed."""
+        from evennia.commands.default.general import (
+            CmdPose, CmdSetDesc, CmdGive,
+        )
+        for cmd in (CmdPose, CmdSetDesc, CmdGive):
+            self.assertIn(cmd, self.cmdset._removed)
 
     # --- Requirement 7.3: Unchanged standalone commands still registered ---
 

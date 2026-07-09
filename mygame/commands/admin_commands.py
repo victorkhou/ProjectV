@@ -717,6 +717,189 @@ class CmdAdminResource(AdminSubcommandRouter):
     }
 
 
+class CmdAdminItem(AdminSubcommandRouter):
+    """Spawn equipment, weapons, and supplies for players.
+
+    Usage:
+      @item spawn <key> [count] [player]
+      @item list [filter]
+
+    Options:
+      <key>     item key or full name (assault_rifle | "Assault Rifle")
+      [count]   how many to grant (default 1)
+      [player]  recipient; defaults to you
+      [filter]  restrict 'list' to a category (weapon, armor, accessory,
+                ammo, consumable, throwable) or a slot (torso, weapon, ...)
+
+    Subcommands:
+      spawn — Grant item(s) to a player, bypassing cost (Builder+)
+      list  — List item definitions available to spawn (Builder+)
+
+    Gear (armor/weapon/accessory) is created as equippable object(s) in the
+    recipient's inventory; Supplies (ammo/consumable/throwable) are added to
+    their Supply_Bag as counts. Admin grants bypass the carry-weight cap,
+    matching '@resource give'.
+    """
+
+    key = "@item"
+
+    def sub_spawn(self, args):
+        """Grant item(s) to a player, bypassing production cost.
+
+        Args:
+            args: "<key> [count] [player]"
+        """
+        caller = self.caller
+        if not args:
+            caller.msg("Usage: @item spawn <key> [count] [player]")
+            return
+
+        parts = args.split()
+        token = parts[0]
+
+        # Optional [count] then optional [player]. The first extra token is a
+        # count only if it parses as an int; otherwise it's a player name.
+        count = 1
+        player_name = None
+        rest = parts[1:]
+        if rest:
+            try:
+                count = int(rest[0])
+                rest = rest[1:]
+            except ValueError:
+                pass  # first extra token is a player name, not a count
+            if count < 1:
+                caller.msg("Count must be at least 1.")
+                return
+        if rest:
+            player_name = rest[0]
+
+        # Resolve the item definition (key or full name, typo-tolerant).
+        registry = _get_registry(caller)
+        if registry is None:
+            caller.msg("Data Registry unavailable.")
+            return
+        item_def = None
+        resolver = getattr(registry, "resolve_item", None)
+        if callable(resolver):
+            item_def = resolver(token)
+        if item_def is None and hasattr(registry, "get_item"):
+            try:
+                item_def = registry.get_item(token)
+            except KeyError:
+                item_def = None
+        if item_def is None:
+            caller.msg(
+                f"Unknown item '{token}'. Use '@item list' to see valid keys."
+            )
+            return
+
+        # Resolve recipient: named player or self.
+        if player_name:
+            target = caller.search(player_name) if hasattr(caller, "search") else None
+            if target is None:
+                caller.msg(f"Could not find player '{player_name}'.")
+                return
+        else:
+            target = caller
+
+        from world.constants import GEAR_CATEGORIES
+        is_gear = item_def.category in GEAR_CATEGORIES
+        if is_gear:
+            granted = self._spawn_gear(target, item_def, count)
+        else:
+            granted = self._grant_supply(target, item_def, count)
+
+        target_name = getattr(target, "key", "?")
+        if granted <= 0:
+            caller.msg(f"Failed to grant {item_def.name} to {target_name}.")
+            return
+
+        kind = "gear" if is_gear else "supplies"
+        suffix = ""
+        if granted < count:
+            suffix = f" ({count - granted} exceeded the stack cap)"
+        self._log_admin("spawn", f"{granted}x {item_def.key} for {target_name}")
+        caller.msg(
+            f"Spawned {granted}x {item_def.name} ({kind}) for {target_name}{suffix}."
+        )
+        if hasattr(target, "msg") and target is not caller:
+            target.msg(
+                f"|y[Admin] You received {granted}x {item_def.name} "
+                f"from {caller.key}.|n"
+            )
+
+    def _spawn_gear(self, target, item_def, count):
+        """Create *count* equippable GameItem objects in *target*'s inventory.
+
+        Returns the number successfully created.
+        """
+        from typeclasses.objects import create_game_item
+
+        created = 0
+        for _ in range(count):
+            try:
+                create_game_item(target, item_def)
+                created += 1
+            except Exception:
+                logger.exception("Failed to create item %s", item_def.key)
+                break
+        return created
+
+    def _grant_supply(self, target, item_def, count):
+        """Add up to *count* units of a Supply to *target*'s Supply_Bag.
+
+        Respects the per-entry ``max_stack`` cap (the data-structure limit);
+        returns the number actually added.
+        """
+        equipment = getattr(target, "equipment", None)
+        if equipment is None or not hasattr(equipment, "add_supply"):
+            return 0
+        return int(
+            equipment.add_supply(item_def.key, count, max_stack=item_def.max_stack)
+        )
+
+    def sub_list(self, args):
+        """List item definitions available to spawn, grouped by category.
+
+        Args:
+            args: "[filter]" — optional category or slot to restrict the list.
+        """
+        caller = self.caller
+        registry = _get_registry(caller)
+        items = getattr(registry, "items", None) if registry else None
+        if not items:
+            caller.msg("No item definitions loaded.")
+            return
+
+        filt = args.strip().lower() if args else ""
+        ordered = sorted(items.values(), key=lambda d: (d.category, d.key))
+
+        lines = ["|w=== Item definitions ===|n"]
+        shown = 0
+        current_cat = None
+        for d in ordered:
+            if filt and filt not in (d.category.lower(), (d.slot or "").lower()):
+                continue
+            if d.category != current_cat:
+                current_cat = d.category
+                lines.append(f"|c{current_cat}|n")
+            slot = f" slot={d.slot}" if d.slot else ""
+            lines.append(f"  {d.key:<18s} {d.name}{slot} wt={d.weight:g}")
+            shown += 1
+
+        if shown == 0:
+            caller.msg(f"No items match '{filt}'.")
+            return
+        self._log_admin("list", f"items filter='{filt}'")
+        caller.msg("\n".join(lines))
+
+    subcommands = {
+        "spawn": (sub_spawn, "Spawn item(s) for a player", "Builder"),
+        "list": (sub_list, "List item definitions", "Builder"),
+    }
+
+
 class CmdAdminPlayer(AdminSubcommandRouter):
     """Manage player level and rank.
 

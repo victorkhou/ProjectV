@@ -33,7 +33,8 @@ from commands.agent_commands import (
 )
 from commands.admin_commands import (
     CmdReboot, CmdPurgeRooms, CmdTeleport, CmdClearFog, CmdMigrate,
-    CmdAdminBuilding, CmdAdminAgent, CmdAdminResource, CmdAdminPlayer,
+    CmdAdminBuilding, CmdAdminAgent, CmdAdminResource, CmdAdminItem,
+    CmdAdminPlayer,
 )
 
 
@@ -51,16 +52,54 @@ class CharacterCmdSet(default_cmds.CharacterCmdSet):
         Populates the cmdset
         """
         super().at_cmdset_creation()
-        # Remove Evennia built-ins replaced by game commands
-        from evennia.commands.default.general import CmdWhisper
-        self.remove(CmdWhisper)
-        # Remove the room-exit builder CmdOpen (key "@open"). Our world is
-        # coordinate-based (one PlanetRoom per planet, no room-to-room exits),
-        # so it is meaningless here — and because CMD_IGNORE_PREFIXES makes
-        # "@open" match a bare "open", leaving it would shadow the "open"
-        # alias on CmdOpenExit. CmdCloseExit's "close" alias has no builtin.
-        from evennia.commands.default.building import CmdOpen
+        # ------------------------------------------------------------------ #
+        #  Prune stock Evennia commands that don't fit this game's model.
+        #
+        #  This world is coordinate-based: one PlanetRoom per planet, with no
+        #  room-to-room exit graph, and all in-world objects (buildings, items,
+        #  agents) are typed and registered in a coordinate index by the game's
+        #  own spawn commands (@building / @item / @agent). Stock builder
+        #  commands that assume a room graph, or that create untyped/unindexed
+        #  objects, produce broken or orphaned state here, so we remove them.
+        # ------------------------------------------------------------------ #
+        from evennia.commands.default.general import (
+            CmdWhisper, CmdPose, CmdSetDesc, CmdGive, CmdHome,
+        )
+        from evennia.commands.default.building import (
+            CmdOpen, CmdDig, CmdTunnel, CmdLink, CmdUnLink, CmdSetHome,
+            CmdCreate, CmdSpawn, CmdCopy, CmdTeleport as CmdBuiltinTeleport,
+        )
+
+        # Replaced by game commands.
+        self.remove(CmdWhisper)  # replaced by CmdMessage (page/tell)
+        # Room-exit builder CmdOpen (key "@open"): CMD_IGNORE_PREFIXES makes
+        # "@open" match a bare "open", so leaving it would shadow CmdOpenExit's
+        # "open" alias. (CmdCloseExit's "close" alias has no stock conflict.)
         self.remove(CmdOpen)
+        # Stock @teleport/@tel is a room-based teleport with the SAME key and
+        # alias as our coordinate CmdTeleport — remove it so ours is the only
+        # match (previously it was silently shadowed).
+        self.remove(CmdBuiltinTeleport)
+
+        # Room-graph builders — meaningless without room-to-room exits.
+        self.remove(CmdDig)      # @dig: create a room + exits to it
+        self.remove(CmdTunnel)   # @tunnel: dig in a compass direction
+        self.remove(CmdLink)     # @link: link exits between rooms
+        self.remove(CmdUnLink)   # unlink: remove exit links
+        self.remove(CmdSetHome)  # @sethome: set an object's home room
+        self.remove(CmdHome)     # home: teleport to your home room
+
+        # Generic object builders — bypass the typed, coordinate-indexed spawn
+        # path (@building / @item / @agent), producing orphaned objects.
+        self.remove(CmdCreate)   # @create: make an untyped object
+        self.remove(CmdSpawn)    # @spawn/@olc: prototype spawner
+        self.remove(CmdCopy)     # @copy: duplicate an object (unindexed clone)
+
+        # RP/social flavor — not part of the RTS combat loop.
+        self.remove(CmdPose)     # pose/emote (":")
+        self.remove(CmdSetDesc)  # setdesc: set your character description
+        self.remove(CmdGive)     # give: hand an object to another character
+
         # Game commands
         self.add(CmdMove())
         self.add(CmdHarvest())
@@ -110,6 +149,7 @@ class CharacterCmdSet(default_cmds.CharacterCmdSet):
         self.add(CmdAdminBuilding())
         self.add(CmdAdminAgent())
         self.add(CmdAdminResource())
+        self.add(CmdAdminItem())
         self.add(CmdAdminPlayer())
         # Override Evennia's default who with rank/level display
         self.add(CmdWho())
