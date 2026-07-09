@@ -52,7 +52,7 @@ _ensure_evennia_stubs()
 
 from mygame.world.systems.combat_engine import CombatEngine  # noqa: E402
 from mygame.world.data_registry import DataRegistry  # noqa: E402
-from mygame.world.definitions import BalanceConfig  # noqa: E402
+from mygame.world.definitions import BalanceConfig, BuildingDef  # noqa: E402
 from mygame.world.event_bus import EventBus  # noqa: E402
 
 # -------------------------------------------------------------- #
@@ -129,8 +129,14 @@ class FakeTile:
         })()
         self._nearby_players = nearby_players or []
 
-    def get_nearby_players(self, radius):
+    def get_nearby_players(self, x, y, radius):
+        # 3-arg spatial-query signature matching PlanetRoom.get_nearby_players;
+        # the fake returns its fixed roster regardless of the query center.
         return self._nearby_players
+
+    @property
+    def planet_name(self):
+        return getattr(self, "_planet", "earth")
 
 class FakePlayer:
     """Lightweight stand-in for CombatCharacter."""
@@ -240,9 +246,22 @@ class FakeAgentSystem:
 
 
 def _make_registry() -> DataRegistry:
-    """Create a DataRegistry with default balance config."""
+    """Create a DataRegistry with default balance config.
+
+    Registers a Turret (``TU``) building def carrying the ``turret`` capability
+    so ``process_turrets`` (which now gates on the capability, not a hardcoded
+    type) recognizes test turrets.
+    """
     registry = DataRegistry()
     registry.balance = BalanceConfig()
+    registry.buildings = {
+        "TU": BuildingDef(
+            name="Turret", abbreviation="TU", cost={"Stone": 20, "Iron": 15},
+            max_health=300, requires_hq=True, required_terrain=None,
+            category="defense", produces=None,
+            capabilities=frozenset({"turret"}),
+        ),
+    }
     return registry
 
 def _make_engine(registry=None, event_bus=None, current_tick=0):
@@ -607,7 +626,7 @@ class TestProcessTurrets(unittest.TestCase):
 
         turret_tile = FakeTile(xyz=(0, 0, "earth"),
                                nearby_players=[near_player, far_player])
-        turret = FakeBuilding(building_type="VV", owner=owner,
+        turret = FakeBuilding(building_type="TU", owner=owner,
                               hp=300, hp_max=300, location=turret_tile)
 
         engine.process_turrets([turret])
@@ -620,7 +639,7 @@ class TestProcessTurrets(unittest.TestCase):
                            location=FakeTile(xyz=(1, 0, "earth")))
         turret_tile = FakeTile(xyz=(0, 0, "earth"),
                                nearby_players=[owner])
-        turret = FakeBuilding(building_type="VV", owner=owner,
+        turret = FakeBuilding(building_type="TU", owner=owner,
                               hp=300, hp_max=300, location=turret_tile)
 
         engine.process_turrets([turret])
@@ -633,7 +652,7 @@ class TestProcessTurrets(unittest.TestCase):
                                 location=FakeTile(xyz=(50, 50, "earth")))
         turret_tile = FakeTile(xyz=(0, 0, "earth"),
                                nearby_players=[far_player])
-        turret = FakeBuilding(building_type="VV", owner=owner,
+        turret = FakeBuilding(building_type="TU", owner=owner,
                               hp=300, hp_max=300, location=turret_tile)
 
         engine.process_turrets([turret])
@@ -646,7 +665,7 @@ class TestProcessTurrets(unittest.TestCase):
                              location=FakeTile(xyz=(1, 0, "earth")))
         turret_tile = FakeTile(xyz=(0, 0, "earth"),
                                nearby_players=[hostile])
-        turret = FakeBuilding(building_type="VV", owner=owner,
+        turret = FakeBuilding(building_type="TU", owner=owner,
                               hp=300, hp_max=300, offline=True,
                               location=turret_tile)
 
@@ -664,6 +683,153 @@ class TestProcessTurrets(unittest.TestCase):
 
         engine.process_turrets([building])
         self.assertEqual(len(engine.pending_actions), 0)
+
+    def test_turret_does_not_fire_for_registered_non_turret_building(self):
+        """A building that IS registered but lacks the turret capability must
+        not fire — proves the fix discriminates on the capability, not merely
+        on the type being resolvable. (Guards against a regression that treats
+        every known building as a turret.)"""
+        registry = _make_registry()
+        registry.buildings["WA"] = BuildingDef(
+            name="Wall", abbreviation="WA", cost={"Stone": 5},
+            max_health=600, requires_hq=True, required_terrain=None,
+            category="defense", produces=None,
+            capabilities=frozenset(),  # NO turret capability
+        )
+        engine, _ = _make_engine(registry=registry)
+        owner = FakePlayer(name="Owner")
+        hostile = FakePlayer(name="Hostile",
+                             location=FakeTile(xyz=(1, 0, "earth")))
+        tile = FakeTile(xyz=(0, 0, "earth"), nearby_players=[hostile])
+        wall = FakeBuilding(building_type="WA", owner=owner,
+                            hp=600, hp_max=600, location=tile)
+
+        engine.process_turrets([wall])
+        self.assertEqual(len(engine.pending_actions), 0)
+
+    def test_turret_skips_owner_by_id_not_identity(self):
+        """The owner-skip compares by .id, not object identity: a distinct
+        player object sharing the owner's .id (e.g. a re-fetched proxy after a
+        reload) is treated as the owner and not fired upon."""
+        engine, _ = _make_engine()
+        owner = FakePlayer(name="Owner")
+        owner.id = 7
+        # A DISTINCT object with the SAME id as the owner (reload/proxy).
+        owner_proxy = FakePlayer(name="OwnerProxy",
+                                 location=FakeTile(xyz=(1, 0, "earth")))
+        owner_proxy.id = 7
+        turret_tile = FakeTile(xyz=(0, 0, "earth"),
+                               nearby_players=[owner_proxy])
+        turret = FakeBuilding(building_type="TU", owner=owner,
+                              hp=300, hp_max=300, location=turret_tile)
+
+        engine.process_turrets([turret])
+        self.assertEqual(len(engine.pending_actions), 0)  # skipped by .id
+
+    def test_turret_fires_on_distinct_player_with_different_id(self):
+        """Conversely, a hostile whose .id differs from the owner's IS fired
+        upon (the id comparison classifies non-owners as hostile)."""
+        engine, _ = _make_engine()
+        owner = FakePlayer(name="Owner")
+        owner.id = 7
+        hostile = FakePlayer(name="Hostile",
+                             location=FakeTile(xyz=(1, 0, "earth")))
+        hostile.id = 99  # different id -> hostile
+        turret_tile = FakeTile(xyz=(0, 0, "earth"),
+                               nearby_players=[hostile])
+        turret = FakeBuilding(building_type="TU", owner=owner,
+                              hp=300, hp_max=300, location=turret_tile)
+
+        engine.process_turrets([turret])
+        self.assertEqual(len(engine.pending_actions), 1)
+        self.assertEqual(engine.pending_actions[0]["target"], hostile)
+
+    def test_turret_does_not_fire_when_owner_hq_inactive(self):
+        """The deactivation gate: when owner_has_active_hq returns False, an
+        in-range hostile is NOT fired upon. Locks in the gate's wiring in
+        process_turrets before Phase 2 replaces the always-True stub."""
+        import mygame.world.systems.combat_engine as ce_mod
+        engine, _ = _make_engine()
+        owner = FakePlayer(name="Owner")
+        hostile = FakePlayer(name="Hostile",
+                             location=FakeTile(xyz=(1, 0, "earth")))
+        turret_tile = FakeTile(xyz=(0, 0, "earth"),
+                               nearby_players=[hostile])
+        turret = FakeBuilding(building_type="TU", owner=owner,
+                              hp=300, hp_max=300, location=turret_tile)
+
+        # process_turrets does `from world.utils import ... owner_has_active_hq`,
+        # so patch it on the world.utils module (the import source).
+        import world.utils as wu
+        original = wu.owner_has_active_hq
+        wu.owner_has_active_hq = lambda owner, planet=None: False
+        try:
+            engine.process_turrets([turret])
+        finally:
+            wu.owner_has_active_hq = original
+        self.assertEqual(len(engine.pending_actions), 0)
+
+    def test_turret_end_to_end_with_real_planetroom_query(self):
+        """End-to-end: drive process_turrets against a REAL
+        PlanetRoom.get_nearby_players (not FakeTile), so the 3-arg spatial-query
+        contract is exercised, not just asserted by convention. This is the
+        exact seam whose mismatch (a 1-arg get_nearby_players) hid the original
+        turret bug."""
+        from mygame.typeclasses.rooms import PlanetRoom
+        from mygame.world.coordinate.coordinate_index import CoordinateIndex
+
+        class _RealRoom(PlanetRoom):
+            def __init__(self, index):
+                self._idx = index
+
+            @property
+            def coord_index(self):
+                return self._idx
+
+            @property
+            def planet_name(self):
+                return "earth"
+
+        class _RoomDb:
+            def __init__(self, x, y):
+                self.coord_x = x
+                self.coord_y = y
+
+        class _RoomPlayer:
+            """A player-like object the real coordinate index accepts."""
+            def __init__(self, name, x, y):
+                self.key = name
+                self.has_account = True
+                self.pk = 1
+                self.db = _RoomDb(x, y)
+                self.location = None
+                self._messages = []
+
+            def msg(self, text):
+                self._messages.append(text)
+
+        index = CoordinateIndex()
+        room = _RealRoom(index)
+        near = _RoomPlayer("Near", 2, 0)   # dist 2 from turret at (0,0)
+        far = _RoomPlayer("Far", 40, 0)    # far out of radius
+        near.location = room
+        far.location = room
+        index.add(near, 2, 0)
+        index.add(far, 40, 0)
+
+        engine, _ = _make_engine()
+        # Turret owner is a separate object so near/far are hostile.
+        owner = FakePlayer(name="Owner")
+        turret = FakeBuilding(building_type="TU", owner=owner,
+                              hp=300, hp_max=300, location=room)
+        # A real Building carries its own coords (db.coord_x/y); the room has
+        # none. Give the turret a coord-bearing db so process_turrets resolves
+        # its firing position from the building, mirroring live objects.
+        turret.db = _RoomDb(0, 0)
+
+        engine.process_turrets([turret])
+        self.assertEqual(len(engine.pending_actions), 1)
+        self.assertEqual(engine.pending_actions[0]["target"], near)
 
 # -------------------------------------------------------------- #
 #  Building Damage Tests

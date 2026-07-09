@@ -97,3 +97,22 @@ class TestGetRankNameInjection:
         rank_num = rank_from_level(lvl)
         provider = FakeProvider(ranks=[])  # rank not present
         assert _get_rank_name(self._player(lvl), provider=provider) == f"Rank {rank_num}"
+
+
+class TestOwnerHasActiveHqStub:
+    """Phase 1 stub contract: owner_has_active_hq always returns True.
+
+    Phase 2 replaces the body with the real HQ enumeration; this test pins the
+    documented stub behavior so the Phase 1 deactivation gate is a no-op until
+    then (turrets/guards are not spuriously silenced before the real check
+    exists).
+    """
+
+    def test_stub_returns_true(self):
+        from mygame.world.utils import owner_has_active_hq
+
+        class _Owner:
+            id = 1
+
+        assert owner_has_active_hq(_Owner(), "earth") is True
+        assert owner_has_active_hq(None) is True  # planet arg optional

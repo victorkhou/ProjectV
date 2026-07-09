@@ -130,6 +130,8 @@
   produces: null
   requires_agent: true
   storage_capacity: 0
+  capabilities:
+    - turret
   unlocks: []
   map_symbol: TU
 

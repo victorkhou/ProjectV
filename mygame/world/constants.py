@@ -256,6 +256,8 @@ ACTIVITY_IDLE = "Idle"
 #:     prerequisite that satisfies other buildings' ``requires_hq``.
 #:   - ``combat_barrier``: a Wall that blocks its own owner from passing while
 #:     the owner has an active combat timer.
+#:   - ``turret``: a defensive building that auto-fires at nearby non-owner
+#:     players each tick (see ``CombatEngine.process_turrets``).
 HARVESTABLE = "harvestable"
 UPGRADABLE = "upgradable"
 REQUIRES_RESOURCE_TERRAIN = "requires_resource_terrain"
@@ -263,6 +265,7 @@ STORAGE = "storage"
 PRIMARY_STORAGE = "primary_storage"
 HEADQUARTERS = "headquarters"
 COMBAT_BARRIER = "combat_barrier"
+TURRET = "turret"
 
 BUILDING_CAPABILITIES: frozenset[str] = frozenset({
     HARVESTABLE,
@@ -272,6 +275,7 @@ BUILDING_CAPABILITIES: frozenset[str] = frozenset({
     PRIMARY_STORAGE,
     HEADQUARTERS,
     COMBAT_BARRIER,
+    TURRET,
 })
 
 # ------------------------------------------------------------------ #

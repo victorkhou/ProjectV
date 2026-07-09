@@ -151,5 +151,49 @@ class TestTileChangeNotifications(unittest.TestCase):
         self.assertEqual(destination.messages, [])
 
 
+class TestGetNearbyPlayers(unittest.TestCase):
+    """PlanetRoom.get_nearby_players — the spatial query turret AI uses."""
+
+    def _room(self):
+        return _RoomWithIndex(CoordinateIndex())
+
+    def test_returns_players_within_manhattan_radius(self):
+        room = self._room()
+        at_center = _Player("Center", 5, 5)
+        edge = _Player("Edge", 7, 5)       # dist 2
+        corner = _Player("Corner", 6, 6)   # dist 2 (Manhattan), inside a r=2 disc
+        room.coord_index.add(at_center, 5, 5)
+        room.coord_index.add(edge, 7, 5)
+        room.coord_index.add(corner, 6, 6)
+
+        found = room.get_nearby_players(5, 5, 2)
+        self.assertCountEqual(found, [at_center, edge, corner])
+
+    def test_excludes_outside_manhattan_radius_even_if_in_bbox(self):
+        """A player inside the bounding box but outside the Manhattan disc is
+        excluded — (6,6) is in the r=2 bbox of (5,5) but Manhattan dist is... 2,
+        so use (6,6) with r=1: bbox includes it, Manhattan dist 2 > 1."""
+        room = self._room()
+        diagonal = _Player("Diagonal", 6, 6)  # in bbox of r=1, Manhattan dist 2
+        room.coord_index.add(diagonal, 6, 6)
+        found = room.get_nearby_players(5, 5, 1)
+        self.assertEqual(found, [])
+
+    def test_excludes_non_players(self):
+        room = self._room()
+        agent = _Agent("Guard", 5, 5)
+        player = _Player("P", 5, 5)
+        room.coord_index.add(agent, 5, 5)
+        room.coord_index.add(player, 5, 5)
+        found = room.get_nearby_players(5, 5, 3)
+        self.assertEqual(found, [player])  # agent (no account) excluded
+
+    def test_empty_when_none_in_range(self):
+        room = self._room()
+        far = _Player("Far", 50, 50)
+        room.coord_index.add(far, 50, 50)
+        self.assertEqual(room.get_nearby_players(5, 5, 3), [])
+
+
 if __name__ == "__main__":
     unittest.main()

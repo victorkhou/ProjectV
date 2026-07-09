@@ -301,3 +301,40 @@ def _copy_real_data_items(dst_items_path: str) -> None:
         os.path.join(_REAL_DATA_DIR, "definitions", "items.yaml"),
         dst_items_path,
     )
+
+
+class TestRealTurretCapability:
+    """The REAL buildings.yaml wires the turret capability onto TU (and not HQ).
+
+    This is the test that would have caught the original turret bug: unit tests
+    hand-build a TU BuildingDef, so a misindented/omitted/misspelled
+    ``capabilities: [turret]`` block in the real YAML would leave live turrets
+    silently never firing while every unit test stayed green. Assert against the
+    loaded real data directly.
+    """
+
+    def test_tu_has_turret_capability(self, real_registry):
+        from mygame.world.constants import TURRET
+        tu = real_registry.resolve_building("TU")
+        assert tu is not None, "Turret (TU) must exist in the real data"
+        assert tu.has_capability(TURRET), (
+            "TU must carry the 'turret' capability or live turrets never fire"
+        )
+
+    def test_hq_does_not_have_turret_capability(self, real_registry):
+        from mygame.world.constants import TURRET
+        hq = real_registry.resolve_building("HQ")
+        assert hq is not None
+        assert not hq.has_capability(TURRET), (
+            "HQ must NOT be turret-capable, else every HQ auto-fires"
+        )
+
+    def test_exactly_the_turret_is_turret_capable(self, real_registry):
+        from mygame.world.constants import TURRET
+        turret_caps = [
+            abbr for abbr, bdef in real_registry.buildings.items()
+            if bdef.has_capability(TURRET)
+        ]
+        assert turret_caps == ["TU"], (
+            f"Exactly TU should be turret-capable, got {turret_caps}"
+        )

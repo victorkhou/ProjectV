@@ -344,6 +344,33 @@ def is_admin(caller: Any) -> bool:
     return False
 
 
+def owner_has_active_hq(owner: Any, planet: Any = None) -> bool:
+    """Return True if *owner* has a live (non-destroyed) HQ on *planet*.
+
+    This is the "no HQ = base inert" predicate: it gates turret auto-fire,
+    guard combat AI, equipment production, and building-specific commands, so
+    that destroying a base's HQ deactivates the whole base until an HQ is
+    rebuilt (PvP) — or, for an NPC base, until it is wiped (PvE).
+
+    .. note::
+        **Phase 1 stub.** This currently always returns ``True`` so the
+        turret-fix phase can land the deactivation *gate* (call sites) without
+        the enumeration logic. Phase 2 replaces the body with the real check:
+        enumerate ``owner.get_buildings()``, filter to *planet* (the
+        enumeration is NOT planet-scoped), and return whether any has the
+        ``HEADQUARTERS`` capability — sharing one helper with
+        ``BuildingSystem._player_has_hq`` to avoid logic drift.
+
+    Args:
+        owner: The building/agent owner (a Character, or an NPC Sentinel).
+        planet: The planet key to scope the HQ search to (unused in the stub).
+
+    Returns:
+        ``True`` while stubbed; the real predicate in Phase 2.
+    """
+    return True
+
+
 # ------------------------------------------------------------------ #
 #  Broadcast
 # ------------------------------------------------------------------ #

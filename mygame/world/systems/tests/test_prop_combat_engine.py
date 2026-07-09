@@ -57,7 +57,7 @@ _ensure_evennia_stubs()
 
 from mygame.world.systems.combat_engine import CombatEngine  # noqa: E402
 from mygame.world.data_registry import DataRegistry  # noqa: E402
-from mygame.world.definitions import BalanceConfig  # noqa: E402
+from mygame.world.definitions import BalanceConfig, BuildingDef  # noqa: E402
 from mygame.world.event_bus import EventBus  # noqa: E402
 
 # -------------------------------------------------------------- #
@@ -136,8 +136,13 @@ class FakeTile:
         })()
         self._nearby_players = nearby_players or []
 
-    def get_nearby_players(self, radius):
+    def get_nearby_players(self, x, y, radius):
+        # 3-arg spatial-query signature matching PlanetRoom.get_nearby_players.
         return self._nearby_players
+
+    @property
+    def planet_name(self):
+        return "earth"
 
 class FakePlayer:
     """Lightweight stand-in for CombatCharacter."""
@@ -218,9 +223,21 @@ class FakeBuilding:
         self._deleted = True
 
 def _make_registry(balance=None) -> DataRegistry:
-    """Create a DataRegistry with default or custom balance config."""
+    """Create a DataRegistry with default or custom balance config.
+
+    Registers a Turret (``TU``) def with the ``turret`` capability so
+    ``process_turrets`` (capability-gated) recognizes test turrets.
+    """
     registry = DataRegistry()
     registry.balance = balance or BalanceConfig()
+    registry.buildings = {
+        "TU": BuildingDef(
+            name="Turret", abbreviation="TU", cost={"Stone": 20, "Iron": 15},
+            max_health=300, requires_hq=True, required_terrain=None,
+            category="defense", produces=None,
+            capabilities=frozenset({"turret"}),
+        ),
+    }
     return registry
 
 def _make_engine(registry=None, event_bus=None, current_tick=0):
@@ -432,7 +449,7 @@ class TestProperty13TurretTargeting(unittest.TestCase):
             nearby_players=players,
         )
         turret = FakeBuilding(
-            building_type="VV", owner=owner,
+            building_type="TU", owner=owner,
             hp=300, hp_max=300, location=turret_tile,
         )
 
@@ -478,7 +495,7 @@ class TestProperty13TurretTargeting(unittest.TestCase):
             nearby_players=[far_player],
         )
         turret = FakeBuilding(
-            building_type="VV", owner=owner,
+            building_type="TU", owner=owner,
             hp=300, hp_max=300, location=turret_tile,
         )
 

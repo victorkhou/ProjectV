@@ -328,41 +328,62 @@ class CombatEngine(BaseSystem):
     def process_turrets(self, active_buildings: list) -> None:
         """Auto-attack nearest hostile player within turret radius.
 
-        For each active turret building (building_type="VV", not offline):
-            - Find nearest hostile player within turret_radius
+        For each active Turret building (one whose BuildingDef declares the
+        ``turret`` capability, online, and whose owner has an active HQ):
+            - Find nearest non-owner player within turret_radius
             - Queue an attack with turret_damage
+
+        Turrets are identified by the ``turret`` capability, NOT a hardcoded
+        building_type — the previous ``"VV"`` check never matched the live
+        Turret abbreviation (``"TU"``), so no turret ever fired. Targeting uses
+        the PlanetRoom's ``get_nearby_players(x, y, radius)`` spatial query.
 
         Args:
             active_buildings: List of Building objects to check.
         """
+        from world.utils import is_owner, owner_has_active_hq
+
         turret_radius = self.registry.balance.turret_radius
         turret_damage = self.registry.balance.turret_damage
 
         for building in active_buildings:
-            # Only process turrets
-            building_type = self._get_building_type(building)
-            if building_type != "VV":
+            # Only process turret-capable buildings.
+            if not self._is_turret(building):
                 continue
 
-            # Skip offline turrets
+            # Skip offline turrets.
             if getattr(building, "is_offline", False):
                 continue
 
             owner = self._get_building_owner(building)
             building_loc = self._get_building_location(building)
-            b_coords = self._get_coords(building_loc)
+            # A Building stores its own coord_x/coord_y; its location is the
+            # (coordless) PlanetRoom. Read the building's coords first, then
+            # fall back to the location (for test doubles that carry coords on
+            # the tile). Reading only the location would leave b_coords None for
+            # every real turret — the same silent no-fire the "VV" bug caused.
+            b_coords = self._get_coords(building)
+            if b_coords is None:
+                b_coords = self._get_coords(building_loc)
             if b_coords is None:
                 continue
 
-            # Find nearest hostile player within radius
+            # A turret whose owner's base is deactivated (no active HQ) does not
+            # fire — mirrors the PvP "no HQ = base inert" rule. (Phase 1: the
+            # predicate is stubbed True; Phase 2 wires the real HQ check.)
+            planet = getattr(building_loc, "planet_name", None)
+            if not owner_has_active_hq(owner, planet):
+                continue
+
+            # Find nearest non-owner player within radius via the room's
+            # spatial query (3-arg: x, y, radius).
+            players = self._nearby_players(building_loc, b_coords[0],
+                                           b_coords[1], turret_radius)
             nearest = None
             nearest_dist = turret_radius + 1
-
-            # Get players from the building's location context
-            players = self._get_nearby_players(building_loc, turret_radius)
             for player in players:
-                # Skip the turret owner
-                if player is owner:
+                # Skip the turret owner (compare by .id, not identity).
+                if is_owner(player, owner):
                     continue
 
                 p_coords = self._get_coords(player)
@@ -381,13 +402,45 @@ class CombatEngine(BaseSystem):
                     nearest_dist = dist
 
             if nearest is not None:
-                # Create a synthetic turret weapon action
+                # Create a synthetic turret weapon action.
                 turret_action = {
                     "attacker": building,
                     "target": nearest,
                     "weapon_item": _TurretWeapon(turret_damage, turret_radius),
                 }
                 self.pending_actions.append(turret_action)
+
+    def _is_turret(self, building: Any) -> bool:
+        """Return True if *building*'s definition declares the turret capability.
+
+        Resolves the building_type against the injected registry (keeping tests
+        hermetic) rather than the global default provider. Safe when the type is
+        unknown or the registry lacks it — returns False.
+        """
+        from world.constants import TURRET
+
+        building_type = self._get_building_type(building)
+        if not building_type:
+            return False
+        try:
+            bdef = self.registry.resolve_building(building_type)
+        except Exception:
+            return False
+        return bdef is not None and bdef.has_capability(TURRET)
+
+    @staticmethod
+    def _nearby_players(location: Any, x: int, y: int, radius: int) -> list:
+        """Return players near ``(x, y)`` within *radius* via the location.
+
+        Prefers the PlanetRoom's ``get_nearby_players(x, y, radius)`` spatial
+        query. Falls back to a ``_nearby_players`` attribute for lightweight
+        test doubles. Returns ``[]`` when neither is available.
+        """
+        if hasattr(location, "get_nearby_players"):
+            return location.get_nearby_players(x, y, radius)
+        if hasattr(location, "_nearby_players"):
+            return location._nearby_players
+        return []
 
     # ------------------------------------------------------------------ #
     #  Damage calculation
@@ -859,22 +912,6 @@ class CombatEngine(BaseSystem):
         current_hp = self._get_hp(target)
         new_hp = max(0, current_hp - damage)
         self._set_hp(target, new_hp)
-
-    @staticmethod
-    def _get_nearby_players(
-        location: Any, radius: int
-    ) -> list:
-        """Get players near a location within a radius.
-
-        This is a hook for the game to provide nearby player lookup.
-        In tests, the location object can provide a ``get_nearby_players``
-        method or a ``_nearby_players`` attribute.
-        """
-        if hasattr(location, "get_nearby_players"):
-            return location.get_nearby_players(radius)
-        if hasattr(location, "_nearby_players"):
-            return location._nearby_players
-        return []
 
 
 def get_loaded(weapon: Any) -> int:
