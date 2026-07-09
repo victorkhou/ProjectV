@@ -192,6 +192,16 @@ class BalanceConfig:
     resource_respawn_ticks: int = 30
     combat_lockout_ticks: int = 5
     tick_interval: float = 1.0
+    # --- Passive HP regeneration (players and agents only) ------------ #
+    #: HP regenerated per interval, as a PERCENT of the entity's hp_max.
+    #: Default 1.0% every ``hp_regen_interval_ticks`` ticks (i.e. 1%/2 ticks).
+    #: Applies to players and agents ONLY — buildings do NOT passively heal and
+    #: must be repaired. Set to 0 to disable passive regen entirely. The
+    #: effective rate is further scaled per-entity by ``db.regen_multiplier``
+    #: (default 1.0), the hook future heal-rate tech / powerups adjust.
+    hp_regen_percent: float = 1.0
+    #: Ticks between passive-regen applications (the "per N ticks" period).
+    hp_regen_interval_ticks: int = 2
     chunk_size: int = 10
     save_interval: int = 30
     metrics_enabled: bool = False

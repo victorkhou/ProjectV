@@ -55,6 +55,7 @@ TICK_STEP_ORDER = (
     ("combat_resolution", "Resolve queued attacks before turrets/expiry."),
     ("turret_attacks", "Turrets fire at the post-resolution world state."),
     ("combat_timer_decrement", "Expire combat lockouts."),
+    ("hp_regen", "Passive HP regen for players/agents (after combat)."),
     ("powerup_ticks", "Expire powerups after this tick's combat resolved."),
     ("tech_research", "Decrement research timers."),
     ("resource_respawns", "Decrement depleted-node respawn counters."),
@@ -371,6 +372,19 @@ class GameTickScript(DefaultScript):
                 if expires > 0 and tick_number >= expires:
                     db.combat_timer_expires = 0
         registered["combat_timer_decrement"] = decrement_combat_timers
+
+        regen_system = systems.get("regen_system")
+        if regen_system:
+            def process_hp_regen():
+                # Players and agents only — buildings do NOT passively heal.
+                entities = list(tick_data["online_players"])
+                if agent_system is not None:
+                    try:
+                        entities.extend(agent_system.get_all_agents())
+                    except Exception:
+                        pass
+                regen_system.process_tick(entities, tick_number)
+            registered["hp_regen"] = process_hp_regen
 
         if powerup_system:
             registered["powerup_ticks"] = (

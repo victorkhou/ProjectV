@@ -114,6 +114,8 @@ def initialize_game() -> dict:
     resource_system = ResourceSystem(registry, event_bus)
     powerup_system = PowerupSystem(registry, event_bus)
     tech_system = TechLabSystem(registry, event_bus)
+    from world.systems.regen_system import RegenSystem
+    regen_system = RegenSystem(registry, event_bus)
     # Inject the live-GameItem production factory so Gear produced each tick is a
     # real, equippable Evennia object (not the framework-free dict placeholder
     # the use-case defaults to for tests). The ``typeclasses`` import lives here
@@ -381,6 +383,7 @@ def initialize_game() -> dict:
         "resource_system": resource_system,
         "powerup_system": powerup_system,
         "tech_system": tech_system,
+        "regen_system": regen_system,
         "equipment_system": equipment_system,
         "agent_system": agent_system,
         "movement_system": movement_system,

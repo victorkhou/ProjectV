@@ -21,6 +21,14 @@ player_default_health: 100
 resource_respawn_ticks: 30
 combat_lockout_ticks: 5
 
+# Passive HP regeneration for players and agents (NOT buildings — buildings
+# must be repaired). hp_regen_percent% of max HP is restored every
+# hp_regen_interval_ticks ticks (default: 1% per 2 ticks). Set hp_regen_percent
+# to 0 to disable. The rate is scaled per-entity by db.regen_multiplier
+# (default 1.0) — the hook heal-rate tech and powerups tune.
+hp_regen_percent: 1.0
+hp_regen_interval_ticks: 2
+
 tick_interval: 1.0
 chunk_size: 10
 save_interval: 30

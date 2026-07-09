@@ -316,6 +316,66 @@ class TestStepOrdering(unittest.TestCase):
         self.assertIn("combat_timer_decrement", step_names)
 
 
+class TestHpRegenStep(unittest.TestCase):
+    """The hp_regen tick step feeds RegenSystem players + agents (not buildings)."""
+
+    class _FakeRegen:
+        def __init__(self):
+            self.calls = []  # (entities, tick_number)
+
+        def process_tick(self, entities, tick_number):
+            self.calls.append((list(entities), tick_number))
+
+    class _FakeAgentSystemWithRoster(FakeAgentSystem):
+        def __init__(self, agents):
+            super().__init__()
+            self._agents = agents
+
+        def get_all_agents(self):
+            return list(self._agents)
+
+    def test_regen_step_registered_and_after_combat_timer(self):
+        script = GameTickScript()
+        script._get_online_players = lambda: []
+        systems = {
+            "regen_system": self._FakeRegen(),
+            "event_bus": FakeEventBus(),
+        }
+        steps = script._build_tick_steps(systems, tick_number=1)
+        names = [n for n, _ in steps]
+        self.assertIn("hp_regen", names)
+        self.assertLess(
+            names.index("combat_timer_decrement"), names.index("hp_regen")
+        )
+
+    def test_regen_step_absent_without_system(self):
+        script = GameTickScript()
+        script._get_online_players = lambda: []
+        steps = script._build_tick_steps({"event_bus": FakeEventBus()}, tick_number=1)
+        self.assertNotIn("hp_regen", [n for n, _ in steps])
+
+    def test_regen_fed_players_and_agents(self):
+        player = object()
+        agent = object()
+        regen = self._FakeRegen()
+        script = GameTickScript()
+        script._get_online_players = lambda: [player]
+        systems = {
+            "regen_system": regen,
+            "agent_system": self._FakeAgentSystemWithRoster([agent]),
+            "event_bus": FakeEventBus(),
+        }
+        steps = dict(script._build_tick_steps(systems, tick_number=4))
+        # active_chunks populates tick_data["online_players"]; run it first.
+        steps["active_chunks"]()
+        steps["hp_regen"]()
+        self.assertEqual(len(regen.calls), 1)
+        entities, tick = regen.calls[0]
+        self.assertIn(player, entities)
+        self.assertIn(agent, entities)
+        self.assertEqual(tick, 4)
+
+
 class TestBuildingCacheInvalidation(unittest.TestCase):
     """_get_all_buildings caches the tag search and re-runs it only when a
     building is created/destroyed (the building-index generation advances)."""

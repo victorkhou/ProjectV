@@ -599,11 +599,13 @@ class SchemaValidator:
             "player_vision_radius", "building_vision_radius", "room_cache_max_size",
             "gc_interval_ticks", "gc_min_age_ticks", "map_border_tiles",
             "equipment_production_ticks", "equipment_production_owner_cap",
+            "hp_regen_interval_ticks",
         ]
         float_fields = [
             "xp_damage", "tick_interval",
             "academy_training_reduction_per_level", "extractor_level_bonus",
             "turret_level_bonus", "demolish_refund_default",
+            "hp_regen_percent",
         ]
         bool_fields = ["metrics_enabled"]
         # Resource->int maps: keys are resource names, values positive ints

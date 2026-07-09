@@ -256,9 +256,10 @@ class TestDataclassContracts:
     def test_balance_config_field_count(self):
         # 28 original balance fields + 16 migrated from world.constants
         # (training ×3, harvest/production ×6, upgrade/turret/demolish ×5,
-        #  plus vault ×2) + 1 resource_weights (D7) + 2 equipment_production (D8).
+        #  plus vault ×2) + 1 resource_weights (D7) + 2 equipment_production (D8)
+        #  + 2 HP regen (hp_regen_percent, hp_regen_interval_ticks).
         # Bump this when adding a balance tunable.
-        assert len(fields(BalanceConfig)) == 47
+        assert len(fields(BalanceConfig)) == 49
 
     def test_coordinate_space_def_field_count(self):
         assert len(fields(CoordinateSpaceDef)) == 14

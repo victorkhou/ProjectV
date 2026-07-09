@@ -594,6 +594,14 @@ class AgentSystem(AgentProgressionMixin, AgentBehaviorMixin, BaseSystem):
         """
         return self._repo.find_agents_for_owner(player)
 
+    def get_all_agents(self) -> list:
+        """Return every agent NPC in the world (all owners).
+
+        Delegates to the injected :class:`AgentRepository`. Used by the tick
+        loop to feed passive systems (e.g. HP regen) the full agent roster.
+        """
+        return self._repo.find_all_agents()
+
     def get_agent_by_id(self, player: Any, agent_id: int) -> Any | None:
         """Find a specific agent by ID.  Returns NPC or None."""
         for agent in self.get_agents(player):
