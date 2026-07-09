@@ -17,7 +17,10 @@ jobs:
     runs-on: ubuntu-latest
 
     strategy:
-      fail-fast: true
+      # fail-fast disabled: a transient runner-allocation failure ("job was not
+      # acquired by Runner of type hosted") in one matrix leg should not cancel
+      # the other legs. Let each Python/DB combo report independently.
+      fail-fast: false
       matrix:
         python-version: ["3.12", "3.13", "3.14"]
         include:
@@ -50,7 +53,10 @@ jobs:
     runs-on: ubuntu-latest
 
     strategy:
-      fail-fast: true
+      # fail-fast disabled: a transient runner-allocation failure ("job was not
+      # acquired by Runner of type hosted") in one matrix leg should not cancel
+      # the other legs. Let each Python/DB combo report independently.
+      fail-fast: false
       matrix:
         python-version: ["3.12", "3.13", "3.14"]
 
@@ -93,7 +99,10 @@ jobs:
     runs-on: ubuntu-latest
 
     strategy:
-      fail-fast: true
+      # fail-fast disabled: a transient runner-allocation failure ("job was not
+      # acquired by Runner of type hosted") in one matrix leg should not cancel
+      # the other legs. Let each Python/DB combo report independently.
+      fail-fast: false
       matrix:
         python-version: ["3.12", "3.13", "3.14"]
 
