@@ -20,8 +20,9 @@ and immediately benefits PvP as well as PvE.
 - [ ] 1. Turret auto-fire fix (Phase 1)
   - [ ] 1.1 Add `TURRET = "turret"` capability constant to `world/constants.py`
     - _Requirements: 1.1_
-  - [ ] 1.2 Add `turret` to HQ's existing capability set AND the Turret BuildingDef in `buildings.yaml`
-    - Verify: grep for the Turret entry in buildings.yaml and add `capabilities: [turret]`
+  - [ ] 1.2 Add a `capabilities: [turret]` field to the Turret BuildingDef (abbreviation `TU`) in `buildings.yaml`
+    - Add the capability ONLY to the Turret entry — do NOT add `turret` to the HQ. `process_turrets` iterates every building with the `turret` capability, so tagging the HQ would make every HQ auto-fire like a turret.
+    - Verify: grep for the `TU` / Turret entry in buildings.yaml; it currently has NO `capabilities` field, so add one with value `[turret]`
     - _Requirements: 1.1_
   - [ ] 1.3 Replace `building_type != "VV"` in `combat_engine.process_turrets` with `building_has_capability(building, TURRET)`
     - _Requirements: 1.1, 12.1_
@@ -32,6 +33,7 @@ and immediately benefits PvP as well as PvE.
   - [ ] 1.6 Change turret owner-skip from `player is owner` to `is_owner(player, owner)`
     - _Requirements: 1.4_
   - [ ] 1.7 Update existing turret tests to use the real building type (`"TU"` / capability) and assert targeting via the new spatial query
+    - Reconcile the `get_nearby_players` signature change: the existing turret test fakes define a 1-arg `get_nearby_players(self, radius)` (in `test_combat_engine.py` and `test_prop_combat_engine.py`), which conflicts with the new 3-arg `PlanetRoom.get_nearby_players(x, y, radius)`. Update these fakes to the 3-arg signature (or retire the old 1-arg `_get_nearby_players` hook and migrate its callers/fakes) so the two contracts cannot coexist with mismatched signatures.
     - _Requirements: 12.6_
   - [ ] 1.8 Add the deactivation gate (placeholder until Phase 2 lands): `if not owner_has_active_hq(owner, planet): continue`
     - Can stub `owner_has_active_hq` to always return True for now; Phase 2 wires the real check
@@ -82,7 +84,7 @@ and immediately benefits PvP as well as PvE.
     - Award `xp_kill` to non-owner attacker (same is_owner guard as player kills)
     - Publish `NPC_ELIMINATED` event
     - Delete target (`target.delete()`)
-    - Bump `agent_index` generation
+    - Bump `agent_index` generation — note: `NPC.at_object_delete` already bumps the `agent_index` generation on `delete()`, so an explicit bump here is only needed if the deletion path differs; keep it idempotent / non-duplicated
     - _Requirements: 4.2, 4.3, 4.4, 4.5_
   - [ ] 4.3 Insert the `_is_enemy_npc` check in `_finalize_hit` BEFORE the `_is_player` check, so enemy NPCs die permanently
     - _Requirements: 4.2, 4.3_
@@ -133,3 +135,53 @@ and immediately benefits PvP as well as PvE.
     - _Requirements: 9.1, 9.2, 9.3_
   - [ ] 6.6 Bump field-count contract tests for any new BalanceConfig fields
     - _Requirements: 12.6_
+
+## Task Dependency Graph
+
+```mermaid
+graph TD
+    1[1. Turret auto-fire fix]
+    2[2. Base-deactivation predicate]
+    3[3. Guard combat AI]
+    4[4. Enemy NPC type + permanent death]
+    5[5. NPC base spawner + base elimination]
+    6[6. Help, polish, and integration]
+
+    1 --> 2
+    2 --> 3
+    1 --> 3
+    2 --> 5
+    3 --> 5
+    4 --> 5
+    1 --> 6
+    2 --> 6
+    3 --> 6
+    4 --> 6
+    5 --> 6
+```
+
+```json
+{
+  "waves": [
+    { "id": 0, "tasks": ["1"] },
+    { "id": 1, "tasks": ["2", "4"] },
+    { "id": 2, "tasks": ["3"] },
+    { "id": 3, "tasks": ["5"] },
+    { "id": 4, "tasks": ["6"] }
+  ]
+}
+```
+
+**Key cross-task dependencies:**
+- **Phase 1 → Phase 2**: Task 1.8 adds the deactivation gate with a stubbed `owner_has_active_hq` (always returns True). Task 2.1 implements the real predicate and task 2.2 replaces the Phase 1 placeholder.
+- **Phase 1 → Phase 3**: Task 3.4 (guard target acquisition) reuses `PlanetRoom.get_nearby_players` introduced in task 1.4.
+- **Phase 2 → Phase 3**: Task 3.6 gates guards on the real `owner_has_active_hq` from task 2.1.
+- **Phases 2/3/4 → Phase 5**: The spawner (Phase 5) needs a functional base — deactivation semantics (Phase 2), defending guards (Phase 3), and enemy-NPC permanent death (Phase 4) must all exist before a placed base behaves correctly.
+- **Phase 4** is an independent combat-engine change (enemy NPC death) that has no upstream dependency beyond the base combat engine; it can proceed in parallel with Phases 1–3 but is required before Phase 5.
+- **All prior → Phase 6**: Help, polish, and end-to-end integration depend on every preceding phase being in place.
+
+## Notes
+
+- Each phase is independently shippable as its own PR (see the Phases → PR mapping in the Overview).
+- Every defensive system (turrets, guards, base-elimination) is ownership-generic, so each phase benefits PvP as well as PvE.
+- The full existing test suite must remain green after each phase — no phase may regress prior behavior.

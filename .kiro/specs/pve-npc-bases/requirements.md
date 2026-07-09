@@ -212,7 +212,7 @@ Every system introduced here (turret auto-fire, guard combat AI, base eliminatio
 
 1. NPC_Base buildings SHALL be discovered through the existing fog-of-war system (a player whose vision_radius reaches the base reveals those tiles).
 2. NPC_Base buildings SHALL render using the existing building symbols on the map (HQ, WL, TU, etc.) in the "enemy" color (dark red), as non-owner buildings already do.
-3. NPC guards SHALL render on the map as NPCs do today (yellow neutral entities — or a new "hostile NPC" color if desired in a follow-up).
+3. WHERE an NPC_Base guard is owned by a Sentinel_Character (a distinct owner id from the looker), THE procedural_map_renderer SHALL render that guard as an enemy agent in red (|r) via the existing owner-id-based renderer logic (a guard with an owner id that differs from the looker is classified as an enemy agent; neutral yellow applies only to NPCs with no owner), requiring no new rendering code.
 4. THE `scan` command SHALL list NPC buildings and guards on the player's tile, using existing display logic.
 
 ### Requirement 12: Backward compatibility and safety
@@ -226,4 +226,4 @@ Every system introduced here (turret auto-fire, guard combat AI, base eliminatio
 3. Player agents (`npc_type="agent"`) SHALL continue to respawn at 0 HP; only `npc_type="enemy"` is deleted.
 4. THE existing combat XP formulas (`xp_kill=100`, `xp_building_destroy=50`, `xp_death_loss=50`) SHALL remain unchanged for standard combat; only `xp_hq_destroy` is new.
 5. THE `_player_has_hq` helper already exists in BuildingSystem; the new `owner_has_active_hq` SHALL be consistent with it (same capability check, same building enumeration).
-6. THE full test suite (currently 1922 tests) SHALL remain green after each phase lands.
+6. THE full existing test suite SHALL remain green after each phase lands.
