@@ -468,6 +468,13 @@ class CmdMove(GameCommand):
         from world.constants import COMBAT_MOVE_LAG_TICKS, compute_effective_delay
         from world.combat_timer import _get_current_tick
 
+        # Admins move freely — no combat move-lag (parity with Wall passage and
+        # closed-exit bypass). Clear any stale pending lag while we're here.
+        if is_admin(caller):
+            if getattr(caller.db, "next_move_tick", 0):
+                caller.db.next_move_tick = 0
+            return True
+
         current_tick = _get_current_tick()
         combat_expires = getattr(caller.db, "combat_timer_expires", 0) or 0
 

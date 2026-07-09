@@ -714,6 +714,24 @@ class TestCmdMoveCombatMoveSpeed(unittest.TestCase):
         self.assertEqual(caller.db.coord_y, 6)
         self.assertEqual(caller.db.next_move_tick, 100 + 1)
 
+    def test_admin_has_no_combat_move_lag(self):
+        """Admins move freely in combat — no lag scheduled, moves not blocked."""
+        caller = self._make_caller(move_speed_modifier=0)
+        caller.db.combat_timer_expires = 999  # in combat
+        caller.check_permstring = lambda perm: True  # is_admin() true
+
+        with patch("world.combat_timer._get_current_tick", return_value=100):
+            _make_cmd(CmdMove, caller, " north").func()  # (5,5) -> (5,6)
+            self.assertEqual(caller.db.coord_y, 6)
+            # Second consecutive move also succeeds (no pending lag gate).
+            _make_cmd(CmdMove, caller, " north").func()
+
+        self.assertEqual(caller.db.coord_y, 7)
+        self.assertEqual(getattr(caller.db, "next_move_tick", 0) or 0, 0)
+        self.assertFalse(
+            any("repositioning" in m.lower() for m in caller._messages)
+        )
+
 
 class TestCmdHarvest(unittest.TestCase):
     def test_no_system(self):
