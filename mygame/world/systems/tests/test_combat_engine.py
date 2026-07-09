@@ -746,6 +746,27 @@ class TestAgentDefeatXP(unittest.TestCase):
         # No player kill XP for downing your own agent.
         self.assertEqual(attacker.db.combat_xp, 0)
 
+    def test_killing_own_agent_still_applies_death_loss(self):
+        """Friendly fire is 'allowed but purely costly': the attacker gains no
+        XP, yet the victim agent still takes its death loss. This asserts both
+        halves in one scenario (the reward guard doesn't skip the victim path).
+        """
+        weapon = FakeWeapon(damage=200, weapon_range=5)
+        engine, _ = self._make_engine_with_awarder()
+        attacker = FakePlayer(name="Owner", weapon=weapon, combat_xp=0,
+                              location=FakeTile(xyz=(0, 0, "earth")))
+        own_agent = FakeAgent(name="MyAgent", hp=100, combat_xp=200,
+                              location=FakeTile(xyz=(1, 0, "earth")))
+        own_agent.db.owner = attacker
+        engine.queue_attack(attacker, own_agent)
+        engine.resolve_tick()
+
+        # No reward to the attacker...
+        self.assertEqual(attacker.db.combat_xp, 0)
+        self.assertEqual(self.agent_system.awarded, [])
+        # ...but the victim's death loss is still applied (purely costly).
+        self.assertEqual(self.agent_system.death_losses, [own_agent])
+
     def test_agent_victim_gets_death_loss_applied(self):
         """A defeated agent victim has agent death loss applied via AgentSystem."""
         weapon = FakeWeapon(damage=200, weapon_range=5)
