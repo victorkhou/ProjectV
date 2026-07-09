@@ -1162,8 +1162,11 @@ class CmdTeleport(BaseCommand):
         if caller.location is not target_room:
             caller.move_to(target_room, quiet=True)
 
-        # Use move_entity for coordinate update within the PlanetRoom
-        target_room.move_entity(caller, tx, ty)
+        # Use move_entity for coordinate update within the PlanetRoom.
+        # notify=False: a teleport is not a step onto an adjacent tile — for a
+        # cross-planet jump the stored old coords are the origin planet's, so
+        # arrival/departure messaging would notify the wrong players.
+        target_room.move_entity(caller, tx, ty, notify=False)
 
         logger.info("Admin %s teleported to (%d, %d, %s)", caller.key, tx, ty, planet)
         caller.msg(f"Teleported to ({tx}, {ty}) on {planet}.")

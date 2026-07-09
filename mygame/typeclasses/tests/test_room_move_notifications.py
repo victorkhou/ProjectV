@@ -127,6 +127,29 @@ class TestTileChangeNotifications(unittest.TestCase):
             observer.messages,
         )
 
+    def test_notify_false_suppresses_notifications(self):
+        """move_entity(notify=False) relocates without any arrival/departure.
+
+        Used by teleport, where the stored old coords may belong to a different
+        planet and would otherwise notify unrelated players. Coordinates still
+        update; only the messaging is skipped.
+        """
+        room = self._room()
+        stayer = _Player("Stayer", 5, 5)      # would hear a departure
+        destination = _Player("Dest", 9, 9)   # would hear an arrival
+        mover = _Player("Mover", 5, 5)
+        room.coord_index.add(stayer, 5, 5)
+        room.coord_index.add(destination, 9, 9)
+        room.coord_index.add(mover, 5, 5)
+
+        room.move_entity(mover, 9, 9, notify=False)
+
+        # Coordinates updated...
+        self.assertEqual((mover.db.coord_x, mover.db.coord_y), (9, 9))
+        # ...but no one was notified.
+        self.assertEqual(stayer.messages, [])
+        self.assertEqual(destination.messages, [])
+
 
 if __name__ == "__main__":
     unittest.main()

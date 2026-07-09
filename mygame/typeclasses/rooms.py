@@ -139,14 +139,19 @@ class PlanetRoom(DefaultRoom):
     #  Mutation — coordinate changes
     # -------------------------------------------------------------- #
 
-    def move_entity(self, obj, new_x: int, new_y: int) -> None:
+    def move_entity(self, obj, new_x: int, new_y: int, notify: bool = True) -> None:
         """Atomically update an object's coordinates and the index.
 
         Fires ``at_coord_change(old_x, old_y, new_x, new_y)`` on the
         object if the hook exists, for game systems that need to react.
 
-        Notifies players at the old tile that the entity left and
-        players at the new tile that the entity arrived.
+        When *notify* is True (the default, for step-by-step tile movement),
+        notifies players at the old tile that the entity left and players at
+        the new tile that it arrived. Pass ``notify=False`` for non-adjacent
+        relocations where arrival/departure messaging is meaningless or wrong —
+        e.g. an admin teleport, especially a cross-planet one, where the stored
+        ``old_x/old_y`` are the ORIGIN planet's coordinates and would notify
+        unrelated players who merely share those coords on the destination room.
         """
         old_x = getattr(getattr(obj, "db", None), "coord_x", None)
         old_y = getattr(getattr(obj, "db", None), "coord_y", None)
@@ -156,8 +161,9 @@ class PlanetRoom(DefaultRoom):
         if hasattr(obj, "at_coord_change"):
             obj.at_coord_change(old_x, old_y, new_x, new_y)
 
-        # Notify players at old and new tiles
-        self._notify_tile_change(obj, old_x, old_y, new_x, new_y)
+        # Notify players at old and new tiles (skipped for teleports/relocations).
+        if notify:
+            self._notify_tile_change(obj, old_x, old_y, new_x, new_y)
 
     def _notify_tile_change(self, obj, old_x, old_y, new_x, new_y):
         """Send arrival/departure messages to players at affected tiles.

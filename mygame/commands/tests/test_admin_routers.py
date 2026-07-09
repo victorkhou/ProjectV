@@ -106,6 +106,7 @@ from mygame.commands.admin_commands import (  # noqa: E402
     CmdAdminResource,
     CmdAdminItem,
     CmdAdminPlayer,
+    CmdTeleport,
 )
 
 
@@ -825,6 +826,61 @@ class TestItemPermissions(unittest.TestCase):
         cmd = _make_cmd(CmdAdminItem, caller, " spawn frag_grenade")
         cmd.func()
         self.assertTrue(any("Permission denied" in m for m in caller._messages))
+
+
+class _RecordingRoom:
+    """PlanetRoom stand-in that records move_entity's notify kwarg."""
+
+    def __init__(self):
+        self.calls = []  # (obj, x, y, notify)
+
+    def move_entity(self, obj, new_x, new_y, notify=True):
+        self.calls.append((obj, new_x, new_y, notify))
+        obj.db.coord_x = new_x
+        obj.db.coord_y = new_y
+
+
+class _FakePlanetRegistry:
+    def resolve_planet(self, token):
+        return "earth"
+
+    def is_valid_coordinate(self, x, y, planet):
+        return True
+
+
+class TestTeleportSuppressesNotifications(unittest.TestCase):
+    """Regression: @teleport must relocate silently (notify=False).
+
+    A teleport is not a step onto an adjacent tile; for a cross-planet jump the
+    stored old coords belong to the origin planet, so arrival/departure
+    messaging would notify the wrong players. CmdTeleport must pass
+    notify=False to move_entity.
+    """
+
+    def test_teleport_calls_move_entity_with_notify_false(self):
+        room = _RecordingRoom()
+        caller = FakeCaller(
+            perm_level="Builder",
+            systems={"planet_registry": _FakePlanetRegistry()},
+        )
+        caller.db.coord_planet = "earth"
+        caller.location = room  # same-planet -> no move_to needed
+
+        # Patch the game_systems dict CmdTeleport imports for planet_rooms.
+        from server.conf import game_init
+        original = getattr(game_init, "game_systems", None)
+        game_init.game_systems = {"planet_rooms": {"earth": room}}
+        try:
+            cmd = _make_cmd(CmdTeleport, caller, " 25 25 earth")
+            cmd.func()
+        finally:
+            if original is not None:
+                game_init.game_systems = original
+
+        self.assertEqual(len(room.calls), 1)
+        _obj, tx, ty, notify = room.calls[0]
+        self.assertEqual((tx, ty), (25, 25))
+        self.assertFalse(notify)  # notifications suppressed
 
 
 if __name__ == "__main__":
