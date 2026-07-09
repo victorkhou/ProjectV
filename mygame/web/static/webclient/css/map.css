@@ -44,7 +44,11 @@ html, body { height: 100%; width: 100%; margin: 0; padding: 0; overflow: hidden;
 #map-panel {
     display: flex;
     flex-direction: column;
-    flex-shrink: 0;
+    /* Default to half the screen; the right (text) panel is flex:1 and fills
+       the other half, so text always gets ~50%. JS drag overrides flex-basis
+       (not width). The panel is NO LONGER forced to the raw map pixel width —
+       the canvas scales down to fit instead (see #map-canvas below). */
+    flex: 0 0 50%;
     background: #0a0a0a;
     min-width: 200px;
     overflow: hidden;
@@ -62,6 +66,11 @@ html, body { height: 100%; width: 100%; margin: 0; padding: 0; overflow: hidden;
     image-rendering: pixelated;
     image-rendering: crisp-edges;
     background: #0a0a0a;
+    /* Scale the rendered map down to fit the panel while preserving aspect
+       ratio; the canvas keeps its full-resolution backing buffer (set via the
+       width/height attributes in JS). */
+    max-width: 100%;
+    max-height: 100%;
 }
 #map-info {
     color: #888; font-family: 'DejaVu Sans Mono', Consolas, monospace;

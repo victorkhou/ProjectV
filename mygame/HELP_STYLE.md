@@ -23,8 +23,9 @@ project-specific structure, tone, and colour vocabulary.
 - **Never reference code, classes, or internal names** (no `EquipmentSystem`,
   `db.resources`, `ItemDef`). Use the in-game noun ("your supply bag", "carry
   weight").
-- Keep lines under ~76 characters so they don't wrap awkwardly in narrow
-  clients.
+- **Do not hard-wrap prose.** Write each paragraph as one physical line and let
+  the client wrap it to the reader's screen width (see §4). A manual mid-sentence
+  break only produces ragged output on narrow panels.
 
 ---
 
@@ -133,8 +134,16 @@ Body text. Commands in |w..|n, game nouns in |c..|n.
 
 - **First line: bold title** (`|wEquipment|n`), then a blank line, then a
   plain-language intro paragraph.
-- Use `#` headings for sections, `##` for subsections (Evennia subtopics). Never
-  skip a level.
+- **One physical line per paragraph — never hard-wrap prose.** The client wraps
+  each line to whatever width the reader's screen (or panel) allows, so a manual
+  break just produces a ragged long-line/short-line pattern on narrow screens.
+  Keep a newline *only* where the structure needs one: blank lines between
+  paragraphs, `#` headings, and one-item-per-line lists (resource rows, command
+  rows, building rows). The `# See Also` block is one line too.
+- Use `#` headings for sections. These are **cosmetic** — they render literally
+  and are *not* Evennia subtopics. A real subtopic block requires a literal
+  `# subtopics` line (only the dev `evennia` entry uses that); don't add one to a
+  player topic unless you intend the `help topic/sub` split.
 - **End every topic with a `# See Also` line** cross-linking related topics as
   `|whelp <topic>|n`, separated by ` · `. This is how players discover the rest.
 - **Reference real commands and real content only.** Building lists, resource

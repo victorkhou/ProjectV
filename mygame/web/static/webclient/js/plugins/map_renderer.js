@@ -242,10 +242,13 @@ let map_renderer_plugin = (function () {
         var bounds=data.bounds, cols=bounds.max_x-bounds.min_x+1, rows=bounds.max_y-bounds.min_y+1;
         var px=data.player.x, py=data.player.y;
 
+        // The canvas keeps a full-resolution backing buffer sized to the map,
+        // but the PANEL width is governed by CSS (50%) / the user's drag — we
+        // no longer stretch the panel to the raw map pixel width (which used to
+        // let a wide map eat ~70% of the screen and stomp any manual resize).
+        // The canvas scales down to fit via max-width/max-height in map.css.
         canvas.width = cols*TILE_SIZE;
         canvas.height = rows*TILE_SIZE;
-        var panel = document.getElementById("map-panel");
-        if (panel) panel.style.width = (cols*TILE_SIZE)+"px";
 
         ctx.fillStyle="#0a0a0a"; ctx.fillRect(0,0,canvas.width,canvas.height);
 
@@ -347,6 +350,13 @@ let map_renderer_plugin = (function () {
         // Horizontal resize: between map-panel and right-panel
         var mapPanel = document.getElementById("map-panel");
         if (mapPanel && rightPanel) {
+            // Restore a previously-dragged split; otherwise the CSS default
+            // (flex: 0 0 50%) applies. Stored as a percentage so it holds up
+            // across window-size changes.
+            var savedPct = null;
+            try { savedPct = localStorage.getItem("mapPanelPct"); } catch (err) {}
+            if (savedPct !== null) mapPanel.style.flexBasis = savedPct + "%";
+
             var hHandle = document.createElement("div");
             hHandle.className = "resize-handle-h-live";
             mapPanel.parentNode.insertBefore(hHandle, rightPanel);
@@ -365,7 +375,11 @@ let map_renderer_plugin = (function () {
                 var x = e.clientX - mainRect.left;
                 var minW = 200, maxW = mainRect.width - 200;
                 var w = Math.max(minW, Math.min(maxW, x));
-                mapPanel.style.width = w + "px";
+                // Drive flex-basis (the panel is a flex item now), and store the
+                // split as a percentage of the content width so it persists.
+                var pct = (w / mainRect.width) * 100;
+                mapPanel.style.flexBasis = pct + "%";
+                try { localStorage.setItem("mapPanelPct", pct.toFixed(2)); } catch (err) {}
             });
             document.addEventListener("mouseup", function() {
                 if (draggingH) {
