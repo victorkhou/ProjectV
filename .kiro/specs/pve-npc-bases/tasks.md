@@ -17,25 +17,25 @@ and immediately benefits PvP as well as PvE.
 
 ## Tasks
 
-- [ ] 1. Turret auto-fire fix (Phase 1)
-  - [ ] 1.1 Add `TURRET = "turret"` capability constant to `world/constants.py`
+- [x] 1. Turret auto-fire fix (Phase 1)
+  - [x] 1.1 Add `TURRET = "turret"` capability constant to `world/constants.py`
     - _Requirements: 1.1_
-  - [ ] 1.2 Add a `capabilities: [turret]` field to the Turret BuildingDef (abbreviation `TU`) in `buildings.yaml`
+  - [x] 1.2 Add a `capabilities: [turret]` field to the Turret BuildingDef (abbreviation `TU`) in `buildings.yaml`
     - Add the capability ONLY to the Turret entry — do NOT add `turret` to the HQ. `process_turrets` iterates every building with the `turret` capability, so tagging the HQ would make every HQ auto-fire like a turret.
     - Verify: grep for the `TU` / Turret entry in buildings.yaml; it currently has NO `capabilities` field, so add one with value `[turret]`
     - _Requirements: 1.1_
-  - [ ] 1.3 Replace `building_type != "VV"` in `combat_engine.process_turrets` with `building_has_capability(building, TURRET)`
+  - [x] 1.3 Replace `building_type != "VV"` in `combat_engine.process_turrets` with `building_has_capability(building, TURRET)`
     - _Requirements: 1.1, 12.1_
-  - [ ] 1.4 Add `PlanetRoom.get_nearby_players(x, y, radius)` using CoordinateIndex spatial query + Manhattan filter
+  - [x] 1.4 Add `PlanetRoom.get_nearby_players(x, y, radius)` using CoordinateIndex spatial query + Manhattan filter
     - _Requirements: 1.2, 1.3_
-  - [ ] 1.5 Update `process_turrets` to call `building.location.get_nearby_players(bx, by, turret_radius)` instead of the nonexistent `_get_nearby_players`
+  - [x] 1.5 Update `process_turrets` to call `building.location.get_nearby_players(bx, by, turret_radius)` instead of the nonexistent `_get_nearby_players`
     - _Requirements: 1.3_
-  - [ ] 1.6 Change turret owner-skip from `player is owner` to `is_owner(player, owner)`
+  - [x] 1.6 Change turret owner-skip from `player is owner` to `is_owner(player, owner)`
     - _Requirements: 1.4_
-  - [ ] 1.7 Update existing turret tests to use the real building type (`"TU"` / capability) and assert targeting via the new spatial query
+  - [x] 1.7 Update existing turret tests to use the real building type (`"TU"` / capability) and assert targeting via the new spatial query
     - Reconcile the `get_nearby_players` signature change: the existing turret test fakes define a 1-arg `get_nearby_players(self, radius)` (in `test_combat_engine.py` and `test_prop_combat_engine.py`), which conflicts with the new 3-arg `PlanetRoom.get_nearby_players(x, y, radius)`. Update these fakes to the 3-arg signature (or retire the old 1-arg `_get_nearby_players` hook and migrate its callers/fakes) so the two contracts cannot coexist with mismatched signatures.
     - _Requirements: 12.6_
-  - [ ] 1.8 Add the deactivation gate (placeholder until Phase 2 lands): `if not owner_has_active_hq(owner, planet): continue`
+  - [x] 1.8 Add the deactivation gate (placeholder until Phase 2 lands): `if not owner_has_active_hq(owner, planet): continue`
     - Can stub `owner_has_active_hq` to always return True for now; Phase 2 wires the real check
     - _Requirements: 1.5_
 
