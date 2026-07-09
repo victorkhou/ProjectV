@@ -818,7 +818,10 @@ class CmdAttack(GameCommand):
       Aliases: at, a. Damage is your equipped weapon's power plus bonuses,
       minus the target's armor. Melee weapons only reach the adjacent tile;
       ranged weapons reach further and fire from a loaded magazine (see
-      'reload'). Equip a weapon first with 'equip'. See 'help combat'.
+      'reload'). Equip a weapon first with 'equip'. Friendly fire is allowed —
+      you can attack your own buildings and agents, but it grants no XP and
+      still puts you in combat. Any attack puts you 'in combat' briefly (see
+      'score'). See 'help combat'.
     """
 
     key = "attack"

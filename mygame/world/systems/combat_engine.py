@@ -96,10 +96,10 @@ class CombatEngine(BaseSystem):
         if attacker is target:
             return False, "You cannot attack yourself."
 
-        # 2b. Prevent attacking own buildings
-        target_owner = self._get_building_owner(target)
-        if target_owner is not None and target_owner is attacker:
-            return False, "You cannot attack your own buildings."
+        # Attacking your OWN buildings is allowed (e.g. to demolish one under
+        # fire, or clear a misplaced structure). It grants no XP or benefit
+        # (see _handle_building_destruction) but still puts you in the combat
+        # state like any other attack — so it is intentionally not rejected here.
 
         # Weapon typing drives range and ammo handling. A weapon with no
         # weapon_type (legacy/synthetic weapons, e.g. turrets and older test
@@ -457,8 +457,17 @@ class CombatEngine(BaseSystem):
         xp_kill = self.registry.balance.xp_kill
         xp_death_loss = self.registry.balance.xp_death_loss
 
+        # Friendly fire grants no reward: defeating your OWN agent yields no kill
+        # XP (mirrors destroying your own building), so it can't be farmed. The
+        # victim's death loss still applies below — attacking your own units is
+        # allowed but purely costly.
+        victim_owner = getattr(getattr(victim, "db", None), "owner", None)
+        own_victim = victim_owner is not None and victim_owner is attacker
+
         # Award XP to attacker.
-        if self._is_agent(attacker):
+        if own_victim:
+            pass  # no reward for friendly fire on your own agent
+        elif self._is_agent(attacker):
             # Agent combat kill XP via the freeze-aware AgentSystem.
             self._award_agent_combat_xp(attacker)
         elif self._is_player(attacker):
@@ -505,8 +514,12 @@ class CombatEngine(BaseSystem):
         """
         xp_building_destroy = self.registry.balance.xp_building_destroy
 
-        # Award XP to attacker (if it's a player)
-        if self._is_player(attacker):
+        # Award XP to attacker (if it's a player) — but NOT for destroying your
+        # own building. Attacking your own structures is permitted, yet grants
+        # no XP or benefit, so it can't be farmed for progression.
+        owner = self._get_building_owner(building)
+        own_building = owner is not None and owner is attacker
+        if self._is_player(attacker) and not own_building:
             attacker_xp = self._get_combat_xp(attacker)
             self._set_combat_xp(attacker, attacker_xp + xp_building_destroy)
 

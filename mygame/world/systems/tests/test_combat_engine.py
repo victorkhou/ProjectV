@@ -286,14 +286,16 @@ class TestQueueAttackValidation(unittest.TestCase):
         self.assertFalse(ok)
         self.assertIn("yourself", msg)
 
-    def test_own_building_attack_rejected(self):
-        weapon = FakeWeapon()
+    def test_own_building_attack_allowed(self):
+        """Friendly fire: attacking your own building is permitted."""
+        weapon = FakeWeapon(damage=25, weapon_range=5)
         engine, _ = _make_engine()
-        player = FakePlayer(name="Player", weapon=weapon)
-        building = FakeBuilding(owner=player, location=player.location)
+        player = FakePlayer(name="Player", weapon=weapon,
+                            location=FakeTile(xyz=(0, 0, "earth")))
+        building = FakeBuilding(owner=player,
+                                location=FakeTile(xyz=(1, 0, "earth")))
         ok, msg = engine.queue_attack(player, building)
-        self.assertFalse(ok)
-        self.assertIn("own buildings", msg)
+        self.assertTrue(ok, msg)
 
     def test_out_of_range_rejected(self):
         weapon = FakeWeapon(damage=25, weapon_range=3)
@@ -557,6 +559,20 @@ class TestBuildingDestruction(unittest.TestCase):
         # xp_building_destroy = 50
         self.assertEqual(attacker.db.combat_xp, 50)
 
+    def test_destroying_own_building_awards_no_xp(self):
+        """Friendly fire on your own building grants no XP (unfarmable)."""
+        weapon = FakeWeapon(damage=500, weapon_range=5)
+        engine, _ = _make_engine()
+        attacker = FakePlayer(name="Attacker", weapon=weapon, combat_xp=0,
+                              location=FakeTile(xyz=(0, 0, "earth")))
+        building = FakeBuilding(building_type="MM", owner=attacker,
+                                hp=100, hp_max=100,
+                                location=FakeTile(xyz=(1, 0, "earth")))
+        engine.queue_attack(attacker, building)
+        engine.resolve_tick()
+        self.assertTrue(building._deleted)      # still destroyed
+        self.assertEqual(attacker.db.combat_xp, 0)  # but no reward
+
     def test_building_destroyed_event_published(self):
         weapon = FakeWeapon(damage=500, weapon_range=5)
         events = []
@@ -713,6 +729,21 @@ class TestAgentDefeatXP(unittest.TestCase):
 
         self.assertEqual(self.agent_system.awarded, [(attacker, "combat")])
         # Agent attacker XP is NOT mutated via the player xp_kill path.
+        self.assertEqual(attacker.db.combat_xp, 0)
+
+    def test_killing_own_agent_awards_no_xp(self):
+        """Friendly fire on your own agent grants the attacker no kill XP."""
+        weapon = FakeWeapon(damage=200, weapon_range=5)
+        engine, _ = self._make_engine_with_awarder()
+        attacker = FakePlayer(name="Owner", weapon=weapon, combat_xp=0,
+                              location=FakeTile(xyz=(0, 0, "earth")))
+        own_agent = FakeAgent(name="MyAgent", hp=100,
+                              location=FakeTile(xyz=(1, 0, "earth")))
+        own_agent.db.owner = attacker
+        engine.queue_attack(attacker, own_agent)
+        engine.resolve_tick()
+
+        # No player kill XP for downing your own agent.
         self.assertEqual(attacker.db.combat_xp, 0)
 
     def test_agent_victim_gets_death_loss_applied(self):

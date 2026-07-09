@@ -270,6 +270,17 @@ def _fmt_produced(d: dict) -> str:
     return f"|g[{where}] Produced {d.get('item_name', 'item')}.|n"
 
 
+def _fmt_combat_started(d: dict) -> str:
+    # Fired once when a player enters the combat state (not on every hit).
+    dur = d.get("duration")
+    tail = f" for {dur}s" if dur else ""
+    return (
+        f"|r[Combat] You are now in combat{tail}. It resets each time you deal "
+        f"or take damage, and blocks passing through your own Walls. "
+        f"'score' shows the time remaining.|n"
+    )
+
+
 def _fmt_craft_failed(d: dict) -> str:
     item = d.get("item_name", "item")
     reason = d.get("reason")
@@ -330,6 +341,7 @@ class NotificationPresenter:
         "crafted": _fmt_crafted,
         "craft_failed": _fmt_craft_failed,
         "produced": _fmt_produced,
+        "combat_started": _fmt_combat_started,
     }
 
     def __init__(self, event_bus: EventBus, player_notifier: Any = None) -> None:

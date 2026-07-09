@@ -53,7 +53,7 @@ def on_combat_action(event_bus: "EventBus", **kwargs) -> None:
     Also accepts a direct ``player=`` kwarg for convenience (e.g.
     vision-triggered timers).
     """
-    from world.event_bus import COMBAT_TIMER_STARTED
+    from world.event_bus import COMBAT_TIMER_STARTED, PLAYER_NOTIFICATION
 
     current_tick = _get_current_tick()
     new_expiry = current_tick + COMBAT_TIMER_DURATION
@@ -76,7 +76,24 @@ def on_combat_action(event_bus: "EventBus", **kwargs) -> None:
         db = getattr(player, "db", None)
         if db is None:
             continue
+
+        # Detect the OUT-OF-COMBAT -> IN-COMBAT transition so the player is told
+        # once when a fight begins, not on every hit (each hit resets the
+        # timer). "In combat" = an expiry strictly in the future.
+        prev_expiry = getattr(db, "combat_timer_expires", 0) or 0
+        was_in_combat = prev_expiry > current_tick
+
         db.combat_timer_expires = new_expiry
+
+        if not was_in_combat:
+            try:
+                event_bus.publish(
+                    PLAYER_NOTIFICATION, player=player,
+                    kind="combat_started",
+                    data={"duration": COMBAT_TIMER_DURATION},
+                )
+            except Exception:
+                logger.exception("Failed to publish combat_started notification")
 
         try:
             event_bus.publish(

@@ -347,6 +347,14 @@ HELP_ENTRY_DICTS = [
 
             |wattack <target>|n (|wa|n) — attack a player, building, or agent in range. Your equipped |cweapon|n decides your damage and reach: melee weapons hit only the tile next to you; ranged weapons reach further. Equip a weapon first (|whelp equipment|n).
 
+            # The Combat State
+
+            Dealing or taking damage puts you |rin combat|n for a short time — you'll get a |r[Combat]|n notice when it starts, and |wscore|n shows the seconds remaining. Each new hit resets the timer. While in combat you can't slip through your own |cWalls|n, and moving is slower (better |cmove speed|n gear eases this). It clears on its own once the timer runs out.
+
+            # Friendly Fire
+
+            You |ccan|n attack your own things — your buildings and your own agents — as well as other players. There's no XP or benefit for hitting your own (you can't farm yourself), and it still puts you in the combat state, but it's allowed (handy to clear a misplaced building). Take care with area attacks: a |cgrenade|n hits everything in the blast, friend or foe.
+
             # Ammo & Reloading
 
             Ranged weapons feed their ammo one of two ways. Most (like the |cassault rifle|n) fire straight from your |cresource stockpile|n — each shot spends a little Iron, Energy, or similar, so there's nothing to reload; just keep the resource stocked. Magazine weapons (like the |cservice rifle|n) fire from a loaded |cmagazine|n and run dry: |wreload|n refills the magazine from the matching |cammo|n in your supply bag (make it at an |cArmory|n or |cLab|n). |wequipment|n shows a magazine weapon's loaded count.

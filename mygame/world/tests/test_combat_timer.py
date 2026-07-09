@@ -12,7 +12,12 @@ from world.combat_timer import (
     on_combat_action,
     subscribe_combat_timer,
 )
-from world.event_bus import COMBAT_ACTION, COMBAT_TIMER_STARTED, EventBus
+from world.event_bus import (
+    COMBAT_ACTION,
+    COMBAT_TIMER_STARTED,
+    PLAYER_NOTIFICATION,
+    EventBus,
+)
 
 
 class _FakeDB:
@@ -72,6 +77,35 @@ class TestOnCombatAction(unittest.TestCase):
         self.assertEqual(len(received), 1)
         self.assertIs(received[0]["player"], self.player)
         self.assertEqual(received[0]["expires"], 10 + COMBAT_TIMER_DURATION)
+
+    @patch("world.combat_timer._get_current_tick", return_value=10)
+    def test_notifies_player_on_entering_combat(self, _mock_tick):
+        """A player NOT already in combat gets a 'combat_started' notification."""
+        notes = []
+        self.event_bus.subscribe(
+            PLAYER_NOTIFICATION, lambda **kw: notes.append(kw)
+        )
+        on_combat_action(self.event_bus, player=self.player)
+        started = [n for n in notes if n.get("kind") == "combat_started"]
+        self.assertEqual(len(started), 1)
+        self.assertIs(started[0]["player"], self.player)
+
+    @patch("world.combat_timer._get_current_tick", return_value=100)
+    def test_no_reentry_notification_while_already_in_combat(self, _mock_tick):
+        """A hit while already in combat resets the timer but does NOT re-notify."""
+        # Timer already active (expires in the future relative to tick 100).
+        self.player.db.combat_timer_expires = 100 + COMBAT_TIMER_DURATION
+        notes = []
+        self.event_bus.subscribe(
+            PLAYER_NOTIFICATION, lambda **kw: notes.append(kw)
+        )
+        on_combat_action(self.event_bus, player=self.player)
+        started = [n for n in notes if n.get("kind") == "combat_started"]
+        self.assertEqual(started, [])
+        # Timer still refreshed.
+        self.assertEqual(
+            self.player.db.combat_timer_expires, 100 + COMBAT_TIMER_DURATION
+        )
 
 
 class TestSubscribeCombatTimer(unittest.TestCase):
