@@ -1507,6 +1507,50 @@ class TestCmdInventory(unittest.TestCase):
         output = "\n".join(caller._messages)
         self.assertNotIn("Carry:", output)
 
+    def test_shows_carried_unequipped_gear(self):
+        """Loose Gear in contents is listed (the spawned-rifle bug)."""
+        caller = FakeCaller()
+        # A GameItem-like: has item_key, no db.count (not a supply drop).
+        rifle = types.SimpleNamespace(
+            key="Assault Rifle",
+            db=types.SimpleNamespace(item_key="assault_rifle", count=None),
+        )
+        caller.contents = [rifle]
+        cmd = _make_cmd(CmdInventory, caller)
+        cmd.func()
+        output = "\n".join(caller._messages)
+        self.assertIn("Carried gear:", output)
+        self.assertIn("assault_rifle", output)
+
+    def test_carried_gear_excludes_equipped_and_supply_drops(self):
+        """Equipped items and counted supply drops are NOT in Carried gear."""
+        caller = FakeCaller()
+        equipped_rifle = types.SimpleNamespace(
+            key="Equipped Rifle",
+            slot="weapon",
+            db=types.SimpleNamespace(item_key="equipped_rifle", count=None),
+        )
+        supply_drop = types.SimpleNamespace(
+            key="Ammo Drop",
+            db=types.SimpleNamespace(item_key="rifle_rounds", count=30),
+        )
+        loose = types.SimpleNamespace(
+            key="Loose Helmet",
+            db=types.SimpleNamespace(item_key="combat_helmet", count=None),
+        )
+        caller.contents = [equipped_rifle, supply_drop, loose]
+        # Equip the rifle so it's excluded from the loose list.
+        caller.equipment.equip(equipped_rifle)
+        cmd = _make_cmd(CmdInventory, caller)
+        cmd.func()
+        output = "\n".join(caller._messages)
+        self.assertIn("combat_helmet", output)          # loose gear listed
+        self.assertNotIn("equipped_rifle", output)       # equipped excluded
+        # The supply drop's key is a supply, not loose gear — not in Carried gear.
+        carried_section = output.split("Carried gear:")[-1]
+        self.assertNotIn("rifle_rounds", carried_section.split("Supplies:")[0]
+                         if "Supplies:" in carried_section else carried_section)
+
 class TestCmdMessage(unittest.TestCase):
     def test_no_args(self):
         caller = FakeCaller()

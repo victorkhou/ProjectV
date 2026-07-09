@@ -1465,6 +1465,57 @@ def _append_supplies_section(caller, lines):
     return True
 
 
+def _append_carried_gear_section(caller, lines):
+    """Append a ``Carried gear:`` section (loose, unequipped Gear) to *lines*.
+
+    Lists equippable :class:`GameItem` objects the caller is holding but has NOT
+    equipped — e.g. a weapon just produced, spawned, or picked up. Without this
+    such items are invisible to ``inventory`` even though ``equip <item>`` finds
+    them (they live in ``caller.contents``), which reads as "my item vanished".
+
+    A carried Gear item is a GameItem carrying an ``item_key`` that is (a) not a
+    counted supply drop (those carry ``db.count`` and belong to the Supplies
+    section) and (b) not currently equipped in a slot. No section is added when
+    nothing loose is carried. Returns True when a section was appended.
+    """
+    contents = getattr(caller, "contents", None)
+    if not contents:
+        return False
+
+    # Slots hold the currently-equipped items; exclude them so we only list loose gear.
+    equipped_items = set()
+    handler = getattr(caller, "equipment", None)
+    if handler is not None and hasattr(handler, "get_all_equipped"):
+        try:
+            equipped_items = {id(it) for it in handler.get_all_equipped().values()}
+        except Exception:
+            equipped_items = set()
+
+    registry = _get_system(caller, "registry")
+    loose = []
+    for obj in contents:
+        db = getattr(obj, "db", None)
+        if db is None:
+            continue
+        item_key = getattr(db, "item_key", None)
+        if not item_key:
+            continue
+        # Skip counted supply drops (shown under Supplies) and equipped items.
+        if getattr(db, "count", None) is not None:
+            continue
+        if id(obj) in equipped_items:
+            continue
+        loose.append(_item_display_name(registry, item_key))
+
+    if not loose:
+        return False
+
+    lines.append("  Carried gear:")
+    for name in sorted(loose):
+        lines.append(f"    {name}")
+    return True
+
+
 def _append_carry_line(caller, lines):
     """Append a ``Carry: <carried>/<limit>`` line to *lines*.
 
@@ -1925,10 +1976,10 @@ class CmdInventory(GameCommand):
       inventory
 
     Notes:
-      Aliases: inv, i. Lists your resources, equipped gear by slot, your
-      supplies (ammo, medkits, grenades), and your current carry weight
-      against your limit. See 'help storage' for how carry weight works and
-      'equipment' for a full gear paperdoll.
+      Aliases: inv, i. Lists your resources, equipped gear by slot, any
+      carried-but-unequipped gear, your supplies (ammo, medkits, grenades),
+      and your current carry weight against your limit. See 'help storage' for
+      how carry weight works and 'equipment' for a full gear paperdoll.
     """
 
     key = "inventory"
@@ -1962,7 +2013,9 @@ class CmdInventory(GameCommand):
                     item_name = getattr(item, "key", str(item))
                     lines.append(f"    [{slot}] {item_name}")
 
-        # Supplies (Supply_Bag counts) + carried weight vs carry limit.
+        # Loose (carried-but-unequipped) Gear, then Supply_Bag counts, then
+        # carried weight vs carry limit.
+        _append_carried_gear_section(caller, lines)
         _append_supplies_section(caller, lines)
         _append_carry_line(caller, lines)
 

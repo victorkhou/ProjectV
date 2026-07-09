@@ -37,6 +37,16 @@ SERVERNAME = "mygame"
 # Use CombatCharacter as the default character typeclass
 BASE_CHARACTER_TYPECLASS = "typeclasses.characters.CombatCharacter"
 
+# Disable the EvMore help pager. Long help entries otherwise show a paginated
+# footer — "(Page [1/2] next | previous | top | end | quit)" — whose control
+# keys (n/p/q/…) are aliases on a single pager command that can end up live from
+# two cmdset sources at once, so typing 'q' triggers a confusing multi-match
+# ("q-1 / q-2"). Our clients scroll inline (the webclient's output panel, and
+# any standard terminal), and help text is now authored to wrap to the client
+# width, so paging adds nothing here. With this off, help prints in full and the
+# client handles scrolling.
+HELP_MORE_ENABLED = False
+
 # Add 'chat' as a server-level alias for the Public channel
 DEFAULT_CHANNELS = [
     {
