@@ -1448,6 +1448,36 @@ class TestCmdEnterLeave(unittest.TestCase):
         self.assertFalse(caller.db.inside_building)
         self.assertTrue(any("sealed" in m.lower() for m in caller._messages))
 
+    def test_enter_blocked_in_combat(self):
+        """You can't manually enter a building while in combat."""
+        building = self._building()
+        caller = self._caller_on_building(building)
+        caller.db.combat_timer_expires = 999  # in combat
+        with patch("world.combat_timer._get_current_tick", return_value=100):
+            _make_cmd(CmdEnter, caller, "").func()
+        self.assertFalse(caller.db.inside_building)
+        self.assertTrue(any("in combat" in m.lower() for m in caller._messages))
+
+    def test_leave_blocked_in_combat(self):
+        """You can't manually leave a building while in combat."""
+        building = self._building()
+        caller = self._caller_on_building(building)
+        caller.db.inside_building = True
+        caller.db.combat_timer_expires = 999  # in combat
+        with patch("world.combat_timer._get_current_tick", return_value=100):
+            _make_cmd(CmdLeave, caller, "").func()
+        self.assertTrue(caller.db.inside_building)  # still inside (blocked)
+        self.assertTrue(any("in combat" in m.lower() for m in caller._messages))
+
+    def test_enter_allowed_when_combat_expired(self):
+        """An expired combat timer no longer blocks entry."""
+        building = self._building()
+        caller = self._caller_on_building(building)
+        caller.db.combat_timer_expires = 50  # expiry in the past
+        with patch("world.combat_timer._get_current_tick", return_value=100):
+            _make_cmd(CmdEnter, caller, "").func()
+        self.assertTrue(caller.db.inside_building)
+
 
 class _StorageCommandBase(unittest.TestCase):
     """Shared setup for deposit/withdraw command tests (Req 12.8, 16.3).

@@ -350,7 +350,7 @@ HELP_ENTRY_DICTS = [
 
             # The Combat State
 
-            Dealing or taking damage puts you |rin combat|n for a short time — you'll get a |r[Combat]|n notice when it starts, and |wscore|n shows the seconds remaining. Each new hit resets the timer. While in combat you can't slip through your own |cWalls|n, and moving is slower (better |cmove speed|n gear eases this). It clears on its own once the timer runs out.
+            Dealing or taking damage puts you |rin combat|n for a short time — you'll get a |r[Combat]|n notice when it starts, and |wscore|n shows the seconds remaining. Each new hit resets the timer. While in combat you can't slip through your own |cWalls|n, you can't manually |wenter|n or |wleave|n a building, and moving is slower (better |cmove speed|n gear eases this). It clears on its own once the timer runs out.
 
             # Friendly Fire
 

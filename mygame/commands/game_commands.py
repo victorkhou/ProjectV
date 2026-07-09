@@ -236,6 +236,23 @@ class GameCommand(BaseCommand):
         b = getattr(planet_room, "building", None)
         return [b] if b is not None else []
 
+    def _in_combat(self, caller) -> bool:
+        """Return True if *caller* is currently in the combat state.
+
+        "In combat" means ``combat_timer_expires`` is strictly in the future
+        (the same definition combat_timer.py uses). Falls back to treating any
+        positive expiry as in-combat if the tick count can't be read, so a
+        transient lookup failure errs on the side of blocking.
+        """
+        expiry = getattr(caller.db, "combat_timer_expires", 0) or 0
+        if expiry <= 0:
+            return False
+        try:
+            from world.combat_timer import _get_current_tick
+            return expiry > _get_current_tick()
+        except Exception:
+            return True
+
     def find_storage_building(self, x=None, y=None):
         """Return the first co-located ``storage``-capability building, or None.
 
@@ -2780,7 +2797,8 @@ class CmdLeave(GameCommand):
 
     Notes:
       Aliases: out, outside, exit building. You stay on the same tile — step
-      back in with 'enter'. (Moving off the tile also leaves.)
+      back in with 'enter'. (Moving off the tile also leaves.) You can't
+      manually leave while in combat.
     """
 
     key = "leave"
@@ -2791,6 +2809,10 @@ class CmdLeave(GameCommand):
         caller = self.caller
         if not getattr(caller.db, "inside_building", False):
             caller.msg("You are not inside a building.")
+            return
+        # No slipping in or out of a building's door mid-fight.
+        if self._in_combat(caller):
+            caller.msg("You can't leave a building while in combat.")
             return
         caller.db.inside_building = False
         caller.msg("You step outside.")
@@ -2833,7 +2855,8 @@ class CmdEnter(GameCommand):
     The mirror of ``leave``: step into the building you are standing on
     (e.g. after using ``leave`` while still on its tile). Walking onto a
     building's tile still auto-enters; this re-enters without moving. Anyone
-    can enter — the only barrier is a sealed building (all exits closed).
+    can enter — the barriers are a sealed building (all exits closed) and
+    being in combat.
     """
 
     key = "enter"
@@ -2850,6 +2873,11 @@ class CmdEnter(GameCommand):
         building = self._building_at_caller(caller)
         if building is None:
             caller.msg("There is no building here to enter.")
+            return
+
+        # No slipping in or out of a building's door mid-fight.
+        if self._in_combat(caller):
+            caller.msg("You can't enter a building while in combat.")
             return
 
         if getattr(building, "is_offline", False):
