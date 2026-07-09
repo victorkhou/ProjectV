@@ -1350,6 +1350,29 @@ class TestProductionRouting(unittest.TestCase):
         self.assertEqual(created, [])
         self.assertEqual(owner.get_resource("Wood"), 1000)  # refunded
 
+    def test_production_at_max_stack_refunds_and_produces_nothing(self):
+        """A full Supply_Bag entry must not silently burn the owner's resources.
+
+        Regression: ``add_supply`` adds 0 once the entry is at ``max_stack``.
+        ``_route_produced_item`` must report that as a routing failure so the
+        deducted ``craft_cost`` is refunded — otherwise the owner pays for an
+        item that never lands in the bag.
+        """
+        system, created = self._make({"MB": ["medkit"]})
+        player = self._rich_player()
+        # medkit max_stack is 10 (see ITEMS). Fill the bag to the cap.
+        player.equipment.add_supply("medkit", 10, max_stack=10)
+        before = player.get_resource("Wood")  # medkit craft_cost is Wood: 5
+
+        for _ in range(5):
+            system.process_production([building := FakeProductionBuilding(
+                "MB", owner=player)])
+
+        # Still capped at 10, and not a single Wood was consumed.
+        self.assertEqual(player.equipment.get_supply("medkit"), 10)
+        self.assertEqual(player.get_resource("Wood"), before)
+        self.assertEqual(created, [])
+
     def test_production_requires_assigned_agent(self):
         """An equipment building with no assigned agent produces nothing."""
         system, created = self._make({"MB": ["medkit"]})
@@ -1495,6 +1518,26 @@ class TestCraft(unittest.TestCase):
         ar = FakeProductionBuilding("AR", owner=player)
         self.assertFalse(system.craft(player, "nonexistent", ar))
         self.assertEqual(sink.last()[1].get("reason"), "unknown_item")
+
+    def test_craft_supply_at_max_stack_refunds(self):
+        """Crafting a supply into a full bag refunds and reports bag_full.
+
+        Regression: without honoring add_supply's return, the resources are
+        deducted, nothing is added, and a false 'crafted' fires.
+        """
+        system, _created, sink = self._make()
+        player = self._player(Iron=100, Stone=100)
+        # rifle_rounds max_stack is 200 (see ITEMS); craft_cost is Iron: 2.
+        player.equipment.add_supply("rifle_rounds", 200, max_stack=200)
+        ar = FakeProductionBuilding("AR", owner=player)
+
+        self.assertFalse(system.craft(player, "rifle_rounds", ar))
+        # Not deducted (refunded), bag unchanged, and told the bag is full.
+        self.assertEqual(player.get_resource("Iron"), 100)
+        self.assertEqual(player.equipment.get_supply("rifle_rounds"), 200)
+        kind, data = sink.last()
+        self.assertEqual(kind, "craft_failed")
+        self.assertEqual(data.get("reason"), "bag_full")
 
 
 if __name__ == "__main__":

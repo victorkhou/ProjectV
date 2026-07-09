@@ -298,6 +298,9 @@ def _fmt_craft_failed(d: dict) -> str:
         ),
         "not_owner": "You can only craft in your own building.",
         "building_offline": "This building is offline — repair it first.",
+        "bag_full": (
+            f"Your supply bag is full of {item} — use or drop some first."
+        ),
     }
     return f"|r[Craft] {messages.get(reason, f'Cannot craft {item}.')}|n"
 

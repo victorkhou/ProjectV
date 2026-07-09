@@ -354,8 +354,11 @@ class EquipmentSystem(CarryWeightMixin, StorageMixin, BaseSystem):
 
         Returns:
             ``True`` if the item was routed into a store, ``False`` otherwise
-            (e.g. a Supply produced for an owner with no equipment handler, or
-            an unrecognized category).
+            (e.g. a Supply produced for an owner with no equipment handler, a
+            Supply_Bag entry already at ``max_stack``, or an unrecognized
+            category). Callers deduct the cost before routing and refund on a
+            ``False`` return, so a full bag must report failure — otherwise the
+            resources are spent for an item that was never added.
         """
         category = getattr(item_def, "category", None)
 
@@ -372,8 +375,12 @@ class EquipmentSystem(CarryWeightMixin, StorageMixin, BaseSystem):
                 max_stack = int(getattr(item_def, "max_stack", 99) or 99)
             except (TypeError, ValueError):
                 max_stack = 99
-            handler.add_supply(item_def.key, 1, max_stack=max_stack)
-            return True
+            # add_supply returns the number actually added (0 when the entry is
+            # already at max_stack). Treat "added nothing" as a routing failure
+            # so the caller refunds — reporting success here would burn the
+            # cost for an item that never landed in the bag.
+            added = handler.add_supply(item_def.key, 1, max_stack=max_stack)
+            return bool(added)
 
         # Gear -> a unique Game_Item slot object via the factory.
         if category in GEAR_CATEGORIES:
@@ -937,11 +944,13 @@ class EquipmentSystem(CarryWeightMixin, StorageMixin, BaseSystem):
             return False
 
         if not self._route_produced_item(item_def, player):
-            # Routing failed (e.g. no equipment handler) — refund so the spend
-            # isn't lost.
+            # Routing failed — refund so the spend isn't lost. For a real
+            # player (who always has an equipment handler) the reachable cause
+            # is a Supply_Bag already at max_stack, so report that rather than a
+            # misleading "wrong building".
             for res, amt in craft_cost.items():
                 player.add_resource(res, amt)
-            self.notify(player, "craft_failed", reason="wrong_building",
+            self.notify(player, "craft_failed", reason="bag_full",
                         item_name=item_name)
             return False
 

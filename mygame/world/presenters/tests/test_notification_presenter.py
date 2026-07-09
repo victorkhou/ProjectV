@@ -394,3 +394,15 @@ class TestPresenterOwnershipBehavioral:
         msg = player.messages[0]
         assert "no magazine" in msg.lower()
         assert "No ammo-using weapon" not in msg
+
+    def test_craft_failed_bag_full_reason_renders_distinct_message(self):
+        """A craft rejected because the supply bag is at max_stack reads as
+        'supply bag is full', not the misleading 'wrong building'."""
+        bus = EventBus()
+        player = _MsgPlayer()
+        NotificationPresenter(bus, player_notifier=EvenniaPlayerNotifier())
+        bus.publish(PLAYER_NOTIFICATION, player=player, kind="craft_failed",
+                    data={"reason": "bag_full", "item_name": "Rifle Rounds"})
+        msg = player.messages[0]
+        assert "full" in msg.lower()
+        assert "Rifle Rounds" in msg
