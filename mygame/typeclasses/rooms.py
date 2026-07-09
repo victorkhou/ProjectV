@@ -160,11 +160,13 @@ class PlanetRoom(DefaultRoom):
         self._notify_tile_change(obj, old_x, old_y, new_x, new_y)
 
     def _notify_tile_change(self, obj, old_x, old_y, new_x, new_y):
-        """Send arrival/departure messages to players at affected tiles."""
-        # Don't notify about player movement (they see the map update)
-        if hasattr(obj, "has_account") and obj.has_account:
-            return
+        """Send arrival/departure messages to players at affected tiles.
 
+        Applies to agents AND players: when anyone (or anything named) leaves
+        the tile you're standing on or arrives on it, you're told. The mover
+        itself is never notified — a moving player already gets their own "You
+        move..." line and map update, so we exclude ``obj`` from the recipients.
+        """
         name = self._entity_display_name(obj)
         if not name:
             return
@@ -187,13 +189,17 @@ class PlanetRoom(DefaultRoom):
             arrive_from = " from the north"
             depart_toward = " to the south"
 
-        # Notify players at the old tile
+        # Notify OTHER players at the old tile (exclude the mover itself).
         if old_x is not None and old_y is not None:
             for player in self.get_players_at(int(old_x), int(old_y)):
+                if player is obj:
+                    continue
                 player.msg(f"|x{name} left{depart_toward}.|n")
 
-        # Notify players at the new tile
+        # Notify OTHER players at the new tile (exclude the mover itself).
         for player in self.get_players_at(int(new_x), int(new_y)):
+            if player is obj:
+                continue
             player.msg(f"|g{name} arrived{arrive_from}.|n")
 
     @staticmethod
