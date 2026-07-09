@@ -113,12 +113,12 @@ class TechLabSystem(BaseSystem):
         # 5. Resource check and deduction
         if tdef.resource_cost:
             if not player.has_resources(tdef.resource_cost):
-                missing = []
-                for r, needed in tdef.resource_cost.items():
-                    current = player.get_resource(r)
-                    if current < needed:
-                        missing.append(f"need {needed} {r}, have {current}")
-                return False, "Insufficient resources: " + "; ".join(missing) + "."
+                # Use the shared have/need breakdown so this reads identically to
+                # building construction/upgrade and agent training.
+                from world.utils import format_insufficient_resources
+                return False, format_insufficient_resources(
+                    player, tdef.resource_cost
+                )
             player.deduct_resources(tdef.resource_cost)
 
         # Add to active research

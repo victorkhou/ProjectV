@@ -296,7 +296,10 @@ class TestTechLabResourceDeduction(unittest.TestCase):
 
         ok, msg = system.start_research(player, "reinforced_walls")
         self.assertFalse(ok)
-        self.assertIn("Insufficient resources", msg)
+        # Uses the shared have/need breakdown (identical to build/upgrade/train).
+        self.assertIn("Insufficient Resources:", msg)
+        self.assertIn("Stone: 50/200", msg)
+        self.assertIn("Iron: 10/100", msg)
 
     def test_resources_not_deducted_on_rejection(self):
         """Resources are not deducted when research is rejected."""
