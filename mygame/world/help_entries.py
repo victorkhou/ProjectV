@@ -121,6 +121,7 @@ HELP_ENTRY_DICTS = [
             # Combat & Equipment
 
             |wattack <target>|n (|wa|n) — attack a player, building, or agent
+            |wcraft <item>|n — make gear/ammo at an Armory, Lab, or Medbay
             |wequip <item>|n / |wunequip <slot>|n — manage worn gear (or |wall|n)
             |wequipment|n (|weq|n) — your full loadout (paperdoll)
             |wuse <item>|n — use a consumable (medkit, stim)
@@ -263,21 +264,25 @@ HELP_ENTRY_DICTS = [
             |wHQ|n |cHeadquarters|n — home base, respawn point, holds storage. Required before most other buildings. (L1)
             |wEX|n |cExtractor|n — boosts harvesting; must sit on resource terrain. Harvester agents work here. (L1)
             |wAC|n |cAcademy|n — train agents here (|wagent train|n inside). (L1)
+            |wAR|n |cArmory|n — crafts weapons, armor, and ammo. (L1)
             |wWL|n |cWall|n — a barrier that blocks passage. (L11)
             |wBK|n |cBarracks|n — army capacity. (L11)
-            |wAR|n |cArmory|n — produces weapons, armor, and ammo; needs an Engineer. (L21)
-            |wLB|n |cLab|n — research technologies; needs an Engineer. (L26)
+            |wLB|n |cLab|n — research and craft advanced gear; needs an Engineer to run. (L26)
             |wRD|n |cRadar|n — extends vision; needs a Scout. (L31)
             |wTU|n |cTurret|n — auto-attacks enemies; needs a Guard. (L31)
             |wVT|n |cVault|n — high-capacity resource storage, protected while you're offline; harvesters prefer to deliver here. (L36)
             |wRL|n |cRelay|n — boosts nearby Turret damage. (L41)
-            |wMB|n |cMedbay|n — produces medkits and stims; reduces respawn time. (L46)
+            |wMB|n |cMedbay|n — crafts medkits and stims; reduces respawn time. (L46)
 
             Higher-level buildings unlock as you climb ranks. Check |wscore|n for your current level, and |wbuild|n to see what's available now.
 
+            # Per-Building Guides
+
+            Every building has its own help topic with costs, level, dependencies, and examples: |whelp hq|n · |whelp extractor|n · |whelp academy|n · |whelp armory|n · |whelp wall|n · |whelp barracks|n · |whelp lab|n · |whelp radar|n · |whelp turret|n · |whelp vault|n · |whelp relay|n · |whelp medbay|n.
+
             # See Also
 
-            |whelp resources|n · |whelp agents|n · |whelp storage|n · |whelp equipment|n
+            |whelp resources|n · |whelp agents|n · |whelp storage|n · |whelp equipment|n · |whelp craft|n
         """,
     },
     # ----------------------------------------------------------------- #
@@ -294,7 +299,7 @@ HELP_ENTRY_DICTS = [
 
             # Getting Gear
 
-            Build an |cArmory|n (|wbuild AR|n) to produce weapons, armor, and ammo, a |cLab|n (|wbuild LB|n) for advanced gear, or a |cMedbay|n (|wbuild MB|n) for medkits and stims. Produced items land in your inventory over time. Pick up dropped items with |wget|n.
+            Build an |cArmory|n (|wbuild AR|n) for weapons, armor, and ammo, a |cLab|n (|wbuild LB|n) for advanced gear, or a |cMedbay|n (|wbuild MB|n) for medkits and stims. Two ways to get items from them: stand in the building and |wcraft <item>|n to make one instantly for resources, or assign an |cEngineer|n agent and it crafts the same catalog passively while you're away (see |whelp craft|n). Made gear lands in your inventory; pick up dropped items with |wget|n.
 
             # Slots
 
@@ -399,6 +404,364 @@ HELP_ENTRY_DICTS = [
             # See Also
 
             |whelp resources|n · |whelp buildings|n · |whelp equipment|n
+        """,
+    },
+    # ----------------------------------------------------------------- #
+    #  Crafting
+    # ----------------------------------------------------------------- #
+    {
+        "key": "craft",
+        "aliases": ["crafting", "make", "craft guide", "production"],
+        "category": "Game",
+        "text": """
+            |wCrafting|n
+
+            You make your own gear, ammo, and supplies at production buildings — by hand for what you need now, or by an assigned agent that produces it for you over time.
+
+            # Where to Craft
+
+            Each production building makes a different set of items. Stand on your own building (or |wenter|n it) to craft there:
+
+            |cArmory|n (|wbuild AR|n) — modern weapons, armor, ammo
+            |cLab|n (|wbuild LB|n) — futuristic gear and grenades (also runs research)
+            |cMedbay|n (|wbuild MB|n) — medkits and combat stims
+
+            # Crafting by Hand
+
+            Stand in the building and type |wcraft|n with no argument to list what it makes and each item's resource cost. Then |wcraft <item>|n makes one instantly, spending the resources from your stockpile.
+
+            # Letting Agents Craft
+
+            Assign an |cEngineer|n to an Armory or Lab (|wagent assign <id>|n while inside) and it crafts items on its own over time, paying the same resource cost from your stockpile — the hands-off way to stock up while you do other things. That asynchronous work is the whole point of agents.
+
+            # What You Get
+
+            Gear (weapons, armor, accessories) goes into your inventory — |wequip|n it or see it with |winventory|n. Supplies (ammo, medkits, stims, grenades) go into your supply bag — |wuse|n or |wreload|n them. Powerful items may need a minimum |crank|n.
+
+            # Examples
+
+            |wcraft|n — list this building's items and costs
+            |wcraft assault_rifle|n — make one Assault Rifle
+            |wcraft medkit|n — make one Medkit (at a Medbay)
+
+            # See Also
+
+            |whelp equipment|n · |whelp armory|n · |whelp lab|n · |whelp medbay|n · |whelp agents|n
+        """,
+    },
+    # ================================================================= #
+    #  Per-building guides (one topic per building type)
+    # ================================================================= #
+    {
+        "key": "headquarters",
+        "aliases": ["hq", "hq building"],
+        "category": "Buildings",
+        "text": """
+            |wHeadquarters (HQ)|n
+
+            Your home base and the anchor of everything you build. It's your respawn point, holds your first block of storage, and must exist before you can raise most other buildings.
+
+            # Build Requirements
+
+            Cost: |c10 Wood|n, |c10 Stone|n, |c10 Iron|n. Level: |c1|n. Dependencies: none — the HQ is the one building you can raise with no prerequisites. One HQ per planet.
+
+            # What It Does
+
+            Acts as your spawn/respawn point, provides |c200|n base storage (|wdeposit|n / |wwithdraw|n here), and unlocks the rest of your base. Losing a fight sends you back here.
+
+            # Using It
+
+            Stand on a good central tile and |wbuild HQ|n. Then |wdeposit iron all|n to bank surplus, or |wwithdraw wood 50|n to pull some back.
+
+            # See Also
+
+            |whelp buildings|n · |whelp storage|n · |whelp extractor|n
+        """,
+    },
+    {
+        "key": "extractor",
+        "aliases": ["ex", "extractor building"],
+        "category": "Buildings",
+        "text": """
+            |wExtractor (EX)|n
+
+            A resource pump. Built on a resource tile, it multiplies what you harvest there — and a |cHarvester|n agent can work it for you automatically.
+
+            # Build Requirements
+
+            Cost: |c15 Wood|n, |c10 Stone|n. Level: |c1|n. Dependencies: an |cHQ|n, and it must sit on |cresource terrain|n (Forest, Rock, Mountain, etc. — |wmap|n shows which tiles yield what).
+
+            # What It Does
+
+            Boosts the harvest yield of the tile it stands on. Assign a |cHarvester|n agent and it produces passively while you do other things; a |cdelivery|n-enabled harvester even hauls the output to your Vault/HQ.
+
+            # Using It
+
+            Walk onto a resource tile and |wbuild EX|n. Harvest by hand with |wharvest|n, or |wagent assign <id>|n inside it to automate. See |whelp resources|n and |whelp agents|n.
+
+            # See Also
+
+            |whelp resources|n · |whelp agents|n · |whelp buildings|n
+        """,
+    },
+    {
+        "key": "academy",
+        "aliases": ["ac", "academy building"],
+        "category": "Buildings",
+        "text": """
+            |wAcademy (AC)|n
+
+            Where you train |cagents|n — the NPC workers and soldiers that scale your base beyond what you can do by hand.
+
+            # Build Requirements
+
+            Cost: |c20 Wood|n, |c15 Stone|n, |c10 Iron|n. Level: |c1|n. Dependencies: an |cHQ|n.
+
+            # What It Does
+
+            Trains new agents. Each agent costs more than the last and takes time to train; your rank caps how many you can command at once.
+
+            # Using It
+
+            |wbuild AC|n, step inside (|wenter|n), then |wagent train|n. Watch progress with |wagent list|n, and once trained, |wagent assign <id>|n to put them to work. See |whelp agents|n.
+
+            # See Also
+
+            |whelp agents|n · |whelp buildings|n
+        """,
+    },
+    {
+        "key": "armory",
+        "aliases": ["ar", "armory building"],
+        "category": "Buildings",
+        "text": """
+            |wArmory (AR)|n
+
+            Your modern-gear workshop: weapons, armor, and ammunition. Craft items by hand here, or assign an |cEngineer|n to churn them out passively.
+
+            # Build Requirements
+
+            Cost: |c20 Wood|n, |c15 Stone|n, |c15 Iron|n. Level: |c1|n. Dependencies: an |cHQ|n.
+
+            # What It Does
+
+            Produces modern gear: |ccombat knife|n, |cassault rifle|n, |csniper rifle|n, |cservice rifle|n, |crifle rounds|n, and the full armor set (helmet, vest, gloves, greaves, boots), plus the |cscope|n and |chauler pack|n accessories. Crafting spends resources per item.
+
+            # Using It
+
+            Stand on it (or |wenter|n) and type |wcraft|n to list what it makes and each cost, then |wcraft assault_rifle|n to make one instantly. Assign an |cEngineer|n (|wagent assign <id>|n inside) and it crafts the same items on its own from your resources while you're away. Made gear lands in your inventory — |wequip|n it.
+
+            # See Also
+
+            |whelp craft|n · |whelp equipment|n · |whelp lab|n · |whelp medbay|n
+        """,
+    },
+    {
+        "key": "wall",
+        "aliases": ["wl", "wall building"],
+        "category": "Buildings",
+        "text": """
+            |wWall (WL)|n
+
+            A cheap, tough barrier that blocks movement — the backbone of base defense and choke points.
+
+            # Build Requirements
+
+            Cost: |c5 Stone|n. Level: |c11|n. Dependencies: an |cHQ|n.
+
+            # What It Does
+
+            Blocks passage through its tile for everyone. High HP (600) makes it a durable shield for the buildings behind it. Combine with |cTurrets|n to funnel attackers into kill zones.
+
+            # Using It
+
+            |wbuild WL|n on the tile you want to seal. Tear it down later with |wdemolish|n if you need the path back.
+
+            # See Also
+
+            |whelp combat|n · |whelp turret|n · |whelp buildings|n
+        """,
+    },
+    {
+        "key": "barracks",
+        "aliases": ["bk", "barracks building"],
+        "category": "Buildings",
+        "text": """
+            |wBarracks (BK)|n
+
+            Military housing that raises how large an army you can field.
+
+            # Build Requirements
+
+            Cost: |c15 Wood|n, |c15 Stone|n, |c10 Iron|n. Level: |c11|n. Dependencies: an |cHQ|n.
+
+            # What It Does
+
+            Increases your army capacity (|cSoldier|n / |cMedic|n agents). Army roles are in active development; build one to grow your fighting force as those features land.
+
+            # Using It
+
+            |wbuild BK|n near your base. Train soldiers at an |cAcademy|n and assign them army roles. See |whelp agents|n.
+
+            # See Also
+
+            |whelp agents|n · |whelp combat|n · |whelp buildings|n
+        """,
+    },
+    {
+        "key": "lab",
+        "aliases": ["lb", "lab building", "laboratory"],
+        "category": "Buildings",
+        "text": """
+            |wLab (LB)|n
+
+            Your research center and futuristic-gear workshop. It runs the tech tree and crafts your most advanced equipment.
+
+            # Build Requirements
+
+            Cost: |c25 Wood|n, |c20 Stone|n, |c15 Iron|n. Level: |c26|n. Dependencies: an |cHQ|n, and an |cEngineer|n agent to run research.
+
+            # What It Does
+
+            Researches |ctechnologies|n (|wresearch <tech>|n) and crafts futuristic gear: |cplasma rifle|n, |cpower armor|n, |cjetpack|n, |cenergy cell|n, and |cfrag grenade|n. An |cEngineer|n drives research progress and passive crafting.
+
+            # Using It
+
+            |wbuild LB|n, assign an |cEngineer|n (|wagent assign <id>|n inside), then |wtechnology|n to see the tree and |wresearch <tech>|n to start one. Craft gear with |wcraft|n / |wcraft plasma_rifle|n. See |whelp craft|n.
+
+            # See Also
+
+            |whelp technology|n · |whelp craft|n · |whelp armory|n · |whelp equipment|n
+        """,
+    },
+    {
+        "key": "radar",
+        "aliases": ["rd", "radar building"],
+        "category": "Buildings",
+        "text": """
+            |wRadar (RD)|n
+
+            An intelligence outpost that widens how far you can see through the fog of war.
+
+            # Build Requirements
+
+            Cost: |c15 Iron|n, |c10 Energy|n. Level: |c31|n. Dependencies: an |cHQ|n, and a |cScout|n agent to run it.
+
+            # What It Does
+
+            Extends your vision radius with an assigned |cScout|n, revealing more of the map around it — useful for spotting enemies and scouting expansion sites.
+
+            # Using It
+
+            |wbuild RD|n, then assign a |cScout|n (|wagent assign <id>|n inside) and set patrols with |wagent patrol <id> <x,y> ...|n. Check the map with |wmap|n and |wscan|n.
+
+            # See Also
+
+            |whelp agents|n · |whelp combat|n · |whelp buildings|n
+        """,
+    },
+    {
+        "key": "turret",
+        "aliases": ["tu", "turret building"],
+        "category": "Buildings",
+        "text": """
+            |wTurret (TU)|n
+
+            An automated defense emplacement that fires on intruders without you lifting a finger.
+
+            # Build Requirements
+
+            Cost: |c20 Stone|n, |c15 Iron|n. Level: |c31|n. Dependencies: an |cHQ|n, and a |cGuard|n agent to power it.
+
+            # What It Does
+
+            Auto-attacks enemies in range each tick while a |cGuard|n is assigned. Pair with |cWalls|n to hold a line and a |cRelay|n to boost its damage.
+
+            # Using It
+
+            |wbuild TU|n where you want coverage, then assign a |cGuard|n (|wagent assign <id>|n inside). See |whelp combat|n and |whelp relay|n.
+
+            # See Also
+
+            |whelp combat|n · |whelp wall|n · |whelp relay|n
+        """,
+    },
+    {
+        "key": "vault",
+        "aliases": ["vt", "vault building"],
+        "category": "Buildings",
+        "text": """
+            |wVault (VT)|n
+
+            High-capacity storage that keeps your stockpile safe — even while you're logged off.
+
+            # Build Requirements
+
+            Cost: |c25 Stone|n, |c10 Iron|n. Level: |c36|n. Dependencies: an |cHQ|n.
+
+            # What It Does
+
+            Stores far more than your HQ's starting capacity and is |cprotected while you're offline|n, so raiders can't drain it. Harvester agents with |cdelivery|n prefer to haul resources here.
+
+            # Using It
+
+            |wbuild VT|n, stand on it, and |wdeposit <resource> [amount || all]|n to bank, |wwithdraw <resource> [amount || all]|n to pull back. You can only use storage you own. See |whelp storage|n.
+
+            # See Also
+
+            |whelp storage|n · |whelp resources|n · |whelp headquarters|n
+        """,
+    },
+    {
+        "key": "relay",
+        "aliases": ["rl", "relay building"],
+        "category": "Buildings",
+        "text": """
+            |wRelay (RL)|n
+
+            A support structure that amplifies the firepower of nearby |cTurrets|n.
+
+            # Build Requirements
+
+            Cost: |c20 Iron|n, |c15 Energy|n. Level: |c41|n. Dependencies: an |cHQ|n.
+
+            # What It Does
+
+            Boosts the damage of Turrets near it — force-multiplying a defensive cluster. Position it central to a ring of Turrets for the widest effect.
+
+            # Using It
+
+            |wbuild RL|n within your Turret cluster. No agent required. See |whelp turret|n and |whelp combat|n.
+
+            # See Also
+
+            |whelp turret|n · |whelp combat|n · |whelp buildings|n
+        """,
+    },
+    {
+        "key": "medbay",
+        "aliases": ["mb", "medbay building", "medical bay"],
+        "category": "Buildings",
+        "text": """
+            |wMedbay (MB)|n
+
+            A medical facility that crafts healing supplies and shortens how long you're out after a defeat.
+
+            # Build Requirements
+
+            Cost: |c15 Wood|n, |c10 Stone|n, |c10 Iron|n, |c5 Energy|n. Level: |c46|n. Dependencies: an |cHQ|n.
+
+            # What It Does
+
+            Crafts consumables — |cmedkits|n (restore HP with |wuse medkit|n) and |ccombat stims|n (temporary combat buff) — and reduces your respawn time after losing a fight.
+
+            # Using It
+
+            |wbuild MB|n, stand on it, and |wcraft|n to list its items, then |wcraft medkit|n to make one instantly. Use what you make with |wuse medkit|n. See |whelp craft|n and |whelp combat|n.
+
+            # See Also
+
+            |whelp craft|n · |whelp combat|n · |whelp equipment|n
         """,
     },
     # ----------------------------------------------------------------- #

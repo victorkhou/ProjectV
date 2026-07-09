@@ -205,6 +205,21 @@ class SchemaValidator:
                                 f"{prefix}: ammo_cost['{res}'] must be a positive integer, got {val!r}"
                             )
 
+            # craft_cost values must be positive ints if present (same shape as
+            # ammo_cost) — resources spent per unit via the `craft` command.
+            cc = entry.get("craft_cost")
+            if cc is not None:
+                if not isinstance(cc, dict):
+                    errors.append(
+                        f"{prefix}: craft_cost must be a dict, got {type(cc).__name__}"
+                    )
+                else:
+                    for res, val in cc.items():
+                        if not isinstance(val, int) or val <= 0:
+                            errors.append(
+                                f"{prefix}: craft_cost['{res}'] must be a positive integer, got {val!r}"
+                            )
+
             # ---- category (Req 3.4) ------------------------------------- #
             # A missing category defaults to "armor" in the populator, so an
             # absent category is treated as the default rather than an error.

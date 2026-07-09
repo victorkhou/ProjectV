@@ -104,7 +104,7 @@
     Iron: 15
   build_time_seconds: 30
   max_level: 5
-  rank_requirement: 21
+  rank_requirement: 1
   max_health: 250
   requires_hq: true
   required_terrain: null

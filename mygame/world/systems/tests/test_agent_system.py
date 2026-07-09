@@ -336,6 +336,22 @@ class TestAssignAgent(AgentSystemTestBase):
         ok, _ = self.system.assign_agent(player, npc.db.agent_id, "engineer", building)
         self.assertTrue(ok)
 
+    def test_activity_status_not_redundant_with_role(self):
+        """When placed at a building, the activity status describes the work,
+        not the role — so the roster doesn't read 'assigned as engineer —
+        Assigned as engineer'."""
+        player = FakePlayer(combat_xp=600, next_agent_id=1)
+        npc = self._train_and_complete(player)
+        building = FakeBuilding(building_type="AR")
+        # Give the building coordinates so the agent is placed there (the branch
+        # that sets activity_status) rather than the legacy move_to fallback.
+        building.db.coord_x = 3
+        building.db.coord_y = 3
+        ok, _ = self.system.assign_agent(player, npc.db.agent_id, "engineer", building)
+        self.assertTrue(ok)
+        status = getattr(npc.db, "activity_status", "") or ""
+        self.assertNotIn("Assigned as engineer", status)
+
     def test_assign_engineer_to_lab(self):
         player = FakePlayer(combat_xp=600, next_agent_id=1)
         npc = self._train_and_complete(player)

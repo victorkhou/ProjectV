@@ -268,6 +268,7 @@ class DataRegistry:
                 ammo_per_shot=entry.get("ammo_per_shot", 1),
                 magazine_size=entry.get("magazine_size"),
                 ammo_cost=entry.get("ammo_cost"),
+                craft_cost=entry.get("craft_cost"),
                 effect=entry.get("effect"),
                 max_stack=entry.get("max_stack", 99),
                 weight=entry.get("weight", 1.0),

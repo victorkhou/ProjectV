@@ -259,6 +259,38 @@ def _fmt_unequip_failed(d: dict) -> str:
     return f"|y[Equip] {messages.get(reason, f'Cannot unequip {slot}.')}|n"
 
 
+def _fmt_crafted(d: dict) -> str:
+    return f"|g[Craft] Crafted {d.get('item_name', 'item')}.|n"
+
+
+def _fmt_produced(d: dict) -> str:
+    # Passive output from an agent-run equipment building.
+    labels = {"AR": "Armory", "LB": "Lab", "MB": "Medbay"}
+    where = labels.get(d.get("building_type"), "building")
+    return f"|g[{where}] Produced {d.get('item_name', 'item')}.|n"
+
+
+def _fmt_craft_failed(d: dict) -> str:
+    item = d.get("item_name", "item")
+    reason = d.get("reason")
+    # Insufficient resources gets the shared have/need breakdown appended.
+    if reason == "insufficient_resources":
+        breakdown = d.get("breakdown")
+        head = f"|r[Craft] Can't afford {item}.|n"
+        return f"{head}\n{breakdown}" if breakdown else head
+    messages = {
+        "unknown_item": f"No such item '{item}'.",
+        "not_craftable": f"{item} can't be crafted.",
+        "wrong_building": (
+            f"You can't craft {item} here. Stand in the building that "
+            f"makes it (Armory, Lab, or Medbay)."
+        ),
+        "not_owner": "You can only craft in your own building.",
+        "building_offline": "This building is offline — repair it first.",
+    }
+    return f"|r[Craft] {messages.get(reason, f'Cannot craft {item}.')}|n"
+
+
 class NotificationPresenter:
     """Formats ``PLAYER_NOTIFICATION`` events and delivers them to players."""
 
@@ -295,6 +327,9 @@ class NotificationPresenter:
         "deposit_failed": _fmt_deposit_failed,
         "withdraw_failed": _fmt_withdraw_failed,
         "unequip_failed": _fmt_unequip_failed,
+        "crafted": _fmt_crafted,
+        "craft_failed": _fmt_craft_failed,
+        "produced": _fmt_produced,
     }
 
     def __init__(self, event_bus: EventBus, player_notifier: Any = None) -> None:

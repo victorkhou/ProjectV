@@ -346,7 +346,11 @@ class AgentSystem(AgentProgressionMixin, AgentBehaviorMixin, BaseSystem):
                     else:
                         agent.db.coord_x = bx
                         agent.db.coord_y = by
-                    agent.db.activity_status = f"Assigned as {role}"
+                    # The roster line already reads "assigned as {role}", so the
+                    # activity status describes what it's *doing*, not repeating
+                    # the role (avoids "assigned as engineer — Assigned as
+                    # engineer").
+                    agent.db.activity_status = "Working"
             elif hasattr(agent, "move_to"):
                 # Legacy fallback: building doesn't have coordinates yet
                 loc = getattr(target_building, "location", target_building)

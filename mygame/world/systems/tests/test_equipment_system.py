@@ -146,6 +146,28 @@ class FakePlayer:
     def check_permstring(self, perm):
         return self._admin
 
+    # Resource pool (Spend_Pool) — used by crafting and agent-run production.
+    def get_resource(self, resource):
+        return int(self.db.resources.get(str(resource).title(), 0))
+
+    def add_resource(self, resource, amount):
+        key = str(resource).title()
+        self.db.resources[key] = self.db.resources.get(key, 0) + int(amount)
+
+    def has_resources(self, costs):
+        return all(
+            self.db.resources.get(str(r).title(), 0) >= amt
+            for r, amt in costs.items()
+        )
+
+    def deduct_resources(self, costs):
+        if not self.has_resources(costs):
+            return False
+        for r, amt in costs.items():
+            key = str(r).title()
+            self.db.resources[key] = self.db.resources.get(key, 0) - int(amt)
+        return True
+
 
 class FakeTarget:
     """A damageable target: a player-like entity at fixed coords."""
@@ -221,6 +243,7 @@ ITEMS = {
     "medkit": ItemDef(
         key="medkit", name="Medkit", slot="", category="consumable",
         effect={"type": "heal", "amount": 30}, weight=5.0, max_stack=10,
+        craft_cost={"Wood": 5},
     ),
     "combat_stim": ItemDef(
         key="combat_stim", name="Combat Stim", slot="", category="consumable",
@@ -235,7 +258,7 @@ ITEMS = {
     ),
     "rifle_rounds": ItemDef(
         key="rifle_rounds", name="Rifle Rounds", slot="", category="ammo",
-        weight=0.1, max_stack=200,
+        weight=0.1, max_stack=200, craft_cost={"Iron": 2},
     ),
     "heavy_ammo": ItemDef(
         key="heavy_ammo", name="Heavy Ammo", slot="", category="ammo",
@@ -1193,11 +1216,18 @@ class TestDepositWithdraw(_StorageSingletonMixin, unittest.TestCase):
 # -------------------------------------------------------------- #
 
 class FakeProductionBuilding:
-    """Stand-in for an active production building (AR/MB/LB)."""
+    """Stand-in for an active production building (AR/MB/LB).
 
-    def __init__(self, building_type="AR", owner=None, offline=False):
+    Passive production is gated on an assigned agent, so ``assigned_agent``
+    defaults to a truthy sentinel (an agent is present). Pass
+    ``assigned_agent=None`` to model an agentless (inert) building.
+    """
+
+    def __init__(self, building_type="AR", owner=None, offline=False,
+                 assigned_agent="engineer"):
         self.key = building_type
-        self.db = DB(building_type=building_type, offline=offline)
+        self.db = DB(building_type=building_type, offline=offline,
+                     assigned_agent=assigned_agent)
         self._owner = owner
 
     @property
@@ -1225,6 +1255,7 @@ class TestProductionRouting(unittest.TestCase):
         registry.items["kevlar_vest"] = ItemDef(
             key="kevlar_vest", name="Kevlar Vest", slot="torso",
             category="armor", stat_modifiers={"damage_reduction": 5},
+            craft_cost={"Iron": 20, "Stone": 10},
         )
         registry.item_production_map = dict(production_map)
         event_bus = EventBus()
@@ -1235,9 +1266,18 @@ class TestProductionRouting(unittest.TestCase):
         )
         return system, created
 
+    @staticmethod
+    def _rich_player():
+        """A player with plenty of every resource, so craft_cost is affordable
+        and the tests below exercise routing/rate/cap, not the resource gate."""
+        return FakePlayer(level=1, resources={
+            r: 100000 for r in
+            ("Wood", "Stone", "Iron", "Energy", "Circuits", "Nexium")
+        })
+
     def test_supply_category_lands_in_bag_not_as_object(self):
         system, created = self._make({"MB": ["medkit"]})
-        player = FakePlayer(level=1)
+        player = self._rich_player()
         building = FakeProductionBuilding("MB", owner=player)
 
         system.process_production([building])
@@ -1248,7 +1288,7 @@ class TestProductionRouting(unittest.TestCase):
 
     def test_gear_category_becomes_object_not_bag_entry(self):
         system, created = self._make({"AR": ["kevlar_vest"]})
-        player = FakePlayer(level=1)
+        player = self._rich_player()
         building = FakeProductionBuilding("AR", owner=player)
 
         system.process_production([building])
@@ -1262,7 +1302,7 @@ class TestProductionRouting(unittest.TestCase):
         system, created = self._make(
             {"AR": ["kevlar_vest", "rifle_rounds"]}
         )
-        player = FakePlayer(level=1)
+        player = self._rich_player()
         building = FakeProductionBuilding("AR", owner=player)
 
         for _ in range(40):
@@ -1280,19 +1320,66 @@ class TestProductionRouting(unittest.TestCase):
         system, created = self._make({"MB": ["medkit"]})
 
         class NoHandlerOwner:
+            """Has resources but no equipment handler — routing fails, refunds."""
             key = "NoHandler"
 
-        building = FakeProductionBuilding("MB", owner=NoHandlerOwner())
-        # Must not raise; nothing is created.
+            def __init__(self):
+                self._res = {"Wood": 1000}
+
+            def get_resource(self, r):
+                return self._res.get(str(r).title(), 0)
+
+            def has_resources(self, costs):
+                return all(self._res.get(str(r).title(), 0) >= a
+                           for r, a in costs.items())
+
+            def deduct_resources(self, costs):
+                if not self.has_resources(costs):
+                    return False
+                for r, a in costs.items():
+                    self._res[str(r).title()] -= a
+                return True
+
+            def add_resource(self, r, a):
+                self._res[str(r).title()] = self._res.get(str(r).title(), 0) + a
+
+        owner = NoHandlerOwner()
+        building = FakeProductionBuilding("MB", owner=owner)
+        # Must not raise; nothing is created and the spend is refunded.
         system.process_production([building])
         self.assertEqual(created, [])
+        self.assertEqual(owner.get_resource("Wood"), 1000)  # refunded
+
+    def test_production_requires_assigned_agent(self):
+        """An equipment building with no assigned agent produces nothing."""
+        system, created = self._make({"MB": ["medkit"]})
+        player = FakePlayer(level=1)
+        building = FakeProductionBuilding("MB", owner=player, assigned_agent=None)
+
+        for _ in range(40):
+            system.process_production([building])
+
+        self.assertEqual(player.equipment.get_supply("medkit"), 0)
+        self.assertEqual(created, [])
+
+    def test_production_stalls_when_owner_cannot_afford(self):
+        """With no resources, an agent-run building idles (no free items)."""
+        system, created = self._make({"MB": ["medkit"]})
+        system.registry.balance.equipment_production_ticks = 1
+        player = FakePlayer(level=1, resources={})  # empty stockpile
+        building = FakeProductionBuilding("MB", owner=player)
+
+        for _ in range(10):
+            system.process_production([building])
+
+        self.assertEqual(player.equipment.get_supply("medkit"), 0)
 
     def test_production_is_rate_gated_by_cooldown(self):
         # With the default cooldown, a building yields at most one item per
         # equipment_production_ticks, not one every tick.
         system, _created = self._make({"MB": ["medkit"]})
         system.registry.balance.equipment_production_ticks = 5
-        player = FakePlayer(level=1)
+        player = self._rich_player()
         building = FakeProductionBuilding("MB", owner=player)
 
         for _ in range(5):
@@ -1309,13 +1396,105 @@ class TestProductionRouting(unittest.TestCase):
         system, _created = self._make({"MB": ["medkit"]})
         system.registry.balance.equipment_production_ticks = 1
         system.registry.balance.equipment_production_owner_cap = 3
-        player = FakePlayer(level=1)
+        player = self._rich_player()
         building = FakeProductionBuilding("MB", owner=player)
 
         for _ in range(20):
             system.process_production([building])
         # Never exceeds the cap despite 20 ticks.
         self.assertEqual(player.equipment.get_supply("medkit"), 3)
+
+
+class TestCraft(unittest.TestCase):
+    """Manual crafting at an equipment building (craft command backend)."""
+
+    def _make(self):
+        registry = _make_registry()
+        registry.items["kevlar_vest"] = ItemDef(
+            key="kevlar_vest", name="Kevlar Vest", slot="torso",
+            category="armor", stat_modifiers={"damage_reduction": 5},
+            craft_cost={"Iron": 20, "Stone": 10},
+        )
+        registry.item_production_map = {"AR": ["kevlar_vest", "rifle_rounds"],
+                                        "MB": ["medkit"]}
+        event_bus = EventBus()
+        created = []
+        sink = NotificationSink()
+        event_bus.subscribe(PLAYER_NOTIFICATION, sink)
+        system = EquipmentSystem(
+            registry, event_bus,
+            create_item_func=lambda idef, owner: created.append(idef.key),
+        )
+        return system, created, sink
+
+    def _player(self, **res):
+        return FakePlayer(level=1, resources=res or {"Iron": 100, "Stone": 100})
+
+    def test_craft_gear_deducts_and_creates(self):
+        system, created, sink = self._make()
+        player = self._player(Iron=100, Stone=100)
+        ar = FakeProductionBuilding("AR", owner=player)
+        self.assertTrue(system.craft(player, "kevlar_vest", ar))
+        self.assertEqual(created, ["kevlar_vest"])
+        self.assertEqual(player.get_resource("Iron"), 80)
+        self.assertEqual(player.get_resource("Stone"), 90)
+        self.assertEqual(sink.last()[0], "crafted")
+
+    def test_craft_supply_adds_to_bag(self):
+        system, _created, sink = self._make()
+        player = self._player(Iron=100, Stone=100)
+        ar = FakeProductionBuilding("AR", owner=player)
+        self.assertTrue(system.craft(player, "rifle_rounds", ar))
+        self.assertEqual(player.equipment.get_supply("rifle_rounds"), 1)
+
+    def test_craft_wrong_building(self):
+        system, _c, sink = self._make()
+        player = self._player(Iron=100, Stone=100)
+        # medkit is made at MB, not AR.
+        ar = FakeProductionBuilding("AR", owner=player)
+        self.assertFalse(system.craft(player, "medkit", ar))
+        kind, data = sink.last()
+        self.assertEqual(kind, "craft_failed")
+        self.assertEqual(data.get("reason"), "wrong_building")
+
+    def test_craft_no_building(self):
+        system, _c, sink = self._make()
+        player = self._player(Iron=100, Stone=100)
+        self.assertFalse(system.craft(player, "kevlar_vest", None))
+        self.assertEqual(sink.last()[1].get("reason"), "wrong_building")
+
+    def test_craft_not_owner(self):
+        system, _c, sink = self._make()
+        player = self._player(Iron=100, Stone=100)
+        other = FakePlayer(level=1)
+        ar = FakeProductionBuilding("AR", owner=other)
+        self.assertFalse(system.craft(player, "kevlar_vest", ar))
+        self.assertEqual(sink.last()[1].get("reason"), "not_owner")
+
+    def test_craft_insufficient_resources(self):
+        system, created, sink = self._make()
+        player = self._player(Iron=5, Stone=5)  # kevlar needs 20/10
+        ar = FakeProductionBuilding("AR", owner=player)
+        self.assertFalse(system.craft(player, "kevlar_vest", ar))
+        self.assertEqual(created, [])
+        self.assertEqual(player.get_resource("Iron"), 5)  # not deducted
+        kind, data = sink.last()
+        self.assertEqual(kind, "craft_failed")
+        self.assertEqual(data.get("reason"), "insufficient_resources")
+
+    def test_craft_offline_building(self):
+        system, _c, sink = self._make()
+        player = self._player(Iron=100, Stone=100)
+        ar = FakeProductionBuilding("AR", owner=player, offline=True)
+        self.assertFalse(system.craft(player, "kevlar_vest", ar))
+        self.assertEqual(sink.last()[1].get("reason"), "building_offline")
+
+    def test_craft_unknown_item(self):
+        system, _c, sink = self._make()
+        player = self._player(Iron=100, Stone=100)
+        ar = FakeProductionBuilding("AR", owner=player)
+        self.assertFalse(system.craft(player, "nonexistent", ar))
+        self.assertEqual(sink.last()[1].get("reason"), "unknown_item")
 
 
 if __name__ == "__main__":

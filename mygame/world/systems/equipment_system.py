@@ -226,6 +226,13 @@ class EquipmentSystem(CarryWeightMixin, StorageMixin, BaseSystem):
             if building_type not in EQUIPMENT_BUILDING_TYPES:
                 continue
 
+            # Agent gate: an equipment building only produces passively while it
+            # has an assigned agent (Engineer). This is what "agents help do it
+            # asynchronously" means — the building automates crafting for you.
+            # Without an agent the building is inert; craft by hand instead.
+            if not self._has_assigned_agent(building):
+                continue
+
             # Rate gate: advance this building's production progress and only
             # yield on the cooldown boundary (mirrors ResourceSystem's harvest
             # cooldown). Without this a building creates an object every tick.
@@ -249,13 +256,36 @@ class EquipmentSystem(CarryWeightMixin, StorageMixin, BaseSystem):
             if not item_defs:
                 continue
 
-            # Select one item (random choice)
-            item_def = random.choice(item_defs)
+            # Passive production crafts the same items a player would by hand,
+            # paying the same craft_cost from the owner's resources. Pick a
+            # random item the owner can currently afford; if none is affordable,
+            # the building idles this cycle (no free items).
+            affordable = [
+                idef for idef in item_defs
+                if getattr(idef, "craft_cost", None)
+                and owner.has_resources(idef.craft_cost)
+            ]
+            if not affordable:
+                continue
+            item_def = random.choice(affordable)
 
-            # Route the produce into storage by category (Req 3.2, 3.3, 13.4).
+            # Charge the owner, then route the produce into storage by category
+            # (Req 3.2, 3.3, 13.4). Deduct first so a routing failure can't mint
+            # a free item; refund if routing fails.
+            if not owner.deduct_resources(item_def.craft_cost):
+                continue
             if not self._route_produced_item(item_def, owner):
+                for res, amt in item_def.craft_cost.items():
+                    owner.add_resource(res, amt)
                 continue
 
+            # Tell the owner what their building made (previously silent, which
+            # read as "it never produced anything").
+            self.notify(
+                owner, "produced",
+                item_name=item_def.name,
+                building_type=building_type,
+            )
             logger.info(
                 "Equipment building %s produced %s for %s",
                 building_type,
@@ -803,6 +833,126 @@ class EquipmentSystem(CarryWeightMixin, StorageMixin, BaseSystem):
         )
         return True
 
+    def craft(self, player: Any, item_token: str, building: Any) -> bool:
+        """Craft one unit of an item at the player's current equipment building.
+
+        The manual counterpart to the passive per-tick production an assigned
+        agent drives (:meth:`process_production`): a player standing in their
+        own Armory/Lab/Medbay spends the item's ``craft_cost`` to make one unit
+        immediately. Agents just do this asynchronously while the player is
+        elsewhere; both draw from the same resource pool and the same
+        ``production_map`` catalog.
+
+        Gates (each emits a ``craft_failed`` notification with a reason):
+
+        1. ``unknown_item`` — the token resolves to no Item_Def.
+        2. ``not_craftable`` — the item declares no ``craft_cost``.
+        3. ``wrong_building`` — the player is not in an equipment building
+           whose ``production_map`` catalog includes this item (also covers
+           "no building here").
+        4. ``not_owner`` — the building is not the player's.
+        5. ``building_offline`` — the building is in offline protection.
+        6. rank gate — reuses :meth:`_rank_allows` (emits ``equip_denied``).
+        7. ``insufficient_resources`` — the player can't afford ``craft_cost``.
+
+        On success the resources are deducted, the item is routed into the
+        player's stores by category (reusing :meth:`_route_produced_item`), and
+        a ``crafted`` notification fires. Never raises into the command layer.
+
+        Args:
+            player: The crafting player.
+            item_token: Item key or display name (typo-tolerant resolve).
+            building: The building the player is standing in (or ``None``).
+
+        Returns:
+            ``True`` if an item was crafted, ``False`` otherwise.
+        """
+        # 1. Resolve the item.
+        item_def = self.registry.resolve_item(item_token)
+        if item_def is None:
+            self.notify(player, "craft_failed", reason="unknown_item",
+                        item_name=item_token)
+            return False
+
+        item_name = item_def.name
+
+        # 2. Craftable gate.
+        craft_cost = getattr(item_def, "craft_cost", None)
+        if not craft_cost:
+            self.notify(player, "craft_failed", reason="not_craftable",
+                        item_name=item_name)
+            return False
+
+        # 3. Right-building gate — the current building must be an equipment
+        #    building whose catalog includes this item.
+        btype = self._get_building_type(building) if building is not None else None
+        catalog_keys = {
+            idef.key for idef in self.registry.get_items_for_building(btype or "")
+        }
+        if (
+            building is None
+            or btype not in EQUIPMENT_BUILDING_TYPES
+            or item_def.key not in catalog_keys
+        ):
+            self.notify(player, "craft_failed", reason="wrong_building",
+                        item_name=item_name)
+            return False
+
+        # 4. Ownership gate. Read the ``owner`` property (Building exposes one),
+        #    falling back to the raw Attribute/db for objects that don't.
+        from world.utils import is_owner, get_building_attr
+        owner = getattr(building, "owner", None)
+        if owner is None:
+            owner = get_building_attr(building, "owner")
+        if not is_owner(player, owner):
+            self.notify(player, "craft_failed", reason="not_owner",
+                        item_name=item_name)
+            return False
+
+        # 5. Offline gate.
+        if getattr(building, "is_offline", False):
+            self.notify(player, "craft_failed", reason="building_offline",
+                        item_name=item_name)
+            return False
+
+        # 6. Rank gate (shared with equip/use; emits its own equip_denied).
+        if not self._rank_allows(player, item_def.required_rank, item_name):
+            return False
+
+        # 7. Resource gate.
+        if not player.has_resources(craft_cost):
+            from world.utils import format_insufficient_resources
+            self.notify(player, "craft_failed", reason="insufficient_resources",
+                        item_name=item_name,
+                        breakdown=format_insufficient_resources(player, craft_cost))
+            return False
+
+        # Deduct and produce. Deduct FIRST; only route the item if the spend
+        # succeeded, so a failed deduction can never mint a free item.
+        if not player.deduct_resources(craft_cost):
+            from world.utils import format_insufficient_resources
+            self.notify(player, "craft_failed", reason="insufficient_resources",
+                        item_name=item_name,
+                        breakdown=format_insufficient_resources(player, craft_cost))
+            return False
+
+        if not self._route_produced_item(item_def, player):
+            # Routing failed (e.g. no equipment handler) — refund so the spend
+            # isn't lost.
+            for res, amt in craft_cost.items():
+                player.add_resource(res, amt)
+            self.notify(player, "craft_failed", reason="wrong_building",
+                        item_name=item_name)
+            return False
+
+        logger.info(
+            "%s crafted %s at %s",
+            getattr(player, "key", "?"), item_def.key, btype,
+        )
+        self.notify(player, "crafted", item_name=item_name,
+                    category=item_def.category)
+        return True
+
     def add_supply_drop(self, player: Any, item_key: str, count: int) -> int:
         """Add up to *count* units of *item_key* to *player*'s Supply_Bag.
 
@@ -1161,6 +1311,24 @@ class EquipmentSystem(CarryWeightMixin, StorageMixin, BaseSystem):
         """Read the building_type string from a building."""
         from world.utils import get_building_type
         return get_building_type(building)
+
+    @staticmethod
+    def _has_assigned_agent(building: Any) -> bool:
+        """Return True if *building* has an agent assigned to it.
+
+        Reads ``db.assigned_agent`` (an Engineer, for equipment buildings),
+        tolerating the Attribute-handler and plain-attribute shapes. Passive
+        production is gated on this — an agentless building is inert.
+        """
+        db = getattr(building, "db", None)
+        if db is not None:
+            agent = getattr(db, "assigned_agent", None)
+            if agent is not None:
+                return True
+        attrs = getattr(building, "attributes", None)
+        if attrs is not None and hasattr(attrs, "get"):
+            return attrs.get("assigned_agent", default=None) is not None
+        return False
 
     @staticmethod
     def _default_create_item(item_def: ItemDef, owner: Any) -> dict:

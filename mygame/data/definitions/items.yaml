@@ -4,6 +4,12 @@
 # Weight reference (design §9): light gear 2-5; rifle/armor 8-15; heavy 25-40;
 # ammo ~0.1; consumables ~1-5; grenade ~3. Every item carries a `weight`.
 # resource_weights lives in balance.yaml (do not duplicate here).
+#
+# craft_cost: resources spent to make one unit via the `craft` command at the
+# matching equipment building (Armory=modern gear/ammo, Lab=futuristic gear/
+# throwables, Medbay=consumables). Omit/null to make an item non-craftable.
+# Agents assigned to those buildings also produce the same items passively
+# (and pay the same craft_cost from the owner's resources).
 
 items:
   # ------------------------------------------------------------------ #
@@ -18,6 +24,8 @@ items:
       damage: 10
       range: 1
     ammo_cost: null
+    craft_cost:
+      Iron: 5
     weight: 3.0
     classification: modern
     required_rank: null
@@ -32,6 +40,9 @@ items:
       range: 5
     ammo_cost:
       Iron: 1
+    craft_cost:
+      Iron: 25
+      Wood: 10
     weight: 10.0
     classification: modern
     required_rank: null
@@ -46,6 +57,10 @@ items:
       range: 6
     ammo_cost:
       Energy: 2
+    craft_cost:
+      Iron: 20
+      Energy: 30
+      Circuits: 10
     weight: 12.0
     classification: futuristic
     required_rank: Sergeant
@@ -60,6 +75,9 @@ items:
       range: 12
     ammo_cost:
       Iron: 2
+    craft_cost:
+      Iron: 40
+      Wood: 15
     weight: 14.0
     classification: modern
     required_rank: Corporal
@@ -78,6 +96,9 @@ items:
     ammo_per_shot: 1
     magazine_size: 30
     ammo_cost: null
+    craft_cost:
+      Iron: 20
+      Wood: 10
     weight: 9.0
     classification: modern
     required_rank: null
@@ -92,6 +113,9 @@ items:
     stat_modifiers:
       damage_reduction: 3
     ammo_cost: null
+    craft_cost:
+      Iron: 10
+      Stone: 5
     weight: 5.0
     classification: modern
     required_rank: null
@@ -103,6 +127,9 @@ items:
     stat_modifiers:
       damage_reduction: 5
     ammo_cost: null
+    craft_cost:
+      Iron: 20
+      Stone: 10
     weight: 8.0
     classification: modern
     required_rank: null
@@ -114,6 +141,10 @@ items:
     stat_modifiers:
       damage_reduction: 15
     ammo_cost: null
+    craft_cost:
+      Iron: 30
+      Energy: 40
+      Circuits: 20
     weight: 30.0
     classification: futuristic
     required_rank: Captain
@@ -125,6 +156,8 @@ items:
     stat_modifiers:
       damage_reduction: 2
     ammo_cost: null
+    craft_cost:
+      Iron: 8
     weight: 3.0
     classification: modern
     required_rank: null
@@ -136,6 +169,9 @@ items:
     stat_modifiers:
       damage_reduction: 4
     ammo_cost: null
+    craft_cost:
+      Iron: 15
+      Stone: 8
     weight: 7.0
     classification: modern
     required_rank: null
@@ -147,6 +183,8 @@ items:
     stat_modifiers:
       damage_reduction: 2
     ammo_cost: null
+    craft_cost:
+      Iron: 8
     weight: 4.0
     classification: modern
     required_rank: null
@@ -161,6 +199,9 @@ items:
     stat_modifiers:
       sight_range: 3
     ammo_cost: null
+    craft_cost:
+      Iron: 10
+      Wood: 5
     weight: 2.0
     classification: modern
     required_rank: null
@@ -172,6 +213,10 @@ items:
     stat_modifiers:
       move_speed: 2.0
     ammo_cost: null
+    craft_cost:
+      Iron: 15
+      Energy: 25
+      Circuits: 15
     weight: 12.0
     classification: futuristic
     required_rank: Staff_Sergeant
@@ -184,6 +229,9 @@ items:
     stat_modifiers:
       carry_capacity: 500
     ammo_cost: null
+    craft_cost:
+      Wood: 20
+      Iron: 5
     weight: 5.0
     classification: modern
     required_rank: null
@@ -194,6 +242,8 @@ items:
   - key: rifle_rounds
     name: Rifle Rounds
     category: ammo
+    craft_cost:
+      Iron: 2
     weight: 0.1
     max_stack: 200
     classification: modern
@@ -202,6 +252,8 @@ items:
   - key: energy_cell
     name: Energy Cell
     category: ammo
+    craft_cost:
+      Energy: 3
     weight: 0.1
     max_stack: 200
     classification: futuristic
@@ -216,6 +268,9 @@ items:
     effect:
       type: heal
       amount: 30
+    craft_cost:
+      Wood: 5
+      Energy: 3
     weight: 2.0
     max_stack: 20
     classification: modern
@@ -229,6 +284,9 @@ items:
       stat: damage_bonus
       amount: 10
       duration_ticks: 30
+    craft_cost:
+      Energy: 5
+      Circuits: 2
     weight: 1.0
     max_stack: 20
     classification: modern
@@ -245,6 +303,9 @@ items:
       amount: 40
       radius: 2
       range: 5
+    craft_cost:
+      Iron: 10
+      Energy: 10
     weight: 3.0
     max_stack: 10
     classification: modern

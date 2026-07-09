@@ -97,7 +97,7 @@ _ensure_evennia_stubs()
 
 from mygame.commands.game_commands import (  # noqa: E402
     CmdMove, CmdHarvest, CmdBuild, CmdUpgrade,
-    CmdAttack, CmdEquip, CmdUnequip, CmdUse, CmdThrow, CmdReload,
+    CmdAttack, CmdEquip, CmdUnequip, CmdUse, CmdThrow, CmdReload, CmdCraft,
     CmdDeposit, CmdWithdraw,
     CmdResearch, CmdPowerup,
     CmdScore, CmdEquipment, CmdBuildings, CmdScan, CmdTechnology,
@@ -1144,6 +1144,73 @@ class TestCmdReload(unittest.TestCase):
         cmd = _make_cmd(CmdReload, caller, "")
         cmd.func()
         self.assertEqual(calls, [caller])
+
+
+class TestCmdCraft(unittest.TestCase):
+    def _caller_in_building(self, equipment_system, building_type="AR"):
+        caller = FakeCaller(systems={"equipment_system": equipment_system})
+        caller.db.coord_x = 5
+        caller.db.coord_y = 5
+        building = types.SimpleNamespace(
+            key=building_type,
+            db=types.SimpleNamespace(building_type=building_type),
+        )
+        caller.location._buildings_by_coord[(5, 5)] = [building]
+        return caller, building
+
+    def test_system_unavailable(self):
+        caller = FakeCaller()
+        _make_cmd(CmdCraft, caller, " assault_rifle").func()
+        self.assertTrue(any("unavailable" in m for m in caller._messages))
+
+    def test_delegates_to_equipment_system_with_building(self):
+        calls = []
+
+        class FakeEquipmentSystem:
+            def craft(self, player, token, building):
+                calls.append((player, token, building))
+                return True
+
+        eqsys = FakeEquipmentSystem()
+        caller, building = self._caller_in_building(eqsys)
+        _make_cmd(CmdCraft, caller, " assault_rifle").func()
+        self.assertEqual(calls, [(caller, "assault_rifle", building)])
+
+    def test_no_arg_lists_craftable(self):
+        # With a registry + AR building, a bare 'craft' lists the catalog.
+        from world.data_registry import DataRegistry
+        from world.definitions import ItemDef
+
+        registry = DataRegistry()
+        registry.items = {
+            "assault_rifle": ItemDef(key="assault_rifle", name="Assault Rifle",
+                                     slot="weapon", category="weapon",
+                                     craft_cost={"Iron": 25}),
+        }
+        registry.item_production_map = {"AR": ["assault_rifle"]}
+
+        class FakeEquipmentSystem:
+            def craft(self, *a):
+                raise AssertionError("should not craft on bare command")
+
+        caller, _b = self._caller_in_building(FakeEquipmentSystem())
+        caller.ndb.systems["registry"] = registry
+        _make_cmd(CmdCraft, caller, "").func()
+        output = "\n".join(caller._messages)
+        self.assertIn("assault_rifle", output)
+        self.assertIn("25 Iron", output)
+
+    def test_no_arg_outside_building_guides(self):
+        caller = FakeCaller(systems={"equipment_system": object()})
+        caller.db.coord_x = 5
+        caller.db.coord_y = 5
+        # No building registered here.
+        _make_cmd(CmdCraft, caller, "").func()
+        output = "\n".join(caller._messages).lower()
+        self.assertIn("equipment building", output)
+
+    def test_make_alias_registered(self):
+        self.assertIn("make", CmdCraft.aliases)
 
 
 class _StorageCommandBase(unittest.TestCase):

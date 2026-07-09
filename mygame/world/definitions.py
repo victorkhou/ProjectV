@@ -64,6 +64,9 @@ class ItemDef:
     ammo_per_shot: int = 1
     magazine_size: int | None = None  # magazine capacity (ranged); weapon tracks db.loaded
     ammo_cost: dict[str, int] | None = None  # resource-pool cost (energy weapons)
+    # crafting — resource cost to make one via the `craft` command at the
+    # matching equipment building (Armory/Lab/Medbay). None/{} = not craftable.
+    craft_cost: dict[str, int] | None = None
     # supply
     effect: dict | None = None  # {"type": ..., ...} for consumable/throwable
     max_stack: int = 99  # per-entry cap in the Supply_Bag

@@ -90,23 +90,52 @@ class FakePlayer:
     ``EquipmentHandler`` Supply_Bag (the handler falls back to a plain
     ``_supplies`` dict in this stubbed environment).
     """
-    def __init__(self, name="TestPlayer"):
+    def __init__(self, name="TestPlayer", resources=None):
         self.key = name
         self._inventory = []
         self.equipment = EquipmentHandler(self)
+        # Plentiful stockpile by default so resource-charged production paths
+        # (which now spend craft_cost) aren't starved in these routing props.
+        self._resources = dict(resources or {
+            r: 1000000 for r in
+            ("Wood", "Stone", "Iron", "Energy", "Circuits", "Nexium")
+        })
 
     @property
     def inventory(self):
         return list(self._inventory)
 
+    def get_resource(self, resource):
+        return int(self._resources.get(str(resource).title(), 0))
+
+    def add_resource(self, resource, amount):
+        key = str(resource).title()
+        self._resources[key] = self._resources.get(key, 0) + int(amount)
+
+    def has_resources(self, costs):
+        return all(
+            self._resources.get(str(r).title(), 0) >= amt
+            for r, amt in costs.items()
+        )
+
+    def deduct_resources(self, costs):
+        if not self.has_resources(costs):
+            return False
+        for r, amt in costs.items():
+            key = str(r).title()
+            self._resources[key] = self._resources.get(key, 0) - int(amt)
+        return True
+
 class FakeBuilding:
     """Lightweight stand-in for a Building object."""
-    def __init__(self, building_type="AR", owner=None, offline=False):
+    def __init__(self, building_type="AR", owner=None, offline=False,
+                 assigned_agent="engineer"):
         self.key = building_type
         self.attributes = FakeAttributes({
             "building_type": building_type,
             "owner": owner,
             "offline": offline,
+            "assigned_agent": assigned_agent,
         })
         self._owner = owner
 
@@ -126,30 +155,33 @@ SAMPLE_ITEMS = {
     "combat_knife": ItemDef(
         key="combat_knife", name="Combat Knife", slot="weapon",
         category="weapon", weapon_type="melee",
-        stat_modifiers={"damage": 10, "range": 1},
+        stat_modifiers={"damage": 10, "range": 1}, craft_cost={"Iron": 5},
     ),
     "assault_rifle": ItemDef(
         key="assault_rifle", name="Assault Rifle", slot="weapon",
         category="weapon", weapon_type="ranged", ammo_type="rifle_rounds",
         magazine_size=30, stat_modifiers={"damage": 25, "range": 3},
+        craft_cost={"Iron": 25},
     ),
     "kevlar_vest": ItemDef(
         key="kevlar_vest", name="Kevlar Vest", slot="torso",
         category="armor", stat_modifiers={"damage_reduction": 5},
+        craft_cost={"Iron": 20},
     ),
     # Supply
     "rifle_rounds": ItemDef(
         key="rifle_rounds", name="Rifle Rounds", slot="", category="ammo",
-        weight=0.1, max_stack=200,
+        weight=0.1, max_stack=200, craft_cost={"Iron": 2},
     ),
     "medkit": ItemDef(
         key="medkit", name="Medkit", slot="", category="consumable",
         effect={"type": "heal", "amount": 30}, weight=5.0, max_stack=10,
+        craft_cost={"Wood": 5},
     ),
     "frag_grenade": ItemDef(
         key="frag_grenade", name="Frag Grenade", slot="", category="throwable",
         effect={"type": "aoe_damage", "amount": 40, "radius": 2, "range": 6},
-        weight=3.0, max_stack=10,
+        weight=3.0, max_stack=10, craft_cost={"Iron": 10},
     ),
 }
 

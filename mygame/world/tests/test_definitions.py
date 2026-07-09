@@ -235,7 +235,8 @@ class TestDataclassContracts:
         assert len(fields(BuildingDef)) == 16
 
     def test_item_def_field_count(self):
-        assert len(fields(ItemDef)) == 15
+        # 16 after adding craft_cost (resource cost for the `craft` command).
+        assert len(fields(ItemDef)) == 16
 
     def test_rank_def_field_count(self):
         assert len(fields(RankDef)) == 6

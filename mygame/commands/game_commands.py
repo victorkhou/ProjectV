@@ -1281,6 +1281,96 @@ class CmdReload(GameCommand):
         equipment_system.reload(self.caller)
 
 
+class CmdCraft(GameCommand):
+    """Make an item at the equipment building you're standing in.
+
+    Usage:
+      craft <item>
+      craft
+
+    Options:
+      <item>  which item to make, by key or name (assault_rifle |
+              "assault rifle"). Costs resources; made instantly.
+      (none)  with no argument: lists what this building can craft and each
+              item's resource cost.
+
+    Examples:
+      craft assault_rifle
+      craft combat helmet
+      craft
+
+    Notes:
+      Alias: make. Craft at your own |cArmory|n (modern weapons, armor,
+      ammo), |cLab|n (futuristic gear, grenades), or |cMedbay|n (medkits,
+      stims) — stand on it (or 'enter' it) first. Crafting is instant and
+      spends resources; an assigned |cEngineer|n makes the same items
+      passively while you're away. Gear lands in your inventory ('equip' it);
+      supplies go to your bag. See 'help buildings' and 'help equipment'.
+    """
+
+    key = "craft"
+    aliases = ["make"]
+    help_category = "Game"
+
+    def func(self):
+        equipment_system = self.require_system("equipment_system")
+        if equipment_system is None:
+            return
+
+        building = self._building_at_caller(self.caller)
+        token = self.args.strip()
+
+        if not token:
+            self._list_craftable(building)
+            return
+
+        # The system validates the building/ownership/rank/cost gates and emits
+        # the player-facing notification (crafted / craft_failed) via the
+        # presenter; the command composes no action-outcome string here.
+        equipment_system.craft(self.caller, token, building)
+
+    def _list_craftable(self, building):
+        """List what the current building can craft, with costs.
+
+        Shows the building's ``production_map`` catalog filtered to craftable
+        items (those with a ``craft_cost``). Guides the player when they're not
+        standing in an equipment building.
+        """
+        from world.systems.equipment_system import EQUIPMENT_BUILDING_TYPES
+
+        caller = self.caller
+        registry = _get_system(caller, "registry")
+        btype = None
+        if building is not None and hasattr(building, "db"):
+            btype = getattr(building.db, "building_type", None)
+
+        if registry is None or btype not in EQUIPMENT_BUILDING_TYPES:
+            caller.msg(
+                "Stand in one of your equipment buildings to craft: an "
+                "|cArmory|n (AR), |cLab|n (LB), or |cMedbay|n (MB). "
+                "See 'help buildings'."
+            )
+            return
+
+        item_defs = [
+            idef for idef in registry.get_items_for_building(btype)
+            if getattr(idef, "craft_cost", None)
+        ]
+        if not item_defs:
+            caller.msg("This building can't craft anything.")
+            return
+
+        bname = getattr(building, "key", btype)
+        lines = [f"|w{bname} — craftable items:|n"]
+        for idef in item_defs:
+            cost_str = ", ".join(
+                f"{amt} {res}" for res, amt in idef.craft_cost.items()
+            )
+            lines.append(f"  |w{idef.key}|n ({idef.name}) — {cost_str}")
+        lines.append("Type |wcraft <item>|n to make one.")
+        caller.msg("\n".join(lines))
+
+
 def _parse_resource_amount(args):
     """Parse ``<resource> [<amount>|all]`` into ``(Title_Case_resource, amount)``.
 

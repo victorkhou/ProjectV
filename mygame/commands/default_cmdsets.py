@@ -18,7 +18,7 @@ from evennia import default_cmds
 
 from commands.game_commands import (
     CmdMove, CmdHarvest, CmdBuild, CmdUpgrade, CmdDemolish,
-    CmdAttack, CmdEquip, CmdUnequip, CmdUse, CmdThrow, CmdReload,
+    CmdAttack, CmdEquip, CmdUnequip, CmdUse, CmdThrow, CmdReload, CmdCraft,
     CmdDeposit, CmdWithdraw,
     CmdResearch, CmdPowerup,
     CmdScore, CmdEquipment, CmdBuildings, CmdScan, CmdTechnology,
@@ -112,6 +112,7 @@ class CharacterCmdSet(default_cmds.CharacterCmdSet):
         self.add(CmdUse())
         self.add(CmdThrow())
         self.add(CmdReload())
+        self.add(CmdCraft())
         self.add(CmdDeposit())
         self.add(CmdWithdraw())
         self.add(CmdResearch())
