@@ -460,9 +460,12 @@ class CombatEngine(BaseSystem):
         # Friendly fire grants no reward: defeating your OWN agent yields no kill
         # XP (mirrors destroying your own building), so it can't be farmed. The
         # victim's death loss still applies below — attacking your own units is
-        # allowed but purely costly.
+        # allowed but purely costly. Compare owners by .id (via is_owner), not
+        # identity: an anti-farm guard must not false-negative if the owner and
+        # attacker are distinct instances of the same PK after an idmapper flush.
+        from world.utils import is_owner
         victim_owner = getattr(getattr(victim, "db", None), "owner", None)
-        own_victim = victim_owner is not None and victim_owner is attacker
+        own_victim = is_owner(attacker, victim_owner)
 
         # Award XP to attacker.
         if own_victim:
@@ -516,9 +519,12 @@ class CombatEngine(BaseSystem):
 
         # Award XP to attacker (if it's a player) — but NOT for destroying your
         # own building. Attacking your own structures is permitted, yet grants
-        # no XP or benefit, so it can't be farmed for progression.
+        # no XP or benefit, so it can't be farmed for progression. Compare by
+        # .id (via is_owner), not identity, so the guard survives an idmapper
+        # flush that leaves owner and attacker as distinct same-PK instances.
+        from world.utils import is_owner
         owner = self._get_building_owner(building)
-        own_building = owner is not None and owner is attacker
+        own_building = is_owner(attacker, owner)
         if self._is_player(attacker) and not own_building:
             attacker_xp = self._get_combat_xp(attacker)
             self._set_combat_xp(attacker, attacker_xp + xp_building_destroy)
