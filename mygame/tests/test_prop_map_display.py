@@ -15,11 +15,18 @@ the rendered symbol SHALL follow the priority order:
 9. Terrain symbol
 
 **Validates: Requirements 19.6, 19.5, 19.8**
+
+These tests exercise the PRODUCTION rendering path — ``_colored_objects`` — which
+``render()`` calls with the flat object list a PlanetRoom returns from
+``get_objects_in_area``. (The former ``_colored_room`` method, a dead duplicate
+that re-encoded this same priority on a legacy single-room-per-tile model, was
+removed; these tests were retargeted onto the live path so Property 19 is
+verified on the code that actually runs.)
 """
 
 import unittest
 
-from hypothesis import given, settings, assume
+from hypothesis import given, settings
 from hypothesis import strategies as st
 
 from mygame.world.coordinate.procedural_map_renderer import (
@@ -30,7 +37,8 @@ from mygame.world.coordinate.procedural_map_renderer import (
 
 
 # ------------------------------------------------------------------ #
-#  Fake objects to simulate Evennia room contents
+#  Fake objects to simulate the flat object list get_objects_in_area
+#  returns (what _colored_objects consumes in production).
 # ------------------------------------------------------------------ #
 
 class FakeDB:
@@ -44,14 +52,15 @@ class FakeDB:
 
 
 class FakeTags:
-    """Simulates Evennia's tag handler."""
+    """Simulates Evennia's tag handler (category -> list of tag values)."""
     def __init__(self, tags=None):
-        self._tags = tags or {}  # category -> list of tag values
+        self._tags = tags or {}
 
     def get(self, key=None, category=None):
-        if category:
-            return self._tags.get(category, [])
-        return []
+        values = self._tags.get(category, [])
+        if key is not None:
+            return key if key in values else None
+        return values
 
 
 class FakeAttributes:
@@ -81,35 +90,34 @@ class FakeNPC:
 
 
 class FakeBuilding:
-    """Simulates a building object attached to a room."""
+    """Simulates a building object as it appears in a tile's object list.
+
+    Carries the ``("building", "object_type")`` tag that ``_colored_objects``
+    keys off, and its own ``contents`` list (occupancy check).
+    """
     def __init__(self, abbreviation="HQ", owner=None, contents=None):
         self._abbreviation = abbreviation
+        self.has_account = False
         self.attributes = FakeAttributes(
             building_type=abbreviation,
             owner=owner,
         )
+        self.tags = FakeTags({"object_type": ["building"]})
         self.contents = contents or []
 
     def get_display_abbreviation(self):
         return self._abbreviation
 
 
-class FakeRoom:
-    """Simulates an Evennia room tile with contents and optional building."""
-    def __init__(self, contents=None, building=None):
-        self.contents = contents or []
-        self.building = building
-
-
 # ------------------------------------------------------------------ #
-#  Minimal renderer for testing _colored_room()
+#  Minimal renderer for testing _colored_objects()
 # ------------------------------------------------------------------ #
 
 def _make_renderer():
-    """Create a minimal ProceduralMapRenderer for testing _colored_room().
+    """Create a minimal ProceduralMapRenderer for testing _colored_objects().
 
-    We only need _colored_terrain() to work for the terrain fallback case.
-    We stub it to return a fixed terrain string.
+    Only _colored_terrain() needs to work (the terrain fallback case); it is
+    patched below to return a fixed terrain string.
     """
     renderer = object.__new__(ProceduralMapRenderer)
     renderer._tile_resolver = None
@@ -128,7 +136,6 @@ def _patched_colored_terrain(self, x, y, planet):
     return _TERRAIN_FALLBACK
 
 
-# Apply the patch
 ProceduralMapRenderer._colored_terrain_original = ProceduralMapRenderer._colored_terrain
 ProceduralMapRenderer._colored_terrain = _patched_colored_terrain
 
@@ -139,9 +146,10 @@ ProceduralMapRenderer._colored_terrain = _patched_colored_terrain
 
 ROLES = list(_ROLE_SYMBOLS.keys())
 role_st = st.sampled_from(ROLES)
-building_abbr_st = st.sampled_from(["HQ", "EX", "AC", "LB", "AR", "TU", "VT", "RD", "WL", "BK", "MB", "RL"])
+building_abbr_st = st.sampled_from(
+    ["HQ", "EX", "AC", "LB", "AR", "TU", "VT", "RD", "WL", "BK", "MB", "RL"]
+)
 
-# Entity presence flags
 entity_flags_st = st.fixed_dictionaries({
     "has_self": st.booleans(),
     "has_enemy_player": st.booleans(),
@@ -156,106 +164,78 @@ entity_flags_st = st.fixed_dictionaries({
 })
 
 
-def _build_room(flags, looker):
-    """Build a FakeRoom from entity presence flags."""
-    contents = []
-    building = None
+def _build_objects(flags, looker):
+    """Build the flat tile object-list (what get_objects_in_area returns)."""
+    objects = []
 
-    # Add player self
     if flags["has_self"]:
-        contents.append(looker)
+        objects.append(looker)
 
-    # Add enemy player
     if flags["has_enemy_player"]:
-        enemy = FakePlayer(player_id=999, x=5, y=5)
-        contents.append(enemy)
+        objects.append(FakePlayer(player_id=999, x=5, y=5))
 
-    # Add own agent (overworld — not inside building)
     if flags["has_own_agent"]:
-        own_agent = FakeNPC(owner=looker, role=flags["own_agent_role"])
-        contents.append(own_agent)
+        objects.append(FakeNPC(owner=looker, role=flags["own_agent_role"]))
 
-    # Add enemy agent (overworld)
     if flags["has_enemy_agent"]:
         enemy_owner = FakePlayer(player_id=888)
-        enemy_agent = FakeNPC(owner=enemy_owner, role="soldier")
-        contents.append(enemy_agent)
+        objects.append(FakeNPC(owner=enemy_owner, role="soldier"))
 
-    # Add neutral NPC
     if flags["has_neutral_npc"]:
-        neutral = FakeNPC(owner=None, role="")
-        contents.append(neutral)
+        objects.append(FakeNPC(owner=None, role=""))
 
-    # Add building
     if flags["has_building"]:
         bld_owner = looker if flags["building_is_own"] else FakePlayer(player_id=777)
         bld_contents = []
         if flags["building_occupied"]:
-            # Put an NPC inside the building to make it occupied
-            occupant = FakeNPC(owner=looker, role="harvester", npc_type="agent")
-            bld_contents.append(occupant)
-        building = FakeBuilding(
+            bld_contents.append(
+                FakeNPC(owner=looker, role="harvester", npc_type="agent")
+            )
+        objects.append(FakeBuilding(
             abbreviation=flags["building_abbr"],
             owner=bld_owner,
             contents=bld_contents,
-        )
+        ))
 
-    return FakeRoom(contents=contents, building=building)
+    return objects
 
 
 def _expected_symbol(flags, looker):
     """Compute the expected rendered symbol based on priority order."""
     abbr = flags["building_abbr"]
 
-    # Priority 1: Player self
     if flags["has_self"]:
         return "|Y@@|n"
-
-    # Priority 2: Enemy player
     if flags["has_enemy_player"]:
         return "|r**|n"
-
-    # Priority 3: Own agent (overworld)
     if flags["has_own_agent"]:
-        sym = _agent_symbol(flags["own_agent_role"])
-        return f"|g{sym}|n"
-
-    # Priority 4: Enemy agent (overworld)
+        return f"|g{_agent_symbol(flags['own_agent_role'])}|n"
     if flags["has_enemy_agent"]:
         return "|rag|n"
-
-    # Priority 5: Neutral NPC
     if flags["has_neutral_npc"]:
         return "|yag|n"
-
-    # Priority 6: Occupied building
     if flags["has_building"] and flags["building_occupied"]:
         return f"|B{abbr}|n"
-
-    # Priority 7: Unoccupied own building
     if flags["has_building"] and flags["building_is_own"]:
         return f"|c{abbr}|n"
-
-    # Priority 8: Unoccupied enemy building
     if flags["has_building"] and not flags["building_is_own"]:
         return f"|R{abbr}|n"
-
-    # Priority 9: Terrain
     return _TERRAIN_FALLBACK
 
 
 # ================================================================== #
-#  Property 19: Map Display Priority
+#  Property 19: Map Display Priority (production _colored_objects path)
 #  **Validates: Requirements 19.6, 19.5, 19.8**
 # ================================================================== #
 
 class TestProperty19MapDisplayPriority(unittest.TestCase):
-    """Property 19: Map Display Priority.
+    """Property 19: Map Display Priority, on the production ``_colored_objects``.
 
     For any visible tile containing multiple entities (player, agents,
     building), the rendered symbol SHALL follow the priority order:
     player self > enemy player > own agent > enemy agent > neutral NPC >
-    occupied building > unoccupied building > terrain.
+    occupied building > unoccupied own building > unoccupied enemy building >
+    terrain.
 
     **Validates: Requirements 19.6, 19.5, 19.8**
     """
@@ -264,21 +244,22 @@ class TestProperty19MapDisplayPriority(unittest.TestCase):
     @settings(max_examples=200)
     def test_display_priority_order(self, flags):
         """Rendered symbol matches the highest-priority entity present."""
-        # Need at least one entity or terrain
         looker = FakePlayer(player_id=1, x=5, y=5)
         renderer = _make_renderer()
 
-        room = _build_room(flags, looker)
+        objects = _build_objects(flags, looker)
         expected = _expected_symbol(flags, looker)
 
-        actual = renderer._colored_room(room, looker, 5, 5, "terra")
+        actual = renderer._colored_objects(objects, looker, 5, 5, "terra")
 
         self.assertEqual(
             actual, expected,
             f"Display priority mismatch.\n"
-            f"  Flags: self={flags['has_self']}, enemy_player={flags['has_enemy_player']}, "
+            f"  Flags: self={flags['has_self']}, "
+            f"enemy_player={flags['has_enemy_player']}, "
             f"own_agent={flags['has_own_agent']}(role={flags['own_agent_role']}), "
-            f"enemy_agent={flags['has_enemy_agent']}, neutral={flags['has_neutral_npc']}, "
+            f"enemy_agent={flags['has_enemy_agent']}, "
+            f"neutral={flags['has_neutral_npc']}, "
             f"building={flags['has_building']}(abbr={flags['building_abbr']}, "
             f"occupied={flags['building_occupied']}, own={flags['building_is_own']})\n"
             f"  Expected: {expected}\n"
@@ -293,15 +274,13 @@ class TestProperty19MapDisplayPriority(unittest.TestCase):
         renderer = _make_renderer()
 
         own_agent = FakeNPC(owner=looker, role=role)
-        room = FakeRoom(contents=[own_agent])
-
-        actual = renderer._colored_room(room, looker, 5, 5, "terra")
-        expected_sym = _ROLE_SYMBOLS[role]
-        expected = f"|g{expected_sym}|n"
+        actual = renderer._colored_objects([own_agent], looker, 5, 5, "terra")
+        expected = f"|g{_ROLE_SYMBOLS[role]}|n"
 
         self.assertEqual(
             actual, expected,
-            f"Own agent with role '{role}' should render as '{expected}', got '{actual}'"
+            f"Own agent with role '{role}' should render as '{expected}', "
+            f"got '{actual}'"
         )
 
     @given(building_abbr=building_abbr_st)
@@ -317,14 +296,13 @@ class TestProperty19MapDisplayPriority(unittest.TestCase):
             owner=looker,
             contents=[occupant],
         )
-        room = FakeRoom(contents=[], building=building)
-
-        actual = renderer._colored_room(room, looker, 5, 5, "terra")
+        actual = renderer._colored_objects([building], looker, 5, 5, "terra")
         expected = f"|B{building_abbr}|n"
 
         self.assertEqual(
             actual, expected,
-            f"Occupied building '{building_abbr}' should render as '{expected}', got '{actual}'"
+            f"Occupied building '{building_abbr}' should render as '{expected}', "
+            f"got '{actual}'"
         )
 
 
