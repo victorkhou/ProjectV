@@ -256,7 +256,9 @@ class ResourceSystem(BaseSystem):
             # Determine drop location and coordinates
             if hasattr(tile, "is_node_depleted") and px is not None and py is not None:
                 # PlanetRoom path: spawn drop at player coordinates
-                self._spawn_resource_drop(tile, resource_type, amount, x=px, y=py)
+                drop = self._spawn_resource_drop(
+                    tile, resource_type, amount, x=px, y=py
+                )
             else:
                 # Legacy path: drop in OverworldRoom
                 building = getattr(tile, "building", None)
@@ -264,7 +266,15 @@ class ResourceSystem(BaseSystem):
                     drop_location = getattr(building, "location", None) or tile
                 else:
                     drop_location = tile
-                self._spawn_resource_drop(drop_location, resource_type, amount)
+                drop = self._spawn_resource_drop(drop_location, resource_type, amount)
+
+            # A full tile refuses a NEW drop (returns None). Tell the player the
+            # ground is full instead of the misleading "you harvested N" line,
+            # and don't fire RESOURCE_GATHERED for a drop that never happened.
+            # The resource is not lost — it simply wasn't generated this cycle.
+            if drop is None:
+                self.notify(player, "tile_full")
+                return True
 
             self.notify(player, "harvest_drop", amount=amount, resource_type=resource_type)
 
@@ -432,9 +442,21 @@ class ResourceSystem(BaseSystem):
             if production_int <= 0:
                 continue
 
-            # Drop resources as objects in the building's room
+            # Drop resources as objects on the building's tile. Pass the
+            # building's coords so the drop merges with an existing pile there
+            # AND is subject to the tile item-capacity cap (an Extractor tile
+            # holds room_capacity_per_storage_level x level). A full tile returns
+            # None: production is skipped this cycle (nothing generated, nothing
+            # lost) — the RESOURCE_GATHERED event only fires on an actual drop.
             drop_location = getattr(building, "location", building)
-            self._spawn_resource_drop(drop_location, resource_type, production_int)
+            bx = getattr(getattr(building, "db", None), "coord_x", None)
+            by = getattr(getattr(building, "db", None), "coord_y", None)
+            drop = self._spawn_resource_drop(
+                drop_location, resource_type, production_int, x=bx, y=by
+            )
+            if drop is None:
+                # Tile at capacity — stop generating here until it's cleared.
+                continue
 
             if production_int > 0:
                 owner = self._get_building_attr(building, "owner")
@@ -696,9 +718,14 @@ class ResourceSystem(BaseSystem):
             return None
         try:
             from typeclasses.objects import spawn_resource_drop
+            # None here means the tile is at its item-capacity cap (a NEW drop
+            # was refused); a real object means it was placed/merged. Callers
+            # rely on this to distinguish "generated" from "tile full".
             return spawn_resource_drop(location, resource_type, amount, x=x, y=y)
         except Exception:
-            # Fallback for test environments: use dict inventory
+            # Fallback for test environments without Evennia: use dict inventory.
+            # Return a truthy sentinel (NOT None) so callers that treat None as
+            # "tile full" don't mis-read a successful fallback as a full tile.
             if hasattr(location, "attributes") and hasattr(location.attributes, "add"):
                 inv = location.attributes.get("resource_inventory", default=None) or {}
                 inv[resource_type] = inv.get(resource_type, 0) + amount
@@ -707,7 +734,7 @@ class ResourceSystem(BaseSystem):
                 inv = getattr(location.db, "resource_inventory", None) or {}
                 inv[resource_type] = inv.get(resource_type, 0) + amount
                 location.db.resource_inventory = inv
-            return None
+            return True
 
     @staticmethod
     def spawn_resource_drop(location: Any, resource_type: str, amount: int,

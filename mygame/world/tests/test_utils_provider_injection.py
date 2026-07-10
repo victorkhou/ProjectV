@@ -182,3 +182,93 @@ class TestOwnerHasActiveHq:
 
     def test_none_owner_is_false(self):
         assert self._call(None, "earth") is False
+
+
+# ------------------------------------------------------------------ #
+#  Tile item-capacity caps (room carry capacity)
+# ------------------------------------------------------------------ #
+
+from mygame.world.utils import (  # noqa: E402
+    tile_item_capacity, tile_object_count, tile_has_room,
+)
+from mygame.world.definitions import BalanceConfig  # noqa: E402
+
+
+class _LevelBuilding:
+    """A building on a tile with a building_type + level (for capability lookup)."""
+    def __init__(self, building_type, level=1):
+        self.db = _Db(building_type=building_type, building_level=level)
+
+
+class _CapTile:
+    """A tile stand-in: buildings + loose objects addressable by coordinate."""
+    def __init__(self):
+        self._buildings = {}   # (x, y) -> [building]
+        self._objects = {}     # (x, y) -> [obj]
+
+    def place_building(self, b, x, y):
+        self._buildings.setdefault((x, y), []).append(b)
+
+    def add_objects(self, x, y, n):
+        self._objects.setdefault((x, y), []).extend(object() for _ in range(n))
+
+    def get_buildings_at(self, x, y):
+        return list(self._buildings.get((x, y), []))
+
+    def get_objects_at(self, x, y, type_tag=None):
+        # The helper sums over ("item", "resource_drop"); return the same loose
+        # list for the "item" tag and nothing for others (count once).
+        if type_tag in (None, "item"):
+            return list(self._objects.get((x, y), []))
+        return []
+
+
+class TestTileItemCapacity:
+    """Per-building tile capacity tiers + the has-room predicate."""
+
+    def _prov(self):
+        return FakeProvider(buildings={
+            "VT": _Cap({"storage"}),
+            "EX": _Cap({"harvestable"}),
+            "HQ": _Cap({"headquarters"}),
+        })
+
+    def _bal(self):
+        return BalanceConfig()  # empty=1, building=10, per_storage_level=20
+
+    def test_empty_tile_capacity_is_one(self):
+        tile = _CapTile()
+        assert tile_item_capacity(tile, 1, 1, provider=self._prov(),
+                                  balance=self._bal()) == 1
+
+    def test_non_storage_building_capacity_is_ten(self):
+        tile = _CapTile()
+        tile.place_building(_LevelBuilding("HQ"), 1, 1)
+        assert tile_item_capacity(tile, 1, 1, provider=self._prov(),
+                                  balance=self._bal()) == 10
+
+    def test_vault_capacity_scales_with_level(self):
+        tile = _CapTile()
+        tile.place_building(_LevelBuilding("VT", level=3), 1, 1)
+        # 20 x level 3 = 60.
+        assert tile_item_capacity(tile, 1, 1, provider=self._prov(),
+                                  balance=self._bal()) == 60
+
+    def test_extractor_capacity_scales_with_level(self):
+        tile = _CapTile()
+        tile.place_building(_LevelBuilding("EX", level=2), 1, 1)
+        assert tile_item_capacity(tile, 1, 1, provider=self._prov(),
+                                  balance=self._bal()) == 40
+
+    def test_object_count_and_has_room(self):
+        tile = _CapTile()
+        # Empty tile: cap 1, count 0 -> has room.
+        assert tile_object_count(tile, 1, 1) == 0
+        assert tile_has_room(tile, 1, 1, provider=self._prov(), balance=self._bal())
+        # Fill it: count 1, cap 1 -> no room.
+        tile.add_objects(1, 1, 1)
+        assert tile_object_count(tile, 1, 1) == 1
+        assert not tile_has_room(tile, 1, 1, provider=self._prov(), balance=self._bal())
+
+    def test_object_count_zero_when_tile_not_queryable(self):
+        assert tile_object_count(object(), 1, 1) == 0

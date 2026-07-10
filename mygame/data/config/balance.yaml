@@ -119,3 +119,16 @@ outpost_count: 5                 # outposts per planet at init
 fortress_count: 2                # fortresses per planet at init
 outpost_guard_hp: 80             # HP per outpost guard
 fortress_guard_hp: 150           # HP per fortress guard
+
+# --- Tile (room) item-capacity caps ---
+# Max loose ground items (dropped Game_Items + Resource_Drops) a single tile
+# can hold before generation and manual drops are refused. A tile's cap depends
+# on the building sitting on it:
+#   * no building        -> room_capacity_empty
+#   * Vault / Extractor   -> room_capacity_per_storage_level x building level
+#   * any other building  -> room_capacity_building
+# Merging into an existing same-type drop does not add an object, so it is
+# always allowed; only creating a NEW drop object counts against the cap.
+room_capacity_empty: 1              # bare tile holds a single dropped item
+room_capacity_building: 10          # tile with a non-storage/resource building
+room_capacity_per_storage_level: 20 # x level for Vault (storage) & Extractor

@@ -270,6 +270,11 @@ def _fmt_produced(d: dict) -> str:
     return f"|g[{where}] Produced {d.get('item_name', 'item')}.|n"
 
 
+def _fmt_tile_full(d: dict) -> str:
+    # The tile is at its item-capacity cap, so a new drop was refused.
+    return "|yThe ground here is full — clear some items to gather more.|n"
+
+
 def _fmt_combat_started(d: dict) -> str:
     # Fired once when a player enters the combat state (not on every hit).
     dur = d.get("duration")
@@ -379,6 +384,7 @@ class NotificationPresenter:
         "crafted": _fmt_crafted,
         "craft_failed": _fmt_craft_failed,
         "produced": _fmt_produced,
+        "tile_full": _fmt_tile_full,
         "combat_started": _fmt_combat_started,
         "npc_killed": _fmt_npc_killed,
         "base_eliminated": _fmt_base_eliminated,

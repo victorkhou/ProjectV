@@ -3103,18 +3103,22 @@ class CmdDrop(GameCommand):
 
     Usage:
       drop <object>
+      drop all
 
     Options:
       <object>  name of a carried item to drop on your tile
+      all       drop everything you can, up to the tile's remaining capacity
 
     Examples:
       drop knife
-      drop medkit
+      drop all
 
     Notes:
-      The item lands on your exact coordinates and can be picked back up with
-      'get'. Dropping is a physical action — it interrupts active-presence work
-      (harvesting/building), same as moving.
+      Dropped items land on your exact coordinates and can be picked back up
+      with 'get'. Each tile has a limited item capacity — a full tile refuses
+      further drops, and 'drop all' fills it up to the limit and keeps the rest
+      in your inventory. Dropping interrupts active-presence work (harvesting/
+      building), same as moving.
     """
 
     key = "drop"
@@ -3133,6 +3137,16 @@ class CmdDrop(GameCommand):
             caller.msg("You have no location.")
             return
 
+        # Dropping is a physical action — interrupt active-presence work.
+        self._interrupt_activity(caller)
+
+        cx = getattr(caller.db, "coord_x", None)
+        cy = getattr(caller.db, "coord_y", None)
+
+        if self.args.strip().lower() == "all":
+            self._drop_all(caller, loc, cx, cy)
+            return
+
         # Find the named object in the caller's inventory (prefix match).
         obj_name = self.args.strip()
         search = obj_name.lower()
@@ -3146,40 +3160,100 @@ class CmdDrop(GameCommand):
             caller.msg(f"You aren't carrying '{obj_name}'.")
             return
 
+        # Capacity gate: a full tile refuses a new dropped item.
+        if not self._tile_has_room(loc, cx, cy):
+            caller.msg("The ground here is full — there's no room to drop that.")
+            return
+
+        if self._drop_one(caller, target, loc, cx, cy):
+            caller.msg(f"You drop {target.key}.")
+        else:
+            caller.msg("You can't drop that.")
+
+    @staticmethod
+    def _tile_has_room(loc, cx, cy) -> bool:
+        """True if the tile at (cx, cy) can accept another dropped item."""
+        if cx is None or cy is None:
+            return True  # no coordinate model (test/legacy) — don't block
+        from world.utils import tile_has_room
+        return tile_has_room(loc, int(cx), int(cy))
+
+    @staticmethod
+    def _drop_one(caller, target, loc, cx, cy) -> bool:
+        """Drop a single item: move to the tile, set coords, index it.
+
+        Order matters: PlanetRoom.at_object_receive indexes an incoming object
+        only if it already carries coord_x/coord_y, but at_drop (which sets them
+        from the dropper) runs AFTER move_to — so the room's auto-index misses
+        it. We set coords + register in the coordinate index here so the dropped
+        item is visible to get/scan/look/map (all coordinate-index queries).
+        (Stock Evennia 'drop' does neither, leaving drops invisible/un-pickable.)
+        Returns True on success.
+        """
         if hasattr(target, "at_pre_drop") and not target.at_pre_drop(caller):
-            caller.msg("You can't drop that.")
-            return
-
-        # Dropping is a physical action — interrupt active-presence work.
-        self._interrupt_activity(caller)
-
-        # Move to the room, THEN set coordinates and register in the coordinate
-        # index. Order matters: PlanetRoom.at_object_receive indexes an incoming
-        # object only if it already carries coord_x/coord_y, but at_drop (which
-        # sets them from the dropper) runs AFTER move_to — so the room's
-        # auto-index misses it. We set coords + index here so the dropped item is
-        # visible to get/scan/look/map (all coordinate-index queries). (The
-        # default Evennia 'drop' does neither, which left dropped items invisible
-        # and un-pickable on the overworld.)
+            return False
         if not target.move_to(loc, quiet=True, move_type="drop"):
-            caller.msg("You can't drop that.")
-            return
-
+            return False
         if hasattr(target, "at_drop"):
             target.at_drop(caller)
-
-        cx = getattr(caller.db, "coord_x", None)
-        cy = getattr(caller.db, "coord_y", None)
         if cx is not None and cy is not None:
-            # Ensure the item carries the tile coords (at_drop normally does this;
-            # set defensively for items whose at_drop is a no-op) and register.
+            # at_drop normally sets coords; set defensively for no-op at_drops.
             if getattr(target.db, "coord_x", None) is None:
                 target.db.coord_x = int(cx)
                 target.db.coord_y = int(cy)
             if hasattr(loc, "coord_index"):
                 loc.coord_index.add(target, int(cx), int(cy))
+        return True
 
-        caller.msg(f"You drop {target.key}.")
+    def _drop_all(self, caller, loc, cx, cy):
+        """Drop as many carried items as the tile's remaining capacity allows.
+
+        Fills the tile up to its item-capacity cap and keeps the rest in the
+        caller's inventory (reported). Equipped Gear is not dropped — only loose
+        inventory items (the same set 'get all' picks up).
+        """
+        from world.utils import tile_item_capacity, tile_object_count
+
+        # Loose, droppable inventory items (skip anything without move_to).
+        carried = [o for o in caller.contents if hasattr(o, "move_to")]
+        if not carried:
+            caller.msg("You have nothing to drop.")
+            return
+
+        if cx is None or cy is None:
+            # No coordinate model — drop everything (legacy/test path).
+            dropped = [o.key for o in carried if self._drop_one(caller, o, loc, cx, cy)]
+            if dropped:
+                caller.msg(f"You drop {', '.join(dropped)}.")
+            else:
+                caller.msg("You have nothing to drop.")
+            return
+
+        capacity = tile_item_capacity(loc, int(cx), int(cy))
+        room_left = capacity - tile_object_count(loc, int(cx), int(cy))
+        if room_left <= 0:
+            caller.msg("The ground here is full — there's no room to drop anything.")
+            return
+
+        dropped = []
+        for obj in carried:
+            if len(dropped) >= room_left:
+                break
+            if self._drop_one(caller, obj, loc, cx, cy):
+                dropped.append(obj.key)
+
+        if not dropped:
+            caller.msg("You couldn't drop anything here.")
+            return
+
+        remaining = len(carried) - len(dropped)
+        msg = f"You drop {', '.join(dropped)}."
+        if remaining > 0:
+            msg += (
+                f" The ground is now full — {remaining} item(s) stay in your "
+                f"inventory."
+            )
+        caller.msg(msg)
 
 
 # ------------------------------------------------------------------ #

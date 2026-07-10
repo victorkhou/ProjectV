@@ -102,7 +102,7 @@ from mygame.commands.game_commands import (  # noqa: E402
     CmdResearch, CmdPowerup,
     CmdScore, CmdEquipment, CmdBuildings, CmdScan, CmdTechnology,
     CmdInventory, CmdMessage, CmdSay, CmdMap,
-    CmdCloseExit, CmdOpenExit, CmdExit, CmdGet, CmdEnter, CmdLeave,
+    CmdCloseExit, CmdOpenExit, CmdExit, CmdGet, CmdEnter, CmdLeave, CmdDrop,
 )
 
 # -------------------------------------------------------------- #
@@ -2428,6 +2428,84 @@ class TestGetInterruptsActivity(unittest.TestCase):
         # No interrupt notice when nothing was in progress.
         self.assertFalse(any("interrupted" in m.lower() for m in caller._messages))
         self.assertEqual(caller.db.activity_state, "idle")
+
+
+# -------------------------------------------------------------- #
+#  CmdDrop — tile capacity cap + drop all
+# -------------------------------------------------------------- #
+
+class _FakeInvItem:
+    """A droppable inventory item that lands on the tile when dropped."""
+    def __init__(self, key):
+        self.key = key
+        self.db = types.SimpleNamespace(coord_x=None, coord_y=None)
+        self.location = None
+
+    def at_pre_drop(self, dropper, **kw):
+        return True
+
+    def move_to(self, dest, **kw):
+        self.location = dest
+        return True
+
+    def at_drop(self, dropper, **kw):
+        self.db.coord_x = getattr(dropper.db, "coord_x", None)
+        self.db.coord_y = getattr(dropper.db, "coord_y", None)
+
+
+class _CapTile(FakeLocation):
+    """A tile whose coord_index.add records items so tile_object_count sees them,
+    making the item-capacity cap real in-test."""
+
+    class _Index:
+        def __init__(self, tile):
+            self._tile = tile
+
+        def add(self, obj, x, y):
+            self._tile._objects_by_coord.setdefault((x, y), []).append(obj)
+
+    @property
+    def coord_index(self):
+        return _CapTile._Index(self)
+
+
+class TestDropCapacity(unittest.TestCase):
+    """drop / drop all honor the tile item-capacity cap (default empty tile=1)."""
+
+    def _caller_with_items(self, tile, *item_keys):
+        caller = FakeCaller(location=tile)
+        caller.db.coord_x = 5
+        caller.db.coord_y = 5
+        items = [_FakeInvItem(k) for k in item_keys]
+        caller.contents = list(items)  # what CmdDrop iterates
+        return caller, items
+
+    def test_drop_onto_empty_tile_succeeds_and_indexes(self):
+        tile = _CapTile()
+        caller, (knife,) = self._caller_with_items(tile, "Combat Knife")
+        _make_cmd(CmdDrop, caller, "Combat Knife").func()
+        self.assertIn(knife, tile.get_objects_at(5, 5))
+        self.assertEqual(knife.db.coord_x, 5)
+        self.assertTrue(any("drop" in m.lower() for m in caller._messages))
+
+    def test_second_drop_on_full_empty_tile_is_refused(self):
+        tile = _CapTile()
+        # Empty-tile cap is 1: pre-fill the tile with one loose item.
+        tile._objects_by_coord[(5, 5)] = [_FakeInvItem("Rock")]
+        caller, (knife,) = self._caller_with_items(tile, "Combat Knife")
+        _make_cmd(CmdDrop, caller, "Combat Knife").func()
+        self.assertNotIn(knife, tile.get_objects_at(5, 5))
+        self.assertTrue(any("full" in m.lower() for m in caller._messages))
+
+    def test_drop_all_fills_to_capacity_and_keeps_the_rest(self):
+        tile = _CapTile()  # empty tile, cap = 1
+        caller, items = self._caller_with_items(tile, "Knife", "Medkit", "Rifle")
+        _make_cmd(CmdDrop, caller, "all").func()
+        on_tile = tile.get_objects_at(5, 5)
+        self.assertEqual(len(on_tile), 1, "only cap-many items should drop")
+        self.assertTrue(
+            any("stay in your inventory" in m for m in caller._messages)
+        )
 
 
 if __name__ == "__main__":

@@ -353,3 +353,21 @@ class BalanceConfig:
     outpost_guard_hp: int = 80
     #: HP for each fortress guard NPC (overridden per template if specified).
     fortress_guard_hp: int = 150
+
+    # --- Tile (room) item-capacity caps --------------------------------- #
+    #: Max loose ground items (Game_Item + Resource_Drop objects) a tile can
+    #: hold before generation/drops are refused. These bound how many drop
+    #: objects a single tile can accumulate. A tile's cap depends on what
+    #: building (if any) sits on it — see ``world.utils.tile_item_capacity``:
+    #:   * no building        -> ``room_capacity_empty``
+    #:   * Vault / Extractor   -> ``room_capacity_per_storage_level`` x level
+    #:   * any other building  -> ``room_capacity_building``
+    #: Merging into an existing same-type drop does NOT add an object, so it is
+    #: always allowed; only creating a NEW drop object is capped.
+    #: An empty tile holds a single dropped item.
+    room_capacity_empty: int = 1
+    #: A tile with a non-storage/non-resource building holds up to this many.
+    room_capacity_building: int = 10
+    #: Per building-level cap for storage (Vault) and resource (Extractor)
+    #: tiles: capacity = this x the building's level (e.g. 20 x Vault level).
+    room_capacity_per_storage_level: int = 20

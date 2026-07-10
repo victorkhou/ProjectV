@@ -584,6 +584,16 @@ def spawn_resource_drop(location, resource_type, amount, x=None, y=None):
                 obj.db.amount = (obj.db.amount or 0) + amount
                 return obj
 
+    # No same-type drop to merge into — this would be a NEW object, so it is
+    # subject to the tile item-capacity cap. A full tile refuses the new drop
+    # (returns None); the caller (harvest/production) must treat that as "not
+    # generated" and NOT consume/lose the resource. (Merges above are always
+    # allowed — they don't add an object.)
+    if x is not None and y is not None:
+        from world.utils import tile_has_room
+        if not tile_has_room(location, x, y):
+            return None
+
     # Create new drop
     import evennia
     drop = evennia.create_object(
@@ -682,6 +692,16 @@ def spawn_gear_drop(location, item_def, x=None, y=None):
     """
     if location is None:
         return None
+
+    # Gear is always a unique NEW object (never merged), so it is always subject
+    # to the tile item-capacity cap. A full tile refuses it (returns None); the
+    # caller (passive production) treats that as a routing failure and refunds
+    # the craft_cost, so nothing is minted or lost.
+    if x is not None and y is not None:
+        from world.utils import tile_has_room
+        if not tile_has_room(location, x, y):
+            return None
+
     import evennia
 
     item = evennia.create_object(
@@ -747,6 +767,14 @@ def spawn_supply_drop(location, item_key, count, x=None, y=None):
             ):
                 obj.db.count = (obj.db.count or 0) + count
                 return obj
+
+    # No same-key stack to merge into — a NEW object, so honor the tile cap. A
+    # full tile refuses it (returns None); the caller keeps the units accounted
+    # for (they stay in the bag / are reported, never destroyed).
+    if x is not None and y is not None:
+        from world.utils import tile_has_room
+        if not tile_has_room(location, x, y):
+            return None
 
     # Create a new supply drop.
     import evennia

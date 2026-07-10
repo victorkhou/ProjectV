@@ -321,6 +321,29 @@ class LiveBootSmokeTest(EvenniaTest):
         # No longer on the tile after pickup.
         self.assertNotIn(knife, room.get_objects_at(7, 7))
 
+    def test_empty_tile_capacity_caps_at_one_gear_drop(self):
+        """An empty tile (capacity 1) accepts one gear drop and refuses the
+        second — exercising spawn_gear_drop's real coordinate-index cap check
+        against a real PlanetRoom."""
+        from typeclasses.objects import spawn_gear_drop
+        from world.definitions import ItemDef
+
+        room = self._make_planet_room("earth")
+        item_def = ItemDef(
+            key="combat_knife", name="Combat Knife", slot="weapon",
+            category="weapon", stat_modifiers={"damage": 8},
+        )
+
+        first = spawn_gear_drop(room, item_def, x=3, y=3)
+        self.assertIsNotNone(first, "first drop onto an empty tile must succeed")
+        self.assertEqual(len(room.get_objects_at(3, 3)), 1)
+
+        # Empty-tile capacity is 1 → the second new gear drop is refused.
+        second = spawn_gear_drop(room, item_def, x=3, y=3)
+        self.assertIsNone(second, "a full tile must refuse a new gear drop")
+        self.assertEqual(len(room.get_objects_at(3, 3)), 1,
+                         "the tile must still hold only one item")
+
 
 def _teardown_game(systems):
     """Best-effort teardown: stop any scripts initialize_game created so they

@@ -74,6 +74,99 @@ def nearby_players(location: Any, x: int, y: int, radius: int) -> list:
     return []
 
 
+# ------------------------------------------------------------------ #
+#  Tile (room) item capacity
+# ------------------------------------------------------------------ #
+
+#: object_type tags that count as a "loose ground item" against a tile's cap.
+#: Buildings and NPCs/agents do NOT count — only pickupable drops.
+_GROUND_ITEM_TAGS = ("item", "resource_drop")
+
+
+def tile_object_count(room: Any, x: int, y: int) -> int:
+    """Count loose ground items (GameItems + ResourceDrops) at ``(x, y)``.
+
+    This is a tile's "carry weight" for the room-capacity cap: dropped gear,
+    dropped supplies, and resource drops. Buildings and agents/NPCs on the tile
+    are excluded — they are not pickupable drops. Returns 0 when *room* can't be
+    queried (no ``get_objects_at``), so lightweight test doubles are safe.
+    """
+    if room is None or not hasattr(room, "get_objects_at"):
+        return 0
+    total = 0
+    for tag in _GROUND_ITEM_TAGS:
+        try:
+            total += len(room.get_objects_at(int(x), int(y), type_tag=tag))
+        except Exception:  # noqa: BLE001 - a query failure must not break drops
+            continue
+    return total
+
+
+def tile_item_capacity(
+    room: Any, x: int, y: int, provider: Any = None, balance: Any = None
+) -> int:
+    """Return the max loose ground items a tile at ``(x, y)`` may hold.
+
+    Depends on the building (if any) occupying the tile:
+      * no building                 -> ``balance.room_capacity_empty`` (1)
+      * Vault (storage) / Extractor (harvestable) -> ``room_capacity_per_storage_level``
+        x the building's level
+      * any other building          -> ``balance.room_capacity_building`` (10)
+
+    *provider*/*balance* may be injected for tests; both default to the live
+    registry. Falls back to the empty-tile cap when the room can't be queried.
+    """
+    from world.constants import HARVESTABLE, STORAGE
+
+    if balance is None:
+        from world.adapters.registry_definitions_provider import default_balance
+        balance = default_balance()
+
+    empty_cap = int(getattr(balance, "room_capacity_empty", 1))
+    building_cap = int(getattr(balance, "room_capacity_building", 10))
+    per_level = int(getattr(balance, "room_capacity_per_storage_level", 20))
+
+    building = _building_on_tile(room, x, y)
+    if building is None:
+        return empty_cap
+
+    # Storage (Vault) or resource (Extractor) tiles scale with building level.
+    if building_has_capability(building, STORAGE, provider=provider) or \
+            building_has_capability(building, HARVESTABLE, provider=provider):
+        level = get_building_level(building)
+        return per_level * max(1, int(level))
+
+    return building_cap
+
+
+def tile_has_room(
+    room: Any, x: int, y: int, provider: Any = None, balance: Any = None
+) -> bool:
+    """Return True if a NEW ground item can be created at ``(x, y)``.
+
+    Compares the current loose-item count against :func:`tile_item_capacity`.
+    Callers that MERGE into an existing drop (growing its count, not adding an
+    object) should skip this check — a merge never increases the object count,
+    so it is always allowed. Only creating a brand-new drop object is capped.
+    """
+    return tile_object_count(room, x, y) < tile_item_capacity(
+        room, x, y, provider=provider, balance=balance
+    )
+
+
+def _building_on_tile(room: Any, x: int, y: int) -> Any | None:
+    """Return the building occupying tile ``(x, y)`` of *room*, or None."""
+    if room is None:
+        return None
+    if hasattr(room, "get_buildings_at"):
+        try:
+            buildings = room.get_buildings_at(int(x), int(y))
+        except Exception:  # noqa: BLE001
+            return None
+        return buildings[0] if buildings else None
+    return None
+
+
 def ensure_coords(caller: Any) -> tuple[Any, Any, str | None]:
     """Ensure caller has valid coordinates.
 

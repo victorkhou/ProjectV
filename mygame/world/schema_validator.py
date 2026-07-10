@@ -606,6 +606,9 @@ class SchemaValidator:
             # NPC base spawner + elimination (PvE NPC bases, Phase 5).
             "xp_hq_destroy", "outpost_respawn_ticks", "outpost_count",
             "fortress_count", "outpost_guard_hp", "fortress_guard_hp",
+            # Tile (room) item-capacity caps.
+            "room_capacity_empty", "room_capacity_building",
+            "room_capacity_per_storage_level",
         ]
         float_fields = [
             "xp_damage", "tick_interval",
