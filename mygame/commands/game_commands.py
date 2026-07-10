@@ -2606,6 +2606,18 @@ def _show_tile_summary(caller, planet_room):
     if drop_strs:
         parts.append(f"Resources: {', '.join(drop_strs)}")
 
+    # Dropped items (gear + supply GameItems on the ground). A supply drop
+    # carries a count; gear is a single unique object. Both are pickupable with
+    # 'get'. (Previously omitted, so dropped items were invisible to 'look'.)
+    items = planet_room.get_objects_at(x, y, type_tag="item")
+    item_strs = []
+    for it in items:
+        name = getattr(it, "key", "item")
+        count = getattr(getattr(it, "db", None), "count", None)
+        item_strs.append(f"{name} x{count}" if count else name)
+    if item_strs:
+        parts.append(f"Items: {', '.join(item_strs)}")
+
     # Other players
     others = []
     for p in planet_room.get_players_at(x, y):
@@ -3077,25 +3089,30 @@ class CmdGet(GameCommand):
             return
 
         candidates = list(loc.get_objects_at(int(cx), int(cy)))
-        picked = 0
+        picked = []
         for obj in candidates:
             if obj is caller:
                 continue
-            # Skip players and buildings
+            # Skip players, buildings, and NPCs/agents (only loose items/drops).
             if hasattr(obj, "has_account") and obj.has_account:
                 continue
             if hasattr(obj, "tags") and obj.tags.get("building", category="object_type"):
                 continue
+            if hasattr(obj, "tags") and obj.tags.get("npc", category="object_type"):
+                continue
             if hasattr(obj, "at_pre_get") and not obj.at_pre_get(caller):
                 continue
+            name = getattr(obj, "key", "item")
             if hasattr(obj, "move_to"):
                 obj.move_to(caller, quiet=True)
             if hasattr(obj, "at_get"):
                 obj.at_get(caller)
-            picked += 1
+            picked.append(name)
 
-        if picked == 0:
+        if not picked:
             caller.msg("Nothing to pick up.")
+        else:
+            caller.msg(f"You pick up {', '.join(picked)}.")
 
 
 class CmdDrop(GameCommand):

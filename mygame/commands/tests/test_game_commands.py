@@ -2508,5 +2508,53 @@ class TestDropCapacity(unittest.TestCase):
         )
 
 
+class TestGetAllAndLookMessages(unittest.TestCase):
+    """get all reports what it picked up; look lists dropped items on the tile."""
+
+    def test_get_all_reports_picked_up_items(self):
+        loc = FakeLocation()
+        loc._objects_by_coord[(5, 5)] = [_FakeDrop(key="Wood"), _FakeDrop(key="Iron")]
+        caller = FakeCaller(location=loc)
+        _make_cmd(CmdGet, caller, "all").func()
+        # A success message names the picked-up items (previously silent).
+        self.assertTrue(
+            any("pick up" in m.lower() for m in caller._messages),
+            f"get all should report what it picked up; got {caller._messages}",
+        )
+
+    def test_get_all_nothing_here_message(self):
+        loc = FakeLocation()  # empty tile
+        caller = FakeCaller(location=loc)
+        _make_cmd(CmdGet, caller, "all").func()
+        self.assertTrue(
+            any("nothing to pick up" in m.lower() for m in caller._messages)
+        )
+
+    def test_tile_summary_lists_dropped_items(self):
+        from mygame.commands.game_commands import _show_tile_summary
+
+        class _Item:
+            def __init__(self, key):
+                self.key = key
+                self.db = types.SimpleNamespace(count=None)
+                self.tags = _ItemTags()
+
+        class _ItemTags:
+            def get(self, key, category=None):
+                return "item" if (key == "item" and category == "object_type") else None
+
+        loc = FakeLocation()
+        knife = _Item("Combat Knife")
+        # get_objects_at(type_tag="item") must return the item.
+        loc._objects_by_coord[(5, 5)] = [knife]
+        caller = FakeCaller(location=loc)
+
+        _show_tile_summary(caller, loc)
+        self.assertTrue(
+            any("Combat Knife" in m for m in caller._messages),
+            f"look/tile summary should list dropped items; got {caller._messages}",
+        )
+
+
 if __name__ == "__main__":
     unittest.main()
