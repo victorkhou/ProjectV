@@ -444,3 +444,116 @@ singleton directly.
 | `DataRegistry.get_instance()` reaches | scattered | 1 choke point |
 | `CombatEngine → AgentSystem` global reach | direct | injected callable |
 | "Framework swap touches core?" | yes | **no** (guard-tested) |
+
+---
+
+# Part 5 — Holistic review (2026-07-10): the wiring/reality gap
+
+A Principal-level holistic pass (9 subsystem clusters, adversarially verified)
+found that the *structural* consolidation claims in Parts 1–4 **hold** — but that
+green-tests confidence is misplaced in one specific dimension: **the production
+wiring path and the real Evennia object model are never exercised by an
+integration test.** The result is a cluster of HIGH-severity bugs that are
+invisible to the 2000+ test suite because the test fakes are, in the places that
+matter, *higher-fidelity-than-real* (they raise `AttributeError` on a missing
+`db.*` attribute; real Evennia does not).
+
+## Holistic scorecard (1–10)
+
+| Dimension | Score | One-line justification |
+|---|---|---|
+| Architectural alignment & extensibility | **7** | Ports/adapters seam, tick-order-as-data, capability flags, role table are genuinely good; but a domain system builds an adapter from the composition root (`building_system._legacy_terrain_provider`, `movement_system`) — an L4→L6 reach the guard can't see — and the "framework swap = zero core changes" claim is undercut by untested production wiring. |
+| Code reuse & redundancy | **6** | Single-source role table and `get_player_level`/`building_has_capability` consolidations are real; but new/edge code re-introduced duplication: `_nearby_players` copy-pasted across two systems, three verbatim building-teardown blocks in `agent_system`, two parallel map renderers, `upgrade()` duplicating `start_upgrade`. |
+| Performance & efficiency | **6** | Agent-index/building-index caching and the per-tick `active_hq_owner_ids` set are well-designed; but `AgentSystem.process_tick` and `DeliveryBehavior` still issue uncached global tag-scans in the 1s loop, `combat_timer` does a `search_script` DB query per hit, and the chunk perf-gate is itself broken (see below). |
+| Readability & maintainability | **7** | Docstrings are thorough and CODING_STYLE-compliant; naming is clear; rationale comments are genuinely useful. Deductions: a few ~140-line multi-concern methods (`assign_agent`), and self-contradicting docs (the `at_repeat` docstring lists 10 tick steps; `TICK_STEP_ORDER` has 17). |
+| Security & error handling | **5** | Ownership perm-locks and per-step/per-agent `try/except` isolation are solid; but several broad `except: pass` blocks mask *real* defects — most damningly `except (KeyError, AttributeError): pass` swallowing a call to a **non-existent** `registry.get_coord_space()`, and `is_player()` failing *open* on every real object. |
+
+## Critical issues (must fix before production)
+
+These are all CONFIRMED (independent trace + adversarial verifier). Full detail
+in the top-level review; the load-bearing point is that **each one passes the
+entire test suite.**
+
+1. **`is_player()` fails open on every real Evennia object.**
+   `world/utils.py:133` — `hasattr(entity.db, "combat_xp")`. Evennia's
+   `DbHolder.__getattribute__` (`evennia/typeclasses/attributes.py:1453`) returns
+   `None` for unset attributes and **never raises**, so `hasattr` is `True` for
+   *any* object with a `.db` — buildings, items, drops. In `_finalize_hit`,
+   `_is_player` is tested *before* `_is_building`, so a 0-HP building routes to
+   `_handle_player_defeat` (respawn) instead of `_handle_building_destruction` →
+   **buildings are never destroyed in production and `BUILDING_DESTROYED` never
+   fires**, silently killing base-elimination. Tests pass because fake `db`
+   objects raise on missing attrs (the E2E test added that on purpose). Fix:
+   identify players by the `object_type`/character tag or an explicit
+   `npc_type is None and has-account` check — never by `hasattr(db, "combat_xp")`.
+
+2. **Tick clock frozen at 0 for three systems.** `server/conf/game_init.py:112–118`
+   constructs `BuildingSystem`, `CombatEngine`, `PowerupSystem` **without**
+   `current_tick_func` (only the spawner, L420, gets it); each defaults to
+   `lambda: 0`. Powerups expire the tick after activation (expiry stamped against
+   0, `process_tick` compares against the real tick); combat build-lockout math is
+   frozen. Fix: inject `current_tick_func=_get_current_tick` into all three.
+
+3. **Active-building list is empty whenever a player is online.**
+   `typeclasses/scripts.py:330` reads `getattr(loc, "z")` for the planet and
+   `world/chunking.py:118–119` reads `loc.x`/`loc.y` — but coordinates live on the
+   *entity* (`db.coord_x/coord_y/coord_planet`), and `PlanetRoom` exposes none of
+   `x/y/z`. So `_compute_active_data` returns `[]` in production →
+   turret/production/combat tick steps get no buildings. Tests inject fakes with
+   `.position`/`.x`/`.y`. Fix: resolve planet/coords from the entity's `db`, not
+   the room object.
+
+4. **Combat XP bypasses the progression pipeline.** `combat_engine._set_combat_xp`
+   (L595) writes `db.combat_xp` directly; the engine never calls `award_xp()`/
+   `recompute_progression()` nor routes through `RankSystem`, so no `LEVEL_CHANGED`
+   fires. Kills grant XP that doesn't level you up, update the agent cap, unlock
+   ranks, or notify — until an unrelated (harvest) award triggers a recompute.
+   Fix: award combat/kill/base XP through `RankSystem.award_xp` like every other
+   source.
+
+5. **`registry.get_coord_space()` / `planet_def.coord_space` do not exist.**
+   Referenced at `pathfinding.py:198` and `agent_system.py:826`; the surrounding
+   `except (KeyError, AttributeError): pass` silently swallows the `AttributeError`
+   and always falls back to 100×100 (pathfinding) / 256×256 (NPC passability,
+   `npcs.py:233`). On any planet larger than those defaults, A*/passability use
+   wrong bounds. Fix: add the real dimension lookup (or delete the dead branch and
+   read dimensions from `PlanetRegistry`), and narrow the `except` so a missing
+   method surfaces.
+
+## Prioritized refactors (reuse / redundancy)
+
+1. **Extract `_nearby_players` to `world/utils.py`** — currently copy-pasted
+   verbatim in `combat_engine.py:491` and `guard_combat_system.py:347` (the
+   docstring even claims it is "shared"). One home next to `get_coords`/`is_owner`.
+2. **Extract building-assignment teardown + path-or-place** in `agent_system.py`
+   (three verbatim copies at L272/L382/L570; place-block duplicated L331/L419).
+3. **Collapse `upgrade()` into `start_upgrade()`** (`building_system.py:281`) — the
+   instant path duplicates the timed path with divergent, staler state.
+4. **Delete the dead room-based map renderer** (`procedural_map_renderer.py:403`)
+   or make the live path reuse it — two ~90-line copies of the same priority logic
+   already diverge (hardcoded `ag` glyph).
+5. **Route the notification kind→formatter contract through a test** that asserts
+   *every* kind emitted by *any* system has a formatter (currently only 2 of ~9
+   emitting systems are scanned; a missing formatter silently drops the message —
+   the doc itself flags this as "a real risk").
+6. **Promote placement/grid magic numbers to `BalanceConfig`** — `_MIN_BASE_SEPARATION`,
+   `_MAX_PLACEMENT_ATTEMPTS`, the 256 passability default — are structural tunables
+   hardcoded against the stated `balance.yaml`-is-the-tuning-surface philosophy.
+
+## Doc-claim audit (what Parts 1–4 got right vs. overstated)
+
+- **Holds:** 0 module-scope Evennia imports in systems/core; presenter is the sole
+  owner of player strings (0 `.msg(` literals in systems); `get_instance()` single
+  choke point; `reload_all` validates-then-swaps; single-source role table;
+  `get_player_level`/`building_has_capability` consolidations; `TICK_STEP_ORDER` as
+  data; per-step tick isolation; all 8 systems inherit `BaseSystem`.
+- **Partial / overstated:** "adapters constructed *only* at `game_init`" — two
+  systems build a `TerrainProvider` from the composition root via a lazy import
+  (documented as a "legacy fallback", but it *is* an L4→L6 reach the guard can't
+  catch); "adding a definition field touches 3 *aligned* sites" — `ItemDef.classification`
+  only touches 2 (no validator rule); "restyle a notification = 1 edit" is true, but
+  the emit→formatter contract is not fully test-guarded.
+- **Violated:** the ER-diagram note that soft resource refs are "never caught at
+  load" is *correct as written*, but the same gap now silently swallows a call to a
+  **non-existent registry method** (`get_coord_space`) — worse than a typo'd
+  resource name because it's a dead code path, not just an unvalidated string.

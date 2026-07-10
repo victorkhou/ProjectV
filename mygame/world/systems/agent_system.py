@@ -816,17 +816,19 @@ class AgentSystem(AgentProgressionMixin, AgentBehaviorMixin, BaseSystem):
             if hasattr(planet_room, "_game_systems"):
                 systems = planet_room._game_systems
             if systems:
-                registry = systems.get("registry")
+                planet_registry = systems.get("planet_registry")
                 planet_key = getattr(
                     getattr(planet_room, "db", None), "planet", None
                 )
-                if registry and planet_key:
+                # Grid dimensions come from the PlanetRegistry's
+                # CoordinateSpaceDef. (The old registry.get_coord_space(
+                # planet_def.coord_space) call referenced a DataRegistry method
+                # and a PlanetDef field that don't exist; the AttributeError was
+                # swallowed, so this always fell through to the 256x256 default.)
+                if planet_registry is not None and planet_key:
                     try:
-                        planet_def = registry.get_planet(planet_key)
-                        coord_space = registry.get_coord_space(
-                            planet_def.coord_space
-                        )
-                        return coord_space.width, coord_space.height
+                        space = planet_registry.get_space(planet_key)
+                        return space.width, space.height
                     except (KeyError, AttributeError):
                         pass
             # Try reading width/height directly from the room

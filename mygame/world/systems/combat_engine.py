@@ -42,6 +42,7 @@ class CombatEngine(BaseSystem):
         event_bus: EventBus,
         current_tick_func: Callable[[], int] | None = None,
         agent_xp_awarder_provider: Callable[[], Any] | None = None,
+        player_xp_awarder_provider: Callable[[], Any] | None = None,
     ) -> None:
         super().__init__(registry, event_bus)
         self._current_tick_func = current_tick_func or (lambda: 0)
@@ -55,6 +56,12 @@ class CombatEngine(BaseSystem):
         # injected (via set_agent_xp_awarder) rather than the instance. Defaults
         # to the game_systems-global lookup for un-injected/legacy contexts.
         self._agent_xp_awarder_provider = agent_xp_awarder_provider
+        # Late-bound resolver for the PLAYER XP-awarder (the RankSystem). Routing
+        # player combat/kill/base XP through it recomputes level/rank and fires
+        # LEVEL_CHANGED / RANK_* — a raw ``db.combat_xp`` write does neither, so
+        # kills would grant XP that never levels the player up. Injected via
+        # set_player_xp_awarder; falls back to the game_systems-global lookup.
+        self._player_xp_awarder_provider = player_xp_awarder_provider
 
     def set_sight_blocked_func(self, func: Callable[..., bool] | None) -> None:
         """Inject the line-of-sight predicate used to gate turret fire.
@@ -73,6 +80,17 @@ class CombatEngine(BaseSystem):
         systems exist, replacing the game_systems-global reach.
         """
         self._agent_xp_awarder_provider = provider
+
+    def set_player_xp_awarder(self, provider: Callable[[], Any]) -> None:
+        """Inject the late-bound player XP-awarder resolver (the RankSystem).
+
+        *provider* is a zero-arg callable returning the object exposing
+        ``award_xp(player, amount, reason)`` (the RankSystem), or ``None`` when
+        unavailable. Wired at the composition root; routing player combat XP
+        through it (rather than a raw ``db.combat_xp`` write) recomputes the
+        player's level/rank and fires ``LEVEL_CHANGED`` / ``RANK_*``.
+        """
+        self._player_xp_awarder_provider = provider
 
     # ------------------------------------------------------------------ #
     #  Queue attack
@@ -592,8 +610,9 @@ class CombatEngine(BaseSystem):
             # XP ever became meaningful).
             pass
         elif self._is_player(attacker):
-            attacker_xp = self._get_combat_xp(attacker)
-            self._set_combat_xp(attacker, attacker_xp + xp_kill)
+            # Route through the progression path (recompute level/rank + events),
+            # not a raw db.combat_xp write.
+            self._award_player_combat_xp(attacker, xp_kill)
 
         # Deduct XP from victim.
         if self._is_agent(victim):
@@ -601,9 +620,9 @@ class CombatEngine(BaseSystem):
             # Routed through AgentSystem to avoid double-deducting.
             self._apply_agent_death_loss(victim)
         else:
-            victim_xp = self._get_combat_xp(victim)
-            new_xp = max(0, victim_xp - xp_death_loss)
-            self._set_combat_xp(victim, new_xp)
+            # Player victim: route the death-loss through the progression path so
+            # a level/rank drop recomputes and fires LEVEL_CHANGED / RANK_*.
+            self._deduct_player_combat_xp(victim, xp_death_loss)
 
         # Respawn victim (reset HP)
         hp_max = self._get_hp_max(victim)
@@ -655,8 +674,7 @@ class CombatEngine(BaseSystem):
         elif self._is_agent(attacker):
             self._award_agent_combat_xp(attacker)
         elif self._is_player(attacker):
-            attacker_xp = self._get_combat_xp(attacker)
-            self._set_combat_xp(attacker, attacker_xp + xp_kill)
+            self._award_player_combat_xp(attacker, xp_kill)
 
         tile = self._get_target_location(victim)
         victim_name = getattr(victim, "key", "enemy")
@@ -707,8 +725,7 @@ class CombatEngine(BaseSystem):
         owner = self._get_building_owner(building)
         own_building = is_owner(attacker, owner)
         if self._is_player(attacker) and not own_building:
-            attacker_xp = self._get_combat_xp(attacker)
-            self._set_combat_xp(attacker, attacker_xp + xp_building_destroy)
+            self._award_player_combat_xp(attacker, xp_building_destroy)
 
         tile = self._get_building_location(building)
 
@@ -989,6 +1006,84 @@ class CombatEngine(BaseSystem):
             agent_system.apply_agent_death_loss(agent)
         except Exception:  # noqa: BLE001 - never let death loss break combat
             pass
+
+    def _get_rank_system(self) -> Any | None:
+        """Resolve the player XP-awarder (the RankSystem).
+
+        Prefers the injected late-bound provider; falls back to the
+        game_systems-global lookup for un-injected/legacy contexts. Guarded so
+        combat never breaks if the rank system is unavailable.
+        """
+        provider = self._player_xp_awarder_provider
+        if provider is not None:
+            try:
+                return provider()
+            except Exception:  # noqa: BLE001 - never let resolution break combat
+                return None
+        try:
+            from server.conf.game_init import game_systems
+
+            return game_systems.get("rank_system")
+        except Exception:  # noqa: BLE001 - never let a missing system break combat
+            return None
+
+    def _award_player_combat_xp(self, player: Any, amount: int) -> None:
+        """Award combat/kill/base XP to a *player* through the progression path.
+
+        A raw ``db.combat_xp`` write does NOT recompute level/rank or fire
+        ``LEVEL_CHANGED`` / ``RANK_*``, so combat kills would grant XP that never
+        levels the player up or unlocks ranks. This routes through, in order of
+        preference:
+
+        1. The injected RankSystem (``award_xp`` — recompute + level/rank events),
+        2. the entity's own ``CombatEntity.award_xp`` (recompute, no events), or
+        3. a raw ``db.combat_xp`` increment (last-resort for minimal test doubles).
+
+        Guarded at each level so combat resolution never breaks.
+        """
+        if amount <= 0:
+            return
+        rank_system = self._get_rank_system()
+        if rank_system is not None and hasattr(rank_system, "award_xp"):
+            try:
+                rank_system.award_xp(player, amount, reason="combat")
+                return
+            except Exception:  # noqa: BLE001 - fall through to entity-local award
+                pass
+        # No rank system (isolated tests / early boot): recompute locally if the
+        # entity supports it, else fall back to the raw increment.
+        if hasattr(player, "award_xp"):
+            try:
+                player.award_xp(amount)
+                return
+            except Exception:  # noqa: BLE001 - fall through to raw set
+                pass
+        self._set_combat_xp(player, self._get_combat_xp(player) + amount)
+
+    def _deduct_player_combat_xp(self, player: Any, amount: int) -> None:
+        """Deduct death-loss XP from a *player* through the progression path.
+
+        Mirrors :meth:`_award_player_combat_xp`: prefers the RankSystem
+        (``deduct_xp`` — recompute + level/rank-down events), falls back to the
+        entity's ``CombatEntity.deduct_xp`` (recompute, no events), then to a raw
+        floored ``db.combat_xp`` write. Guarded so combat never breaks.
+        """
+        if amount <= 0:
+            return
+        rank_system = self._get_rank_system()
+        if rank_system is not None and hasattr(rank_system, "deduct_xp"):
+            try:
+                rank_system.deduct_xp(player, amount)
+                return
+            except Exception:  # noqa: BLE001 - fall through to entity-local path
+                pass
+        if hasattr(player, "deduct_xp"):
+            try:
+                player.deduct_xp(amount)
+                return
+            except Exception:  # noqa: BLE001 - fall through to raw set
+                pass
+        self._set_combat_xp(player, max(0, self._get_combat_xp(player) - amount))
 
     @staticmethod
     def _get_building_type(building: Any) -> str | None:

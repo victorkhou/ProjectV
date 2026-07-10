@@ -187,17 +187,23 @@ def compute_path_for_npc(
         if systems:
             terrain_generators = systems.get("_terrain_generators")
             registry = systems.get("registry")
+            planet_registry = systems.get("planet_registry")
             planet_key = None
             if hasattr(room, "db"):
                 planet_key = getattr(room.db, "planet", None)
 
-            # Resolve grid dimensions
-            if registry and planet_key:
+            # Resolve grid dimensions from the PlanetRegistry, which owns the
+            # CoordinateSpaceDef (width/height) for each planet. (The old code
+            # called registry.get_coord_space(planet_def.coord_space) — neither
+            # that DataRegistry method nor the PlanetDef.coord_space field exist,
+            # so the AttributeError was silently swallowed and dimensions always
+            # fell through to the 100x100 default, breaking A* bounds on any
+            # larger planet.)
+            if planet_registry is not None and planet_key:
                 try:
-                    planet_def = registry.get_planet(planet_key)
-                    coord_space = registry.get_coord_space(planet_def.coord_space)
-                    width = coord_space.width
-                    height = coord_space.height
+                    space = planet_registry.get_space(planet_key)
+                    width = space.width
+                    height = space.height
                 except (KeyError, AttributeError):
                     pass
 

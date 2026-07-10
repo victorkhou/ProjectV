@@ -112,11 +112,13 @@ class WorldChunkManager:
             if pos is not None:
                 return (pos[0], pos[1])
 
-        # Evennia room-based location
-        loc = getattr(player, "location", None)
-        if loc is not None:
-            x = getattr(loc, "x", None)
-            y = getattr(loc, "y", None)
+        # Real coordinate model: position lives on the entity's db
+        # (coord_x/coord_y), NOT on the room. (Reading loc.x/loc.y off the
+        # PlanetRoom always yielded None, so no chunk was ever active.)
+        db = getattr(player, "db", None)
+        if db is not None:
+            x = getattr(db, "coord_x", None)
+            y = getattr(db, "coord_y", None)
             if x is not None and y is not None:
                 return (int(x), int(y))
 
@@ -125,11 +127,13 @@ class WorldChunkManager:
     @staticmethod
     def _get_building_position(building: Any) -> tuple[int, int] | None:
         """Extract (x, y) position from a building object."""
-        # Building is placed in a room (tile)
-        loc = getattr(building, "location", None)
-        if loc is not None:
-            x = getattr(loc, "x", None)
-            y = getattr(loc, "y", None)
+        # Real coordinate model: a building's tile is on its db (coord_x/coord_y),
+        # not on the PlanetRoom it lives in. (Reading loc.x/loc.y always gave
+        # None, so buildings were never matched into any active chunk.)
+        db = getattr(building, "db", None)
+        if db is not None:
+            x = getattr(db, "coord_x", None)
+            y = getattr(db, "coord_y", None)
             if x is not None and y is not None:
                 return (int(x), int(y))
 

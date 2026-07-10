@@ -131,12 +131,23 @@ def get_building_level(building: Any) -> int:
 
 
 def is_player(entity: Any) -> bool:
-    """Return True if the entity is a player character (has combat_xp)."""
-    return (
-        entity is not None
-        and hasattr(entity, "db")
-        and hasattr(entity.db, "combat_xp")
-    )
+    """Return True if the entity is a player character or player-owned agent.
+
+    Both players and agents are ``CombatEntity`` instances, so they carry a
+    ``db.combat_xp`` value; buildings/items/drops (``GameEntity`` only) do not.
+
+    The check reads the VALUE of ``combat_xp``, not merely whether the attribute
+    is accessible: on a real Evennia object ``db`` is a ``DbHolder`` whose
+    ``__getattribute__`` returns ``None`` for any unset attribute and never
+    raises, so ``hasattr(entity.db, "combat_xp")`` is ``True`` for *every* object
+    with a ``.db``. A value-based check (``combat_xp is not None``) correctly
+    excludes buildings, whose ``combat_xp`` is unset (``None``). ``combat_xp`` is
+    always initialised to ``0`` on a CombatEntity, so a live player/agent still
+    reads a non-``None`` value.
+    """
+    if entity is None or not hasattr(entity, "db"):
+        return False
+    return getattr(entity.db, "combat_xp", None) is not None
 
 
 # ------------------------------------------------------------------ #

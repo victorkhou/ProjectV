@@ -109,13 +109,25 @@ def initialize_game() -> dict:
         EvenniaMovingEntityRepository,
     )
 
+    # The shared game-tick clock. ``_get_current_tick`` reads the live
+    # GameTickScript's tick count on each call, so systems constructed here get
+    # the real tick — without it they default to ``lambda: 0`` and their
+    # tick-derived math (combat lockout expiry, powerup duration/cooldown, the
+    # build-while-in-combat gate) freezes at 0.
+    from world.combat_timer import _get_current_tick
+
     building_system = BuildingSystem(
-        registry, event_bus, building_factory=EvenniaBuildingFactory()
+        registry, event_bus, building_factory=EvenniaBuildingFactory(),
+        current_tick_func=_get_current_tick,
     )
-    combat_engine = CombatEngine(registry, event_bus)
+    combat_engine = CombatEngine(
+        registry, event_bus, current_tick_func=_get_current_tick
+    )
     rank_system = RankSystem(registry, event_bus)
     resource_system = ResourceSystem(registry, event_bus)
-    powerup_system = PowerupSystem(registry, event_bus)
+    powerup_system = PowerupSystem(
+        registry, event_bus, current_tick_func=_get_current_tick
+    )
     tech_system = TechLabSystem(registry, event_bus)
     from world.systems.regen_system import RegenSystem
     regen_system = RegenSystem(registry, event_bus)
@@ -148,6 +160,11 @@ def initialize_game() -> dict:
     # Late-bind the agent XP-awarder into CombatEngine now that AgentSystem
     # exists, replacing its game_systems-global reach on agent kills.
     combat_engine.set_agent_xp_awarder(lambda: agent_system)
+    # Route player combat/kill/base XP through the RankSystem so a kill recomputes
+    # level/rank and fires LEVEL_CHANGED / RANK_* (a raw db.combat_xp write does
+    # neither). Late-bound: RankSystem exists by now, but keep the callable form
+    # consistent with the agent awarder.
+    combat_engine.set_player_xp_awarder(lambda: rank_system)
     # Guard combat AI: guard/soldier NPCs acquire nearby non-owner players and
     # queue attacks through the CombatEngine each tick (before combat_resolution
     # so they land same-tick). Ownership-generic — defends player bases and NPC
@@ -375,7 +392,8 @@ def initialize_game() -> dict:
     from world.adapters.game_systems_terrain_provider import (
         GameSystemsTerrainProvider,
     )
-    from world.combat_timer import _get_current_tick
+    # ``_get_current_tick`` already imported above where the tick-sensitive
+    # systems are constructed.
 
     # Enumerate every building AND guard NPC owned by a sentinel, for the
     # mass-delete on base elimination. Buildings come from get_buildings();

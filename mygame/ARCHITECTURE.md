@@ -201,6 +201,34 @@ graph LR
 > (it never runs `initialize_game()`). Together they turn "swap the DB or
 > framework with zero changes to core logic" into an enforced property.
 
+> ⚠️ **Known gap — the wiring/reality boundary is NOT guarded (holistic review,
+> 2026‑07‑10).** The two guards above check *names and import layering*, not
+> *runtime wiring correctness*. Because no test boots the real `initialize_game()`
+> against real typeclasses, a class of HIGH‑severity bugs passes the full suite:
+> - **`is_player()` fails open on real objects.** `world/utils.py` uses
+>   `hasattr(entity.db, "combat_xp")`, but Evennia's `DbHolder.__getattribute__`
+>   returns `None` (never raises) for unset attrs — so it is `True` for *every*
+>   object with a `.db`. In `_finalize_hit`, `_is_player` is tested before
+>   `_is_building`, so a 0‑HP building respawns instead of being destroyed and
+>   `BUILDING_DESTROYED` never fires. Tests pass because their fake `db` objects
+>   *raise* on missing attrs (higher‑fidelity‑than‑real).
+> - **Tick clock frozen at 0.** `game_init` constructs `BuildingSystem` /
+>   `CombatEngine` / `PowerupSystem` without `current_tick_func` (they default to
+>   `lambda: 0`); powerups expire immediately and combat lockout math is frozen.
+> - **Active‑building list empty when players are online.** The chunk perf‑gate
+>   reads `loc.x/loc.y/loc.z` off the `PlanetRoom`, but coordinates live on the
+>   entity (`db.coord_x/coord_y/coord_planet`); `_compute_active_data` returns `[]`
+>   in production.
+> - **Combat XP bypasses progression** (writes `db.combat_xp` directly, no
+>   `recompute_progression`/`LEVEL_CHANGED`), and **`registry.get_coord_space()`**
+>   (called in `pathfinding.py`/`agent_system.py`) **does not exist** — its
+>   `except (KeyError, AttributeError): pass` silently swallows the failure.
+>
+> The highest‑leverage remediation is a single **boot‑the‑real‑wiring integration
+> test** (assert each system received its tick func; assert `is_player(Building())`
+> is `False`; assert `tick_data["buildings"]` is populated with an online player on
+> a `PlanetRoom`). See `COMPLEXITY_REVIEW.md` Part 5 for the full list and fixes.
+
 ---
 
 ## 2. Bootstrap Sequence

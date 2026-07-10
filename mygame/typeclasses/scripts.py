@@ -321,15 +321,22 @@ class GameTickScript(DefaultScript):
         if not online_players:
             return []
 
-        # Collect active chunks across all planets
+        # Collect active chunks across all planets. The planet lives on the
+        # ENTITY (``db.coord_planet``) — the coordinate model stores position on
+        # the object, not on the room — with the PlanetRoom's ``planet_name`` as
+        # a fallback. (The old ``loc.z`` read the wrong model: a PlanetRoom has
+        # no ``z``/``x``/``y``, so it always yielded None and left this set empty,
+        # feeding an empty active-building list to every downstream tick step
+        # whenever a player was online.)
         all_active_chunks = set()
         planets = set()
         for player in online_players:
-            loc = getattr(player, "location", None)
-            if loc is not None:
-                planet = getattr(loc, "z", None)
-                if planet is not None:
-                    planets.add(str(planet))
+            planet = getattr(getattr(player, "db", None), "coord_planet", None)
+            if not planet:
+                loc = getattr(player, "location", None)
+                planet = getattr(loc, "planet_name", None) if loc else None
+            if planet:
+                planets.add(str(planet))
 
         active_buildings = []
 
