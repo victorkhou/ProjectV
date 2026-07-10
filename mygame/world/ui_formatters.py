@@ -137,6 +137,21 @@ def format_building_interior(looker: Any, building: Any, registry: Any = None) -
             lines.append(f"  |yResources: {', '.join(drops)}|n")
             lines.append(f"  Use |wget|n to pick them up.")
 
+    # Show dropped/produced items (gear + supply GameItems) on the building's
+    # tile — e.g. gear an assigned engineer just produced here. Without this,
+    # items on the tile were invisible while inside the building even though
+    # 'get' could pick them up.
+    if tile is not None and bx is not None and by is not None and hasattr(tile, "get_objects_at"):
+        item_strs = []
+        for obj in tile.get_objects_at(int(bx), int(by), type_tag="item"):
+            name = getattr(obj, "key", "item")
+            count = getattr(getattr(obj, "db", None), "count", None)
+            item_strs.append(f"{name} x{count}" if count else name)
+        if item_strs:
+            lines.append("")
+            lines.append(f"  |wItems: {', '.join(item_strs)}|n")
+            lines.append(f"  Use |wget|n to pick them up.")
+
     # Show other agents at the building's coordinates
     if tile is not None and bx is not None and by is not None and hasattr(tile, "get_objects_at"):
         tile_agents = []

@@ -17,14 +17,16 @@ class _DB:
 class _Tile:
     """PlanetRoom stand-in exposing get_players_at / get_objects_at."""
 
-    def __init__(self, players_by_coord=None):
+    def __init__(self, players_by_coord=None, objects_by_tag=None):
         self._players = players_by_coord or {}
+        # {(x, y, type_tag): [objs]}
+        self._objects = objects_by_tag or {}
 
     def get_players_at(self, x, y):
         return list(self._players.get((x, y), []))
 
     def get_objects_at(self, x, y, type_tag=None):
-        return []
+        return list(self._objects.get((x, y, type_tag), []))
 
 
 class _Player:
@@ -76,6 +78,45 @@ class TestInteriorListsPlayers(unittest.TestCase):
         out = format_building_interior(looker, building, registry=None)
 
         self.assertNotIn("Players here:", out)
+
+
+class _Item:
+    def __init__(self, key, count=None):
+        self.key = key
+        self.db = _DB(count=count)
+
+
+class TestInteriorListsItems(unittest.TestCase):
+    """The interior view lists dropped/produced items on the building's tile
+    (e.g. gear an assigned engineer produced), so they're visible while inside."""
+
+    def test_dropped_item_on_tile_is_listed(self):
+        looker = _Player("Looker")
+        tile = _Tile(objects_by_tag={(5, 5, "item"): [_Item("Combat Knife")]})
+        building = _Building(tile)
+
+        out = format_building_interior(looker, building, registry=None)
+
+        self.assertIn("Items:", out)
+        self.assertIn("Combat Knife", out)
+
+    def test_supply_item_shows_count(self):
+        looker = _Player("Looker")
+        tile = _Tile(objects_by_tag={(5, 5, "item"): [_Item("Rifle Rounds", count=30)]})
+        building = _Building(tile)
+
+        out = format_building_interior(looker, building, registry=None)
+
+        self.assertIn("Rifle Rounds x30", out)
+
+    def test_no_items_section_when_tile_has_none(self):
+        looker = _Player("Looker")
+        tile = _Tile()  # no items
+        building = _Building(tile)
+
+        out = format_building_interior(looker, building, registry=None)
+
+        self.assertNotIn("Items:", out)
 
 
 if __name__ == "__main__":

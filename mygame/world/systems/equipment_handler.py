@@ -115,8 +115,70 @@ class EquipmentHandler:
 
         slots[slot] = item
         self._set_slots(slots)
+
+        # Take the item into the wearer's possession: an item can be equipped
+        # straight off the ground/tile (equip resolves via caller.search, which
+        # sees the room's contents too). Moving it onto the character means that
+        # when it is later unequipped it stays in the character's inventory (its
+        # location is the character), so it shows in 'inventory' and can be
+        # re-equipped — rather than being left on whatever tile it came from.
+        self._move_item_to_character(item)
+
         item_name = getattr(item, "key", str(item))
         return True, f"Equipped {item_name} to {slot} slot."
+
+    def _move_item_to_character(self, item) -> None:
+        """Ensure *item* is located on this handler's character.
+
+        Uses Evennia's ``move_to`` (quiet, no hooks) when the item and character
+        support it; degrades to a direct ``location`` set, then to a no-op for
+        lightweight test doubles. Never raises into the equip/unequip path.
+
+        When the item was on a tile (equipped straight off the ground), it is
+        also de-registered from that room's coordinate index — otherwise the
+        worn item would linger on the map (visible to look/scan/get) as a ghost,
+        because ``move_hooks=False`` skips the ``at_object_leave`` hook that
+        normally clears the index.
+        """
+        character = self.character
+        try:
+            old_loc = getattr(item, "location", None)
+            if old_loc is character:
+                return
+
+            # Drop the item out of its old tile's coordinate index (if any).
+            self._deindex_from_tile(item, old_loc)
+
+            if hasattr(item, "move_to"):
+                item.move_to(character, quiet=True, move_hooks=False)
+            elif hasattr(item, "location"):
+                item.location = character
+        except Exception:
+            # A move failure must never break equipping; the slot dict is the
+            # source of truth for what's worn.
+            pass
+
+    @staticmethod
+    def _deindex_from_tile(item, room) -> None:
+        """Remove *item* from *room*'s coordinate index at its current tile."""
+        if room is None or not hasattr(room, "coord_index"):
+            return
+        db = getattr(item, "db", None)
+        cx = getattr(db, "coord_x", None) if db is not None else None
+        cy = getattr(db, "coord_y", None) if db is not None else None
+        if cx is None or cy is None:
+            return
+        try:
+            room.coord_index.remove(item, int(cx), int(cy))
+        except Exception:
+            pass
+        # The item is no longer on a tile — clear its tile coords so a later
+        # drop re-stamps them cleanly and nothing treats it as ground-placed.
+        try:
+            item.db.coord_x = None
+            item.db.coord_y = None
+        except Exception:
+            pass
 
     def unequip(self, slot: str):
         """Unequip the item in the given slot.

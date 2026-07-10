@@ -344,6 +344,52 @@ class LiveBootSmokeTest(EvenniaTest):
         self.assertEqual(len(room.get_objects_at(3, 3)), 1,
                          "the tile must still hold only one item")
 
+    # -------------------------------------------------------------- #
+    #  Equip/unequip lifecycle — item location + no map ghost
+    # -------------------------------------------------------------- #
+
+    def test_equip_from_ground_then_unequip_returns_to_inventory(self):
+        """Equipping an item off a tile moves it onto the player (de-indexed
+        from the tile — no map ghost); unequipping leaves it in inventory so it
+        shows in 'inventory' and can be re-equipped."""
+        from server.conf.game_init import initialize_game
+        from typeclasses.objects import spawn_gear_drop
+        from world.definitions import ItemDef
+
+        systems = initialize_game()
+        try:
+            eq = systems["equipment_system"]
+            room = self._make_planet_room("earth")
+            player = self._make_player(x=5, y=5, planet="earth",
+                                       combat_xp=100000, location=room)
+            idef = ItemDef(key="combat_knife", name="Combat Knife",
+                           slot="weapon", category="weapon",
+                           stat_modifiers={"damage": 8})
+            knife = spawn_gear_drop(room, idef, x=5, y=5)
+            self.assertIn(knife, room.get_objects_at(5, 5))
+
+            # Equip straight off the ground.
+            eq.equip(player, knife)
+            self.assertIs(knife.location, player, "equipped item must be on the player")
+            self.assertNotIn(
+                knife, room.get_objects_at(5, 5),
+                "equipped item must NOT linger on the tile (map ghost)",
+            )
+            self.assertIs(player.equipment.get_equipped("weapon"), knife)
+
+            # Unequip → stays in inventory (location is the player).
+            eq.unequip(player, "weapon")
+            self.assertIn(knife, player.contents,
+                          "unequipped item must be in the player's inventory")
+            self.assertIsNone(player.equipment.get_equipped("weapon"))
+            self.assertNotIn(knife, room.get_objects_at(5, 5))
+
+            # Re-equip from inventory works.
+            self.assertTrue(eq.equip(player, knife))
+            self.assertIs(player.equipment.get_equipped("weapon"), knife)
+        finally:
+            _teardown_game(systems)
+
 
 def _teardown_game(systems):
     """Best-effort teardown: stop any scripts initialize_game created so they
