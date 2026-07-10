@@ -971,9 +971,22 @@ class BuildingSystem(BaseSystem):
             except Exception:
                 bdef = None
             if bdef is not None and bdef.has_capability(HEADQUARTERS):
+                # Exclude the just-built HQ itself when checking for "other"
+                # buildings. Match by .id (the codebase's equality convention,
+                # robust across an idmapper flush that could hand back a distinct
+                # same-PK instance); fall back to identity when there is no id
+                # (test doubles).
+                built_id = getattr(building, "id", None)
+
+                def _is_the_new_hq(b):
+                    bid = getattr(b, "id", None)
+                    if built_id is not None and bid is not None:
+                        return bid == built_id
+                    return b is building
+
                 others = [
                     b for b in self._get_player_buildings(player)
-                    if b is not building
+                    if not _is_the_new_hq(b)
                 ]
                 if others:
                     self.notify(player, "base_reactivated")
