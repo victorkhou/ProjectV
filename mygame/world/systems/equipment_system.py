@@ -117,6 +117,14 @@ class EquipmentSystem(CarryWeightMixin, StorageMixin, BaseSystem):
         # ``world/systems`` stays framework-free and the layering guard stays
         # green; when unwired the spill degrades to a log.
         self._resource_drop_spawner: Callable[[Any, str, int], Any] | None = None
+        # Injected gear-drop spawner (composition root wires this via
+        # ``set_gear_drop_spawner``). A callable ``(building, item_def)`` that
+        # spawns a unique equippable Gear ``GameItem`` as a GROUND DROP on the
+        # building's tile (indexed), used by PASSIVE/agent production so produced
+        # gear lands on the map for the player to ``get`` rather than teleporting
+        # into their inventory. When unwired (isolated tests), the gear branch
+        # falls back to the ``_create_item_func`` inventory factory.
+        self._gear_drop_spawner: Callable[[Any, Any], Any] | None = None
 
     # ------------------------------------------------------------------ #
     #  Collaborator injection (composition root)
@@ -179,6 +187,22 @@ class EquipmentSystem(CarryWeightMixin, StorageMixin, BaseSystem):
         via the ``carry_full``/``storage_full`` notification but not respawned.
         """
         self._resource_drop_spawner = func
+
+    def set_gear_drop_spawner(
+        self, func: Callable[[Any, Any], Any]
+    ) -> None:
+        """Inject the gear-drop spawner used by PASSIVE gear production.
+
+        *func* is a callable ``(building, item_def)`` that spawns a unique
+        equippable Gear ``GameItem`` as a ground drop on *building*'s tile
+        (coordinate-indexed) and returns it. Wired once at the composition root
+        (``server/conf/game_init.py``) over ``typeclasses.objects.spawn_gear_drop``
+        so passive/agent production drops gear on the map — the player collects
+        it with ``get`` — without ``world/systems`` importing ``typeclasses`` at
+        module scope. When unwired (isolated tests), :meth:`_route_produced_item`
+        falls back to the inventory ``_create_item_func`` factory.
+        """
+        self._gear_drop_spawner = func
 
     # ------------------------------------------------------------------ #
     #  Production
@@ -282,7 +306,10 @@ class EquipmentSystem(CarryWeightMixin, StorageMixin, BaseSystem):
             # a free item; refund if routing fails.
             if not owner.deduct_resources(item_def.craft_cost):
                 continue
-            if not self._route_produced_item(item_def, owner):
+            # Passive production: pass the building so gear drops on ITS tile
+            # (the player collects it with ``get``), not into the owner's
+            # inventory. Supplies still route into the owner's Supply_Bag.
+            if not self._route_produced_item(item_def, owner, building=building):
                 for res, amt in item_def.craft_cost.items():
                     owner.add_resource(res, amt)
                 continue
@@ -357,27 +384,37 @@ class EquipmentSystem(CarryWeightMixin, StorageMixin, BaseSystem):
             )
         return total
 
-    def _route_produced_item(self, item_def: ItemDef, owner: Any) -> bool:
-        """Route a produced *item_def* into *owner*'s storage by category.
+    def _route_produced_item(
+        self, item_def: ItemDef, owner: Any, building: Any = None
+    ) -> bool:
+        """Route a produced *item_def* into storage by category.
 
         Supply-category produce (``ammo``/``consumable``/``throwable``) is added
         as a counted stack to the owner's Supply_Bag via ``add_supply`` — never
-        a Game_Item object. Gear-category produce (``armor``/``weapon``/
-        ``accessory``) becomes a unique Game_Item slot object via the injected
-        ``_create_item_func`` factory. There is no crossover (Req 3.2, 3.3,
-        13.4).
+        a Game_Item object.
+
+        Gear-category produce (``armor``/``weapon``/``accessory``) becomes a
+        unique Game_Item. WHERE it lands depends on *building*:
+
+        - **Passive/agent production** passes the producing *building*: the gear
+          is spawned as a GROUND DROP on the building's tile (via the injected
+          gear-drop spawner), so the player collects it with ``get``.
+        - **Manual craft** passes ``building=None``: the gear goes into the
+          crafter's inventory via ``_create_item_func`` (you hold what you made).
+
+        There is no supply/gear crossover (Req 3.2, 3.3, 13.4).
 
         Args:
             item_def: The definition of the produced item.
-            owner: The building owner receiving the produce.
+            owner: The building owner receiving supply produce / crafted gear.
+            building: The producing building (passive path) → gear drops on its
+                tile; ``None`` (craft path) → gear goes to *owner*'s inventory.
 
         Returns:
-            ``True`` if the item was routed into a store, ``False`` otherwise
-            (e.g. a Supply produced for an owner with no equipment handler, a
-            Supply_Bag entry already at ``max_stack``, or an unrecognized
-            category). Callers deduct the cost before routing and refund on a
-            ``False`` return, so a full bag must report failure — otherwise the
-            resources are spent for an item that was never added.
+            ``True`` if the item was routed, ``False`` otherwise (e.g. a Supply
+            for an owner with no handler, a Supply_Bag entry at ``max_stack``, a
+            gear drop with no resolvable tile, or an unrecognized category).
+            Callers deduct the cost before routing and refund on ``False``.
         """
         category = getattr(item_def, "category", None)
 
@@ -401,13 +438,29 @@ class EquipmentSystem(CarryWeightMixin, StorageMixin, BaseSystem):
             added = handler.add_supply(item_def.key, 1, max_stack=max_stack)
             return bool(added)
 
-        # Gear -> a unique Game_Item slot object via the factory. The injected
-        # factory calls evennia.create_object, which can raise (DB error, etc.).
-        # Contain it and report failure so the caller refunds — an escaping
-        # exception would leave the cost deducted with no item and no refund.
-        # (Note: a falsy return is NOT treated as failure — the default dict
-        # factory and test factories legitimately return None on success.)
+        # Gear -> a unique Game_Item. Passive production (a *building* was given
+        # AND a gear-drop spawner is wired) drops it on the building's tile so
+        # the player collects it with ``get``; manual craft (no building) puts it
+        # in the owner's inventory via the factory. Both paths call
+        # evennia.create_object, which can raise (DB error, etc.); contain it and
+        # report failure so the caller refunds — an escaping exception would
+        # leave the cost deducted with no item and no refund. (A falsy return is
+        # NOT treated as failure — the default dict/test factories return None on
+        # success. The drop spawner returns None only on a missing tile, which IS
+        # a failure — handled explicitly below.)
         if category in GEAR_CATEGORIES:
+            if building is not None and self._gear_drop_spawner is not None:
+                try:
+                    drop = self._gear_drop_spawner(building, item_def)
+                except Exception:
+                    logger.exception(
+                        "Failed to drop gear %s at %s's tile",
+                        item_def.key, getattr(building, "key", "?"),
+                    )
+                    return False
+                # None => no resolvable tile (building off-map): a real failure,
+                # so the caller refunds rather than minting a lost item.
+                return drop is not None
             try:
                 self._create_item_func(item_def, owner)
             except Exception:

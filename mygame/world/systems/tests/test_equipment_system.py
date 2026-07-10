@@ -1411,6 +1411,44 @@ class TestProductionRouting(unittest.TestCase):
         self.assertEqual(created, ["kevlar_vest"])
         self.assertEqual(player.equipment.get_supplies(), {})
 
+    def test_passive_gear_production_drops_on_building_tile(self):
+        """When a gear-drop spawner is wired (production), passive gear produce
+        is spawned on the BUILDING (a ground drop), NOT the owner's inventory."""
+        system, created = self._make({"AR": ["kevlar_vest"]})
+        # Wire a gear-drop spawner that records (building, item_def).
+        dropped = []
+        system.set_gear_drop_spawner(
+            lambda building, item_def: dropped.append((building, item_def.key))
+            or object()  # non-None => routing success
+        )
+        player = self._rich_player()
+        building = FakeProductionBuilding("AR", owner=player)
+
+        system.process_production([building])
+
+        # Gear went to the drop spawner (on the building), not the inventory
+        # factory, and not the Supply_Bag.
+        self.assertEqual(len(dropped), 1)
+        self.assertIs(dropped[0][0], building)
+        self.assertEqual(dropped[0][1], "kevlar_vest")
+        self.assertEqual(created, [], "gear must NOT go to the inventory factory")
+        self.assertEqual(player.equipment.get_supplies(), {})
+
+    def test_passive_gear_drop_failure_refunds(self):
+        """If the gear-drop spawner returns None (no resolvable tile), production
+        treats it as a routing failure and refunds the craft_cost."""
+        system, created = self._make({"AR": ["kevlar_vest"]})
+        system.set_gear_drop_spawner(lambda building, item_def: None)
+        player = self._rich_player()
+        before = player.get_resource("Iron")
+        building = FakeProductionBuilding("AR", owner=player)
+
+        system.process_production([building])
+
+        self.assertEqual(created, [])
+        # kevlar_vest craft_cost is Iron: 20 — must be refunded after the None.
+        self.assertEqual(player.get_resource("Iron"), before)
+
     def test_no_crossover_over_many_ticks(self):
         # AR list mixes gear (kevlar_vest) and supply (rifle_rounds).
         system, created = self._make(

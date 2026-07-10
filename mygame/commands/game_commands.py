@@ -3098,6 +3098,90 @@ class CmdGet(GameCommand):
             caller.msg("Nothing to pick up.")
 
 
+class CmdDrop(GameCommand):
+    """Drop something from your inventory onto your current tile.
+
+    Usage:
+      drop <object>
+
+    Options:
+      <object>  name of a carried item to drop on your tile
+
+    Examples:
+      drop knife
+      drop medkit
+
+    Notes:
+      The item lands on your exact coordinates and can be picked back up with
+      'get'. Dropping is a physical action — it interrupts active-presence work
+      (harvesting/building), same as moving.
+    """
+
+    key = "drop"
+    locks = "cmd:all()"
+    arg_regex = r"\s|$"
+    help_category = "General"
+
+    def func(self):
+        caller = self.caller
+        if not self.args:
+            caller.msg("Drop what?")
+            return
+
+        loc = caller.location
+        if loc is None:
+            caller.msg("You have no location.")
+            return
+
+        # Find the named object in the caller's inventory (prefix match).
+        obj_name = self.args.strip()
+        search = obj_name.lower()
+        target = None
+        for obj in caller.contents:
+            obj_key = getattr(obj, "key", "").lower()
+            if obj_key == search or obj_key.startswith(search):
+                target = obj
+                break
+        if target is None:
+            caller.msg(f"You aren't carrying '{obj_name}'.")
+            return
+
+        if hasattr(target, "at_pre_drop") and not target.at_pre_drop(caller):
+            caller.msg("You can't drop that.")
+            return
+
+        # Dropping is a physical action — interrupt active-presence work.
+        self._interrupt_activity(caller)
+
+        # Move to the room, THEN set coordinates and register in the coordinate
+        # index. Order matters: PlanetRoom.at_object_receive indexes an incoming
+        # object only if it already carries coord_x/coord_y, but at_drop (which
+        # sets them from the dropper) runs AFTER move_to — so the room's
+        # auto-index misses it. We set coords + index here so the dropped item is
+        # visible to get/scan/look/map (all coordinate-index queries). (The
+        # default Evennia 'drop' does neither, which left dropped items invisible
+        # and un-pickable on the overworld.)
+        if not target.move_to(loc, quiet=True, move_type="drop"):
+            caller.msg("You can't drop that.")
+            return
+
+        if hasattr(target, "at_drop"):
+            target.at_drop(caller)
+
+        cx = getattr(caller.db, "coord_x", None)
+        cy = getattr(caller.db, "coord_y", None)
+        if cx is not None and cy is not None:
+            # Ensure the item carries the tile coords (at_drop normally does this;
+            # set defensively for items whose at_drop is a no-op) and register.
+            if getattr(target.db, "coord_x", None) is None:
+                target.db.coord_x = int(cx)
+                target.db.coord_y = int(cy)
+            if hasattr(loc, "coord_index"):
+                loc.coord_index.add(target, int(cx), int(cy))
+
+        caller.msg(f"You drop {target.key}.")
+
+
 # ------------------------------------------------------------------ #
 #  Helper: retrieve a game system from the caller's ndb or global
 # ------------------------------------------------------------------ #

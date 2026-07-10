@@ -24,6 +24,7 @@ from commands.game_commands import (
     CmdScore, CmdEquipment, CmdBuildings, CmdScan, CmdTechnology,
     CmdInventory, CmdChat, CmdMessage, CmdSay, CmdLook, CmdMap,
     CmdLeave, CmdEnter, CmdCloseExit, CmdOpenExit, CmdExit, CmdStop, CmdWho, CmdGet,
+    CmdDrop,
 )
 from commands.agent_commands import (
     CmdAgent,
@@ -63,7 +64,7 @@ class CharacterCmdSet(default_cmds.CharacterCmdSet):
         #  objects, produce broken or orphaned state here, so we remove them.
         # ------------------------------------------------------------------ #
         from evennia.commands.default.general import (
-            CmdWhisper, CmdPose, CmdSetDesc, CmdGive, CmdHome,
+            CmdWhisper, CmdPose, CmdSetDesc, CmdGive, CmdHome, CmdDrop as CmdStockDrop,
         )
         from evennia.commands.default.building import (
             CmdOpen, CmdDig, CmdTunnel, CmdLink, CmdUnLink, CmdSetHome,
@@ -100,6 +101,12 @@ class CharacterCmdSet(default_cmds.CharacterCmdSet):
         self.remove(CmdSetDesc)  # setdesc: set your character description
         self.remove(CmdGive)     # give: hand an object to another character
 
+        # Stock 'drop' moves an item to the room WITHOUT setting coord_x/coord_y
+        # or registering it in the coordinate index (its at_drop runs after
+        # at_object_receive already skipped indexing), so dropped items were
+        # invisible to get/scan/look. Replaced by the coordinate-aware CmdDrop.
+        self.remove(CmdStockDrop)
+
         # Game commands
         self.add(CmdMove())
         self.add(CmdHarvest())
@@ -129,6 +136,7 @@ class CharacterCmdSet(default_cmds.CharacterCmdSet):
         self.add(CmdSay())
         self.add(CmdLook())
         self.add(CmdGet())
+        self.add(CmdDrop())
         self.add(CmdMap())
         self.add(CmdLeave())
         self.add(CmdEnter())

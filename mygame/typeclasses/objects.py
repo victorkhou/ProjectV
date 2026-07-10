@@ -603,34 +603,13 @@ def spawn_resource_drop(location, resource_type, amount, x=None, y=None):
     return drop
 
 
-def create_game_item(owner, item_def):
-    """Create a live ``GameItem`` for *owner* from an ``ItemDef`` (Gear production).
+def _apply_item_def(item, item_def):
+    """Copy an ``ItemDef``'s metadata onto a freshly-created ``GameItem``.
 
-    The production factory injected into ``EquipmentSystem`` at the composition
-    root (``game_init``). Where the framework-free
-    ``EquipmentSystem._default_create_item`` returns a lightweight dict for tests,
-    this spawns a real Evennia ``GameItem`` object in the owner's inventory so
-    produced Gear is equippable/usable end-to-end. Supplies are NOT created here —
-    they are routed into the Supply_Bag as counts by ``process_production``.
-
-    All metadata is copied onto the object's attributes so the ``GameItem``
-    property accessors resolve correctly, and a fresh ranged weapon starts with a
-    full magazine (``db.loaded = magazine_size``; Req 5.2, 11.7).
-
-    Args:
-        owner: The player/entity that produced the item (its new location).
-        item_def: The ``ItemDef`` to instantiate.
-
-    Returns:
-        The created ``GameItem``.
+    Shared by :func:`create_game_item` (inventory) and :func:`spawn_gear_drop`
+    (ground drop) so the metadata copy — and the full-magazine rule for a fresh
+    ranged weapon — lives in one place.
     """
-    import evennia
-
-    item = evennia.create_object(
-        "typeclasses.objects.GameItem",
-        key=item_def.name,
-        location=owner,
-    )
     item.db.item_key = item_def.key
     item.db.slot = item_def.slot
     item.db.category = item_def.category
@@ -649,6 +628,75 @@ def create_game_item(owner, item_def):
     # usable before the first reload (Req 5.2, 11.7).
     if item_def.weapon_type == "ranged" and item_def.magazine_size is not None:
         item.db.loaded = item_def.magazine_size
+
+
+def create_game_item(owner, item_def):
+    """Create a live ``GameItem`` for *owner* from an ``ItemDef`` (Gear).
+
+    Used by manual ``craft`` (the crafter holds what they made) and the admin
+    ``@item give`` command. Spawns a real Evennia ``GameItem`` object in the
+    owner's inventory so produced Gear is equippable/usable end-to-end. Supplies
+    are NOT created here — they are counted in the Supply_Bag.
+
+    (Passive/agent production spawns Gear as a GROUND DROP on the building's tile
+    instead — see :func:`spawn_gear_drop` — so a player collects it with ``get``.)
+
+    Args:
+        owner: The player/entity that gets the item (its new location).
+        item_def: The ``ItemDef`` to instantiate.
+
+    Returns:
+        The created ``GameItem``.
+    """
+    import evennia
+
+    item = evennia.create_object(
+        "typeclasses.objects.GameItem",
+        key=item_def.name,
+        location=owner,
+    )
+    _apply_item_def(item, item_def)
+    return item
+
+
+def spawn_gear_drop(location, item_def, x=None, y=None):
+    """Create a unique equippable Gear ``GameItem`` as a GROUND DROP at a tile.
+
+    The passive/agent production drop path (an Armory/Lab/Medbay with an Engineer
+    produces gear onto its own tile, not into thin air on the owner). Mirrors
+    :func:`spawn_supply_drop`, but for a unique Gear object rather than a counted
+    Supply stack — so each produced weapon/armor is its own pickup.
+
+    Sets ``coord_x``/``coord_y`` and manually registers in the room's coordinate
+    index: ``at_object_receive`` ran during ``create_object`` when the coords were
+    still ``None``, so it skipped indexing — without this the drop would be
+    invisible to ``get``/``scan``/``look`` (all coordinate-index queries).
+
+    Args:
+        location: Room/tile (PlanetRoom) to place the drop in.
+        item_def: The ``ItemDef`` to instantiate.
+        x, y: Tile coordinates for PlanetRoom placement + indexing.
+
+    Returns:
+        The created ``GameItem``, or ``None`` when *location* is falsy.
+    """
+    if location is None:
+        return None
+    import evennia
+
+    item = evennia.create_object(
+        "typeclasses.objects.GameItem",
+        key=item_def.name,
+        location=location,
+    )
+    _apply_item_def(item, item_def)
+    if x is not None and y is not None:
+        item.db.coord_x = int(x)
+        item.db.coord_y = int(y)
+        # at_object_receive saw coord_x=None during create_object, so register
+        # in the coordinate index now (same pattern as spawn_supply_drop).
+        if hasattr(location, "coord_index"):
+            location.coord_index.add(item, int(x), int(y))
     return item
 
 

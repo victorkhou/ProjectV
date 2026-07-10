@@ -597,6 +597,7 @@ def _setup_default_cmds_stubs():
     general_mod.CmdSetDesc = type("CmdSetDesc", (), {"key": "setdesc"})
     general_mod.CmdGive = type("CmdGive", (), {"key": "give"})
     general_mod.CmdHome = type("CmdHome", (), {"key": "home"})
+    general_mod.CmdDrop = type("CmdDrop", (), {"key": "drop"})
     sys.modules["evennia.commands.default.general"] = general_mod
 
     comms_mod = types.ModuleType("evennia.commands.default.comms")

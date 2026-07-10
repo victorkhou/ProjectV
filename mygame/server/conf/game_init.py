@@ -226,6 +226,23 @@ def initialize_game() -> dict:
 
     equipment_system.set_supply_drop_spawner(_spawn_supply_drop_for)
 
+    # Inject the gear-drop spawner so PASSIVE (agent-driven) gear production
+    # drops the produced weapon/armor on the building's tile — the player
+    # collects it with ``get`` — instead of teleporting it into their inventory.
+    # Reuses ``_holder_room_and_coords`` (a building exposes location +
+    # db.coord_x/coord_y just like a player) over
+    # ``typeclasses.objects.spawn_gear_drop``, keeping ``world/systems``
+    # framework-free. Returns None on a missing tile so production refunds.
+    def _spawn_gear_drop_for(building: Any, item_def: Any) -> Any:
+        room, cx, cy = _holder_room_and_coords(building)
+        if room is None:
+            return None
+        from typeclasses.objects import spawn_gear_drop
+
+        return spawn_gear_drop(room, item_def, x=cx, y=cy)
+
+    equipment_system.set_gear_drop_spawner(_spawn_gear_drop_for)
+
     movement_system = MovementSystem(
         max_paths_per_tick=MAX_PATHS_PER_TICK,
         moving_entity_repository=EvenniaMovingEntityRepository(),

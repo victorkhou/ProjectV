@@ -137,16 +137,33 @@ class LiveBootSmokeTest(EvenniaTest):
         b.attributes.add("building_type", btype)
         return b
 
-    def _make_player(self, x=11, y=10, planet="earth", combat_xp=0):
+    def _make_player(self, x=11, y=10, planet="earth", combat_xp=0, location=None):
         c = create.create_object(
             "typeclasses.characters.CombatCharacter", key="Raider",
-            location=self.room1, home=self.room1,
+            location=location or self.room1, home=self.room1,
         )
         c.db.coord_x = x
         c.db.coord_y = y
         c.db.coord_planet = planet
         c.db.combat_xp = combat_xp
         return c
+
+    def _make_planet_room(self, planet="earth"):
+        room = create.create_object(
+            "typeclasses.rooms.PlanetRoom", key=f"Planet-{planet}", nohome=True,
+        )
+        room.db.planet = planet
+        return room
+
+    def _make_gear_item(self, key="Combat Knife", location=None):
+        item = create.create_object(
+            "typeclasses.objects.GameItem", key=key,
+            location=location, home=self.room1,
+        )
+        item.db.item_key = "combat_knife"
+        item.db.category = "weapon"
+        item.db.slot = "weapon"
+        return item
 
     # -------------------------------------------------------------- #
     #  Fix #1 — is_player must NOT fail open on a real Building
@@ -260,6 +277,49 @@ class LiveBootSmokeTest(EvenniaTest):
             )
         finally:
             _teardown_game(systems)
+
+    # -------------------------------------------------------------- #
+    #  Drop/pickup — a dropped item must be indexed and re-gettable
+    # -------------------------------------------------------------- #
+
+    def test_dropped_item_is_indexed_and_can_be_picked_back_up(self):
+        """The custom CmdDrop must set coords AND register the item in the
+        PlanetRoom coordinate index, so get/scan/look see it and it can be
+        picked back up. (The stock 'drop' left items un-indexed and invisible.)"""
+        from commands.game_commands import CmdDrop, CmdGet
+
+        room = self._make_planet_room("earth")
+        player = self._make_player(x=7, y=7, planet="earth", location=room)
+        knife = self._make_gear_item("Combat Knife", location=player)
+
+        # --- drop it ---
+        drop = CmdDrop()
+        drop.caller = player
+        drop.args = "Combat Knife"
+        drop.func()
+
+        # It left the player and is on the tile, coordinate-indexed.
+        self.assertIsNot(knife.location, player, "item should have left inventory")
+        self.assertEqual(knife.db.coord_x, 7)
+        self.assertEqual(knife.db.coord_y, 7)
+        at_tile = room.get_objects_at(7, 7)
+        self.assertIn(
+            knife, at_tile,
+            "dropped item must be in the coordinate index (visible to get/scan/look)",
+        )
+
+        # --- pick it back up ---
+        get = CmdGet()
+        get.caller = player
+        get.args = "Combat Knife"
+        get.func()
+
+        self.assertIs(
+            knife.location, player,
+            "the dropped item must be pick-back-up-able via get",
+        )
+        # No longer on the tile after pickup.
+        self.assertNotIn(knife, room.get_objects_at(7, 7))
 
 
 def _teardown_game(systems):
