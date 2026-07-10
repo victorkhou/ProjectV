@@ -66,6 +66,30 @@ class TestOnCombatAction(unittest.TestCase):
         on_combat_action(self.event_bus)  # no player
         # Nothing to assert — just ensure no exception
 
+    def test_uses_current_tick_from_payload_without_db_query(self):
+        """When the publisher supplies current_tick (CombatEngine does), the
+        subscriber uses it and NEVER calls _get_current_tick (no per-hit
+        search_script DB query)."""
+        with patch("world.combat_timer._get_current_tick") as mock_tick:
+            on_combat_action(
+                self.event_bus, player=self.player, current_tick=777,
+            )
+            self.assertEqual(
+                self.player.db.combat_timer_expires,
+                777 + COMBAT_TIMER_DURATION,
+            )
+            mock_tick.assert_not_called()
+
+    @patch("world.combat_timer._get_current_tick", return_value=42)
+    def test_falls_back_to_lookup_when_payload_has_no_tick(self, mock_tick):
+        """Publishers that don't supply current_tick (e.g. vision events) still
+        work via the live lookup."""
+        on_combat_action(self.event_bus, player=self.player)
+        self.assertEqual(
+            self.player.db.combat_timer_expires, 42 + COMBAT_TIMER_DURATION,
+        )
+        mock_tick.assert_called_once()
+
     @patch("world.combat_timer._get_current_tick", return_value=10)
     def test_publishes_combat_timer_started(self, _mock_tick):
         received = []

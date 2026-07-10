@@ -302,12 +302,16 @@ class CombatEngine(BaseSystem):
             self._set_combat_lockout(target, lockout_until)
 
         # Publish combat_action event (drives the combat timer subscriber).
+        # Include current_tick so the combat-timer subscriber doesn't have to
+        # re-derive it with a per-hit search_script DB query — the engine already
+        # holds the tick here (its injected clock, passed down as current_tick).
         self.event_bus.publish(
             COMBAT_ACTION,
             attacker=attacker,
             target=target,
             item=weapon_item,
             damage=damage,
+            current_tick=current_tick,
         )
 
         # Notify the target (or building owner) of the hit.

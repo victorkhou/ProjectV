@@ -1717,11 +1717,16 @@ class TestTimeServedTick(AgentSystemTestBase):
         self.assertEqual(len(calls), 1)
         self.assertEqual(agent.db.combat_xp, 7)
 
-    def test_no_award_still_evaluates_once(self):
-        """When no award happens (frozen), the defensive re-eval still runs once.
+    def test_no_award_does_not_evaluate_gated_abilities(self):
+        """When no award happens (frozen, or zero configured amount),
+        _process_agent_tick does NOT run evaluate_gated_abilities.
 
-        This preserves convergence for direct/out-of-band XP edits that changed
-        the effective level without going through an award.
+        Gated-ability convergence is event-driven (an agent's own XP award, or
+        its owner's LEVEL_CHANGED via on_owner_level_changed) — the only things
+        that change an agent's effective level. So there is no unconditional
+        per-tick re-eval; under the shipped default (agent_xp_time_served = 0)
+        that pass would otherwise run for EVERY active agent EVERY tick with
+        nothing to converge. This asserts that redundant scan is gone.
         """
         self.registry.balance.agent_xp_time_served = 7
         owner = self._owner(level=1)  # ceiling 1 → frozen, no award
@@ -1735,7 +1740,7 @@ class TestTimeServedTick(AgentSystemTestBase):
 
         self.system._process_agent_tick(agent)
 
-        self.assertEqual(len(calls), 1)
+        self.assertEqual(len(calls), 0, "no per-tick re-eval when frozen")
         self.assertEqual(agent.db.combat_xp, 0)
 
     def test_zero_time_served_is_noop(self):

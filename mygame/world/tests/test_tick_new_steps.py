@@ -90,11 +90,17 @@ class FakePlayer:
 
 
 class FakeAgentSystem:
-    def __init__(self):
+    def __init__(self, agents=None):
         self.ticks = []
+        self.rosters = []
+        self._agents = agents or []
 
-    def process_tick(self, tick_number):
+    def get_all_agents(self):
+        return self._agents
+
+    def process_tick(self, tick_number, agents=None):
         self.ticks.append(tick_number)
+        self.rosters.append(agents)
 
 
 class FakeBuildingSystem:
@@ -141,8 +147,9 @@ class TestAgentProcessingStep(unittest.TestCase):
     """Agent processing step calls agent_system.process_tick."""
 
     def test_agent_system_called_with_tick_number(self):
+        roster = [object(), object()]
         script = GameTickScript()
-        agent_sys = FakeAgentSystem()
+        agent_sys = FakeAgentSystem(agents=roster)
         systems = {"agent_system": agent_sys}
 
         steps = script._build_tick_steps(systems, tick_number=42)
@@ -154,6 +161,9 @@ class TestAgentProcessingStep(unittest.TestCase):
             if name == "agent_processing":
                 fn()
         self.assertEqual(agent_sys.ticks, [42])
+        # process_tick must be fed the cached roster (from _get_all_agents),
+        # not left to re-scan the DB itself (Perf: no per-tick find_all_agents).
+        self.assertEqual(agent_sys.rosters, [roster])
 
     def test_no_agent_step_when_system_missing(self):
         script = GameTickScript()

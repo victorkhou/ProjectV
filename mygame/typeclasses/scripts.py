@@ -410,7 +410,12 @@ class GameTickScript(DefaultScript):
 
         if agent_system:
             registered["agent_processing"] = (
-                lambda: agent_system.process_tick(tick_number)
+                # Feed the cached agent roster (invalidated only on NPC
+                # create/delete) so process_tick doesn't re-issue a full
+                # find_all_agents DB tag-scan every second.
+                lambda: agent_system.process_tick(
+                    tick_number, self._get_all_agents(agent_system)
+                )
             )
             # Uses in-memory cache, no DB query per tick.
             registered["agent_training"] = (

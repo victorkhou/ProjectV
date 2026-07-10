@@ -645,26 +645,29 @@ class AgentSystem(AgentProgressionMixin, AgentBehaviorMixin, BaseSystem):
         return True
 
     def _process_agent_tick(self, agent: Any) -> None:
-        """Award time-served XP and converge gated abilities for one agent.
+        """Award time-served XP for one agent.
 
         For an actively-assigned, non-reserved, non-incapacitated agent, awards
         ``"time_served"`` once per tick (a zero configured amount is a no-op via
         ``CombatEntity.award_xp``; an agent frozen at its cap ceiling is
-        short-circuited inside ``award_agent_xp``), then runs a
-        defensive ``evaluate_gated_abilities`` re-eval so an agent whose effective
-        level changed converges.
+        short-circuited inside ``award_agent_xp``). When an award happens,
+        ``award_agent_xp`` re-evaluates gated abilities itself.
+
+        Gated-ability convergence is fully event-driven — the only things that
+        change an agent's effective level are its own XP award (handled above)
+        and its owner's level changing (the ``LEVEL_CHANGED`` subscriber
+        ``on_owner_level_changed`` re-evaluates every owned agent). So there is
+        NO unconditional per-tick ``evaluate_gated_abilities`` here: under the
+        shipped default (``agent_xp_time_served = 0``) that pass would otherwise
+        run for every actively-assigned agent every tick — an
+        O(agents x gates x scripts) scan that can never observe a change the two
+        event triggers didn't already apply.
         """
         if not self._is_actively_assigned(agent):
             return
-        # award_agent_xp already re-evaluates gated abilities when it awards, so
-        # only run the defensive convergence pass when it did NOT (frozen at the
-        # ceiling, or a zero/unknown amount) — e.g. after a direct XP edit that
-        # changed the effective level out-of-band. Avoids a duplicate per-agent
-        # script scan every tick when time-served XP is configured > 0.
-        if not self.award_agent_xp(agent, "time_served"):
-            self.evaluate_gated_abilities(agent)
+        self.award_agent_xp(agent, "time_served")
 
-    def process_tick(self, tick_number: int) -> None:
+    def process_tick(self, tick_number: int, agents: list | None = None) -> None:
         """Process all agent-related per-tick work.
 
         For each actively-assigned agent, awards the configured time-served XP
@@ -675,8 +678,17 @@ class AgentSystem(AgentProgressionMixin, AgentBehaviorMixin, BaseSystem):
 
         Each agent's award + gate re-eval is wrapped in its own try/except so a
         single misbehaving agent never halts the whole tick.
+
+        Args:
+            tick_number: The current game tick.
+            agents: The agent roster for this tick. The tick loop passes its
+                cached roster (invalidated only when an NPC is created/deleted —
+                see ``GameTickScript._get_all_agents``) so this step does NOT
+                re-issue a full ``find_all_agents`` DB tag-scan every second.
+                Falls back to a live query when omitted (isolated tests).
         """
-        agents = self._repo.find_all_agents()
+        if agents is None:
+            agents = self._repo.find_all_agents()
         if not agents:
             return
 

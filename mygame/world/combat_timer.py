@@ -55,7 +55,13 @@ def on_combat_action(event_bus: "EventBus", **kwargs) -> None:
     """
     from world.event_bus import COMBAT_TIMER_STARTED, PLAYER_NOTIFICATION
 
-    current_tick = _get_current_tick()
+    # Prefer the tick supplied by the publisher (CombatEngine passes its injected
+    # clock in the event payload) so we avoid a search_script DB query on EVERY
+    # hit — a real per-tick cost when many turret/guard/AoE hits land. Fall back
+    # to the live lookup only for publishers that don't supply it (vision events).
+    current_tick = kwargs.get("current_tick")
+    if current_tick is None:
+        current_tick = _get_current_tick()
     new_expiry = current_tick + COMBAT_TIMER_DURATION
 
     # Collect all player entities involved in this combat action
