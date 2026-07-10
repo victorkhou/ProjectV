@@ -427,3 +427,37 @@ class TestPresenterOwnershipBehavioral:
                     kind="base_reactivated", data={})
         msg = player.messages[0]
         assert "online" in msg.lower() or "rebuilt" in msg.lower()
+
+    def test_npc_killed_renders_kill_and_xp(self):
+        """Killing an enemy NPC reports the name and XP awarded."""
+        bus = EventBus()
+        player = _MsgPlayer()
+        NotificationPresenter(bus, player_notifier=EvenniaPlayerNotifier())
+        bus.publish(PLAYER_NOTIFICATION, player=player,
+                    kind="npc_killed", data={"name": "Guard #2", "xp": 100})
+        msg = player.messages[0]
+        assert "Guard #2" in msg
+        assert "100" in msg
+
+    def test_base_eliminated_renders_reward(self):
+        """Destroying an NPC base reports the tier, XP, and loot coords."""
+        bus = EventBus()
+        player = _MsgPlayer()
+        NotificationPresenter(bus, player_notifier=EvenniaPlayerNotifier())
+        bus.publish(PLAYER_NOTIFICATION, player=player, kind="base_eliminated",
+                    data={"tier": "Outpost", "xp": 500,
+                          "loot": {"Iron": 30}, "x": 34, "y": 67})
+        msg = player.messages[0]
+        assert "Outpost" in msg
+        assert "500" in msg
+        assert "34" in msg and "67" in msg
+
+    def test_base_eliminated_without_loot_omits_coords(self):
+        bus = EventBus()
+        player = _MsgPlayer()
+        NotificationPresenter(bus, player_notifier=EvenniaPlayerNotifier())
+        bus.publish(PLAYER_NOTIFICATION, player=player, kind="base_eliminated",
+                    data={"tier": "Outpost", "xp": 500, "loot": {}})
+        msg = player.messages[0]
+        assert "eliminated" in msg.lower()
+        assert "Loot" not in msg

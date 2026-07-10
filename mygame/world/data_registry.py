@@ -17,11 +17,14 @@ import yaml
 from world.definitions import (
     AbilityGateDef,
     BalanceConfig,
+    BaseTemplateDef,
     BuildingDef,
     ItemDef,
     PlanetDef,
     PowerupDef,
     RankDef,
+    TemplateBuildingDef,
+    TemplateGuardDef,
     TerrainDef,
     TechnologyDef,
 )
@@ -43,6 +46,9 @@ _REQUIRED_FILES = {
 # Optional config files
 _OPTIONAL_FILES = {
     "balance": "config/balance.yaml",
+    # NPC base templates (PvE NPC bases feature). Optional so the game loads
+    # fine without it — an absent/empty file just means no NPC bases spawn.
+    "outposts": "definitions/outposts.yaml",
 }
 
 
@@ -93,6 +99,9 @@ class DataRegistry:
         self.terrain: dict[str, TerrainDef] = {}
         self.ability_gates: dict[str, AbilityGateDef] = {}
         self.planets: dict[str, PlanetDef] = {}
+        #: NPC-base templates keyed by tier ("outpost", "fortress", ...); loaded
+        #: from the optional data/definitions/outposts.yaml. Empty when absent.
+        self.base_templates: dict[str, BaseTemplateDef] = {}
         self.balance: BalanceConfig = BalanceConfig()
         self._base_path: str = "data"
         self._validator = SchemaValidator()
@@ -172,6 +181,9 @@ class DataRegistry:
         # --- Load optional balance config ---
         self._load_balance(base_path)
 
+        # --- Load optional NPC-base templates ---
+        self._load_base_templates(base_path)
+
         logger.info("Data Registry loaded successfully from '%s'", base_path)
 
     def reload_all(self) -> tuple[bool, list[str]]:
@@ -203,6 +215,7 @@ class DataRegistry:
         self.terrain = temp.terrain
         self.ability_gates = temp.ability_gates
         self.planets = temp.planets
+        self.base_templates = temp.base_templates
         self.balance = temp.balance
 
         # Rebuild the shared level<->XP threshold curve from the newly-swapped
@@ -433,6 +446,68 @@ class DataRegistry:
         )
 
         return BalanceConfig(**kwargs)
+
+    def _load_base_templates(self, base_path: str) -> None:
+        """Load optional NPC-base templates from outposts.yaml.
+
+        Absent, empty, or malformed → an empty template set (the feature simply
+        spawns no bases), so a template problem never blocks server start. Each
+        top-level key is a tier ("outpost", "fortress"); its value describes the
+        buildings, guards, and loot.
+        """
+        self.base_templates = {}
+        path = os.path.join(base_path, _OPTIONAL_FILES["outposts"])
+        if not os.path.isfile(path):
+            logger.info("No NPC-base templates at '%s' — NPC bases disabled.", path)
+            return
+        try:
+            with open(path, "r") as f:
+                raw = yaml.safe_load(f)
+        except Exception:
+            logger.exception("Failed to read NPC-base templates at '%s'.", path)
+            return
+        if not isinstance(raw, dict):
+            return
+
+        for tier, spec in raw.items():
+            if not isinstance(spec, dict):
+                logger.warning("Skipping malformed NPC-base template %r.", tier)
+                continue
+            try:
+                buildings = [
+                    TemplateBuildingDef(
+                        building_type=b["type"],
+                        offset=tuple(b.get("offset", (0, 0))),
+                        hp=b.get("hp"),
+                        level=b.get("level", 1),
+                    )
+                    for b in spec.get("buildings", [])
+                ]
+                guards = [
+                    TemplateGuardDef(
+                        role=g.get("role", "guard"),
+                        weapon_type=g.get("weapon_type", "melee"),
+                        count=int(g.get("count", 1)),
+                        hp=g.get("hp"),
+                    )
+                    for g in spec.get("guards", [])
+                ]
+                loot = {k: int(v) for k, v in (spec.get("loot") or {}).items()}
+            except (KeyError, TypeError, ValueError):
+                logger.exception("Skipping invalid NPC-base template %r.", tier)
+                continue
+            self.base_templates[tier] = BaseTemplateDef(
+                tier=tier,
+                display_name=spec.get("display_name", tier.title()),
+                buildings=buildings,
+                guards=guards,
+                loot=loot,
+            )
+        logger.info("Loaded %d NPC-base template(s).", len(self.base_templates))
+
+    def get_base_template(self, tier: str) -> "BaseTemplateDef | None":
+        """Return the NPC-base template for *tier*, or ``None`` if undefined."""
+        return self.base_templates.get(tier)
 
     # ------------------------------------------------------------------ #
     #  Getter methods

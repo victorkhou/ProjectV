@@ -95,6 +95,9 @@ def initialize_game() -> dict:
     from world.systems.tech_system import TechLabSystem
     from world.systems.equipment_system import EquipmentSystem
     from world.systems.agent_system import AgentSystem
+    from world.systems.guard_combat_system import GuardCombatSystem
+    from world.systems.outpost_spawner import OutpostSpawnerSystem
+    from world.systems.base_elimination import BaseEliminationHandler
     from world.systems.movement_system import MovementSystem
     from world.constants import MAX_PATHS_PER_TICK
     from world.chunking import WorldChunkManager
@@ -145,6 +148,20 @@ def initialize_game() -> dict:
     # Late-bind the agent XP-awarder into CombatEngine now that AgentSystem
     # exists, replacing its game_systems-global reach on agent kills.
     combat_engine.set_agent_xp_awarder(lambda: agent_system)
+    # Guard combat AI: guard/soldier NPCs acquire nearby non-owner players and
+    # queue attacks through the CombatEngine each tick (before combat_resolution
+    # so they land same-tick). Ownership-generic — defends player bases and NPC
+    # outposts identically.
+    guard_combat_system = GuardCombatSystem(
+        registry, event_bus, combat_engine=combat_engine
+    )
+    # Line-of-sight: turrets and guards must not fire through their own Walls.
+    # A shared predicate (blocked when a combat_barrier building lies between
+    # shooter and target) is injected into both.
+    from world.adapters.line_of_sight import make_sight_blocked
+    _sight_blocked = make_sight_blocked(registry)
+    combat_engine.set_sight_blocked_func(_sight_blocked)
+    guard_combat_system.set_sight_blocked_func(_sight_blocked)
     # Inject the PowerupSystem into EquipmentSystem so ``use`` applies a
     # consumable buff through the real timed-effect machinery (correct entry
     # shape + tick-based expiry) rather than reaching into game_systems.
@@ -352,6 +369,58 @@ def initialize_game() -> dict:
     logger.info("Event subscribers wired.")
 
     # ---------------------------------------------------------- #
+    #  4b. NPC bases: spawner + base-elimination handler (PvE)
+    # ---------------------------------------------------------- #
+    from world.adapters.evennia_npc_base_factory import EvenniaNpcBaseFactory
+    from world.adapters.game_systems_terrain_provider import (
+        GameSystemsTerrainProvider,
+    )
+    from world.combat_timer import _get_current_tick
+
+    # Enumerate every building AND guard NPC owned by a sentinel, for the
+    # mass-delete on base elimination. Buildings come from get_buildings();
+    # enemy guards are tagged (player_<id>, agent_owner) by the NPC factory.
+    def _owned_entities_for(sentinel: Any) -> list:
+        entities: list[Any] = []
+        try:
+            entities.extend(sentinel.get_buildings())
+        except Exception:
+            pass
+        try:
+            from evennia.utils.search import search_object_by_tag
+            owner_id = getattr(sentinel, "id", None)
+            if owner_id is not None:
+                entities.extend(
+                    search_object_by_tag(f"player_{owner_id}", category="agent_owner")
+                )
+        except Exception:
+            pass
+        return entities
+
+    base_elimination = BaseEliminationHandler(
+        registry,
+        event_bus,
+        owned_entities_provider=_owned_entities_for,
+        loot_drop_func=(
+            lambda room, resource, amount, x, y:
+            resource_system.spawn_resource_drop(room, resource, amount, x=x, y=y)
+        ),
+    )
+    outpost_spawner = OutpostSpawnerSystem(
+        registry,
+        event_bus,
+        npc_base_factory=EvenniaNpcBaseFactory(),
+        building_factory=EvenniaBuildingFactory(),
+        terrain_provider=(
+            GameSystemsTerrainProvider(terrain_generators)
+            if terrain_generators else None
+        ),
+        planet_rooms_provider=lambda: game_systems.get("planet_rooms", {}),
+        planet_registry=planet_registry,
+        current_tick_func=_get_current_tick,
+    )
+
+    # ---------------------------------------------------------- #
     #  5. Initialize ChatSystem — ensure Global channel
     # ---------------------------------------------------------- #
     try:
@@ -386,6 +455,9 @@ def initialize_game() -> dict:
         "regen_system": regen_system,
         "equipment_system": equipment_system,
         "agent_system": agent_system,
+        "guard_combat_system": guard_combat_system,
+        "outpost_spawner": outpost_spawner,
+        "base_elimination": base_elimination,
         "movement_system": movement_system,
         "chunking": chunking,
         "chat_system": chat_system,
@@ -398,6 +470,41 @@ def initialize_game() -> dict:
         "_terrain_generators": terrain_generators,
         "planet_rooms": planet_rooms,
     })
+
+    # ---------------------------------------------------------- #
+    #  7b. Spawn initial NPC bases per planet (idempotent-ish)
+    # ---------------------------------------------------------- #
+    # Rebuild the spawner's in-memory state from surviving sentinels + persisted
+    # pending respawns (Req 7.6), THEN seed only the planets that have no base
+    # yet. This is per-planet idempotent: a restart re-seeds a freshly-added
+    # planet without stacking duplicate bases on planets that already have them,
+    # and a base cleared just before the restart still respawns (its pending
+    # entry was persisted on the PlanetRoom).
+    try:
+        from evennia.utils.search import search_object_by_tag
+        from world.utils import get_obj_attr
+
+        existing = list(search_object_by_tag("sentinel", category="npc_role") or [])
+        # Restore active-base separation state + reload persisted respawns.
+        outpost_spawner.rebuild_from_world(existing)
+
+        if existing:
+            logger.info("Found %d existing NPC base(s).", len(existing))
+        if registry.base_templates:
+            seeded_planets = {
+                get_obj_attr(s, "base_planet") for s in existing
+            }
+            for planet_key in (planet_rooms or {}).keys():
+                if planet_key in seeded_planets:
+                    continue  # this planet already has NPC bases — don't re-seed
+                try:
+                    outpost_spawner.spawn_initial(planet_key)
+                except Exception:
+                    logger.exception(
+                        "Initial NPC-base spawn failed for planet %s.", planet_key
+                    )
+    except Exception:
+        logger.exception("Initial NPC-base spawn skipped (search unavailable).")
 
     # ---------------------------------------------------------- #
     #  8. Start GameTickScript and AutoSaveScript

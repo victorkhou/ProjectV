@@ -281,6 +281,25 @@ def _fmt_combat_started(d: dict) -> str:
     )
 
 
+def _fmt_npc_killed(d: dict) -> str:
+    # Fired when a player kills an enemy NPC (an NPC-base guard), which dies
+    # permanently. Reports the kill and the XP awarded.
+    return (
+        f"|g[Combat] Killed {d.get('name', 'enemy')}. "
+        f"+{d.get('xp', 0)} XP.|n"
+    )
+
+
+def _fmt_base_eliminated(d: dict) -> str:
+    # Fired when a player destroys an NPC base's HQ (the whole base is wiped).
+    tier = d.get("tier", "Outpost")
+    loot = d.get("loot")
+    loot_tail = f" Loot dropped at ({d.get('x', '?')},{d.get('y', '?')})." if loot else ""
+    return (
+        f"|g[Combat] {tier} eliminated! +{d.get('xp', 0)} XP.{loot_tail}|n"
+    )
+
+
 def _fmt_base_deactivated(d: dict) -> str:
     # Fired when a player's HQ is destroyed — the base goes inert until rebuilt.
     return (
@@ -361,6 +380,8 @@ class NotificationPresenter:
         "craft_failed": _fmt_craft_failed,
         "produced": _fmt_produced,
         "combat_started": _fmt_combat_started,
+        "npc_killed": _fmt_npc_killed,
+        "base_eliminated": _fmt_base_eliminated,
         "base_deactivated": _fmt_base_deactivated,
         "base_reactivated": _fmt_base_reactivated,
     }

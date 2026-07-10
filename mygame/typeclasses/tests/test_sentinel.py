@@ -1,26 +1,22 @@
 """
-Shared Evennia stub setup for all mygame tests.
+Unit tests for SentinelCharacter (PvE NPC bases, Phase 5).
 
-This conftest.py runs before any test collection, ensuring that
-Evennia module stubs are installed in sys.modules with rich enough
-implementations to support all typeclasses (Building, CombatCharacter,
-PlanetRoom, GameItem, etc.).
-
-This prevents stub conflicts caused by test collection order.
+A Sentinel owns an NPC base's buildings/guards. It must: inherit
+``get_buildings()`` from CombatCharacter (so ``owner_has_active_hq`` works),
+carry the ``is_sentinel`` marker, and be inert as a player — its ``msg`` is a
+no-op so it is never "notified" (Requirement 5.6).
 """
 
 import sys
 import types
+import unittest
 
 
 def _ensure_evennia_stubs():
-    """Install comprehensive Evennia stubs into sys.modules."""
-    # If real Evennia is installed, don't overwrite
     if "evennia" in sys.modules:
         mod = sys.modules["evennia"]
         if hasattr(mod, "__file__") and mod.__file__:
             return
-
     stubs = {}
 
     def _mod(name, attrs=None):
@@ -30,8 +26,6 @@ def _ensure_evennia_stubs():
                 setattr(m, k, v)
         stubs[name] = m
         return m
-
-    # --- Rich attribute/db stubs ---
 
     class _AttrStore:
         def __init__(self):
@@ -61,67 +55,79 @@ def _ensure_evennia_stubs():
         def remove(self, key, category=None):
             self._tags.discard((key, category))
 
-    class DefaultObject:
-        def __init__(self, **kwargs):
-            self._attr_store = _AttrStore()
-            self.attributes = self._attr_store
-            self.db = _DbProxy(self._attr_store)
-            self.tags = _TagStore()
-            self.key = kwargs.get("key", "")
-            self.location = None
-
     class DefaultCharacter:
         def __init__(self, **kwargs):
             self._attr_store = _AttrStore()
             self.attributes = self._attr_store
             self.db = _DbProxy(self._attr_store)
             self.tags = _TagStore()
-            self.key = kwargs.get("key", "")
+            self.key = kwargs.get("key", "TestChar")
         def at_object_creation(self):
             pass
-        def at_post_login(self, session=None, **kwargs):
+        def at_post_login(self, session, **kwargs):
             pass
-
-    class DefaultRoom:
-        def at_object_receive(self, moved_obj, source_location, **kwargs):
-            pass
-
-    class Command:
-        key = ""
-        aliases = []
-        locks = ""
-        help_category = "General"
-        def func(self):
-            pass
-
-    class DefaultScript:
-        pass
-
-    # --- Register all stubs ---
 
     _mod("evennia")
     _mod("evennia.objects")
     _mod("evennia.objects.objects", {
-        "DefaultObject": DefaultObject,
-        "DefaultRoom": DefaultRoom,
         "DefaultCharacter": DefaultCharacter,
+        "DefaultObject": type("DefaultObject", (), {}),
+        "DefaultRoom": type("DefaultRoom", (), {}),
     })
     _mod("evennia.commands")
-    _mod("evennia.commands.command", {
-        "Command": Command,
-    })
     _mod("evennia.commands.cmdset")
     _mod("evennia.utils")
     _mod("evennia.utils.utils")
     _mod("evennia.utils.logger")
-    _mod("evennia.scripts")
-    _mod("evennia.scripts.scripts", {
-        "DefaultScript": DefaultScript,
-    })
 
     for name, mod in stubs.items():
         sys.modules.setdefault(name, mod)
 
 
-# Run stubs at import time (before any test collection)
 _ensure_evennia_stubs()
+
+from mygame.typeclasses.sentinel import SentinelCharacter  # noqa: E402
+
+
+def _make_sentinel(name="Outpost #1") -> SentinelCharacter:
+    s = SentinelCharacter(key=name)
+    s.at_object_creation()
+    return s
+
+
+class TestSentinel(unittest.TestCase):
+
+    def test_is_a_combat_character(self):
+        """Must subclass CombatCharacter so it inherits get_buildings().
+
+        Checked by MRO class-name (robust to the mygame.* vs bare-path dual
+        import, which yields distinct class objects for isinstance).
+        """
+        s = _make_sentinel()
+        mro_names = [c.__name__ for c in type(s).__mro__]
+        self.assertIn("CombatCharacter", mro_names)
+        self.assertTrue(hasattr(s, "get_buildings"))
+
+    def test_is_sentinel_flag_set(self):
+        s = _make_sentinel()
+        self.assertTrue(s.db.is_sentinel)
+
+    def test_tagged_sentinel(self):
+        s = _make_sentinel()
+        self.assertIn("sentinel", s.tags.get(category="npc_role"))
+
+    def test_msg_is_noop(self):
+        """A sentinel never receives player-facing output (Req 5.6)."""
+        s = _make_sentinel()
+        # Must not raise and must return None regardless of args.
+        self.assertIsNone(s.msg("hello"))
+        self.assertIsNone(s.msg(text="x", from_obj=object()))
+
+    def test_get_buildings_default_empty(self):
+        """Outside a full Evennia DB, get_buildings returns [] (no crash)."""
+        s = _make_sentinel()
+        self.assertEqual(s.get_buildings(), [])
+
+
+if __name__ == "__main__":
+    unittest.main()

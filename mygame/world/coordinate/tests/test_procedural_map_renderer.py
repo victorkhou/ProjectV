@@ -172,6 +172,19 @@ class _FakeBuilding:
         return default
 
 
+class _FakeNPC:
+    """Minimal NPC (agent/guard) with an npc_type tag and a db.owner.
+
+    The renderer classifies NPCs by owner id (own vs enemy vs neutral), not by
+    the npc_type tag VALUE, so this doubles for both a player agent and an enemy
+    guard — the owner determines the color.
+    """
+    def __init__(self, owner=None, role="guard", npc_type="enemy"):
+        self.db = _FakeDB(owner=owner, role=role, coord_x=None, coord_y=None)
+        self.tags = _FakeTags({npc_type: {"npc_type"}})
+        self.contents = []
+
+
 class _FakeTags:
     """Minimal tag system for testing."""
     def __init__(self, tags=None):
@@ -452,6 +465,53 @@ class TestVisibilityStates:
         )
         result = renderer.render(player, [])
         assert "HQ" in result
+
+    def test_enemy_building_renders_dark_red(self):
+        """An NPC-base (sentinel-owned) building renders dark red |R on a visible
+        tile — proves req 11.2 on the PRODUCTION _colored_objects path. The
+        sentinel is a distinct object from the looker, so `owner is looker` is
+        False and the enemy-building branch fires."""
+        planet_room = _FakePlanetRoom()
+        player = _FakePlayer(x=5, y=5, planet="earth", location=planet_room)
+        sentinel = _FakePlayer(name="Sentinel", x=99, y=99)  # distinct .id owner
+        building = _FakeBuilding(btype="HQ", owner=sentinel)
+        planet_room.add_object(player, 5, 5)
+        planet_room.add_object(building, 6, 5)
+        room_bld = _FakeRoom(x=6, y=5, terrain="Plains", contents=[building])
+        renderer, _ = _make_renderer(pvr=1, rooms={(6, 5, "earth"): room_bld})
+        result = renderer.render(player, [])
+        assert "|RHQ|n" in result
+
+    def test_own_building_renders_cyan_not_red(self):
+        """Contrast: the looker's OWN building renders cyan |c, not enemy red."""
+        planet_room = _FakePlanetRoom()
+        player = _FakePlayer(x=5, y=5, planet="earth", location=planet_room)
+        building = _FakeBuilding(btype="HQ", owner=player)  # owned by looker
+        planet_room.add_object(player, 5, 5)
+        planet_room.add_object(building, 6, 5)
+        room_bld = _FakeRoom(x=6, y=5, terrain="Plains", contents=[building])
+        renderer, _ = _make_renderer(pvr=1, rooms={(6, 5, "earth"): room_bld})
+        result = renderer.render(player, [])
+        assert "|cHQ|n" in result
+        assert "|RHQ|n" not in result
+
+    def test_enemy_guard_renders_red(self):
+        """An NPC-base guard (sentinel owner id != looker) renders red |r on a
+        visible tile — req 11.3, production path. Classification keys on owner
+        id, so an enemy guard flows through the enemy_agent branch."""
+        planet_room = _FakePlanetRoom()
+        player = _FakePlayer(x=5, y=5, planet="earth", location=planet_room)
+        sentinel = _FakePlayer(name="Sentinel", x=99, y=99)  # distinct .id
+        guard = _FakeNPC(owner=sentinel, role="guard")
+        planet_room.add_object(player, 5, 5)
+        planet_room.add_object(guard, 6, 5)
+        room_guard = _FakeRoom(x=6, y=5, terrain="Plains", contents=[guard])
+        renderer, _ = _make_renderer(pvr=1, rooms={(6, 5, "earth"): room_guard})
+        result = renderer.render(player, [])
+        # Enemy agents render as |rag|n (red, generic agent glyph). Assert the
+        # EXACT enemy-agent segment so this can't pass on an unrelated red glyph
+        # (e.g. an enemy player's |r**|n) — there is no other player here.
+        assert "|rag|n" in result
 
     def test_fog_tile_shows_terrain(self):
         """A fog tile within render bounds shows dimmed terrain."""

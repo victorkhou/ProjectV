@@ -415,6 +415,129 @@ class TestHpRegenStep(unittest.TestCase):
         self.assertEqual(agent_system.get_all_agents_called, 0)
 
 
+class TestGuardCombatStep(unittest.TestCase):
+    """The guard_combat step runs guard AI before combat_resolution."""
+
+    class _FakeGuardCombat:
+        def __init__(self):
+            self.calls = []  # (tick_number, guards, active_owner_ids)
+
+        def process_tick(self, tick_number, guards, active_owner_ids=None):
+            self.calls.append((tick_number, list(guards), active_owner_ids))
+
+    class _FakeAgentSystemWithRoster(FakeAgentSystem):
+        def __init__(self, agents, enemies=None):
+            super().__init__()
+            self._agents = agents
+            self._enemies = enemies or []
+
+        def get_all_agents(self):
+            return list(self._agents)
+
+        def get_all_enemies(self):
+            return list(self._enemies)
+
+    def test_guard_step_registered_before_combat_resolution(self):
+        script = GameTickScript()
+        script._get_online_players = lambda: []
+
+        class _FakeCombatEngine:
+            def resolve_tick(self, buildings):
+                pass
+
+            def process_turrets(self, buildings, active_owner_ids=None):
+                pass
+
+        systems = {
+            "guard_combat_system": self._FakeGuardCombat(),
+            "combat_engine": _FakeCombatEngine(),
+            "event_bus": FakeEventBus(),
+        }
+        steps = script._build_tick_steps(systems, tick_number=1)
+        names = [n for n, _ in steps]
+        self.assertIn("guard_combat", names)
+        self.assertLess(
+            names.index("guard_combat"), names.index("combat_resolution")
+        )
+
+    def test_guard_step_absent_without_system(self):
+        script = GameTickScript()
+        script._get_online_players = lambda: []
+        steps = script._build_tick_steps({"event_bus": FakeEventBus()}, tick_number=1)
+        self.assertNotIn("guard_combat", [n for n, _ in steps])
+
+    def test_guard_step_fed_agent_roster(self):
+        from world import agent_index
+        agent_index.bump()  # invalidate any cached roster from a prior test
+
+        guard = object()
+        gc = self._FakeGuardCombat()
+        script = GameTickScript()
+        script._get_online_players = lambda: []
+        systems = {
+            "guard_combat_system": gc,
+            "agent_system": self._FakeAgentSystemWithRoster([guard]),
+            "event_bus": FakeEventBus(),
+        }
+        steps = dict(script._build_tick_steps(systems, tick_number=7))
+        steps["guard_combat"]()
+        self.assertEqual(len(gc.calls), 1)
+        tick, guards = gc.calls[0][0], gc.calls[0][1]
+        self.assertEqual(tick, 7)
+        self.assertIn(guard, guards)
+
+    def test_guard_step_feeds_both_agents_and_enemies(self):
+        """NPC-base guards (npc_type='enemy') must reach the guard AI too, else
+        outposts never fight back (Phase 5 roster-feed dependency)."""
+        from world import agent_index
+        agent_index.bump()
+
+        player_guard = object()
+        enemy_guard = object()
+        gc = self._FakeGuardCombat()
+        script = GameTickScript()
+        script._get_online_players = lambda: []
+        systems = {
+            "guard_combat_system": gc,
+            "agent_system": self._FakeAgentSystemWithRoster(
+                [player_guard], enemies=[enemy_guard]),
+            "event_bus": FakeEventBus(),
+        }
+        steps = dict(script._build_tick_steps(systems, tick_number=3))
+        steps["guard_combat"]()
+        guards = gc.calls[0][1]
+        self.assertIn(player_guard, guards)
+        self.assertIn(enemy_guard, guards)
+
+
+class TestOutpostRespawnStep(unittest.TestCase):
+    """The outpost_respawn step drives the spawner's process_respawns."""
+
+    class _FakeSpawner:
+        def __init__(self):
+            self.calls = []
+
+        def process_respawns(self, tick_number):
+            self.calls.append(tick_number)
+            return 0
+
+    def test_step_registered_and_calls_process_respawns(self):
+        script = GameTickScript()
+        script._get_online_players = lambda: []
+        spawner = self._FakeSpawner()
+        systems = {"outpost_spawner": spawner, "event_bus": FakeEventBus()}
+        steps = dict(script._build_tick_steps(systems, tick_number=42))
+        self.assertIn("outpost_respawn", steps)
+        steps["outpost_respawn"]()
+        self.assertEqual(spawner.calls, [42])
+
+    def test_step_absent_without_spawner(self):
+        script = GameTickScript()
+        script._get_online_players = lambda: []
+        steps = script._build_tick_steps({"event_bus": FakeEventBus()}, tick_number=1)
+        self.assertNotIn("outpost_respawn", [n for n, _ in steps])
+
+
 class TestBuildingCacheInvalidation(unittest.TestCase):
     """_get_all_buildings caches the tag search and re-runs it only when a
     building is created/destroyed (the building-index generation advances)."""

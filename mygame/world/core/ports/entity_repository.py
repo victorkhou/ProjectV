@@ -33,6 +33,14 @@ class AgentRepository(ABC):
         """Return every agent NPC in the world (used by the per-tick sweep)."""
 
     @abstractmethod
+    def find_all_enemies(self) -> list[Any]:
+        """Return every enemy NPC (npc_type="enemy") — NPC-base guards.
+
+        Used by the per-tick guard-combat sweep so NPC-base guards fight back
+        (they are NOT in the ``npc_type="agent"`` roster).
+        """
+
+    @abstractmethod
     def find_training_buildings(self) -> list[Any]:
         """Return buildings that currently hold a ``training_agent_id``."""
 
@@ -81,3 +89,28 @@ class MovingEntityRepository(ABC):
     @abstractmethod
     def find_moving_npcs(self) -> list[Any]:
         """Return NPCs that currently have a non-empty movement queue."""
+
+
+class NpcBaseFactory(ABC):
+    """Write-side port for spawning NPC-base entities (Sentinel + enemy guards).
+
+    Lets ``OutpostSpawnerSystem`` create the sentinel Character (the base owner)
+    and enemy-guard NPCs without importing Evennia. The ``create_object`` calls,
+    tag seeding, and coordinate-index registration live in the adapter.
+    """
+
+    @abstractmethod
+    def create_sentinel(self, name: str, tile: Any, planet: str) -> Any:
+        """Create a non-puppeted Sentinel Character owning an NPC base."""
+
+    @abstractmethod
+    def create_enemy_guard(
+        self,
+        owner: Any,
+        tile: Any,
+        x: int,
+        y: int,
+        role: str,
+        hp: int,
+    ) -> Any:
+        """Create, place, and index an enemy-guard NPC owned by *owner*."""

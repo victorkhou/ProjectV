@@ -600,6 +600,12 @@ class SchemaValidator:
             "gc_interval_ticks", "gc_min_age_ticks", "map_border_tiles",
             "equipment_production_ticks", "equipment_production_owner_cap",
             "hp_regen_interval_ticks",
+            # Guard combat AI (PvE NPC bases feature, Phase 3).
+            "guard_melee_damage", "guard_ranged_damage", "guard_ranged_range",
+            "guard_aggro_radius",
+            # NPC base spawner + elimination (PvE NPC bases, Phase 5).
+            "xp_hq_destroy", "outpost_respawn_ticks", "outpost_count",
+            "fortress_count", "outpost_guard_hp", "fortress_guard_hp",
         ]
         float_fields = [
             "xp_damage", "tick_interval",

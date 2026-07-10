@@ -1982,6 +1982,70 @@ class TestCmdScan(unittest.TestCase):
         self.assertNotIn("FarAway", output)
         self.assertIn("Nothing else visible", output)
 
+    def test_scan_labels_enemy_guard(self):
+        """An NPC-base guard (sentinel owner) is tagged [Enemy] in the scan."""
+        sentinel = types.SimpleNamespace(
+            key="Outpost #1",
+            db=types.SimpleNamespace(is_sentinel=True),
+        )
+        guard = types.SimpleNamespace(
+            key="Guard (Outpost #1)",
+            db=types.SimpleNamespace(
+                coord_x=6, coord_y=5, combat_xp=0,  # combat_xp -> is_player True
+                npc_type="enemy", owner=sentinel,
+            ),
+        )
+        caller = FakeCaller()
+        caller.location.contents = [guard]
+        cmd = _make_cmd(CmdScan, caller)
+        cmd.func()
+        output = "\n".join(caller._messages)
+        self.assertIn("[Enemy]", output)
+        self.assertIn("Guard (Outpost #1)", output)
+
+    def test_scan_labels_enemy_building(self):
+        """An NPC-base building (sentinel owner) is tagged [Enemy]."""
+        sentinel = types.SimpleNamespace(
+            key="Outpost #1",
+            db=types.SimpleNamespace(is_sentinel=True),
+        )
+        building = types.SimpleNamespace(
+            key="Headquarters",
+            owner=sentinel,
+            db=types.SimpleNamespace(
+                coord_x=6, coord_y=5, building_type="HQ", owner=sentinel,
+            ),
+        )
+        caller = FakeCaller()
+        caller.location.contents = [building]
+        cmd = _make_cmd(CmdScan, caller)
+        cmd.func()
+        output = "\n".join(caller._messages)
+        self.assertIn("[Enemy]", output)
+        self.assertIn("HQ", output)
+
+    def test_scan_does_not_label_player_building(self):
+        """Another player's building is NOT tagged [Enemy] (no owner-!=-caller
+        mislabeling in PvP) — only sentinel-owned bases get the tag."""
+        other_player = types.SimpleNamespace(
+            key="Rival",
+            db=types.SimpleNamespace(combat_xp=200),  # a player, not a sentinel
+        )
+        building = types.SimpleNamespace(
+            key="Rival HQ",
+            owner=other_player,
+            db=types.SimpleNamespace(
+                coord_x=6, coord_y=5, building_type="HQ", owner=other_player,
+            ),
+        )
+        caller = FakeCaller()
+        caller.location.contents = [building]
+        cmd = _make_cmd(CmdScan, caller)
+        cmd.func()
+        output = "\n".join(caller._messages)
+        self.assertNotIn("[Enemy]", output)
+        self.assertIn("HQ", output)
+
 class TestCmdTechnology(unittest.TestCase):
     def test_shows_researched(self):
         caller = FakeCaller()

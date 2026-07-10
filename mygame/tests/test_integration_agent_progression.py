@@ -47,6 +47,9 @@ class _SettableAgentRepo:
         # queries, so an empty sweep is correct for these tests.
         return []
 
+    def find_all_enemies(self):
+        return []
+
     def find_training_buildings(self):
         return []
 

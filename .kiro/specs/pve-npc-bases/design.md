@@ -75,6 +75,8 @@ A new `GuardCombatSystem(BaseSystem)` in `world/systems/guard_combat_system.py`,
 
 **Tick timing note (intentional asymmetry — do not "fix"):** the real tick step for turrets is named `turret_attacks` and runs AFTER `combat_resolution`, so turret-queued shots resolve on the NEXT tick. By contrast, `guard_combat` is placed BEFORE `combat_resolution`, so guard-queued attacks resolve in the SAME tick. This difference between guards (same-tick resolution) and turrets (next-tick resolution) is intentional and expected — it is flagged here so it is not mistaken for a bug and "fixed" later.
 
+**Roster-feed dependency (Phase 3 → Phase 5):** the tick step feeds the system from the cached agent roster (`_get_all_agents`, an `npc_type="agent"` tag search). Enemy-base guards use `npc_type="enemy"` and therefore are NOT in that roster — Phase 5 must widen the feed (include enemy NPCs) for NPC outposts to fight back. The `GuardCombatSystem` itself is already ownership-generic; only the roster passed to `process_tick` needs extending.
+
 Per tick:
 1. Gather all NPCs with role `"guard"` or `"soldier"` (from the agent-roster cache).
 2. For each, check `owner_has_active_hq(npc.db.owner, planet)` — skip if False.

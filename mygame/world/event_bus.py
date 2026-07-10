@@ -18,6 +18,12 @@ PLAYER_LOGIN = "player_login"
 PLAYER_LOGOUT = "player_logout"
 PLAYER_MOVED = "player_moved"
 PLAYER_ELIMINATED = "player_eliminated"
+# An enemy NPC (npc_type="enemy") was killed and permanently deleted.
+# Payload: attacker, victim, tile
+NPC_ELIMINATED = "npc_eliminated"
+# An NPC base was eliminated (its HQ destroyed → whole base wiped, PvE).
+# Payload: attacker, sentinel, tier, planet, x, y
+BASE_ELIMINATED = "base_eliminated"
 
 BUILDING_CONSTRUCTED = "building_constructed"
 BUILDING_DESTROYED = "building_destroyed"
@@ -54,6 +60,8 @@ ALL_EVENTS = (
     PLAYER_LOGOUT,
     PLAYER_MOVED,
     PLAYER_ELIMINATED,
+    NPC_ELIMINATED,
+    BASE_ELIMINATED,
     BUILDING_CONSTRUCTED,
     BUILDING_DESTROYED,
     BUILDING_UPGRADED,

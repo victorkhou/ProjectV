@@ -404,6 +404,9 @@ def _make_all_systems(registry=None, event_bus=None, planet_registry=None):
         def find_all_agents(self):
             return list(created_agents)
 
+        def find_all_enemies(self):
+            return []
+
         def find_training_buildings(self):
             return []
 

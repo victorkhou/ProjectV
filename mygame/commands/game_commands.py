@@ -2171,7 +2171,7 @@ class CmdScan(GameCommand):
     help_category = "Game"
 
     def func(self):
-        from world.utils import is_player, is_building
+        from world.utils import is_player, is_building, get_obj_attr
 
         caller = self.caller
         loc = caller.location
@@ -2217,11 +2217,25 @@ class CmdScan(GameCommand):
         players.sort(key=lambda t: t[0])
         buildings.sort(key=lambda t: t[0])
 
+        # NPC-base buildings/guards are owned by a Sentinel (db.is_sentinel).
+        # Prefix those with a dark-red [Enemy] tag (matching the map renderer's
+        # |R enemy convention) so raiders can tell an enemy base from their own
+        # or another player's structures. Detect by owner-is-sentinel, NOT
+        # owner!=caller: the latter would mislabel every other player's building
+        # in PvP. Uses get_obj_attr so it reads owner off both a Building
+        # (attribute) and an NPC guard (db.owner) uniformly.
+        def _enemy_prefix(obj):
+            owner = get_obj_attr(obj, "owner")
+            return "|R[Enemy]|n " if get_obj_attr(owner, "is_sentinel", False) else ""
+
         lines = [f"|wScan|n (within {radius} tiles):"]
         if players:
             lines.append("  |wPlayers & agents:|n")
             for dist, ox, oy, p in players:
-                lines.append(f"    {getattr(p, 'key', '?')} at ({ox},{oy}) — {dist} away")
+                lines.append(
+                    f"    {_enemy_prefix(p)}{getattr(p, 'key', '?')} "
+                    f"at ({ox},{oy}) — {dist} away"
+                )
         if buildings:
             lines.append("  |wBuildings:|n")
             for dist, ox, oy, b in buildings:
@@ -2231,7 +2245,8 @@ class CmdScan(GameCommand):
                 owner = getattr(b, "owner", None)
                 owner_name = getattr(owner, "key", "?") if owner else "?"
                 lines.append(
-                    f"    {btype} at ({ox},{oy}) — {dist} away (owner: {owner_name})"
+                    f"    {_enemy_prefix(b)}{btype} at ({ox},{oy}) — "
+                    f"{dist} away (owner: {owner_name})"
                 )
         if not players and not buildings:
             lines.append("  Nothing else visible nearby.")

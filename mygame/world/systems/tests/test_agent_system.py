@@ -195,6 +195,9 @@ class AgentSystemTestBase(unittest.TestCase):
                     return list(self.all_agents)
                 return list(test_case.created_agents)
 
+            def find_all_enemies(self):
+                return []
+
             def find_training_buildings(self):
                 return []
 

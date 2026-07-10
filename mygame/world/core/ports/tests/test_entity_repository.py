@@ -31,6 +31,10 @@ class FakeAgentRepository(AgentRepository):
     def find_all_agents(self):
         return list(self.agents)
 
+    def find_all_enemies(self):
+        return [a for a in self.agents
+                if getattr(a.db, "npc_type", None) == "enemy"]
+
     def find_training_buildings(self):
         return []
 

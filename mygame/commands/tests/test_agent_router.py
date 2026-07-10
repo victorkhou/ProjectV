@@ -823,6 +823,9 @@ def _make_real_ability_system(agents):
         def find_all_agents(self):
             return list(agents)
 
+        def find_all_enemies(self):
+            return []
+
         def find_training_buildings(self):
             return []
 

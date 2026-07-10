@@ -422,6 +422,47 @@ def _owner_hq_buildings(owner: Any, planet: Any = None, provider: Any = None):
         yield b
 
 
+def active_hq_owner_ids(buildings: Any, provider: Any = None) -> set:
+    """Return the set of owner ``.id``s that have a completed HQ in *buildings*.
+
+    A per-tick precomputation for the "no HQ = base inert" gate. Iterating the
+    already-gathered active-building list once — using only in-memory capability
+    lookups (no DB query) — yields every owner whose base is currently powered.
+    Turret and guard-AI steps then test ``owner.id in active_ids`` instead of
+    calling :func:`owner_has_active_hq` (which runs a ``get_buildings()`` DB
+    query) for *every* turret/guard on *every* tick. This turns an
+    O(entities)-DB-queries-per-tick gate into a single O(buildings) in-memory
+    pass.
+
+    An HQ that is still ``under_construction`` does not count (mirrors
+    :func:`owner_has_active_hq`).
+
+    Args:
+        buildings: The active-building list for this tick.
+        provider: Optional DefinitionsProvider for the capability lookup;
+            defaults to the live registry inside ``building_has_capability``.
+
+    Returns:
+        A set of owner ids (ints). Owners without a resolvable ``.id`` are
+        omitted.
+    """
+    from world.constants import HEADQUARTERS
+
+    ids: set = set()
+    for b in buildings or ():
+        if get_obj_attr(b, "under_construction", False):
+            continue
+        if not building_has_capability(b, HEADQUARTERS, provider=provider):
+            continue
+        owner = getattr(b, "owner", None)
+        if owner is None:
+            owner = get_obj_attr(b, "owner")
+        oid = getattr(owner, "id", None)
+        if oid is not None:
+            ids.add(oid)
+    return ids
+
+
 # ------------------------------------------------------------------ #
 #  Broadcast
 # ------------------------------------------------------------------ #

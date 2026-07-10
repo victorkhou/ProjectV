@@ -106,6 +106,7 @@ from mygame.commands.admin_commands import (  # noqa: E402
     CmdAdminResource,
     CmdAdminItem,
     CmdAdminPlayer,
+    CmdAdminOutpost,
     CmdTeleport,
 )
 
@@ -881,6 +882,88 @@ class TestTeleportSuppressesNotifications(unittest.TestCase):
         _obj, tx, ty, notify = room.calls[0]
         self.assertEqual((tx, ty), (25, 25))
         self.assertFalse(notify)  # notifications suppressed
+
+
+# -------------------------------------------------------------- #
+#  CmdAdminOutpost tests
+# -------------------------------------------------------------- #
+
+class FakeSpawner:
+    """Fake OutpostSpawnerSystem recording spawn_base calls."""
+
+    def __init__(self, result="ok"):
+        self.calls = []
+        self._result = result
+        self._active_bases = {}
+
+    def spawn_base(self, planet, tier, coords=None):
+        self.calls.append((planet, tier, coords))
+        if self._result is None:
+            return None
+        x, y = coords if coords else (7, 7)
+        rec = {"tier": tier, "planet": planet, "x": x, "y": y}
+        self._active_bases[len(self._active_bases)] = rec
+        return rec
+
+
+class TestCmdAdminOutpost(unittest.TestCase):
+
+    def _caller(self, spawner, x=3, y=4, planet="earth", perm="Builder"):
+        caller = FakeCaller(perm_level=perm,
+                            systems={"outpost_spawner": spawner})
+        caller.db.coord_x = x
+        caller.db.coord_y = y
+        caller.db.coord_planet = planet
+        return caller
+
+    def test_spawn_uses_caller_tile_by_default(self):
+        spawner = FakeSpawner()
+        caller = self._caller(spawner, x=3, y=4)
+        cmd = _make_cmd(CmdAdminOutpost, caller, "spawn outpost")
+        cmd.func()
+        self.assertEqual(spawner.calls, [("earth", "outpost", (3, 4))])
+        self.assertTrue(any("Spawned outpost" in m for m in caller._messages))
+
+    def test_spawn_with_explicit_coords(self):
+        spawner = FakeSpawner()
+        caller = self._caller(spawner)
+        cmd = _make_cmd(CmdAdminOutpost, caller, "spawn fortress 20 30")
+        cmd.func()
+        self.assertEqual(spawner.calls, [("earth", "fortress", (20, 30))])
+
+    def test_spawn_no_tier_shows_usage(self):
+        spawner = FakeSpawner()
+        caller = self._caller(spawner)
+        cmd = _make_cmd(CmdAdminOutpost, caller, "spawn")
+        cmd.func()
+        self.assertTrue(any("Usage" in m for m in caller._messages))
+        self.assertEqual(spawner.calls, [])
+
+    def test_spawn_failure_reports(self):
+        spawner = FakeSpawner(result=None)  # placement fails
+        caller = self._caller(spawner)
+        cmd = _make_cmd(CmdAdminOutpost, caller, "spawn outpost")
+        cmd.func()
+        self.assertTrue(any("Could not spawn" in m for m in caller._messages))
+
+    def test_spawn_denied_without_builder(self):
+        spawner = FakeSpawner()
+        caller = self._caller(spawner, perm="Player")
+        cmd = _make_cmd(CmdAdminOutpost, caller, "spawn outpost")
+        cmd.func()
+        self.assertTrue(any("Permission denied" in m for m in caller._messages))
+        self.assertEqual(spawner.calls, [])
+
+    def test_list_shows_active_bases(self):
+        spawner = FakeSpawner()
+        spawner._active_bases = {0: {"tier": "outpost", "planet": "earth",
+                                     "x": 5, "y": 6}}
+        caller = self._caller(spawner)
+        cmd = _make_cmd(CmdAdminOutpost, caller, "list")
+        cmd.func()
+        output = "\n".join(caller._messages)
+        self.assertIn("outpost", output)
+        self.assertIn("5", output)
 
 
 if __name__ == "__main__":

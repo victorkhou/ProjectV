@@ -602,6 +602,15 @@ class AgentSystem(AgentProgressionMixin, AgentBehaviorMixin, BaseSystem):
         """
         return self._repo.find_all_agents()
 
+    def get_all_enemies(self) -> list:
+        """Return every enemy NPC (npc_type="enemy") — NPC-base guards.
+
+        Delegates to the injected :class:`AgentRepository`. Used by the tick
+        loop to feed the guard-combat sweep, so NPC-base guards (which are NOT
+        in the agent roster) also acquire targets and fight back.
+        """
+        return self._repo.find_all_enemies()
+
     def get_agent_by_id(self, player: Any, agent_id: int) -> Any | None:
         """Find a specific agent by ID.  Returns NPC or None."""
         for agent in self.get_agents(player):

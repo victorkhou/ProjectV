@@ -85,7 +85,7 @@ HELP_ENTRY_DICTS = [
 
             # See Also
 
-            |whelp commands|n · |whelp resources|n · |whelp buildings|n · |whelp agents|n · |whelp equipment|n · |whelp combat|n · |whelp storage|n
+            |whelp commands|n · |whelp resources|n · |whelp buildings|n · |whelp agents|n · |whelp equipment|n · |whelp combat|n · |whelp outposts|n · |whelp storage|n
         """,
     },
     # ----------------------------------------------------------------- #
@@ -283,7 +283,7 @@ HELP_ENTRY_DICTS = [
 
             # See Also
 
-            |whelp resources|n · |whelp agents|n · |whelp storage|n · |whelp equipment|n · |whelp craft|n
+            |whelp resources|n · |whelp agents|n · |whelp storage|n · |whelp equipment|n · |whelp craft|n · |whelp outposts|n
         """,
     },
     # ----------------------------------------------------------------- #
@@ -362,7 +362,15 @@ HELP_ENTRY_DICTS = [
 
             # Armor & Defense
 
-            Every armor piece you |wequip|n reduces incoming damage, and they stack across all slots. |cTurrets|n (with a Guard agent) auto-attack intruders; |cWalls|n block movement. A |cVault|n protects your stored resources while you're offline. You and your agents heal over time, but |cbuildings do not|n — repair a damaged building with |wrepair|n (see |whelp buildings|n).
+            Every armor piece you |wequip|n reduces incoming damage, and they stack across all slots. |cTurrets|n auto-attack intruders; |cWalls|n block movement. A |cVault|n protects your stored resources while you're offline. You and your agents heal over time, but |cbuildings do not|n — repair a damaged building with |wrepair|n (see |whelp buildings|n).
+
+            # Guards
+
+            A |cGuard|n agent (or |cSoldier|n) automatically attacks any enemy that comes within range each tick — so assigning one actually defends your base. Melee guards strike an adjacent tile; ranged soldiers reach several tiles out. This cuts both ways: enemy |coutpost|n and |cfortress|n guards attack you the same way when you raid them (|whelp outposts|n).
+
+            # Destroying a Base
+
+            Destroying an owner's |cHeadquarters|n is decisive. Wreck an |cenemy base|n's HQ and the whole base is eliminated at once — every building and guard is wiped and loot drops on the spot: |g[Combat] Outpost eliminated! +X XP. Loot dropped at (x,y).|n Lose your |cown|n HQ (in PvP) and nothing is deleted — your base goes |rinert|n instead: turrets stop, production halts, agents idle, and building commands are refused until you |wbuild|n a new HQ.
 
             # Grenades
 
@@ -374,7 +382,42 @@ HELP_ENTRY_DICTS = [
 
             # See Also
 
-            |whelp equipment|n · |whelp agents|n · |whelp buildings|n
+            |whelp equipment|n · |whelp outposts|n · |whelp agents|n · |whelp buildings|n
+        """,
+    },
+    # ----------------------------------------------------------------- #
+    #  Outposts & Fortresses (PvE NPC bases)
+    # ----------------------------------------------------------------- #
+    {
+        "key": "outposts",
+        "aliases": ["outpost", "fortress", "fortresses", "raid", "raiding",
+                    "enemy base", "enemy bases", "npc bases"],
+        "category": "Game",
+        "text": """
+            |wOutposts & Fortresses|n
+
+            Enemy bases are scattered across the map — clusters of enemy buildings defended by guards. Raid them for XP and loot: it's the reason to gear up and go on the offensive, even with no other players around.
+
+            # Two Tiers
+
+            |cOutpost|n — small: an enemy Headquarters plus a building or two and one or two melee guards. Soloable at low rank.
+            |cFortress|n — large: an HQ with Walls, Turrets, and an Armory, defended by three to five mixed melee and ranged guards. Bring a higher rank and good gear.
+
+            # Finding Them
+
+            Explore with |wmove|n and watch your |wmap|n — enemy structures and units show up in |rred|n (your own are cyan), so a cluster of red buildings is a base. Stand near one and |wscan|n to list what's on the tiles around you; enemy buildings and guards are tagged |R[Enemy]|n.
+
+            # Raiding
+
+            Clear the |cguards|n, dodge or destroy the |cTurrets|n, breach the |cWalls|n, and destroy the enemy |cHeadquarters|n. Guards fight back and turrets auto-fire, so bring armor, ammo, and medkits (|whelp equipment|n, |whelp combat|n). Guards you kill stay dead. Destroying the |cHQ|n eliminates the entire base at once: |g[Combat] Outpost eliminated! +X XP. Loot dropped at (x,y).|n Pick up the loot with |wget|n.
+
+            # Respawns
+
+            Cleared bases respawn elsewhere after a while, so there's always something to raid — at rising difficulty as you climb the ranks.
+
+            # See Also
+
+            |whelp combat|n · |whelp equipment|n · |whelp buildings|n · |whelp agents|n
         """,
     },
     # ----------------------------------------------------------------- #

@@ -258,9 +258,14 @@ class TestDataclassContracts:
         # (training ×3, harvest/production ×6, upgrade/turret/demolish ×5,
         #  plus vault ×2) + 1 resource_weights (D7) + 2 equipment_production (D8)
         #  + 2 HP regen (hp_regen_percent, hp_regen_interval_ticks)
-        #  + 1 repair_cost_fraction.
+        #  + 1 repair_cost_fraction
+        #  + 4 guard combat AI (guard_melee_damage, guard_ranged_damage,
+        #    guard_ranged_range, guard_aggro_radius) — PvE Phase 3.
+        #  + 6 NPC base spawner/elimination (xp_hq_destroy, outpost_respawn_ticks,
+        #    outpost_count, fortress_count, outpost_guard_hp, fortress_guard_hp)
+        #    — PvE Phase 5.
         # Bump this when adding a balance tunable.
-        assert len(fields(BalanceConfig)) == 50
+        assert len(fields(BalanceConfig)) == 60
 
     def test_coordinate_space_def_field_count(self):
         assert len(fields(CoordinateSpaceDef)) == 14

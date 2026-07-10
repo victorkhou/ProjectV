@@ -34,7 +34,7 @@ from commands.agent_commands import (
 from commands.admin_commands import (
     CmdReboot, CmdPurgeRooms, CmdTeleport, CmdClearFog, CmdMigrate,
     CmdAdminBuilding, CmdAdminAgent, CmdAdminResource, CmdAdminItem,
-    CmdAdminPlayer,
+    CmdAdminPlayer, CmdAdminOutpost,
 )
 
 
@@ -153,6 +153,7 @@ class CharacterCmdSet(default_cmds.CharacterCmdSet):
         self.add(CmdAdminResource())
         self.add(CmdAdminItem())
         self.add(CmdAdminPlayer())
+        self.add(CmdAdminOutpost())
         # Override Evennia's default who with rank/level display
         self.add(CmdWho())
 

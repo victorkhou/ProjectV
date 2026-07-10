@@ -15,6 +15,7 @@ from world.data_registry import DataRegistry
 from world.event_bus import (
     BUILDING_DESTROYED,
     COMBAT_ACTION,
+    NPC_ELIMINATED,
     PLAYER_ELIMINATED,
     EventBus,
 )
@@ -45,11 +46,23 @@ class CombatEngine(BaseSystem):
         super().__init__(registry, event_bus)
         self._current_tick_func = current_tick_func or (lambda: 0)
         self.pending_actions: list[dict] = []
+        # Optional line-of-sight predicate (location, x1, y1, x2, y2) -> blocked.
+        # Injected at the composition root so turrets don't fire through Walls;
+        # None means "no LOS restriction" (unit tests, minimal setups).
+        self._sight_blocked: Callable[..., bool] | None = None
         # Late-bound resolver for the agent XP-awarder. CombatEngine is built
         # before AgentSystem at the composition root, so a *callable* is
         # injected (via set_agent_xp_awarder) rather than the instance. Defaults
         # to the game_systems-global lookup for un-injected/legacy contexts.
         self._agent_xp_awarder_provider = agent_xp_awarder_provider
+
+    def set_sight_blocked_func(self, func: Callable[..., bool] | None) -> None:
+        """Inject the line-of-sight predicate used to gate turret fire.
+
+        *func* is ``(location, x1, y1, x2, y2) -> bool`` (True = blocked by a
+        Wall). Wired at the composition root; when unset, turrets ignore LOS.
+        """
+        self._sight_blocked = func
 
     def set_agent_xp_awarder(self, provider: Callable[[], Any]) -> None:
         """Inject the late-bound agent XP-awarder resolver.
@@ -66,12 +79,12 @@ class CombatEngine(BaseSystem):
     # ------------------------------------------------------------------ #
 
     def queue_attack(
-        self, attacker: Any, target: Any
+        self, attacker: Any, target: Any, weapon: Any = None
     ) -> tuple[bool, str]:
         """Queue an attack action for resolution on the next tick.
 
         Validation:
-            1. Attacker has a weapon equipped
+            1. Attacker has a weapon (equipped, or supplied via *weapon*)
             2. Target is not self
             3. Target is in range (Manhattan distance <= weapon range;
                a melee weapon's effective range is always 1)
@@ -84,11 +97,20 @@ class CombatEngine(BaseSystem):
             5. On a proceeding shot, deduct ``ammo_per_shot`` from the weapon's
                magazine (never the Supply_Bag) and any resource ammo_cost.
 
+        Args:
+            attacker: The attacking entity.
+            target: The target entity.
+            weapon: Optional weapon to attack with. When given (e.g. a
+                :class:`_GuardWeapon` for an NPC guard that wields no Game_Item),
+                it overrides the attacker's equipped-weapon lookup, so the same
+                validation/ammo pipeline runs against the supplied weapon.
+
         Returns:
             (success, message) tuple.
         """
-        # 1. Weapon check
-        weapon_item = self._get_weapon_item(attacker)
+        # 1. Weapon check — a supplied weapon (synthetic guard weapon) overrides
+        # the attacker's equipped-slot lookup.
+        weapon_item = weapon if weapon is not None else self._get_weapon_item(attacker)
         if weapon_item is None:
             return False, "No weapon equipped."
 
@@ -274,8 +296,15 @@ class CombatEngine(BaseSystem):
         self._notify_target(target, attacker, weapon_item, damage)
 
         # Defeat / destruction when HP has reached zero.
+        #
+        # Enemy NPCs are checked FIRST, above the _is_player branch: an enemy
+        # NPC also satisfies _is_player (it carries db.combat_xp like every
+        # CombatEntity), so without this ordering it would be routed to
+        # _handle_player_defeat and respawned instead of dying permanently.
         if self._get_hp(target) <= 0:
-            if self._is_player(target):
+            if self._is_enemy_npc(target):
+                self._handle_enemy_death(target, attacker)
+            elif self._is_player(target):
                 self._handle_player_defeat(target, attacker)
             elif self._is_building(target):
                 self._handle_building_destruction(target, attacker)
@@ -325,7 +354,9 @@ class CombatEngine(BaseSystem):
     #  Process turrets
     # ------------------------------------------------------------------ #
 
-    def process_turrets(self, active_buildings: list) -> None:
+    def process_turrets(
+        self, active_buildings: list, active_owner_ids: set | None = None
+    ) -> None:
         """Auto-attack nearest hostile player within turret radius.
 
         For each active Turret building (one whose BuildingDef declares the
@@ -340,6 +371,12 @@ class CombatEngine(BaseSystem):
 
         Args:
             active_buildings: List of Building objects to check.
+            active_owner_ids: Optional precomputed set of owner ids that have a
+                live HQ this tick (see ``world.utils.active_hq_owner_ids``). When
+                supplied, the deactivation gate is a cheap ``owner.id in`` set
+                membership test instead of a per-turret ``get_buildings()`` DB
+                query. When ``None`` (isolated tests), it falls back to the
+                per-owner :func:`owner_has_active_hq` live query.
         """
         from world.utils import is_owner, owner_has_active_hq
 
@@ -369,12 +406,18 @@ class CombatEngine(BaseSystem):
                 continue
 
             # A turret whose owner's base is deactivated (no active HQ) does not
-            # fire — mirrors the PvP "no HQ = base inert" rule. Resolve the HQ
-            # capability against the injected registry (hermetic in tests), like
-            # _is_turret above.
-            planet = getattr(building_loc, "planet_name", None)
-            if not owner_has_active_hq(owner, planet, provider=self.registry):
-                continue
+            # fire — mirrors the PvP "no HQ = base inert" rule. Prefer the
+            # precomputed per-tick owner-id set (one in-memory pass over active
+            # buildings); fall back to the per-owner live query when it wasn't
+            # supplied (isolated tests).
+            if active_owner_ids is not None:
+                oid = getattr(owner, "id", None)
+                if oid is None or oid not in active_owner_ids:
+                    continue
+            else:
+                planet = getattr(building_loc, "planet_name", None)
+                if not owner_has_active_hq(owner, planet, provider=self.registry):
+                    continue
 
             # Find nearest non-owner player within radius via the room's
             # spatial query (3-arg: x, y, radius).
@@ -398,9 +441,16 @@ class CombatEngine(BaseSystem):
                     b_coords[0], b_coords[1],
                     p_coords[0], p_coords[1],
                 )
-                if dist <= turret_radius and dist < nearest_dist:
-                    nearest = player
-                    nearest_dist = dist
+                if dist > turret_radius or dist >= nearest_dist:
+                    continue
+                # A Wall between the turret and the target blocks the shot.
+                if self._sight_blocked is not None and self._sight_blocked(
+                    building_loc, b_coords[0], b_coords[1],
+                    p_coords[0], p_coords[1],
+                ):
+                    continue
+                nearest = player
+                nearest_dist = dist
 
             if nearest is not None:
                 # Create a synthetic turret weapon action.
@@ -535,6 +585,12 @@ class CombatEngine(BaseSystem):
         elif self._is_agent(attacker):
             # Agent combat kill XP via the freeze-aware AgentSystem.
             self._award_agent_combat_xp(attacker)
+        elif self._is_enemy_npc(attacker):
+            # Enemy NPC-base guards satisfy _is_player (they carry combat_xp),
+            # but they have no progression of their own — never bank kill XP on
+            # them (dead state; would also be a latent farming vector if guard
+            # XP ever became meaningful).
+            pass
         elif self._is_player(attacker):
             attacker_xp = self._get_combat_xp(attacker)
             self._set_combat_xp(attacker, attacker_xp + xp_kill)
@@ -559,6 +615,69 @@ class CombatEngine(BaseSystem):
             attacker=attacker,
             victim=victim,
         )
+
+    # ------------------------------------------------------------------ #
+    #  Handle enemy-NPC death (permanent)
+    # ------------------------------------------------------------------ #
+
+    def _handle_enemy_death(self, victim: Any, attacker: Any) -> None:
+        """Handle an enemy NPC (an NPC-base guard) being killed at 0 HP.
+
+        Enemy NPCs die permanently — the antithesis of player agents, which
+        ``_handle_player_defeat`` respawns. This:
+
+        - Awards the attacker ``xp_kill`` (same balance as a player kill),
+          under the same ``is_owner`` friendly-fire guard: destroying a unit you
+          own grants nothing, so it can't be farmed. Agent attackers route their
+          kill XP through the freeze-aware AgentSystem, mirroring
+          ``_handle_player_defeat``.
+        - Publishes ``NPC_ELIMINATED`` (the base-elimination handler and future
+          consumers subscribe) BEFORE deleting, so subscribers can still read
+          the victim's coordinates/owner.
+        - Deletes the victim (``target.delete()``). ``NPC.at_object_delete``
+          already bumps the agent-index generation, so the tick loop's cached
+          roster is invalidated — no explicit bump needed here.
+
+        Args:
+            victim: The enemy NPC that reached 0 HP.
+            attacker: The entity that killed it.
+        """
+        from world.utils import is_owner
+
+        xp_kill = self.registry.balance.xp_kill
+
+        # Award kill XP to a non-owner attacker (same anti-farm guard as
+        # players/buildings: no reward for killing your own unit).
+        owner = getattr(getattr(victim, "db", None), "owner", None)
+        own_victim = is_owner(attacker, owner)
+        if own_victim:
+            pass  # friendly fire — no reward
+        elif self._is_agent(attacker):
+            self._award_agent_combat_xp(attacker)
+        elif self._is_player(attacker):
+            attacker_xp = self._get_combat_xp(attacker)
+            self._set_combat_xp(attacker, attacker_xp + xp_kill)
+
+        tile = self._get_target_location(victim)
+        victim_name = getattr(victim, "key", "enemy")
+
+        # Notify a (non-owner) player attacker of the kill + XP. Agents/turrets
+        # get no notification (guarded inside notify for a None/NPC player).
+        if not own_victim and self._is_player(attacker) and not self._is_agent(attacker):
+            self.notify(attacker, "npc_killed", name=victim_name, xp=xp_kill)
+
+        # Publish BEFORE delete so subscribers can read victim state/coords.
+        self.event_bus.publish(
+            NPC_ELIMINATED,
+            attacker=attacker,
+            victim=victim,
+            tile=tile,
+        )
+
+        # Permanent death — delete the NPC (bumps the agent-index generation
+        # via NPC.at_object_delete, invalidating the tick roster cache).
+        if hasattr(victim, "delete"):
+            victim.delete()
 
     # ------------------------------------------------------------------ #
     #  Handle building destruction
@@ -809,6 +928,18 @@ class CombatEngine(BaseSystem):
             return False
         return getattr(entity.db, "npc_type", None) == "agent"
 
+    @staticmethod
+    def _is_enemy_npc(entity: Any) -> bool:
+        """Check if an entity is an enemy NPC (an NPC-base guard).
+
+        An enemy NPC has ``db.npc_type == "enemy"``. Unlike a player agent
+        (``"agent"``), an enemy is deleted permanently at 0 HP rather than
+        respawned — the check that routes it to :meth:`_handle_enemy_death`.
+        """
+        if entity is None or not hasattr(entity, "db"):
+            return False
+        return getattr(entity.db, "npc_type", None) == "enemy"
+
     def _get_agent_system(self) -> Any | None:
         """Resolve the agent XP-awarder (the AgentSystem).
 
@@ -1002,3 +1133,23 @@ class _TurretWeapon(SyntheticWeapon):
 
     def __init__(self, damage: int, weapon_range: int) -> None:
         super().__init__(damage, weapon_range, name="Turret")
+
+
+class _GuardWeapon(SyntheticWeapon):
+    """Synthetic weapon for NPC-guard auto-attacks (same pattern as _TurretWeapon).
+
+    Carries a ``weapon_type`` (``"melee"`` or ``"ranged"``) so it flows through
+    the standard ``queue_attack`` validation exactly like a wielded weapon: a
+    melee guard's effective range is forced to 1, a ranged guard uses its
+    ``range`` stat. It is ammo-free — ``ammo_type``/``ammo_cost`` are ``None`` so
+    no magazine gating or resource cost applies — the guard just attacks.
+    """
+
+    def __init__(
+        self, damage: int, weapon_range: int, weapon_type: str = "melee"
+    ) -> None:
+        super().__init__(damage, weapon_range, name="Guard")
+        self.weapon_type = weapon_type
+        self.ammo_type = None
+        self.ammo_per_shot = 0
+        self.magazine_size = None

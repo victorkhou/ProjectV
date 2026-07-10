@@ -141,7 +141,8 @@ class FakeTile:
 class FakePlayer:
     """Lightweight stand-in for CombatCharacter."""
     def __init__(self, name="TestPlayer", hp=100, hp_max=100, combat_xp=0,
-                 resources=None, location=None, weapon=None, armor=None):
+                 resources=None, location=None, weapon=None, armor=None,
+                 oid=None):
         self.key = name
         self.db = FakeDB(hp=hp, hp_max=hp_max, combat_xp=combat_xp)
         self._resources = {r: 0 for r in RESOURCE_TYPES}
@@ -150,6 +151,9 @@ class FakePlayer:
         self.location = location or FakeTile()
         self.equipment = FakeEquipmentHandler()
         self._messages = []
+        # Optional stable id for is_owner (.id) friend/foe comparisons.
+        if oid is not None:
+            self.id = oid
         if weapon:
             self.equipment.equip(weapon)
         if armor:
@@ -227,6 +231,34 @@ class FakeAgent:
         self._messages = []
         if weapon:
             self.equipment.equip(weapon)
+
+    def msg(self, text):
+        self._messages.append(text)
+
+
+class FakeEnemyNPC:
+    """Lightweight stand-in for an enemy NPC (an NPC-base guard).
+
+    Enemies carry ``db.combat_xp`` (so ``_is_player`` recognizes them — which is
+    precisely why the enemy check must run BEFORE the player branch) plus
+    ``db.npc_type == "enemy"`` and a ``db.owner`` (the Sentinel). At 0 HP they
+    are deleted, not respawned — ``delete()`` records that.
+    """
+    def __init__(self, name="Guard #1", hp=100, hp_max=100, combat_xp=0,
+                 owner=None, location=None, oid=None):
+        self.key = name
+        self.db = FakeDB(hp=hp, hp_max=hp_max, combat_xp=combat_xp)
+        self.db.npc_type = "enemy"
+        self.db.owner = owner
+        self.location = location or FakeTile()
+        self.equipment = FakeEquipmentHandler()
+        self._messages = []
+        self.deleted = False
+        if oid is not None:
+            self.id = oid
+
+    def delete(self):
+        self.deleted = True
 
     def msg(self, text):
         self._messages.append(text)
@@ -662,6 +694,47 @@ class TestProcessTurrets(unittest.TestCase):
         self.assertEqual(len(engine.pending_actions), 1)
         self.assertEqual(engine.pending_actions[0]["target"], near_player)
 
+    def test_turret_gated_by_active_owner_ids_set(self):
+        """When the precomputed active-owner-id set is supplied, the turret uses
+        it (no per-turret get_buildings query). An owner absent from the set is
+        inert even with an in-range hostile."""
+        engine, _ = _make_engine()
+        owner = FakePlayer(name="Owner", oid=55)  # no get_buildings
+        hostile = FakePlayer(name="Hostile",
+                             location=FakeTile(xyz=(1, 0, "earth")))
+        turret_tile = FakeTile(xyz=(0, 0, "earth"), nearby_players=[hostile])
+        turret = FakeBuilding(building_type="TU", owner=owner,
+                              hp=300, hp_max=300, location=turret_tile)
+
+        # Owner in the active set -> fires.
+        engine.process_turrets([turret], active_owner_ids={55})
+        self.assertEqual(len(engine.pending_actions), 1)
+
+        # Owner absent -> inert (no fallback DB query attempted).
+        engine.pending_actions.clear()
+        engine.process_turrets([turret], active_owner_ids=set())
+        self.assertEqual(len(engine.pending_actions), 0)
+
+    def test_turret_does_not_fire_through_wall(self):
+        """LOS: a Wall between turret and target blocks the shot."""
+        engine, _ = _make_engine()
+        owner = _hq_owner()
+        hostile = FakePlayer(name="Hostile",
+                             location=FakeTile(xyz=(3, 0, "earth")))
+        turret_tile = FakeTile(xyz=(0, 0, "earth"), nearby_players=[hostile])
+        turret = FakeBuilding(building_type="TU", owner=owner,
+                              hp=300, hp_max=300, location=turret_tile)
+        engine.set_sight_blocked_func(
+            lambda loc, x1, y1, x2, y2: (x2, y2) == (3, 0)
+        )
+        engine.process_turrets([turret])
+        self.assertEqual(len(engine.pending_actions), 0)
+
+        # Clear LOS -> fires.
+        engine.set_sight_blocked_func(lambda *a: False)
+        engine.process_turrets([turret])
+        self.assertEqual(len(engine.pending_actions), 1)
+
     def test_turret_does_not_fire_when_owner_has_no_hq(self):
         """The deactivation rule in production form: an owner with no HQ (a
         plain FakePlayer whose get_buildings returns nothing) has an inert
@@ -1069,6 +1142,146 @@ class TestAgentDefeatXP(unittest.TestCase):
         engine.queue_attack(attacker, victim)
         engine.resolve_tick()
         self.assertEqual(victim.db.hp, 100)
+
+
+class TestEnemyNPCDeath(unittest.TestCase):
+    """Enemy NPCs (npc_type='enemy') die permanently at 0 HP (Phase 4)."""
+
+    def _sentinel(self, oid=1):
+        """A base owner (Sentinel) with a distinct id for is_owner checks."""
+        owner = FakePlayer(name="Sentinel")
+        owner.id = oid
+        return owner
+
+    def test_enemy_deleted_at_zero_hp(self):
+        weapon = FakeWeapon(damage=200, weapon_range=5)
+        engine, _ = _make_engine()
+        attacker = FakePlayer(name="Raider", weapon=weapon, oid=2,
+                              location=FakeTile(xyz=(0, 0, "earth")))
+        enemy = FakeEnemyNPC(name="Guard #1", hp=100, owner=self._sentinel(1),
+                             location=FakeTile(xyz=(1, 0, "earth")), oid=3)
+        engine.queue_attack(attacker, enemy)
+        engine.resolve_tick()
+        self.assertTrue(enemy.deleted)
+
+    def test_enemy_not_respawned(self):
+        """Unlike a player agent, the enemy's HP is NOT reset to max — it dies."""
+        weapon = FakeWeapon(damage=200, weapon_range=5)
+        engine, _ = _make_engine()
+        attacker = FakePlayer(name="Raider", weapon=weapon, oid=2,
+                              location=FakeTile(xyz=(0, 0, "earth")))
+        enemy = FakeEnemyNPC(name="Guard #1", hp=100, hp_max=100,
+                             owner=self._sentinel(1),
+                             location=FakeTile(xyz=(1, 0, "earth")), oid=3)
+        engine.queue_attack(attacker, enemy)
+        engine.resolve_tick()
+        self.assertEqual(enemy.db.hp, 0)  # stayed dead, not restored to 100
+
+    def test_kill_awards_xp_kill_to_player(self):
+        weapon = FakeWeapon(damage=200, weapon_range=5)
+        engine, _ = _make_engine()
+        attacker = FakePlayer(name="Raider", weapon=weapon, combat_xp=50, oid=2,
+                              location=FakeTile(xyz=(0, 0, "earth")))
+        enemy = FakeEnemyNPC(name="Guard #1", hp=100, owner=self._sentinel(1),
+                             location=FakeTile(xyz=(1, 0, "earth")), oid=3)
+        engine.queue_attack(attacker, enemy)
+        engine.resolve_tick()
+        # xp_kill = 100 (same as a player kill)
+        self.assertEqual(attacker.db.combat_xp, 150)
+
+    def test_kill_publishes_npc_eliminated_event(self):
+        weapon = FakeWeapon(damage=200, weapon_range=5)
+        events = []
+        event_bus = EventBus()
+        event_bus.subscribe("npc_eliminated", lambda **kw: events.append(kw))
+        engine, _ = _make_engine(event_bus=event_bus)
+        attacker = FakePlayer(name="Raider", weapon=weapon, oid=2,
+                              location=FakeTile(xyz=(0, 0, "earth")))
+        enemy = FakeEnemyNPC(name="Guard #1", hp=100, owner=self._sentinel(1),
+                             location=FakeTile(xyz=(1, 0, "earth")), oid=3)
+        engine.queue_attack(attacker, enemy)
+        engine.resolve_tick()
+        self.assertEqual(len(events), 1)
+        self.assertEqual(events[0]["attacker"], attacker)
+        self.assertEqual(events[0]["victim"], enemy)
+
+    def test_npc_eliminated_published_before_delete(self):
+        """Subscribers can still read the victim (not-yet-deleted) at publish."""
+        weapon = FakeWeapon(damage=200, weapon_range=5)
+        seen_deleted = []
+        event_bus = EventBus()
+        event_bus.subscribe(
+            "npc_eliminated",
+            lambda **kw: seen_deleted.append(kw["victim"].deleted),
+        )
+        engine, _ = _make_engine(event_bus=event_bus)
+        attacker = FakePlayer(name="Raider", weapon=weapon, oid=2,
+                              location=FakeTile(xyz=(0, 0, "earth")))
+        enemy = FakeEnemyNPC(name="Guard #1", hp=100, owner=self._sentinel(1),
+                             location=FakeTile(xyz=(1, 0, "earth")), oid=3)
+        engine.queue_attack(attacker, enemy)
+        engine.resolve_tick()
+        self.assertEqual(seen_deleted, [False])  # not deleted yet at publish
+        self.assertTrue(enemy.deleted)           # deleted afterward
+
+    def test_killing_own_enemy_awards_no_xp(self):
+        """Anti-farm: destroying an enemy NPC you own grants no XP (by .id)."""
+        weapon = FakeWeapon(damage=200, weapon_range=5)
+        engine, _ = _make_engine()
+        owner = self._sentinel(oid=7)
+        attacker = FakePlayer(name="Owner", weapon=weapon, combat_xp=50, oid=7,
+                              location=FakeTile(xyz=(0, 0, "earth")))
+        enemy = FakeEnemyNPC(name="Guard #1", hp=100, owner=owner,
+                             location=FakeTile(xyz=(1, 0, "earth")), oid=3)
+        engine.queue_attack(attacker, enemy)
+        engine.resolve_tick()
+        self.assertEqual(attacker.db.combat_xp, 50)  # unchanged
+        self.assertTrue(enemy.deleted)               # still dies
+
+    def test_kill_notifies_player(self):
+        weapon = FakeWeapon(damage=200, weapon_range=5)
+        engine, _ = _make_engine()
+        attacker = FakePlayer(name="Raider", weapon=weapon, oid=2,
+                              location=FakeTile(xyz=(0, 0, "earth")))
+        enemy = FakeEnemyNPC(name="Guard #2", hp=100, owner=self._sentinel(1),
+                             location=FakeTile(xyz=(1, 0, "earth")), oid=3)
+        engine.queue_attack(attacker, enemy)
+        engine.resolve_tick()
+        killed = [m for m in attacker._messages if "Guard #2" in m]
+        self.assertTrue(killed, attacker._messages)
+
+    def test_agent_attacker_kill_routes_through_agent_system(self):
+        """An agent killing an enemy earns combat XP via the AgentSystem,
+        not the player xp_kill path (mirrors _handle_player_defeat)."""
+        weapon = FakeWeapon(damage=200, weapon_range=5)
+        agent_system = FakeAgentSystem()
+        engine, _ = _make_engine()
+        engine.set_agent_xp_awarder(lambda: agent_system)
+        attacker = FakeAgent(name="MyGuard", weapon=weapon,
+                             location=FakeTile(xyz=(0, 0, "earth")))
+        attacker.id = 5
+        enemy = FakeEnemyNPC(name="Guard #1", hp=100, owner=self._sentinel(1),
+                             location=FakeTile(xyz=(1, 0, "earth")), oid=3)
+        engine.queue_attack(attacker, enemy)
+        engine.resolve_tick()
+        self.assertEqual(agent_system.awarded, [(attacker, "combat")])
+        self.assertTrue(enemy.deleted)
+
+    def test_player_agent_still_respawns_regression(self):
+        """Regression: a player agent (npc_type='agent') still respawns and is
+        NOT deleted — only npc_type='enemy' dies permanently."""
+        weapon = FakeWeapon(damage=200, weapon_range=5)
+        agent_system = FakeAgentSystem()
+        engine, _ = _make_engine()
+        engine.set_agent_xp_awarder(lambda: agent_system)
+        attacker = FakePlayer(name="Attacker", weapon=weapon, oid=2,
+                              location=FakeTile(xyz=(0, 0, "earth")))
+        agent = FakeAgent(name="PlayerAgent", hp=100, hp_max=100,
+                          location=FakeTile(xyz=(1, 0, "earth")))
+        engine.queue_attack(attacker, agent)
+        engine.resolve_tick()
+        self.assertEqual(agent.db.hp, 100)              # respawned to full
+        self.assertFalse(hasattr(agent, "deleted") and agent.deleted)
 
 
 # -------------------------------------------------------------- #

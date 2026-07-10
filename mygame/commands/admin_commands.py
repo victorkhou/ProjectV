@@ -1304,3 +1304,88 @@ class CmdMigrate(BaseCommand):
 
         logger.info("Admin %s migrated %d characters (%d attrs added)", caller.key, updated, attrs_added)
         caller.msg(f"Migrated {updated} player(s). {attrs_added} missing attribute(s) filled in.")
+
+
+class CmdAdminOutpost(AdminSubcommandRouter):
+    """Spawn and inspect NPC bases (outposts/fortresses).
+
+    Usage:
+        @outpost spawn <tier> [x y]
+        @outpost list
+
+    Options:
+        <tier>   template tier ("outpost" or "fortress")
+        [x y]    HQ tile coordinates; defaults to your current tile
+
+    Subcommands:
+        spawn — Spawn an NPC base at a tile (Builder+)
+        list  — List active NPC bases (Builder+)
+
+    """
+
+    key = "@outpost"
+
+    def sub_spawn(self, args):
+        """Spawn an NPC base of a tier at the caller's tile (or given x y)."""
+        caller = self.caller
+        spawner = self.require_system("outpost_spawner", "Outpost spawner")
+        if spawner is None:
+            return
+
+        parts = args.split()
+        if not parts:
+            caller.msg("Usage: @outpost spawn <tier> [x y]")
+            return
+        tier = parts[0].lower()
+
+        planet = getattr(caller.db, "coord_planet", None)
+        if not planet:
+            caller.msg("You have no planet position to spawn a base on.")
+            return
+
+        coords = None
+        if len(parts) >= 3:
+            x = self.parse_int(parts[1], "X")
+            y = self.parse_int(parts[2], "Y")
+            if x is None or y is None:
+                return
+            coords = (x, y)
+        else:
+            cx = getattr(caller.db, "coord_x", None)
+            cy = getattr(caller.db, "coord_y", None)
+            if cx is not None and cy is not None:
+                coords = (int(cx), int(cy))
+
+        base = spawner.spawn_base(planet, tier, coords=coords)
+        if base is None:
+            caller.msg(
+                f"Could not spawn {tier!r} base "
+                f"(unknown tier or no valid placement)."
+            )
+            return
+        self._log_admin("spawn", f"{tier} at {base['x']},{base['y']} on {planet}")
+        caller.msg(
+            f"|gSpawned {tier} base|n at ({base['x']}, {base['y']}) on {planet}."
+        )
+
+    def sub_list(self, args):
+        """List active NPC bases the spawner is tracking."""
+        caller = self.caller
+        spawner = self.require_system("outpost_spawner", "Outpost spawner")
+        if spawner is None:
+            return
+        bases = list(getattr(spawner, "_active_bases", {}).values())
+        if not bases:
+            caller.msg("No active NPC bases.")
+            return
+        lines = ["|wActive NPC bases:|n"]
+        for rec in bases:
+            lines.append(
+                f"  {rec['tier']} at ({rec['x']}, {rec['y']}) on {rec['planet']}"
+            )
+        caller.msg("\n".join(lines))
+
+    subcommands = {
+        "spawn": (sub_spawn, "Spawn an NPC base at a tile", "Builder"),
+        "list": (sub_list, "List active NPC bases", "Builder"),
+    }

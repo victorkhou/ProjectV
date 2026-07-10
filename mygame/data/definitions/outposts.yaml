@@ -1,0 +1,59 @@
+# NPC base templates (PvE NPC bases feature, Phase 5).
+#
+# Data-driven layouts for the Outpost_Spawner. Each template names a tier and
+# describes the buildings (type + tile offset from the HQ + optional HP/level),
+# the guards (role + weapon_type + count), and the loot dropped when the base's
+# HQ is destroyed. Adding a new tier (e.g. "citadel") is a YAML edit — no code
+# change (Requirement 8.5).
+#
+# building.type is a BuildingDef abbreviation (HQ, WL, TU, AR, BK, ...).
+# offset is [dx, dy] relative to the HQ tile (which is always [0, 0]).
+# guard.role is "guard" (melee) or "soldier" (ranged) — GuardCombatSystem reads
+# the role; damage/range come from BalanceConfig (guard_* fields).
+
+outpost:
+  display_name: Outpost
+  buildings:
+    - type: HQ
+      offset: [0, 0]
+      hp: 200
+    - type: WL
+      offset: [0, 1]
+      hp: 300
+  guards:
+    - role: guard
+      weapon_type: melee
+      count: 2
+  loot:
+    Iron: 30
+    Stone: 20
+
+fortress:
+  display_name: Fortress
+  buildings:
+    - type: HQ
+      offset: [0, 0]
+      hp: 600
+    - type: WL
+      offset: [-1, 0]
+      hp: 600
+    - type: WL
+      offset: [1, 0]
+      hp: 600
+    - type: TU
+      offset: [0, 1]
+      hp: 400
+    - type: TU
+      offset: [0, -1]
+      hp: 400
+  guards:
+    - role: guard
+      weapon_type: melee
+      count: 2
+    - role: soldier
+      weapon_type: ranged
+      count: 3
+  loot:
+    Iron: 100
+    Stone: 80
+    Energy: 50

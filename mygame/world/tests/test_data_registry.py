@@ -794,3 +794,73 @@ class TestEconomyTunablesSourcedFromBalance:
         ok, errors = reg.reload_all()
         assert ok, errors
         assert reg.balance.upgrade_cost_base == 6
+
+
+# ------------------------------------------------------------------ #
+#  Tests: NPC-base templates (PvE Phase 5, optional outposts.yaml)
+# ------------------------------------------------------------------ #
+
+_VALID_OUTPOSTS = {
+    "outpost": {
+        "display_name": "Outpost",
+        "buildings": [
+            {"type": "HQ", "offset": [0, 0], "hp": 200},
+            {"type": "WL", "offset": [0, 1], "hp": 300},
+        ],
+        "guards": [{"role": "guard", "weapon_type": "melee", "count": 2}],
+        "loot": {"Iron": 30, "Stone": 20},
+    },
+}
+
+
+class TestBaseTemplates:
+    def test_absent_outposts_yields_empty_templates(self, data_dir):
+        """No outposts.yaml → empty template set (feature disabled), no error."""
+        reg = DataRegistry()
+        reg.load_all(data_dir)
+        assert reg.base_templates == {}
+        assert reg.get_base_template("outpost") is None
+
+    def test_templates_loaded_and_parsed(self, data_dir):
+        _write_yaml(
+            os.path.join(data_dir, "definitions", "outposts.yaml"),
+            _VALID_OUTPOSTS,
+        )
+        reg = DataRegistry()
+        reg.load_all(data_dir)
+
+        tpl = reg.get_base_template("outpost")
+        assert tpl is not None
+        assert tpl.display_name == "Outpost"
+        assert len(tpl.buildings) == 2
+        hq = tpl.buildings[0]
+        assert hq.building_type == "HQ"
+        assert hq.offset == (0, 0)
+        assert hq.hp == 200
+        assert len(tpl.guards) == 1
+        assert tpl.guards[0].role == "guard"
+        assert tpl.guards[0].count == 2
+        assert tpl.loot == {"Iron": 30, "Stone": 20}
+
+    def test_malformed_template_skipped(self, data_dir):
+        _write_yaml(
+            os.path.join(data_dir, "definitions", "outposts.yaml"),
+            {"outpost": _VALID_OUTPOSTS["outpost"], "broken": "not-a-dict"},
+        )
+        reg = DataRegistry()
+        reg.load_all(data_dir)
+        assert "outpost" in reg.base_templates
+        assert "broken" not in reg.base_templates
+
+    def test_templates_swapped_on_reload(self, data_dir):
+        reg = DataRegistry()
+        reg.load_all(data_dir)
+        assert reg.base_templates == {}
+        # Add templates on disk, then hot-reload picks them up.
+        _write_yaml(
+            os.path.join(data_dir, "definitions", "outposts.yaml"),
+            _VALID_OUTPOSTS,
+        )
+        ok, errors = reg.reload_all()
+        assert ok, errors
+        assert "outpost" in reg.base_templates

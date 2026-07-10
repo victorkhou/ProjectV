@@ -155,6 +155,42 @@ class CoordinateSpaceDef:
 
 
 @dataclass
+class TemplateBuildingDef:
+    """One building in an NPC-base template: a type at an offset from the HQ."""
+
+    building_type: str  # BuildingDef abbreviation (HQ, WL, TU, ...)
+    offset: tuple[int, int] = (0, 0)  # (dx, dy) relative to the HQ tile
+    hp: int | None = None  # override max HP; None = BuildingDef default
+    level: int = 1
+
+
+@dataclass
+class TemplateGuardDef:
+    """A group of guard NPCs in an NPC-base template."""
+
+    role: str = "guard"  # "guard" (melee) or "soldier" (ranged)
+    weapon_type: str = "melee"  # "melee" or "ranged"
+    count: int = 1
+    hp: int | None = None  # override guard HP; None = tier default from balance
+
+
+@dataclass
+class BaseTemplateDef:
+    """A data-driven NPC-base layout (outpost / fortress / future tiers).
+
+    Loaded from ``data/definitions/outposts.yaml`` by the DataRegistry and used
+    by the OutpostSpawnerSystem to place a base: which buildings at what
+    offsets, which guards, and the loot dropped when the HQ is destroyed.
+    """
+
+    tier: str  # template key ("outpost", "fortress", ...)
+    display_name: str
+    buildings: list[TemplateBuildingDef] = field(default_factory=list)
+    guards: list[TemplateGuardDef] = field(default_factory=list)
+    loot: dict[str, int] = field(default_factory=dict)
+
+
+@dataclass
 class AbilityGateDef:
     """Definition for a data-driven ability gate.
 
@@ -288,3 +324,32 @@ class BalanceConfig:
     #: from production before it stalls, so an idle player's building cannot
     #: grow the object table without bound. 0 disables the cap.
     equipment_production_owner_cap: int = 50
+
+    # --- Guard combat AI (PvE NPC bases feature, Phase 3) ------------- #
+    #: Base damage for melee guards (outpost guards, role "guard"). Applied
+    #: through the standard combat formula via a synthetic guard weapon.
+    guard_melee_damage: int = 10
+    #: Base damage for ranged guards (fortress soldiers, role "soldier").
+    guard_ranged_damage: int = 15
+    #: Weapon range (Manhattan tiles) for ranged guards. Melee guards are
+    #: always range 1.
+    guard_ranged_range: int = 4
+    #: Detection distance (Manhattan tiles) within which a guard acquires and
+    #: attacks the nearest non-owner player each tick.
+    guard_aggro_radius: int = 5
+
+    # --- NPC base spawner + elimination (PvE NPC bases, Phase 5) ------ #
+    #: XP awarded for destroying an NPC base's HQ (the whole base is wiped) —
+    #: far more than xp_building_destroy=50, so raiding is decisively rewarding.
+    xp_hq_destroy: int = 500
+    #: Ticks before a cleared NPC base respawns at a fresh location (~10 min
+    #: at 1 tick/s). 0 disables respawning.
+    outpost_respawn_ticks: int = 600
+    #: Outposts (small NPC bases) placed per planet at server init.
+    outpost_count: int = 5
+    #: Fortresses (large NPC bases) placed per planet at server init.
+    fortress_count: int = 2
+    #: HP for each outpost guard NPC (overridden per template if specified).
+    outpost_guard_hp: int = 80
+    #: HP for each fortress guard NPC (overridden per template if specified).
+    fortress_guard_hp: int = 150

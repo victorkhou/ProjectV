@@ -98,3 +98,24 @@ resource_weights:
 # already holds this many un-equipped produced items (0 disables the cap).
 equipment_production_ticks: 30
 equipment_production_owner_cap: 50
+
+# --- Guard combat AI (PvE NPC bases feature, Phase 3) ---
+# Guards (role "guard"/"soldier") whose owner has an active HQ attack the
+# nearest non-owner player within guard_aggro_radius each tick, using a
+# synthetic weapon routed through the standard combat formula. Outpost guards
+# are melee (range 1); fortress soldiers are ranged (guard_ranged_range).
+guard_melee_damage: 10           # base damage for melee guards (outpost)
+guard_ranged_damage: 15          # base damage for ranged guards (fortress)
+guard_ranged_range: 4            # weapon range (tiles) for ranged guards
+guard_aggro_radius: 5            # detection distance (tiles) for guard AI
+
+# --- NPC base spawner + elimination (PvE NPC bases, Phase 5) ---
+# NPC outposts/fortresses placed on the map at init; destroying a base's HQ
+# wipes the whole base and awards xp_hq_destroy + loot, then respawns it
+# elsewhere after outpost_respawn_ticks. Loot tables live in outposts.yaml.
+xp_hq_destroy: 500               # XP for destroying an NPC HQ (whole base wiped)
+outpost_respawn_ticks: 600       # ticks before a cleared base respawns (0=never)
+outpost_count: 5                 # outposts per planet at init
+fortress_count: 2                # fortresses per planet at init
+outpost_guard_hp: 80             # HP per outpost guard
+fortress_guard_hp: 150           # HP per fortress guard

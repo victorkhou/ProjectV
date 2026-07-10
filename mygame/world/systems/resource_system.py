@@ -709,6 +709,19 @@ class ResourceSystem(BaseSystem):
                 location.db.resource_inventory = inv
             return None
 
+    @staticmethod
+    def spawn_resource_drop(location: Any, resource_type: str, amount: int,
+                            x: int | None = None, y: int | None = None) -> Any:
+        """Public: spawn or merge a ResourceDrop at *location* (optionally at x/y).
+
+        Stable entry point for callers outside the resource system — e.g. the
+        PvE base-elimination loot drop — so they don't reach into the private
+        ``_spawn_resource_drop``. Delegates to it.
+        """
+        return ResourceSystem._spawn_resource_drop(
+            location, resource_type, amount, x=x, y=y
+        )
+
     # ------------------------------------------------------------------ #
     #  Tile inventory (resources on the ground)
     # ------------------------------------------------------------------ #

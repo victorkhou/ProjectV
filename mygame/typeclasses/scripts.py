@@ -33,6 +33,9 @@ logger = logging.getLogger("evennia")
 #     (online players + active buildings) that nearly every later step reads.
 #   - ``npc_movement`` / ``agent_processing`` run before combat so agents are at
 #     their resolved positions when attacks resolve.
+#   - ``guard_combat`` runs BEFORE ``combat_resolution`` so guard-queued attacks
+#     resolve in the SAME tick (intentional asymmetry with turrets, which fire
+#     AFTER resolution and land next tick — see GuardCombatSystem's docstring).
 #   - ``combat_resolution`` runs before ``turret_attacks`` so turrets fire at
 #     the post-resolution world state.
 #   - ``powerup_ticks`` runs AFTER ``combat_resolution`` so a powerup lasts
@@ -52,6 +55,7 @@ TICK_STEP_ORDER = (
     ("agent_training", "Decrement training timers."),
     ("active_presence", "Online-player construction/harvest progress."),
     ("equipment_production", "Equipment buildings emit items."),
+    ("guard_combat", "Guards/soldiers acquire targets and queue attacks."),
     ("combat_resolution", "Resolve queued attacks before turrets/expiry."),
     ("turret_attacks", "Turrets fire at the post-resolution world state."),
     ("combat_timer_decrement", "Expire combat lockouts."),
@@ -59,6 +63,7 @@ TICK_STEP_ORDER = (
     ("powerup_ticks", "Expire powerups after this tick's combat resolved."),
     ("tech_research", "Decrement research timers."),
     ("resource_respawns", "Decrement depleted-node respawn counters."),
+    ("outpost_respawn", "Respawn cleared NPC bases whose cooldown elapsed."),
     ("tick_completed", "Last: announce the tick is fully processed."),
 )
 
@@ -257,6 +262,46 @@ class GameTickScript(DefaultScript):
             self._agents_cache_gen = generation
         return agents
 
+    def _get_all_enemies(self, agent_system):
+        """Return the full enemy-NPC roster, cached against the agent-index gen.
+
+        The guard-combat sweep needs NPC-base guards (``npc_type="enemy"``),
+        which are NOT in the ``get_all_agents`` roster. Enemy NPCs are created
+        and deleted through the same ``NPC`` lifecycle that bumps the
+        agent-index generation, so this reuses that counter for cache
+        invalidation exactly like :meth:`_get_all_agents`.
+
+        Args:
+            agent_system: the AgentSystem exposing ``get_all_enemies()``.
+
+        Returns:
+            list of enemy NPC objects (empty on any failure / missing system).
+        """
+        if agent_system is None or not hasattr(agent_system, "get_all_enemies"):
+            return []
+        try:
+            from world import agent_index
+            generation = agent_index.generation()
+        except Exception:  # noqa: BLE001 - if the counter is unavailable, don't cache
+            generation = None
+
+        if (
+            generation is not None
+            and getattr(self, "_enemies_cache_gen", None) == generation
+            and getattr(self, "_enemies_cache", None) is not None
+        ):
+            return self._enemies_cache
+
+        try:
+            enemies = list(agent_system.get_all_enemies())
+        except Exception:
+            return []
+
+        if generation is not None:
+            self._enemies_cache = enemies
+            self._enemies_cache_gen = generation
+        return enemies
+
     def _compute_active_data(self, chunking, online_players):
         """Compute active buildings from chunk filtering.
 
@@ -396,12 +441,43 @@ class GameTickScript(DefaultScript):
                 lambda: equipment_system.process_production(tick_data["buildings"])
             )
 
+        registry = systems.get("registry")
+
+        def _active_hq_owner_ids():
+            """Owner ids with a live HQ this tick — one in-memory pass over the
+            active buildings, shared by guard AI and turrets so the "no HQ =
+            inert" gate costs zero DB queries per entity (see
+            ``world.utils.active_hq_owner_ids``)."""
+            from world.utils import active_hq_owner_ids
+            return active_hq_owner_ids(tick_data["buildings"], provider=registry)
+
+        guard_combat_system = systems.get("guard_combat_system")
+        if guard_combat_system:
+            def process_guard_combat():
+                # Feed BOTH rosters so guards fight back on player bases AND NPC
+                # outposts: player-assigned guards live in the npc_type="agent"
+                # roster; NPC-base guards live in the npc_type="enemy" roster.
+                # Both are cached against the agent-index generation (a DB scan
+                # only when an NPC is created/deleted). GuardCombatSystem is
+                # ownership-generic and filters by role internally, so a
+                # non-guard agent in the list is simply skipped.
+                guards = self._get_all_agents(agent_system)
+                guards = guards + self._get_all_enemies(agent_system)
+                guard_combat_system.process_tick(
+                    tick_number, guards,
+                    active_owner_ids=_active_hq_owner_ids(),
+                )
+            registered["guard_combat"] = process_guard_combat
+
         if combat_engine:
             registered["combat_resolution"] = (
                 lambda: combat_engine.resolve_tick(tick_data["buildings"])
             )
             registered["turret_attacks"] = (
-                lambda: combat_engine.process_turrets(tick_data["buildings"])
+                lambda: combat_engine.process_turrets(
+                    tick_data["buildings"],
+                    active_owner_ids=_active_hq_owner_ids(),
+                )
             )
 
         def decrement_combat_timers():
@@ -449,6 +525,12 @@ class GameTickScript(DefaultScript):
                     planet_rooms_list = []
                 resource_system.process_respawns(planet_rooms_list)
             registered["resource_respawns"] = _process_respawns
+
+        outpost_spawner = systems.get("outpost_spawner")
+        if outpost_spawner:
+            registered["outpost_respawn"] = (
+                lambda: outpost_spawner.process_respawns(tick_number)
+            )
 
         if event_bus:
             registered["tick_completed"] = (

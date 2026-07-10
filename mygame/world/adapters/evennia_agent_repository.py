@@ -55,6 +55,15 @@ class EvenniaAgentRepository(AgentRepository):
             logger.exception("find_all_agents failed")
             return []
 
+    def find_all_enemies(self) -> list[Any]:
+        try:
+            from evennia.utils.search import search_object_by_tag
+
+            return list(search_object_by_tag("enemy", category="npc_type"))
+        except Exception:
+            logger.exception("find_all_enemies failed")
+            return []
+
     def find_training_buildings(self) -> list[Any]:
         try:
             from evennia.objects.models import ObjectDB
