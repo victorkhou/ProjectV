@@ -221,6 +221,7 @@ class NPC(CombatEntity, GameEntity):
 
         terrain_generators = systems.get("_terrain_generators")
         registry = systems.get("registry")
+        planet_registry = systems.get("planet_registry")
         planet_key = getattr(room.db, "planet", None) if hasattr(room, "db") else None
 
         if terrain_generators and registry and planet_key:
@@ -228,10 +229,19 @@ class NPC(CombatEntity, GameEntity):
             if tgen:
                 from world.pathfinding import make_passability_checker
 
-                # Get grid dimensions — use generous defaults since we
-                # only need bounds for the checker, not for pathfinding.
-                width = getattr(getattr(room, "db", None), "grid_width", 256) or 256
-                height = getattr(getattr(room, "db", None), "grid_height", 256) or 256
+                # Resolve the real grid bounds from the PlanetRegistry's
+                # CoordinateSpaceDef. The old hardcoded 256x256 default (grid_width/
+                # grid_height are never set anywhere) treated every tile past 256 as
+                # impassable, creating a movement dead-zone on any planet larger
+                # than 256 (terra 500, space 1000, ...). Fall back to 256 only when
+                # the registry lookup is unavailable.
+                width = height = 256
+                if planet_registry is not None:
+                    try:
+                        space = planet_registry.get_space(planet_key)
+                        width, height = space.width, space.height
+                    except (KeyError, AttributeError):
+                        pass
                 checker = make_passability_checker(
                     tgen, registry, room, int(width), int(height),
                 )

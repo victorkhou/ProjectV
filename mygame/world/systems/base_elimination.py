@@ -42,6 +42,11 @@ class BaseEliminationHandler(BaseSystem):
             building AND guard NPC owned by the sentinel (for the mass-delete).
         loot_drop_func: callable ``(room, resource, amount, x, y) -> None`` that
             drops loot on the ground (injected ResourceSystem drop spawner).
+        player_xp_awarder_provider: zero-arg callable returning the RankSystem
+            (or ``None``). The base-destroy reward (``xp_hq_destroy`` — the
+            largest single XP grant in the game) MUST flow through it so the
+            destroyer's level/rank recompute and ``LEVEL_CHANGED`` / ``RANK_*``
+            fire; a raw ``db.combat_xp`` write does neither.
     """
 
     def __init__(
@@ -50,10 +55,12 @@ class BaseEliminationHandler(BaseSystem):
         event_bus: EventBus,
         owned_entities_provider: Callable[[Any], list] | None = None,
         loot_drop_func: Callable[..., Any] | None = None,
+        player_xp_awarder_provider: Callable[[], Any] | None = None,
     ) -> None:
         super().__init__(registry, event_bus)
         self._owned_entities_provider = owned_entities_provider
         self._loot_drop_func = loot_drop_func
+        self._player_xp_awarder_provider = player_xp_awarder_provider
         #: Sentinel ids currently being wiped — guards against re-entrancy if a
         #: building/guard deletion during the wipe re-publishes BUILDING_DESTROYED.
         self._eliminating: set = set()
@@ -133,7 +140,12 @@ class BaseEliminationHandler(BaseSystem):
         #    itself, but keep the guard for symmetry / admin edge cases).
         xp = self.registry.balance.xp_hq_destroy
         awarded_xp = 0
-        if is_player(attacker) and not is_owner(attacker, sentinel):
+        # A real player only earns the base-destroy reward. NPCs (agents/enemy
+        # guards) also satisfy is_player — they carry combat_xp — so exclude any
+        # attacker with an npc_type (a real player has none).
+        attacker_npc_type = get_obj_attr(attacker, "npc_type", None)
+        if (is_player(attacker) and attacker_npc_type is None
+                and not is_owner(attacker, sentinel)):
             awarded_xp = xp
             self._award_xp(attacker, xp)
 
@@ -193,8 +205,38 @@ class BaseEliminationHandler(BaseSystem):
             except Exception:  # noqa: BLE001 - keep wiping the rest of the base
                 logger.exception("Failed to delete %r during base wipe", entity)
 
-    @staticmethod
-    def _award_xp(attacker: Any, xp: int) -> None:
+    def _award_xp(self, attacker: Any, xp: int) -> None:
+        """Award the base-destroy XP through the progression path.
+
+        Prefers the injected RankSystem (``award_xp`` — recompute level/rank +
+        fire LEVEL_CHANGED / RANK_*); falls back to the entity's own
+        ``CombatEntity.award_xp`` (recompute, no events); last-resort raw write
+        for minimal test doubles. A raw ``db.combat_xp`` write alone would leave
+        the destroyer's level/rank stale — and this is the game's largest single
+        XP grant, so a rank-up here matters most. Guarded so a wipe never breaks.
+        """
+        if xp <= 0:
+            return
+        rank_system = None
+        provider = self._player_xp_awarder_provider
+        if provider is not None:
+            try:
+                rank_system = provider()
+            except Exception:  # noqa: BLE001 - resolution must not break the wipe
+                rank_system = None
+        if rank_system is not None and hasattr(rank_system, "award_xp"):
+            try:
+                rank_system.award_xp(attacker, xp, reason="base_destroy")
+                return
+            except Exception:  # noqa: BLE001 - fall through to entity-local award
+                logger.exception("RankSystem award_xp failed on base destroy")
+                return  # do NOT re-award: award_xp mutates before it can raise
+        if hasattr(attacker, "award_xp"):
+            try:
+                attacker.award_xp(xp)
+                return
+            except Exception:  # noqa: BLE001 - fall through to raw set
+                pass
         db = getattr(attacker, "db", None)
         if db is not None:
             db.combat_xp = (getattr(db, "combat_xp", 0) or 0) + xp

@@ -239,58 +239,83 @@ class _OnlinePlayer:
         self.db = _EvenniaDb(coord_x=x, coord_y=y, coord_planet=room.planet_name)
 
 
-class _StubChunking:
-    """A chunk manager whose position resolution matches the real one:
-    it reads the ENTITY's coords (db.coord_x/coord_y), never loc.x/loc.y."""
-
-    def get_active_chunks(self, planet, online_players):
-        active = set()
-        for p in online_players:
-            cx = getattr(p.db, "coord_x", None)
-            cy = getattr(p.db, "coord_y", None)
-            if cx is not None and cy is not None:
-                active.add((int(cx) // 16, int(cy) // 16))
-        return active
-
-    def get_buildings_in_chunks(self, planet, chunks, all_buildings):
-        result = []
-        for b in all_buildings:
-            bx = getattr(b.db, "coord_x", None)
-            by = getattr(b.db, "coord_y", None)
-            if bx is None or by is None:
-                continue
-            if (int(bx) // 16, int(by) // 16) in chunks:
-                result.append(b)
-        return result
+def _building_at(planet, x, y, btype="HQ"):
+    b = _FakeBuildingDb(building_type=btype)
+    b.db.coord_x = x
+    b.db.coord_y = y
+    b.db.coord_planet = planet
+    return b
 
 
 class TestActiveBuildingsNonEmptyWithPlanetRoom(unittest.TestCase):
     """With an online player on a PlanetRoom (no loc.z), the tick's active
     buildings must NOT be empty. Exercises GameTickScript._compute_active_data
-    with production-shaped objects."""
+    driving the REAL WorldChunkManager (not a reimplementing stub), with
+    production-shaped objects (coords on db, planet on db.coord_planet)."""
 
     def _make_script(self):
         from typeclasses.scripts import GameTickScript
-        script = GameTickScript.__new__(GameTickScript)
-        return script
+        return GameTickScript.__new__(GameTickScript)
+
+    def _real_chunking(self):
+        from world.chunking import WorldChunkManager
+        return WorldChunkManager(chunk_size=16)
 
     def test_compute_active_data_finds_buildings_for_online_player(self):
         room = _PlanetRoomLike("earth")
         player = _OnlinePlayer(room, x=10, y=10)
-        building = _FakeBuildingDb(building_type="HQ")
-        building.db.coord_x = 11
-        building.db.coord_y = 10
-        building.db.coord_planet = "earth"
+        building = _building_at("earth", 11, 10)
 
         script = self._make_script()
-        # _get_all_buildings hits an Evennia search we don't want; stub it.
         script._get_all_buildings = lambda: [building]
 
-        active = script._compute_active_data(_StubChunking(), [player])
+        # Drives the REAL WorldChunkManager: this is what exercises the
+        # chunking.py db.coord_x/coord_y fix (a stub would bypass it).
+        active = script._compute_active_data(self._real_chunking(), [player])
         self.assertIn(
             building, active,
             "an online player on a PlanetRoom must yield a non-empty active "
-            "building list (planet resolved from the entity, not loc.z)",
+            "building list via the real WorldChunkManager (coords read from the "
+            "entity db, planet from db.coord_planet — not loc.z/x/y)",
+        )
+
+    def test_active_buildings_isolated_per_planet_no_cross_leak_or_dup(self):
+        """Finding C: a building is active only when a player is on ITS planet,
+        and appears at most once even with players on multiple planets."""
+        earth_room = _PlanetRoomLike("earth")
+        mars_room = _PlanetRoomLike("mars")
+        earth_player = _OnlinePlayer(earth_room, x=10, y=10)
+        mars_player = _OnlinePlayer(mars_room, x=10, y=10)  # same tile, other planet
+
+        earth_bldg = _building_at("earth", 11, 10)
+        mars_bldg = _building_at("mars", 11, 10)  # same tile as earth_bldg
+
+        script = self._make_script()
+        script._get_all_buildings = lambda: [earth_bldg, mars_bldg]
+
+        active = script._compute_active_data(
+            self._real_chunking(), [earth_player, mars_player]
+        )
+        # Each building appears exactly once (no duplicate from the per-planet
+        # loop) and only its own planet's building is present per planet.
+        self.assertEqual(active.count(earth_bldg), 1, "earth building duplicated")
+        self.assertEqual(active.count(mars_bldg), 1, "mars building duplicated")
+
+    def test_building_not_active_when_only_other_planet_has_players(self):
+        """Finding C: no cross-planet activation — a building on mars is NOT
+        active when the only online player is on earth (same chunk coords)."""
+        earth_room = _PlanetRoomLike("earth")
+        earth_player = _OnlinePlayer(earth_room, x=10, y=10)
+        mars_bldg = _building_at("mars", 11, 10)  # same chunk as earth_player
+
+        script = self._make_script()
+        script._get_all_buildings = lambda: [mars_bldg]
+
+        active = script._compute_active_data(self._real_chunking(), [earth_player])
+        self.assertNotIn(
+            mars_bldg, active,
+            "a mars building must not be activated by an earth-only player "
+            "(cross-planet chunk leak)",
         )
 
 
@@ -460,6 +485,153 @@ class TestNoCallToMissingCoordSpaceMethod(unittest.TestCase):
             "with a 300x250 planet from the PlanetRegistry, a path to (0,120) "
             "must exist; an empty path means dimensions fell back to 100x100 "
             "(the missing get_coord_space path)",
+        )
+
+
+# ================================================================== #
+#  Round 2, Finding A: base-destroy XP must route through progression
+# ================================================================== #
+
+class TestBaseDestroyXpDrivesProgression(unittest.TestCase):
+    """BaseEliminationHandler awards the largest XP grant in the game
+    (xp_hq_destroy). It must flow through the RankSystem (recompute + events),
+    not a raw db.combat_xp write."""
+
+    def _handler(self, rank_system):
+        from world.systems.base_elimination import BaseEliminationHandler
+
+        class _Reg:
+            class balance:
+                xp_hq_destroy = 500
+
+            def get_base_template(self, tier):
+                return None
+        return BaseEliminationHandler(
+            _Reg(), _RecordingBus(),
+            owned_entities_provider=lambda s: [],
+            loot_drop_func=lambda *a, **k: None,
+            player_xp_awarder_provider=lambda: rank_system,
+        )
+
+    def _sentinel(self):
+        s = _RealObj(is_sentinel=True, base_tier="outpost", base_planet="earth")
+        s.id = 9999
+        return s
+
+    def _hq(self):
+        b = _FakeBuildingDb(building_type="HQ")
+        b.db.coord_x = 5
+        b.db.coord_y = 5
+        b.location = None
+        b.delete = lambda: None
+        return b
+
+    def test_base_destroy_routes_player_xp_through_rank_system(self):
+        rank = _RecordingRankSystem()
+        handler = self._handler(rank)
+        attacker = _LevelingPlayer()  # real player: no npc_type
+
+        handler._eliminate_base(self._sentinel(), self._hq(), attacker, None)
+
+        self.assertEqual(
+            len(rank.awards), 1,
+            "destroying an NPC-base HQ must award xp_hq_destroy through the "
+            "RankSystem (recompute level/rank + fire events), not a raw write",
+        )
+        self.assertEqual(rank.awards[0][1], 500)
+
+    def test_base_destroy_no_rank_system_still_recomputes_level(self):
+        handler = self._handler(None)  # no rank system injected
+        attacker = _LevelingPlayer()
+        level_before = attacker.db.level
+
+        handler._eliminate_base(self._sentinel(), self._hq(), attacker, None)
+
+        self.assertGreater(
+            attacker.db.level, level_before,
+            "without a rank system, base-destroy XP must still recompute the "
+            "destroyer's level via the entity's own award_xp",
+        )
+
+    def test_enemy_npc_attacker_earns_no_base_xp(self):
+        rank = _RecordingRankSystem()
+        handler = self._handler(rank)
+        # An enemy NPC satisfies is_player (carries combat_xp) but has npc_type.
+        enemy = _RealObj(combat_xp=0, npc_type="enemy")
+
+        handler._eliminate_base(self._sentinel(), self._hq(), enemy, None)
+
+        self.assertEqual(
+            len(rank.awards), 0,
+            "an enemy-NPC attacker (npc_type set) must not earn base-destroy XP",
+        )
+
+
+# ================================================================== #
+#  Round 2, Finding B: NPC passability must use real planet bounds
+# ================================================================== #
+
+class TestNpcPassabilityUsesRealBounds(unittest.TestCase):
+    """typeclasses.npcs._is_tile_passable must resolve grid bounds from the
+    PlanetRegistry, not a hardcoded 256x256 (which made every tile past 256 a
+    movement dead-zone on larger planets)."""
+
+    def _npc_on_planet(self, width, height):
+        from typeclasses.npcs import NPC
+
+        class _Space:
+            pass
+        space = _Space()
+        space.width, space.height = width, height
+
+        class _PlanetReg:
+            def get_space(self, key):
+                return space
+
+        class _Terrain:
+            passable = True
+
+        class _Reg:
+            def get_terrain(self, t):
+                return _Terrain()
+
+        class _Tgen:
+            def get_terrain(self, x, y):
+                return "grass"
+
+        class _RoomDb:
+            planet = "terra"
+
+        class _Room:
+            db = _RoomDb()
+            _game_systems = {
+                "_terrain_generators": {"terra": _Tgen()},
+                "registry": _Reg(),
+                "planet_registry": _PlanetReg(),
+            }
+
+            def get_buildings_at(self, x, y):
+                return []  # no offline building blocking the tile
+
+        npc = NPC.__new__(NPC)
+        npc.location = _Room()
+        return npc
+
+    def test_tile_beyond_256_is_passable_on_a_500_wide_planet(self):
+        npc = self._npc_on_planet(500, 500)
+        # (300, 300) is out of bounds under the old 256 default (impassable) but
+        # in-bounds on a 500x500 planet with all-passable terrain.
+        self.assertTrue(
+            npc._is_tile_passable(300, 300),
+            "tile (300,300) on a 500x500 planet must be passable; a False here "
+            "means the hardcoded 256x256 bound is still in effect",
+        )
+
+    def test_tile_outside_real_bounds_is_impassable(self):
+        npc = self._npc_on_planet(500, 500)
+        self.assertFalse(
+            npc._is_tile_passable(600, 600),
+            "tile (600,600) is outside a 500x500 planet and must be impassable",
         )
 
 

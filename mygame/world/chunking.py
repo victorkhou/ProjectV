@@ -60,6 +60,11 @@ class WorldChunkManager:
         """
         active = set()
         for player in online_players:
+            # Only players ON this planet activate its chunks — otherwise a
+            # player on planet A would activate the same-numbered chunk on every
+            # planet, defeating per-planet isolation.
+            if not self._on_planet(player, planet):
+                continue
             pos = self._get_player_position(player, planet)
             if pos is None:
                 continue
@@ -86,6 +91,13 @@ class WorldChunkManager:
         """
         result = []
         for building in all_buildings:
+            # Only buildings ON this planet are eligible — the active-chunk set is
+            # per-planet, and without this a building at (x,y) on planet A would
+            # match an active chunk computed from planet B's players. It also
+            # prevents the same building being appended once per planet by a
+            # caller that loops get_buildings_in_chunks over multiple planets.
+            if not self._on_planet(building, planet):
+                continue
             pos = self._get_building_position(building)
             if pos is None:
                 continue
@@ -94,6 +106,20 @@ class WorldChunkManager:
             if chunk in chunks:
                 result.append(building)
         return result
+
+    @staticmethod
+    def _on_planet(obj: Any, planet: str) -> bool:
+        """Return True if *obj* is on *planet*.
+
+        Reads ``db.coord_planet`` (the real coordinate model). Objects with no
+        recorded planet (lightweight test fakes that only carry a ``.position``)
+        are treated as matching, so position-only tests keep working.
+        """
+        db = getattr(obj, "db", None)
+        obj_planet = getattr(db, "coord_planet", None) if db is not None else None
+        if not obj_planet:
+            return True  # no planet recorded (test fake) — don't exclude
+        return str(obj_planet) == str(planet)
 
     # ------------------------------------------------------------------ #
     #  Internal helpers

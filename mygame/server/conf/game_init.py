@@ -423,6 +423,9 @@ def initialize_game() -> dict:
             lambda room, resource, amount, x, y:
             resource_system.spawn_resource_drop(room, resource, amount, x=x, y=y)
         ),
+        # Route the base-destroy reward (largest XP grant in the game) through
+        # the RankSystem so the destroyer's level/rank recompute and fire events.
+        player_xp_awarder_provider=lambda: rank_system,
     )
     outpost_spawner = OutpostSpawnerSystem(
         registry,

@@ -673,6 +673,11 @@ class CombatEngine(BaseSystem):
             pass  # friendly fire — no reward
         elif self._is_agent(attacker):
             self._award_agent_combat_xp(attacker)
+        elif self._is_enemy_npc(attacker):
+            # An enemy NPC satisfies _is_player (it carries combat_xp) but has no
+            # progression — never route its "kill" into the RankSystem. Mirrors
+            # the guard in _handle_player_defeat.
+            pass
         elif self._is_player(attacker):
             self._award_player_combat_xp(attacker, xp_kill)
 
@@ -724,7 +729,11 @@ class CombatEngine(BaseSystem):
         from world.utils import is_owner
         owner = self._get_building_owner(building)
         own_building = is_owner(attacker, owner)
-        if self._is_player(attacker) and not own_building:
+        # An enemy NPC satisfies _is_player (carries combat_xp) but has no
+        # progression — exclude it so a (future) enemy-destroys-building path
+        # can't route XP into the RankSystem. Agents earn no building XP either.
+        if (self._is_player(attacker) and not self._is_enemy_npc(attacker)
+                and not self._is_agent(attacker) and not own_building):
             self._award_player_combat_xp(attacker, xp_building_destroy)
 
         tile = self._get_building_location(building)
@@ -1047,9 +1056,13 @@ class CombatEngine(BaseSystem):
         if rank_system is not None and hasattr(rank_system, "award_xp"):
             try:
                 rank_system.award_xp(player, amount, reason="combat")
-                return
-            except Exception:  # noqa: BLE001 - fall through to entity-local award
+            except Exception:  # noqa: BLE001
+                # RankSystem.award_xp mutates combat_xp BEFORE it can raise (the
+                # failure is downstream, in _sync_level / event dispatch), so the
+                # XP is already applied — do NOT fall through to award it again
+                # (that would double-count). Swallow: combat must never break.
                 pass
+            return
         # No rank system (isolated tests / early boot): recompute locally if the
         # entity supports it, else fall back to the raw increment.
         if hasattr(player, "award_xp"):
@@ -1074,9 +1087,11 @@ class CombatEngine(BaseSystem):
         if rank_system is not None and hasattr(rank_system, "deduct_xp"):
             try:
                 rank_system.deduct_xp(player, amount)
-                return
-            except Exception:  # noqa: BLE001 - fall through to entity-local path
+            except Exception:  # noqa: BLE001
+                # deduct_xp mutates combat_xp before it can raise downstream — do
+                # NOT fall through and deduct again (double-deduction). Swallow.
                 pass
+            return
         if hasattr(player, "deduct_xp"):
             try:
                 player.deduct_xp(amount)

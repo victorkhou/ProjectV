@@ -557,3 +557,35 @@ entire test suite.**
   load" is *correct as written*, but the same gap now silently swallows a call to a
   **non-existent registry method** (`get_coord_space`) — worse than a typo'd
   resource name because it's a dead code path, not just an unvalidated string.
+
+## Fix status (two rounds)
+
+**Round 1** fixed the 5 issues above. An adversarial re-review of the fix commit
+then found the first pass was *incomplete* — the same overconfidence the review
+warns about — and **round 2** closed the gaps:
+
+- **A (fix #4 incomplete):** `base_elimination._award_xp` — the game's *largest*
+  XP grant (`xp_hq_destroy`) — was still a raw `db.combat_xp` write and the
+  handler had no RankSystem reference. The combat-engine fix missed its
+  co-located sibling. Now routed through an injected RankSystem awarder.
+- **B (fix #5 incomplete):** `npcs.py` `_is_tile_passable` still hardcoded
+  256×256 (the *third* site, named in finding 5 but not patched), making every
+  tile past 256 a movement dead-zone on larger planets. Now resolves via
+  `PlanetRegistry.get_space()`.
+- **C (fix #3 exposed a dormant bug):** `WorldChunkManager.get_active_chunks` /
+  `get_buildings_in_chunks` ignore their `planet` argument. Harmless while the
+  active-building list was empty; once fix #3 made it live, it caused
+  cross-planet chunk activation and duplicate per-tick processing. Now filters
+  by `db.coord_planet`.
+- **D (fix #4 fragility):** the award/deduct fallback could double-apply XP if
+  `RankSystem.award_xp` raised *after* mutating `combat_xp`. Now returns instead
+  of falling through on a RankSystem error.
+- **E (latent asymmetry):** an enemy NPC satisfies `is_player` (it carries
+  `combat_xp`); only `_handle_player_defeat` guarded against it. The enemy-death,
+  building-destruction, and base-elimination XP branches now guard too.
+
+**Test-quality lessons (round 2):** the round-1 chunking test used a stub that
+*reimplemented* the chunk logic, so it never ran the real `chunking.py` fix and
+structurally couldn't catch bug C. Round-2 tests drive the **real**
+`WorldChunkManager`, and add coverage for A (base-destroy XP routing) and B (NPC
+passability past 256). Full suite after round 2: **2084 passing.**
