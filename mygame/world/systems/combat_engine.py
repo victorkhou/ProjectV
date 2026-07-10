@@ -509,15 +509,12 @@ class CombatEngine(BaseSystem):
     def _nearby_players(location: Any, x: int, y: int, radius: int) -> list:
         """Return players near ``(x, y)`` within *radius* via the location.
 
-        Prefers the PlanetRoom's ``get_nearby_players(x, y, radius)`` spatial
-        query. Falls back to a ``_nearby_players`` attribute for lightweight
-        test doubles. Returns ``[]`` when neither is available.
+        Thin delegator to the shared :func:`world.utils.nearby_players` (also
+        used by GuardCombatSystem) so turret and guard targeting resolve players
+        through one implementation.
         """
-        if hasattr(location, "get_nearby_players"):
-            return location.get_nearby_players(x, y, radius)
-        if hasattr(location, "_nearby_players"):
-            return location._nearby_players
-        return []
+        from world.utils import nearby_players
+        return nearby_players(location, x, y, radius)
 
     # ------------------------------------------------------------------ #
     #  Damage calculation

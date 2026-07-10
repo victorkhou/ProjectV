@@ -269,13 +269,8 @@ class AgentSystem(AgentProgressionMixin, AgentBehaviorMixin, BaseSystem):
 
         # Clear assigned_agent on the old building (if any)
         old_target = getattr(agent.db, "role_target", None)
-        if old_target is not None and old_target is not target_building:
-            if hasattr(old_target, "attributes") and hasattr(old_target.attributes, "add"):
-                if old_target.attributes.get("assigned_agent") is agent:
-                    old_target.attributes.add("assigned_agent", None)
-            elif hasattr(old_target, "db"):
-                if getattr(old_target.db, "assigned_agent", None) is agent:
-                    old_target.db.assigned_agent = None
+        if old_target is not target_building:
+            self._clear_building_assignment(old_target, agent)
 
         agent.db.role = role
         agent.db.role_target = target_building
@@ -325,32 +320,14 @@ class AgentSystem(AgentProgressionMixin, AgentBehaviorMixin, BaseSystem):
                             if hasattr(planet_room, "coord_index"):
                                 planet_room.coord_index.add(agent, int(px), int(py))
 
-                ax = getattr(agent.db, "coord_x", None)
-                ay = getattr(agent.db, "coord_y", None)
-
-                path = []
-                if ax is not None and ay is not None:
-                    path = self._compute_path_to(agent, int(ax), int(ay), bx, by)
-
-                if path and hasattr(agent, "set_movement_queue"):
-                    agent.set_movement_queue(path)
-                    agent.db.activity_status = (
-                        f"Moving to {role} assignment ({len(path)} tiles)"
-                    )
-                else:
-                    # Fallback: no path found or already at destination —
-                    # place agent directly at building coordinates
-                    planet_room = getattr(agent, "location", None)
-                    if planet_room is not None and hasattr(planet_room, "move_entity"):
-                        planet_room.move_entity(agent, bx, by)
-                    else:
-                        agent.db.coord_x = bx
-                        agent.db.coord_y = by
-                    # The roster line already reads "assigned as {role}", so the
-                    # activity status describes what it's *doing*, not repeating
-                    # the role (avoids "assigned as engineer — Assigned as
-                    # engineer").
-                    agent.db.activity_status = "Working"
+                # Walk to the building, or snap there if no path/already there.
+                # "Working" (not "Assigned as {role}") because the roster line
+                # already states the role — this describes what it's *doing*.
+                self._move_agent_to(
+                    agent, bx, by,
+                    moving_status=f"Moving to {role} assignment",
+                    arrived_status="Working",
+                )
             elif hasattr(agent, "move_to"):
                 # Legacy fallback: building doesn't have coordinates yet
                 loc = getattr(target_building, "location", target_building)
@@ -378,14 +355,9 @@ class AgentSystem(AgentProgressionMixin, AgentBehaviorMixin, BaseSystem):
             return False, f"Agent #{agent_id} not found."
 
         # Clear assigned_agent on the building
-        old_target = getattr(agent.db, "role_target", None)
-        if old_target is not None:
-            if hasattr(old_target, "attributes") and hasattr(old_target.attributes, "add"):
-                if old_target.attributes.get("assigned_agent") is agent:
-                    old_target.attributes.add("assigned_agent", None)
-            elif hasattr(old_target, "db"):
-                if getattr(old_target.db, "assigned_agent", None) is agent:
-                    old_target.db.assigned_agent = None
+        self._clear_building_assignment(
+            getattr(agent.db, "role_target", None), agent
+        )
 
         # Detach behavior script before clearing role
         self._detach_behavior_script(agent)
@@ -412,29 +384,12 @@ class AgentSystem(AgentProgressionMixin, AgentBehaviorMixin, BaseSystem):
             hx = getattr(getattr(hq, "db", None), "coord_x", None)
             hy = getattr(getattr(hq, "db", None), "coord_y", None)
             if hx is not None and hy is not None:
-                hx, hy = int(hx), int(hy)
-                ax = getattr(agent.db, "coord_x", None)
-                ay = getattr(agent.db, "coord_y", None)
-
-                path = []
-                if ax is not None and ay is not None:
-                    path = self._compute_path_to(agent, int(ax), int(ay), hx, hy)
-
-                if path and hasattr(agent, "set_movement_queue"):
-                    agent.set_movement_queue(path)
-                    agent.db.activity_status = (
-                        f"Returning to HQ ({len(path)} tiles)"
-                    )
-                else:
-                    # Fallback: no path found or already at HQ —
-                    # place agent directly at HQ coordinates
-                    planet_room = getattr(agent, "location", None)
-                    if planet_room is not None and hasattr(planet_room, "move_entity"):
-                        planet_room.move_entity(agent, hx, hy)
-                    else:
-                        agent.db.coord_x = hx
-                        agent.db.coord_y = hy
-                    agent.db.activity_status = ACTIVITY_IDLE
+                # Walk back to HQ, or snap there if no path/already there.
+                self._move_agent_to(
+                    agent, int(hx), int(hy),
+                    moving_status="Returning to HQ",
+                    arrived_status=ACTIVITY_IDLE,
+                )
             elif hasattr(agent, "move_to"):
                 # Legacy fallback: HQ doesn't have coordinates yet
                 loc = getattr(hq, "location", hq)
@@ -566,14 +521,9 @@ class AgentSystem(AgentProgressionMixin, AgentBehaviorMixin, BaseSystem):
 
         # Clear the building's assigned_agent reference so it can accept
         # a new assignment.
-        old_target = getattr(agent.db, "role_target", None)
-        if old_target is not None:
-            if hasattr(old_target, "attributes") and hasattr(old_target.attributes, "add"):
-                if old_target.attributes.get("assigned_agent") is agent:
-                    old_target.attributes.add("assigned_agent", None)
-            elif hasattr(old_target, "db"):
-                if getattr(old_target.db, "assigned_agent", None) is agent:
-                    old_target.db.assigned_agent = None
+        self._clear_building_assignment(
+            getattr(agent.db, "role_target", None), agent
+        )
 
         # Detach behavior scripts and clear role assignment
         self._detach_behavior_script(agent)
@@ -790,6 +740,53 @@ class AgentSystem(AgentProgressionMixin, AgentBehaviorMixin, BaseSystem):
         """
         from world.pathfinding import compute_path_for_npc
         return compute_path_for_npc(agent, (start_x, start_y), (goal_x, goal_y))
+
+    @staticmethod
+    def _clear_building_assignment(old_target: Any, agent: Any) -> None:
+        """Clear ``assigned_agent`` on *old_target* if it points at *agent*.
+
+        The single teardown used by assign/unassign/stop (was copy-pasted
+        verbatim three times). Handles both the attributes-handler path (live
+        Building) and the ``db`` path (test doubles), and only clears when the
+        reference is actually this agent (never stomps another agent's slot).
+        """
+        if old_target is None:
+            return
+        if hasattr(old_target, "attributes") and hasattr(old_target.attributes, "add"):
+            if old_target.attributes.get("assigned_agent") is agent:
+                old_target.attributes.add("assigned_agent", None)
+        elif hasattr(old_target, "db"):
+            if getattr(old_target.db, "assigned_agent", None) is agent:
+                old_target.db.assigned_agent = None
+
+    def _move_agent_to(
+        self, agent: Any, gx: int, gy: int,
+        moving_status: str, arrived_status: str,
+    ) -> None:
+        """Path *agent* toward ``(gx, gy)``; on no-path/arrival, place it there.
+
+        The shared "walk there, else snap to the tile" move used by both
+        assign_agent (to the building) and unassign_agent (back to HQ) — was
+        duplicated between them. Sets ``activity_status`` to *moving_status*
+        while pathing (with the tile count) or *arrived_status* once placed.
+        """
+        ax = getattr(agent.db, "coord_x", None)
+        ay = getattr(agent.db, "coord_y", None)
+        path = []
+        if ax is not None and ay is not None:
+            path = self._compute_path_to(agent, int(ax), int(ay), gx, gy)
+
+        if path and hasattr(agent, "set_movement_queue"):
+            agent.set_movement_queue(path)
+            agent.db.activity_status = f"{moving_status} ({len(path)} tiles)"
+        else:
+            planet_room = getattr(agent, "location", None)
+            if planet_room is not None and hasattr(planet_room, "move_entity"):
+                planet_room.move_entity(agent, gx, gy)
+            else:
+                agent.db.coord_x = gx
+                agent.db.coord_y = gy
+            agent.db.activity_status = arrived_status
 
     @staticmethod
     def _find_hq(player: Any) -> Any | None:

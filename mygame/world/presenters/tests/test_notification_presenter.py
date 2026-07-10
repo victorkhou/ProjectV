@@ -329,6 +329,36 @@ class TestPresenterOwnershipStructural:
         missing = expected_routed - emitted
         assert not missing, f"Feature kinds not routed through notify(): {missing}"
 
+    def test_every_emitted_kind_has_a_formatter(self):
+        """Contract: EVERY ``kind`` any system emits via ``self.notify`` must have
+        a matching entry in the presenter's ``_FORMATTERS`` table.
+
+        ``on_notification`` silently drops a kind with no formatter (logs, but the
+        player sees nothing) — the exact "a typo/new kind is dropped and CI stays
+        green" risk flagged in the architecture docs. This scans every system
+        source file (plus the other notify-emitters) for string-literal kinds and
+        asserts each is formattable, turning that latent risk into a hard failure.
+        """
+        paths = list(_system_source_files())
+        # Other modules that emit PLAYER_NOTIFICATION kinds via self.notify.
+        world_dir = os.path.dirname(_systems_dir())
+        for extra in ("combat_timer.py", "notification_system.py"):
+            p = os.path.join(world_dir, extra)
+            if os.path.exists(p):
+                paths.append(p)
+
+        emitted = set()
+        for path in paths:
+            emitted |= _emitted_kind_literals(path)
+
+        formatter_keys = set(NotificationPresenter._FORMATTERS.keys())
+        missing = emitted - formatter_keys
+        assert not missing, (
+            "These notification kinds are emitted by a system but have NO "
+            "formatter in NotificationPresenter._FORMATTERS, so they are "
+            f"silently dropped instead of shown to the player: {sorted(missing)}"
+        )
+
 
 class TestPresenterOwnershipBehavioral:
     """Property 13(b): every feature kind renders to player.msg via the presenter."""

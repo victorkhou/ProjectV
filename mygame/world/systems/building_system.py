@@ -210,6 +210,51 @@ class BuildingSystem(BaseSystem):
         base = self.registry.balance.upgrade_time_base
         return int(building_def.build_time_seconds * (base ** (target_level - 1)))
 
+    def _validate_upgrade(
+        self, player: Any, building: Any
+    ) -> tuple[bool, Any, int, dict, str]:
+        """Shared validation for both upgrade paths (timed + instant).
+
+        Runs the ownership / building-type / max-level / cost / resource checks
+        that ``start_upgrade`` and ``upgrade`` used to duplicate (with drifting
+        details — one read ``getattr(building, "owner")`` and hardcoded the
+        max-level string, the other used ``_get_building_attr``). Both now share
+        this single source, always using ``_get_building_attr`` and the
+        ``MAX_BUILDING_LEVEL`` constant.
+
+        Returns ``(ok, building_def, target_level, upgrade_cost, error)``. When
+        ``ok`` is False, *error* holds the player-facing reason and the other
+        fields are unset (``None``/``0``/``{}``). Resources are NOT deducted here
+        — the caller deducts after any path-specific checks.
+        """
+        owner = self._get_building_attr(building, "owner")
+        if owner is not player:
+            return False, None, 0, {}, "You do not own this building."
+
+        building_type = self._get_building_attr(building, "building_type")
+        if building_type is None:
+            return False, None, 0, {}, "Cannot determine building type."
+
+        try:
+            building_def = self.registry.get_building(building_type)
+        except KeyError:
+            return False, None, 0, {}, f"Unknown building type: {building_type}"
+
+        current_level = self._get_building_attr(building, "building_level", 1)
+        if current_level >= MAX_BUILDING_LEVEL:
+            return False, None, 0, {}, (
+                f"This building is already at maximum level "
+                f"({MAX_BUILDING_LEVEL})."
+            )
+
+        target_level = current_level + 1
+        upgrade_cost = self.get_upgrade_cost(building_def, target_level)
+        err = self._validate_resources(player, upgrade_cost)
+        if err:
+            return False, None, 0, {}, err
+
+        return True, building_def, target_level, upgrade_cost, ""
+
     def start_upgrade(
         self, player: Any, building: Any
     ) -> tuple[bool, str]:
@@ -222,30 +267,10 @@ class BuildingSystem(BaseSystem):
         Returns:
             (success, message) tuple.
         """
-        # Ownership check
-        owner = self._get_building_attr(building, "owner")
-        if owner is not player:
-            return False, "You do not own this building."
-
-        building_type = self._get_building_attr(building, "building_type")
-        if building_type is None:
-            return False, "Cannot determine building type."
-
-        try:
-            building_def = self.registry.get_building(building_type)
-        except KeyError:
-            return False, f"Unknown building type: {building_type}"
-
-        current_level = self._get_building_attr(building, "building_level", 1)
-        if current_level >= MAX_BUILDING_LEVEL:
-            return False, f"This building is already at maximum level ({MAX_BUILDING_LEVEL})."
-
-        target_level = current_level + 1
-
-        # Exponential cost
-        upgrade_cost = self.get_upgrade_cost(building_def, target_level)
-        err = self._validate_resources(player, upgrade_cost)
-        if err:
+        ok, building_def, target_level, upgrade_cost, err = (
+            self._validate_upgrade(player, building)
+        )
+        if not ok:
             return False, err
 
         # Deduct resources
@@ -279,64 +304,41 @@ class BuildingSystem(BaseSystem):
         )
 
     def upgrade(self, player: Any, building: Any) -> tuple[bool, str]:
-        """Upgrade a resource building to the next level.
+        """Upgrade an upgradable building to the next level, INSTANTLY.
 
-        Validation:
-            1. Building is owned by player
-            2. Building is a resource building
-            3. Level < MAX_BUILDING_LEVEL
-            4. Sufficient resources (base_cost * target_level)
+        The timeless variant of :meth:`start_upgrade` (no construction timer —
+        the level bumps immediately and ``BUILDING_UPGRADED`` fires). Shares the
+        ownership / max-level / cost / resource validation via
+        :meth:`_validate_upgrade`; adds one path-specific check: the building
+        must declare the ``UPGRADABLE`` capability.
 
         Returns:
             (success, message) tuple.
         """
-        # 1. Ownership check
-        if getattr(building, "owner", None) is not player:
-            return False, "You do not own this building."
+        # Path-specific: only UPGRADABLE-capability buildings use the instant
+        # path (start_upgrade has no such restriction). Resolve the type the
+        # same way _validate_upgrade does, so the capability check is consistent.
+        building_type = self._get_building_attr(building, "building_type")
+        if building_type is not None:
+            try:
+                bdef = self.registry.get_building(building_type)
+                if not bdef.has_capability(UPGRADABLE):
+                    return False, "This building type cannot be upgraded."
+            except KeyError:
+                pass  # unknown type — _validate_upgrade returns the error below
 
-        # 2. Category check — must be a resource building
-        building_type = None
-        if hasattr(building, "attributes"):
-            building_type = building.attributes.get("building_type", default=None)
-        elif hasattr(building, "db"):
-            building_type = getattr(building.db, "building_type", None)
-
-        if building_type is None:
-            return False, "Cannot determine building type."
-
-        try:
-            building_def = self.registry.get_building(building_type)
-        except KeyError:
-            return False, f"Unknown building type: {building_type}"
-
-        if not building_def.has_capability(UPGRADABLE):
-            return False, "This building type cannot be upgraded."
-
-        # 3. Level check
-        current_level = building.building_level
-        if current_level >= MAX_BUILDING_LEVEL:
-            return False, "This building is already at maximum level (5)."
-
-        target_level = current_level + 1
-
-        # 4. Calculate upgrade cost: base_cost × 2^(target_level - 1)
-        upgrade_cost = self.get_upgrade_cost(building_def, target_level)
-
-        err = self._validate_resources(player, upgrade_cost)
-        if err:
+        ok, building_def, target_level, upgrade_cost, err = (
+            self._validate_upgrade(player, building)
+        )
+        if not ok:
             return False, err
 
-        # All checks passed — deduct resources and upgrade
+        # All checks passed — deduct resources and upgrade instantly.
         player.deduct_resources(upgrade_cost)
 
-        old_level = current_level
-        # Set the new level
-        if hasattr(building, "attributes"):
-            building.attributes.add("building_level", target_level)
-        elif hasattr(building, "db"):
-            building.db.building_level = target_level
+        old_level = target_level - 1
+        self._set_building_attr(building, "building_level", target_level)
 
-        # Publish event
         self.event_bus.publish(
             BUILDING_UPGRADED,
             player=player,

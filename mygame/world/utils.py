@@ -56,6 +56,24 @@ def get_coords(obj: Any) -> tuple[int, int] | None:
     return None
 
 
+def nearby_players(location: Any, x: int, y: int, radius: int) -> list:
+    """Return players near ``(x, y)`` within *radius* via *location*.
+
+    The single spatial-targeting helper shared by turret fire (CombatEngine) and
+    guard combat AI (GuardCombatSystem) — previously copy-pasted in both. Prefers
+    the PlanetRoom's ``get_nearby_players(x, y, radius)`` spatial query; falls
+    back to a ``_nearby_players`` attribute for lightweight test doubles. Returns
+    ``[]`` when *location* is ``None`` or exposes neither.
+    """
+    if location is None:
+        return []
+    if hasattr(location, "get_nearby_players"):
+        return location.get_nearby_players(x, y, radius)
+    if hasattr(location, "_nearby_players"):
+        return location._nearby_players
+    return []
+
+
 def ensure_coords(caller: Any) -> tuple[Any, Any, str | None]:
     """Ensure caller has valid coordinates.
 

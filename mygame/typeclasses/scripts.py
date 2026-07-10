@@ -104,17 +104,11 @@ class GameTickScript(DefaultScript):
     def at_repeat(self):
         """Execute one game tick, processing all systems in order.
 
-        Processing order:
-        1. Determine active chunks from online player positions
-        2. Resource building production (active chunks)
-        3. Equipment building production (active chunks)
-        4. Combat engine resolution (pending actions)
-        5. Turret auto-attacks (active chunks)
-        6. Powerup duration decrements
-        7. Technology research timer decrements
-        8. Resource node respawn counter decrements
-        9. Publish tick_completed event
-        10. Record metrics
+        The per-tick step sequence — and the rationale for each step's position —
+        is the module-level ``TICK_STEP_ORDER`` constant (the single source of
+        truth); ``_build_tick_steps`` registers the available steps and emits them
+        in that order. Do NOT re-list the order here — a second copy drifts (this
+        docstring once listed 10 steps while ``TICK_STEP_ORDER`` had 17).
 
         Each step is wrapped in try/except so a failure in one step
         does not prevent the others from executing.
