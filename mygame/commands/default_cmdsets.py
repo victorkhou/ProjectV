@@ -24,7 +24,7 @@ from commands.game_commands import (
     CmdScore, CmdEquipment, CmdBuildings, CmdScan, CmdTechnology,
     CmdInventory, CmdChat, CmdMessage, CmdSay, CmdLook, CmdMap,
     CmdLeave, CmdEnter, CmdCloseExit, CmdOpenExit, CmdExit, CmdStop, CmdWho, CmdGet,
-    CmdDrop,
+    CmdDrop, CmdSell, CmdJunk,
 )
 from commands.agent_commands import (
     CmdAgent,
@@ -137,6 +137,8 @@ class CharacterCmdSet(default_cmds.CharacterCmdSet):
         self.add(CmdLook())
         self.add(CmdGet())
         self.add(CmdDrop())
+        self.add(CmdSell())
+        self.add(CmdJunk())
         self.add(CmdMap())
         self.add(CmdLeave())
         self.add(CmdEnter())

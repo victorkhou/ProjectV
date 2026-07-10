@@ -1098,6 +1098,123 @@ class EquipmentSystem(CarryWeightMixin, StorageMixin, BaseSystem):
                     category=item_def.category)
         return True
 
+    def sell_item(self, player: Any, item: Any) -> bool:
+        """Sell a carried Gear *item* for a partial (50%) craft_cost refund.
+
+        The item must be a loose (carried, not equipped) Gear ``GameItem`` the
+        player is holding — the command resolves it. Refund = ``floor(cost/2)``
+        per resource in the item's ``craft_cost``. The refund is routed through
+        :meth:`add_resource_capped` (the carry-weight-bounded inflow choke
+        point), so any amount over the player's carry limit spills to a ground
+        drop rather than being lost. The item object is then deleted.
+
+        Emits ``sell_failed`` (with a reason) on rejection and ``sold`` on
+        success. Never raises into the command layer.
+
+        Args:
+            player: The selling player.
+            item: The carried Gear ``GameItem`` to sell.
+
+        Returns:
+            ``True`` if the item was sold, ``False`` otherwise.
+        """
+        ok, item_def, reason = self._resolve_sellable(player, item)
+        if not ok:
+            self.notify(player, "sell_failed", reason=reason,
+                        item_name=self._item_name(item))
+            return False
+
+        item_name = item_def.name
+        craft_cost = getattr(item_def, "craft_cost", None) or {}
+
+        # 50% refund, floored per resource. Route each through the capped inflow
+        # so an over-carry-limit refund spills to the ground (never destroyed).
+        refunded: dict[str, int] = {}
+        for res, amt in craft_cost.items():
+            give = int(amt) // 2
+            if give <= 0:
+                continue
+            self.add_resource_capped(player, res, give)
+            refunded[res] = give
+
+        # Remove the sold item from the world.
+        if hasattr(item, "delete"):
+            item.delete()
+
+        logger.info("%s sold %s (refund %r)",
+                    getattr(player, "key", "?"), item_def.key, refunded)
+        self.notify(player, "sold", item_name=item_name, refund=refunded)
+        return True
+
+    def junk_item(self, player: Any, item: Any) -> bool:
+        """Destroy a carried Gear *item* with no refund.
+
+        Same eligibility as :meth:`sell_item` (a loose, carried, non-equipped
+        Gear ``GameItem``), but simply deletes the item — no resources returned.
+        Emits ``sell_failed`` on rejection (shared reasons) and ``junked`` on
+        success.
+
+        Args:
+            player: The player junking the item.
+            item: The carried Gear ``GameItem`` to destroy.
+
+        Returns:
+            ``True`` if the item was destroyed, ``False`` otherwise.
+        """
+        ok, item_def, reason = self._resolve_sellable(player, item)
+        if not ok:
+            self.notify(player, "sell_failed", reason=reason,
+                        item_name=self._item_name(item))
+            return False
+
+        item_name = item_def.name
+        if hasattr(item, "delete"):
+            item.delete()
+
+        logger.info("%s junked %s", getattr(player, "key", "?"), item_def.key)
+        self.notify(player, "junked", item_name=item_name)
+        return True
+
+    def _resolve_sellable(self, player: Any, item: Any):
+        """Validate that *item* is a loose, carried Gear item the player owns.
+
+        Shared eligibility for :meth:`sell_item` / :meth:`junk_item`. Returns
+        ``(ok, item_def, reason)``: on success ``(True, ItemDef, "")``; on
+        failure ``(False, None, reason)`` where *reason* is one of
+        ``no_item`` / ``equipped`` / ``not_gear`` / ``unknown_item``.
+
+        - ``no_item`` — nothing to act on.
+        - ``equipped`` — the item is currently worn (unequip it first); we do
+          not silently strip gear.
+        - ``not_gear`` — a counted Supply-bag stack, not a loose Gear object
+          (supplies aren't sellable in this pass).
+        - ``unknown_item`` — the object carries no resolvable ``item_key``.
+        """
+        if item is None:
+            return False, None, "no_item"
+
+        # Reject equipped gear — must be unequipped first.
+        handler = getattr(player, "equipment", None)
+        if handler is not None and hasattr(handler, "get_all_equipped"):
+            try:
+                if any(it is item for it in handler.get_all_equipped().values()):
+                    return False, None, "equipped"
+            except Exception:  # noqa: BLE001 - handler stub without equipped view
+                pass
+
+        # Reject counted Supply drops/stacks (scope: carried gear only).
+        if getattr(getattr(item, "db", None), "count", None) is not None:
+            return False, None, "not_gear"
+
+        item_key = self._item_attr(item, "item_key", None)
+        if not item_key:
+            return False, None, "unknown_item"
+        item_def = self.registry.resolve_item(item_key)
+        if item_def is None:
+            return False, None, "unknown_item"
+
+        return True, item_def, ""
+
     def add_supply_drop(self, player: Any, item_key: str, count: int) -> int:
         """Add up to *count* units of *item_key* to *player*'s Supply_Bag.
 

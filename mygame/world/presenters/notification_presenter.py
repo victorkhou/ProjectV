@@ -270,6 +270,30 @@ def _fmt_produced(d: dict) -> str:
     return f"|g[{where}] Produced {d.get('item_name', 'item')}.|n"
 
 
+def _fmt_sold(d: dict) -> str:
+    name = d.get("item_name", "item")
+    refund = d.get("refund") or {}
+    if refund:
+        parts = ", ".join(f"{amt} {res}" for res, amt in refund.items())
+        return f"|g[Sell] Sold {name} for {parts}.|n"
+    return f"|g[Sell] Sold {name}.|n"
+
+
+def _fmt_junked(d: dict) -> str:
+    return f"|y[Junk] Destroyed {d.get('item_name', 'item')}.|n"
+
+
+def _fmt_sell_failed(d: dict) -> str:
+    name = d.get("item_name", "that")
+    reasons = {
+        "no_item": "You aren't carrying that.",
+        "equipped": f"{name} is equipped — unequip it first.",
+        "not_gear": "You can only sell or junk carried gear, not supplies.",
+        "unknown_item": f"{name} can't be sold or junked.",
+    }
+    return f"|r{reasons.get(d.get('reason'), f'You cannot do that to {name}.')}|n"
+
+
 def _fmt_tile_full(d: dict) -> str:
     # The tile is at its item-capacity cap, so a new drop was refused.
     return "|yThe ground here is full — clear some items to gather more.|n"
@@ -383,6 +407,9 @@ class NotificationPresenter:
         "unequip_failed": _fmt_unequip_failed,
         "crafted": _fmt_crafted,
         "craft_failed": _fmt_craft_failed,
+        "sold": _fmt_sold,
+        "junked": _fmt_junked,
+        "sell_failed": _fmt_sell_failed,
         "produced": _fmt_produced,
         "tile_full": _fmt_tile_full,
         "combat_started": _fmt_combat_started,

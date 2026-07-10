@@ -1217,6 +1217,131 @@ def _parse_coords(text):
     return None
 
 
+def _resolve_carried_gear(caller, arg):
+    """Resolve *arg* to a single loose (carried, unequipped) Gear item.
+
+    Matches by display name or item_key, case-/separator-insensitive, preferring
+    exact over prefix over substring — the same leniency as equip/unequip.
+    Returns the ``GameItem`` on a unique match, ``"__ambiguous__"`` when a
+    partial name matches more than one, or ``None`` when nothing matches.
+    """
+    loose = _carried_gear_items(caller)
+    if not loose:
+        return None
+    norm = arg.strip().lower().replace("_", " ")
+    exact, prefix, substr = [], [], []
+    for item in loose:
+        for attr in ("key", "db"):
+            if attr == "db":
+                val = getattr(getattr(item, "db", None), "item_key", None)
+            else:
+                val = getattr(item, attr, None)
+            if not val:
+                continue
+            name = str(val).replace("_", " ").lower()
+            if name == norm:
+                exact.append(item)
+            elif name.startswith(norm):
+                prefix.append(item)
+            elif norm in name:
+                substr.append(item)
+    for tier in (exact, prefix, substr):
+        items = list(dict.fromkeys(tier))
+        if len(items) == 1:
+            return items[0]
+        if len(items) > 1:
+            return "__ambiguous__"
+    return None
+
+
+class CmdSell(GameCommand):
+    """Sell a piece of carried gear for half its resource cost.
+
+    Usage:
+      sell <item>
+
+    Options:
+      <item>  name of a piece of carried (unequipped) gear — a partial name
+              works (e.g. "assault" for "Assault Rifle").
+
+    Examples:
+      sell assault
+      sell combat helmet
+
+    Notes:
+      Refunds 50% of the item's craft cost (rounded down) and destroys the item.
+      The refund is bounded by your carry weight — any overflow drops on the
+      ground. You can't sell equipped gear (unequip it first) or supplies; use
+      'junk' to destroy an item with no refund. See 'help equipment'.
+    """
+
+    key = "sell"
+    help_category = "Game"
+
+    def func(self):
+        arg = self.args.strip()
+        if not arg:
+            self.caller.msg("Usage: sell <item>")
+            return
+        equipment_system = self.require_system("equipment_system")
+        if equipment_system is None:
+            return
+        item = _resolve_carried_gear(self.caller, arg)
+        if item == "__ambiguous__":
+            self.caller.msg(
+                f"'{arg}' matches more than one carried item — be more specific."
+            )
+            return
+        if item is None:
+            self.caller.msg(f"You aren't carrying gear matching '{arg}'.")
+            return
+        # The system emits the player-facing notification (sold / sell_failed).
+        equipment_system.sell_item(self.caller, item)
+
+
+class CmdJunk(GameCommand):
+    """Destroy a piece of carried gear (no refund).
+
+    Usage:
+      junk <item>
+
+    Options:
+      <item>  name of a piece of carried (unequipped) gear — a partial name
+              works.
+
+    Examples:
+      junk knife
+      junk kevlar
+
+    Notes:
+      Permanently destroys the item and returns nothing. To recover half its
+      resource cost instead, use 'sell'. You can't junk equipped gear (unequip
+      it first) or supplies. See 'help equipment'.
+    """
+
+    key = "junk"
+    help_category = "Game"
+
+    def func(self):
+        arg = self.args.strip()
+        if not arg:
+            self.caller.msg("Usage: junk <item>")
+            return
+        equipment_system = self.require_system("equipment_system")
+        if equipment_system is None:
+            return
+        item = _resolve_carried_gear(self.caller, arg)
+        if item == "__ambiguous__":
+            self.caller.msg(
+                f"'{arg}' matches more than one carried item — be more specific."
+            )
+            return
+        if item is None:
+            self.caller.msg(f"You aren't carrying gear matching '{arg}'.")
+            return
+        equipment_system.junk_item(self.caller, item)
+
+
 class CmdUse(GameCommand):
     """Use a consumable from your supply bag.
 

@@ -1881,5 +1881,102 @@ class TestCraft(unittest.TestCase):
         self.assertEqual(data.get("reason"), "craft_error")
 
 
+# -------------------------------------------------------------- #
+#  sell / junk — carried gear disposal (partial refund / destroy)
+# -------------------------------------------------------------- #
+
+class _SellableItem:
+    """A carried gear item with an item_key (resolves to a known ItemDef).
+
+    Exposes ``item_key`` directly (like a real GameItem's @property that reads
+    from attributes) so ``_item_attr(item, "item_key")`` resolves it.
+    """
+    def __init__(self, key):
+        self.key = key
+        self.item_key = key  # _item_attr reads this via getattr(item, name)
+        self.db = DB(item_key=key, count=None)
+        self.deleted = False
+        self.location = None
+
+    def delete(self):
+        self.deleted = True
+
+
+class TestSellAndJunk(unittest.TestCase):
+    """sell_item / junk_item — carried-gear-only disposal."""
+
+    def _sys(self):
+        registry = _make_registry()
+        # Add a gear item with a known craft_cost for the sell refund test.
+        registry.items["combat_knife"] = ItemDef(
+            key="combat_knife", name="Combat Knife", slot="weapon",
+            category="weapon", stat_modifiers={"damage": 8},
+            craft_cost={"Iron": 5, "Stone": 3},
+        )
+        event_bus = EventBus()
+        sink = NotificationSink()
+        event_bus.subscribe(PLAYER_NOTIFICATION, sink)
+        system = EquipmentSystem(registry, event_bus)
+        return system, sink
+
+    def _player(self, **resources):
+        return FakePlayer(resources=resources)
+
+    def test_sell_refunds_half_craft_cost_and_deletes(self):
+        system, sink = self._sys()
+        player = self._player(Iron=0, Stone=0)
+        item = _SellableItem("combat_knife")
+
+        ok = system.sell_item(player, item)
+
+        self.assertTrue(ok)
+        self.assertTrue(item.deleted)
+        # 50% of {Iron:5, Stone:3} = Iron:2 + Stone:1 (floored).
+        self.assertEqual(player.get_resource("Iron"), 2)
+        self.assertEqual(player.get_resource("Stone"), 1)
+        kind, data = sink.last()
+        self.assertEqual(kind, "sold")
+        self.assertIn("Iron", str(data.get("refund")))
+
+    def test_junk_deletes_with_no_refund(self):
+        system, sink = self._sys()
+        player = self._player(Iron=10)
+        item = _SellableItem("combat_knife")
+
+        ok = system.junk_item(player, item)
+
+        self.assertTrue(ok)
+        self.assertTrue(item.deleted)
+        self.assertEqual(player.get_resource("Iron"), 10)  # unchanged
+        kind, _ = sink.last()
+        self.assertEqual(kind, "junked")
+
+    def test_sell_rejects_equipped_item(self):
+        system, sink = self._sys()
+        player = self._player()
+        item = FakeItem("combat_knife", "weapon")
+        player.equipment.equip(item)
+
+        ok = system.sell_item(player, item)
+
+        self.assertFalse(ok)
+        kind, data = sink.last()
+        self.assertEqual(kind, "sell_failed")
+        self.assertEqual(data.get("reason"), "equipped")
+
+    def test_sell_rejects_supply_stack(self):
+        system, sink = self._sys()
+        player = self._player()
+        item = _SellableItem("combat_knife")
+        item.db.count = 5  # has a count → is a supply drop, not gear
+
+        ok = system.sell_item(player, item)
+
+        self.assertFalse(ok)
+        kind, data = sink.last()
+        self.assertEqual(kind, "sell_failed")
+        self.assertEqual(data.get("reason"), "not_gear")
+
+
 if __name__ == "__main__":
     unittest.main()
