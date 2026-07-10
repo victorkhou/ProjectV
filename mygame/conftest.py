@@ -15,6 +15,15 @@ import types
 
 def _ensure_evennia_stubs():
     """Install comprehensive Evennia stubs into sys.modules."""
+    # Escape hatch for the live-boot smoke test: when EVENNIA_REAL_BOOT=1 the
+    # caller wants the REAL Evennia + a Django test DB (see
+    # tests/test_live_boot_smoke.py), so never install stubs. This keeps the
+    # fast stubbed suite (the default) and the slow real-boot test from
+    # clobbering each other's sys.modules["evennia"].
+    import os
+    if os.environ.get("EVENNIA_REAL_BOOT") == "1":
+        return
+
     # If real Evennia is installed, don't overwrite
     if "evennia" in sys.modules:
         mod = sys.modules["evennia"]
