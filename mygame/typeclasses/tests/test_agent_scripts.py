@@ -207,6 +207,43 @@ class TestHarvesterScript(unittest.TestCase):
             else:
                 sys.modules.pop("world.systems.resource_system", None)
 
+    @contextmanager
+    def _capture_owner_notifications(self):
+        """Inject a fake ``server.conf.game_init`` so ``_notify_owner`` fires.
+
+        ``HarvesterScript.at_repeat`` calls the module-level ``_notify_owner``
+        helper, which does ``from server.conf.game_init import game_systems``
+        and routes the owner notification through a live system's ``notify``.
+        We inject a fake module whose ``game_systems`` holds a recording system,
+        capturing ``(owner, kind, data)`` tuples without a running server.
+        """
+        captured = []
+
+        class _RecordingSystem:
+            def notify(self, player, kind, **data):
+                captured.append((player, kind, data))
+
+        fake_init = types.ModuleType("server.conf.game_init")
+        fake_init.game_systems = {"resource_system": _RecordingSystem()}
+        fake_conf = types.ModuleType("server.conf")
+        fake_conf.game_init = fake_init
+        fake_server = types.ModuleType("server")
+        fake_server.conf = fake_conf
+
+        saved = {name: sys.modules.get(name)
+                 for name in ("server", "server.conf", "server.conf.game_init")}
+        sys.modules["server"] = fake_server
+        sys.modules["server.conf"] = fake_conf
+        sys.modules["server.conf.game_init"] = fake_init
+        try:
+            yield captured
+        finally:
+            for name, mod in saved.items():
+                if mod is not None:
+                    sys.modules[name] = mod
+                else:
+                    sys.modules.pop(name, None)
+
     def _run_until_production(self, script):
         """Drive at_repeat through the harvest cooldown until production fires."""
         from mygame.world.definitions import BalanceConfig
@@ -343,6 +380,51 @@ class TestHarvesterScript(unittest.TestCase):
 
         # Production only — no delivery state involvement (Req 8.3, 8.4).
         self.assertIsNone(npc.db.delivery_state)
+
+    def test_notifies_owner_on_production(self):
+        """Autonomous Extractor output notifies the owner (mirrors the Armory's
+        'produced' line) — one notification per production cycle, not silent."""
+        tile = FakeTile(resource_type="Wood")
+        building = FakeBuilding(
+            building_type="EX", building_level=1, location=tile,
+        )
+        owner = object()
+        npc = FakeNPC(role="harvester", role_target=building)
+        npc.db.owner = owner
+        script = self._make_script(npc)
+
+        with self._capture_owner_notifications() as captured:
+            with self._capture_drops() as spawned:
+                self._run_until_production(script)  # one full cooldown → one yield
+
+        self.assertEqual(len(spawned), 1)
+        # Exactly one owner notification, addressed to the owner, of the right
+        # kind, carrying the produced resource type and a positive amount.
+        self.assertEqual(len(captured), 1)
+        player, kind, data = captured[0]
+        self.assertIs(player, owner)
+        self.assertEqual(kind, "harvester_produced")
+        self.assertEqual(data["resource_type"], "Wood")
+        self.assertGreater(data["amount"], 0)
+
+    def test_no_owner_notification_before_cooldown(self):
+        """No notification on the pre-cooldown ticks — only when a drop fires."""
+        tile = FakeTile(resource_type="Wood")
+        building = FakeBuilding(
+            building_type="EX", building_level=1, location=tile,
+        )
+        npc = FakeNPC(role="harvester", role_target=building)
+        npc.db.owner = object()
+        script = self._make_script(npc)
+
+        from mygame.world.definitions import BalanceConfig
+        with self._capture_owner_notifications() as captured:
+            with self._capture_drops():
+                # One tick short of the cooldown → no production, no notify.
+                for _ in range(BalanceConfig().harvest_cooldown_ticks - 1):
+                    script.at_repeat()
+
+        self.assertEqual(captured, [])
 
 
 # -------------------------------------------------------------- #

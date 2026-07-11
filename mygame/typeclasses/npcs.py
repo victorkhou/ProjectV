@@ -145,7 +145,14 @@ class NPC(CombatEntity, GameEntity):
 
         # Check if queue is now empty → movement complete
         if not queue:
-            self.db.activity_status = ACTIVITY_IDLE
+            # Apply the arrival status the mover intended (e.g. "Working" for a
+            # building assignment), consuming it so it doesn't leak into the
+            # next move. Defaults to Idle when nothing was requested — a plain
+            # patrol/return leg with no per-tick status setter of its own.
+            arrival = getattr(self.db, "arrival_status", None)
+            self.db.activity_status = arrival or ACTIVITY_IDLE
+            if arrival is not None:
+                self.db.arrival_status = None
             self.at_movement_complete()
 
         return True
@@ -155,8 +162,14 @@ class NPC(CombatEntity, GameEntity):
 
         Registers the NPC with the MovementSystem if available so it
         is tracked for per-tick processing.
+
+        Clears any pending ``arrival_status`` so a new leg starts clean —
+        ``_move_agent_to`` re-sets it right after this call when it wants a
+        specific arrival status; direct callers (patrol/delivery) leave it
+        unset so ``advance_movement`` falls back to Idle on arrival.
         """
         self.db.movement_queue = [[x, y] for x, y in path]
+        self.db.arrival_status = None
 
         # Register with MovementSystem if available
         movement_system = self._get_movement_system()

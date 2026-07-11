@@ -90,6 +90,19 @@ class TestFormatTable:
                     data={"amount": 20, "resource_type": "Iron"})
         assert "+20 Iron dropped" in n.sent[0][1]
 
+    def test_harvester_produced(self):
+        """A harvester agent's Extractor output notifies the owner (mirrors the
+        equipment buildings' 'produced' line) so autonomous extraction isn't
+        silent."""
+        bus, n, _ = _make()
+        p = _Player()
+        bus.publish(PLAYER_NOTIFICATION, player=p, kind="harvester_produced",
+                    data={"amount": 9, "resource_type": "Wood"})
+        msg = n.sent[0][1]
+        assert "Extractor" in msg
+        assert "+9 Wood" in msg
+        assert "get" in msg
+
     def test_attacked(self):
         bus, n, _ = _make()
         p = _Player()
@@ -300,6 +313,28 @@ def _emitted_kind_literals(path):
     return kinds
 
 
+def _notify_owner_kind_literals(path):
+    """Set of string-literal ``kind`` values emitted via the ``_notify_owner``
+    helper (agent behavior scripts route owner notifications through it rather
+    than ``self.notify``, since a Script is not a BaseSystem). The kind is the
+    second positional arg: ``_notify_owner(npc, "kind", ...)``.
+    """
+    with open(path, "r", encoding="utf-8") as fh:
+        tree = ast.parse(fh.read(), filename=path)
+    kinds = set()
+    for node in ast.walk(tree):
+        if (
+            isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Name)
+            and node.func.id == "_notify_owner"
+            and len(node.args) >= 2
+            and isinstance(node.args[1], ast.Constant)
+            and isinstance(node.args[1].value, str)
+        ):
+            kinds.add(node.args[1].value)
+    return kinds
+
+
 class TestPresenterOwnershipStructural:
     """Property 13(a): systems own no player-facing strings."""
 
@@ -350,6 +385,14 @@ class TestPresenterOwnershipStructural:
         emitted = set()
         for path in paths:
             emitted |= _emitted_kind_literals(path)
+
+        # Agent behavior scripts (a Script isn't a BaseSystem) route owner
+        # notifications through the ``_notify_owner`` helper, not ``self.notify``
+        # — scan those kinds too so a script-emitted kind can't silently drop.
+        mygame_dir = os.path.dirname(world_dir)
+        scripts_path = os.path.join(mygame_dir, "typeclasses", "agent_scripts.py")
+        if os.path.exists(scripts_path):
+            emitted |= _notify_owner_kind_literals(scripts_path)
 
         formatter_keys = set(NotificationPresenter._FORMATTERS.keys())
         missing = emitted - formatter_keys

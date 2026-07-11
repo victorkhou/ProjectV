@@ -165,6 +165,17 @@ class LiveBootSmokeTest(EvenniaTest):
         item.db.slot = "weapon"
         return item
 
+    def _make_agent(self, x=0, y=0, planet="earth", location=None):
+        npc = create.create_object(
+            "typeclasses.npcs.NPC", key="Agent",
+            location=location, home=self.room1,
+        )
+        npc.db.coord_x = x
+        npc.db.coord_y = y
+        npc.db.coord_planet = planet
+        npc.db.npc_type = "agent"
+        return npc
+
     # -------------------------------------------------------------- #
     #  Fix #1 — is_player must NOT fail open on a real Building
     # -------------------------------------------------------------- #
@@ -387,6 +398,73 @@ class LiveBootSmokeTest(EvenniaTest):
             # Re-equip from inventory works.
             self.assertTrue(eq.equip(player, knife))
             self.assertIs(player.equipment.get_equipped("weapon"), knife)
+        finally:
+            _teardown_game(systems)
+
+    # -------------------------------------------------------------- #
+    #  Arrival status — an agent that WALKS to its assignment lands on the
+    #  intended status (e.g. "Working"), not a hardcoded "Idle".
+    # -------------------------------------------------------------- #
+
+    def test_walked_agent_lands_on_working_not_idle(self):
+        """A real NPC walking a queued path must apply its stashed
+        ``arrival_status`` when the queue drains — on a real ``db`` (where an
+        unset attribute is None, not a raise), advance_movement must read it and
+        set "Working", not reset to "Idle". This is the armory-agent bug.
+        """
+        room = self._make_planet_room("earth")
+        npc = self._make_agent(x=0, y=0, planet="earth", location=room)
+        room.coord_index.add(npc, 0, 0)
+
+        # Queue a one-step walk and stash the intended arrival status, exactly
+        # as AgentSystem._move_agent_to does for a building assignment.
+        npc.set_movement_queue([(1, 0)])
+        npc.db.arrival_status = "Working"
+
+        # Drive the movement engine until the queue drains.
+        npc.advance_movement(tick_number=1)
+
+        self.assertEqual(list(npc.db.movement_queue or []), [])
+        self.assertEqual(
+            npc.db.activity_status, "Working",
+            "a walked agent must land on its intended arrival status, not Idle",
+        )
+        # Consumed, so a later unrelated move doesn't inherit it.
+        self.assertIsNone(npc.db.arrival_status)
+
+    # -------------------------------------------------------------- #
+    #  Extractor notification — a harvester agent's production notifies its
+    #  owner through the real presenter (autonomous extraction isn't silent).
+    # -------------------------------------------------------------- #
+
+    def test_harvester_production_notifies_owner_through_presenter(self):
+        """With the real composition root booted, a HarvesterScript producing on
+        an Extractor emits a ``harvester_produced`` notification that the real
+        presenter renders to the owner's ``msg`` sink."""
+        from server.conf.game_init import initialize_game
+        from typeclasses.agent_scripts import _notify_owner
+
+        systems = initialize_game()
+        try:
+            room = self._make_planet_room("earth")
+            player = self._make_player(x=4, y=4, planet="earth", location=room)
+
+            captured = []
+            orig_msg = player.msg
+            player.msg = lambda text=None, **kw: captured.append(text)
+
+            npc = self._make_agent(x=4, y=4, planet="earth", location=room)
+            npc.db.owner = player
+
+            # Emit the exact notification HarvesterScript.at_repeat sends.
+            _notify_owner(npc, "harvester_produced", amount=6, resource_type="Wood")
+
+            player.msg = orig_msg
+            self.assertTrue(
+                any("Extractor" in (m or "") and "Wood" in (m or "")
+                    for m in captured),
+                f"owner must be notified of extractor output; got {captured!r}",
+            )
         finally:
             _teardown_game(systems)
 

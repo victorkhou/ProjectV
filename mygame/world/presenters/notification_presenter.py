@@ -270,6 +270,15 @@ def _fmt_produced(d: dict) -> str:
     return f"|g[{where}] Produced {d.get('item_name', 'item')}.|n"
 
 
+def _fmt_harvester_produced(d: dict) -> str:
+    # Passive output from an agent-run Extractor (mirrors the equipment
+    # buildings' "produced" line so autonomous extraction isn't silent).
+    return (
+        f"|g[Extractor] +{d.get('amount', 0)} {d.get('resource_type', 'resource')} "
+        f"produced. Use 'get' to pick up.|n"
+    )
+
+
 def _fmt_sold(d: dict) -> str:
     name = d.get("item_name", "item")
     refund = d.get("refund") or {}
@@ -411,6 +420,7 @@ class NotificationPresenter:
         "junked": _fmt_junked,
         "sell_failed": _fmt_sell_failed,
         "produced": _fmt_produced,
+        "harvester_produced": _fmt_harvester_produced,
         "tile_full": _fmt_tile_full,
         "combat_started": _fmt_combat_started,
         "npc_killed": _fmt_npc_killed,

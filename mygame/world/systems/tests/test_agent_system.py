@@ -369,6 +369,34 @@ class TestAssignAgent(AgentSystemTestBase):
         ok, _ = self.system.assign_agent(player, npc.db.agent_id, "medic", building)
         self.assertTrue(ok)
 
+    def test_walk_to_building_stashes_arrival_status(self):
+        """When the agent WALKS to its assignment (a path exists), the intended
+        arrival status is stashed on db.arrival_status so the movement engine
+        applies it on arrival — otherwise move_step would reset it to 'Idle'
+        and an engineer at a producing Armory would read 'Idle' (the bug)."""
+        queued = {}
+
+        class _WalkAgent:
+            def __init__(self):
+                self.db = FakeDB(coord_x=0, coord_y=0)
+
+            def set_movement_queue(self, path):
+                queued["path"] = list(path)
+
+        agent = _WalkAgent()
+        # Force a non-empty path so the walk branch (not the snap branch) runs.
+        self.system._compute_path_to = lambda a, sx, sy, gx, gy: [(1, 0), (2, 0)]
+
+        self.system._move_agent_to(
+            agent, 2, 0, moving_status="Moving to engineer assignment",
+            arrived_status="Working",
+        )
+
+        # It walked (queue set) and stashed the arrival status for move_step.
+        self.assertEqual(queued["path"], [(1, 0), (2, 0)])
+        self.assertEqual(agent.db.arrival_status, "Working")
+        self.assertIn("Moving to engineer assignment", agent.db.activity_status)
+
     def test_assign_soldier_no_building_needed(self):
         player = FakePlayer(combat_xp=600, next_agent_id=1)
         npc = self._train_and_complete(player)

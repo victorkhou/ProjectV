@@ -781,6 +781,13 @@ class AgentSystem(AgentProgressionMixin, AgentBehaviorMixin, BaseSystem):
         assign_agent (to the building) and unassign_agent (back to HQ) — was
         duplicated between them. Sets ``activity_status`` to *moving_status*
         while pathing (with the tile count) or *arrived_status* once placed.
+
+        When the agent walks a path, *arrived_status* is stashed on
+        ``db.arrival_status`` so the movement engine can apply it when the queue
+        drains — otherwise ``NPC.advance_movement`` would reset the agent to
+        plain "Idle" on arrival, discarding the "Working" status we intend for a
+        building assignment (an engineer/medic has no per-tick status setter to
+        restore it, so it would read "Idle" while its building is producing).
         """
         ax = getattr(agent.db, "coord_x", None)
         ay = getattr(agent.db, "coord_y", None)
@@ -791,6 +798,8 @@ class AgentSystem(AgentProgressionMixin, AgentBehaviorMixin, BaseSystem):
         if path and hasattr(agent, "set_movement_queue"):
             agent.set_movement_queue(path)
             agent.db.activity_status = f"{moving_status} ({len(path)} tiles)"
+            # Preserved across the walk; consumed by move_step on arrival.
+            agent.db.arrival_status = arrived_status
         else:
             planet_room = getattr(agent, "location", None)
             if planet_room is not None and hasattr(planet_room, "move_entity"):

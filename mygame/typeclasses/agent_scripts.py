@@ -68,6 +68,29 @@ def _award_agent_xp(npc: Any, source: str) -> None:
         logger.debug("Agent XP award failed for source %r", source, exc_info=True)
 
 
+def _notify_owner(npc: Any, kind: str, **data: Any) -> None:
+    """Emit a player-facing notification to *npc*'s owner via the presenter.
+
+    Routes the structured ``(owner, kind, data)`` through a live system's
+    ``notify`` (all world systems share ``BaseSystem.notify``, which publishes
+    the ``PLAYER_NOTIFICATION`` event the presenter renders) so the script
+    composes no player-facing text itself. Looked up lazily from the global
+    ``game_systems`` dict and wrapped defensively so a missing system or a
+    None owner never breaks the per-tick agent loop.
+    """
+    owner = getattr(getattr(npc, "db", None), "owner", None)
+    if owner is None:
+        return
+    try:
+        from server.conf.game_init import game_systems
+        system = game_systems.get("resource_system") or game_systems.get("agent_system")
+        if system is None:
+            return
+        system.notify(owner, kind, **data)
+    except Exception:  # noqa: BLE001 - never let a notification break the tick loop
+        logger.debug("Owner notification failed for kind %r", kind, exc_info=True)
+
+
 # ------------------------------------------------------------------ #
 #  HarvesterScript
 # ------------------------------------------------------------------ #
@@ -164,6 +187,15 @@ class HarvesterScript(DefaultScript):
         logger.debug(
             "Harvester on %s produced %d %s (level %d)",
             building, production, resource_type, level,
+        )
+
+        # Tell the owner their Extractor produced (mirrors the Armory's
+        # "produced" notification) so autonomous extraction isn't silent — the
+        # player sees output land and knows to 'get' it. Fires once per
+        # production cycle (harvest_cooldown_ticks), not every tick.
+        _notify_owner(
+            npc, "harvester_produced",
+            amount=production, resource_type=resource_type,
         )
 
         # Award harvest-production XP. Routed through the freeze-aware

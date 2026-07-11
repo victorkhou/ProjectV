@@ -264,6 +264,39 @@ class TestAdvanceMovement:
         assert npc.db.movement_queue == []
         assert len(completed) == 1
 
+    def test_arrival_status_applied_on_completion(self):
+        """A pending arrival_status (e.g. 'Working' for a building assignment) is
+        applied when the queue drains — NOT overwritten with plain 'Idle'.
+
+        Regression: an engineer assigned to an Armory walks there and, on
+        arrival, must read 'Working' (it has no per-tick status setter of its
+        own), not 'Idle', while its building produces items.
+        """
+        room = FakeRoom()
+        npc = _make_npc(location=room, movement_queue=[[5, 5]],
+                        arrival_status="Working")
+        npc.advance_movement(tick_number=1)
+        assert npc.db.movement_queue == []
+        assert npc.db.activity_status == "Working"
+        # Consumed so it doesn't leak into a later, unrelated move.
+        assert npc.db.arrival_status is None
+
+    def test_arrival_defaults_to_idle_without_pending_status(self):
+        """With no pending arrival_status, completion resets to Idle (patrol/
+        return legs that carry no intended arrival status)."""
+        room = FakeRoom()
+        npc = _make_npc(location=room, movement_queue=[[5, 5]],
+                        activity_status="Moving (1 tiles)")
+        npc.advance_movement(tick_number=1)
+        assert npc.db.activity_status == "Idle"
+
+    def test_set_movement_queue_clears_stale_arrival_status(self):
+        """A new leg started via set_movement_queue clears any prior
+        arrival_status so it can't leak from a previous move."""
+        npc = _make_npc(arrival_status="Working")
+        npc.set_movement_queue([(1, 1), (2, 2)])
+        assert npc.db.arrival_status is None
+
     def test_fallback_direct_coord_update_without_room(self):
         """When location has no move_entity, coords update directly."""
         npc = _make_npc(location=None, movement_queue=[[7, 8]])
