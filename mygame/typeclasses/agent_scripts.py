@@ -13,7 +13,8 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-from world.constants import ACTIVITY_IDLE, DeliveryState
+from world.constants import DeliveryState
+from world.utils import resting_activity_status
 
 try:
     from evennia.scripts.scripts import DefaultScript
@@ -594,9 +595,11 @@ class DeliveryBehavior(DefaultScript):
         """
         carried = getattr(npc.db, "carried_resources", None) or {}
         if not carried or sum(carried.values()) <= 0:
-            # Nothing to deliver — go back to idle
+            # Nothing to deliver — drop back to the derived resting status (the
+            # harvester is still assigned, so "Working"; HarvesterScript refines
+            # it to "Harvesting X" next tick).
             npc.db.delivery_state = DeliveryState.IDLE
-            npc.db.activity_status = ACTIVITY_IDLE
+            npc.db.activity_status = resting_activity_status(npc)
             return
 
         target = self.select_delivery_target(npc)
@@ -653,14 +656,14 @@ class DeliveryBehavior(DefaultScript):
         building = getattr(npc.db, "role_target", None)
         if building is None:
             npc.db.delivery_state = DeliveryState.IDLE
-            npc.db.activity_status = ACTIVITY_IDLE
+            npc.db.activity_status = resting_activity_status(npc)
             return
 
         bx = getattr(getattr(building, "db", None), "coord_x", None)
         by = getattr(getattr(building, "db", None), "coord_y", None)
         if bx is None or by is None:
             npc.db.delivery_state = DeliveryState.IDLE
-            npc.db.activity_status = ACTIVITY_IDLE
+            npc.db.activity_status = resting_activity_status(npc)
             return
 
         bx, by = int(bx), int(by)
@@ -695,7 +698,9 @@ class DeliveryBehavior(DefaultScript):
         from world.constants import HARVESTER_EMPTY_DELAY
         npc.db.delivery_state = DeliveryState.IDLE
         npc.db.movement_delay = HARVESTER_EMPTY_DELAY
-        npc.db.activity_status = ACTIVITY_IDLE
+        # Back on station — derived resting status ("Working"), refined to
+        # "Harvesting X" by HarvesterScript next tick.
+        npc.db.activity_status = resting_activity_status(npc)
 
     # ------------------------------------------------------------------ #
     #  Resource operations

@@ -369,16 +369,18 @@ class TestAssignAgent(AgentSystemTestBase):
         ok, _ = self.system.assign_agent(player, npc.db.agent_id, "medic", building)
         self.assertTrue(ok)
 
-    def test_walk_to_building_stashes_arrival_status(self):
-        """When the agent WALKS to its assignment (a path exists), the intended
-        arrival status is stashed on db.arrival_status so the movement engine
-        applies it on arrival — otherwise move_step would reset it to 'Idle'
-        and an engineer at a producing Armory would read 'Idle' (the bug)."""
+    def test_walk_to_building_sets_transient_moving_status(self):
+        """When the agent WALKS to its assignment (a path exists), _move_agent_to
+        sets only the transient moving status — it does NOT name the arrival
+        status. Deriving the resting status on arrival (via advance_movement →
+        resting_activity_status) is what keeps an engineer reading 'Working',
+        not 'Idle' (the bug); the mover no longer guesses it."""
         queued = {}
 
         class _WalkAgent:
             def __init__(self):
-                self.db = FakeDB(coord_x=0, coord_y=0)
+                self.db = FakeDB(coord_x=0, coord_y=0,
+                                 role="engineer", role_target=object())
 
             def set_movement_queue(self, path):
                 queued["path"] = list(path)
@@ -389,13 +391,31 @@ class TestAssignAgent(AgentSystemTestBase):
 
         self.system._move_agent_to(
             agent, 2, 0, moving_status="Moving to engineer assignment",
-            arrived_status="Working",
         )
 
-        # It walked (queue set) and stashed the arrival status for move_step.
+        # It walked (queue set) and shows the transient moving status; the
+        # arrival status is left to the movement engine's derivation.
         self.assertEqual(queued["path"], [(1, 0), (2, 0)])
-        self.assertEqual(agent.db.arrival_status, "Working")
         self.assertIn("Moving to engineer assignment", agent.db.activity_status)
+
+    def test_snap_to_building_derives_working_status(self):
+        """When the agent SNAPS (no path / already there), _move_agent_to resolves
+        the resting status immediately via the authority — an engineer assigned
+        to a building lands on 'Working'."""
+        class _SnapAgent:
+            def __init__(self):
+                self.db = FakeDB(coord_x=2, coord_y=0,
+                                 role="engineer", role_target=object())
+            # No set_movement_queue → forces the snap branch.
+
+        agent = _SnapAgent()
+        self.system._compute_path_to = lambda *a, **kw: []  # no path
+
+        self.system._move_agent_to(
+            agent, 2, 0, moving_status="Moving to engineer assignment",
+        )
+
+        self.assertEqual(agent.db.activity_status, "Working")
 
     def test_assign_soldier_no_building_needed(self):
         player = FakePlayer(combat_xp=600, next_agent_id=1)

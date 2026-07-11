@@ -272,3 +272,52 @@ class TestTileItemCapacity:
 
     def test_object_count_zero_when_tile_not_queryable(self):
         assert tile_object_count(object(), 1, 1) == 0
+
+
+class TestRestingActivityStatus:
+    """The single derived authority for an agent's resting status.
+
+    Precedence (highest first): incapacitated > reserve > (role at a building)
+    > (army role, no building) > idle. This is what the movement engine and the
+    assign/unassign paths consult instead of guessing, so no two writers can
+    disagree — the fix for the "engineer stuck at Idle" regression class.
+    """
+
+    @staticmethod
+    def _agent(**kw):
+        from mygame.world.utils import resting_activity_status  # noqa: F401
+        a = type("A", (), {})()
+        a.db = _Db(**kw)
+        return a
+
+    def _status(self, **kw):
+        from mygame.world.utils import resting_activity_status
+        return resting_activity_status(self._agent(**kw))
+
+    def test_no_role_is_idle(self):
+        assert self._status(role="", role_target=None) == "Idle"
+
+    def test_role_at_building_is_working(self):
+        # An engineer/harvester/guard assigned to a building.
+        assert self._status(role="engineer", role_target=object()) == "Working"
+
+    def test_army_role_without_building_is_ready(self):
+        # A soldier has no target building → on standby, "Ready" (not "Idle").
+        assert self._status(role="soldier", role_target=None) == "Ready"
+
+    def test_reserve_outranks_role(self):
+        # Benched by a demotion — "Reserve" even though a role is still set.
+        assert self._status(role="engineer", role_target=object(),
+                            reserve=True) == "Reserve"
+
+    def test_incapacitated_outranks_everything(self):
+        assert self._status(role="engineer", role_target=object(),
+                            reserve=True, incapacitated=True) == "Incapacitated"
+
+    def test_role_without_target_and_not_army_is_idle(self):
+        # A building role whose target was lost, and not an army role → Idle.
+        assert self._status(role="engineer", role_target=None) == "Idle"
+
+    def test_none_db_is_idle(self):
+        from mygame.world.utils import resting_activity_status
+        assert resting_activity_status(object()) == "Idle"

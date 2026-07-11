@@ -403,23 +403,27 @@ class LiveBootSmokeTest(EvenniaTest):
 
     # -------------------------------------------------------------- #
     #  Arrival status — an agent that WALKS to its assignment lands on the
-    #  intended status (e.g. "Working"), not a hardcoded "Idle".
+    #  DERIVED resting status ("Working"), not a hardcoded "Idle".
     # -------------------------------------------------------------- #
 
     def test_walked_agent_lands_on_working_not_idle(self):
-        """A real NPC walking a queued path must apply its stashed
-        ``arrival_status`` when the queue drains — on a real ``db`` (where an
-        unset attribute is None, not a raise), advance_movement must read it and
-        set "Working", not reset to "Idle". This is the armory-agent bug.
+        """A real NPC that walks a queued path must, on arrival, take the resting
+        status DERIVED from its role/assignment — not a hardcoded "Idle".
+
+        On a real ``db`` (where an unset attribute is None, not a raise),
+        ``advance_movement`` calls ``resting_activity_status``, which returns
+        "Working" for an assigned agent. This is the armory-agent bug, fixed at
+        the class level: the movement engine no longer guesses the status.
         """
         room = self._make_planet_room("earth")
         npc = self._make_agent(x=0, y=0, planet="earth", location=room)
         room.coord_index.add(npc, 0, 0)
+        # Assigned to a building → resting status must derive to "Working".
+        npc.db.role = "engineer"
+        npc.db.role_target = self._make_building("AR", x=1, y=0, planet="earth")
 
-        # Queue a one-step walk and stash the intended arrival status, exactly
-        # as AgentSystem._move_agent_to does for a building assignment.
+        # Queue a one-step walk, exactly as AgentSystem._move_agent_to does.
         npc.set_movement_queue([(1, 0)])
-        npc.db.arrival_status = "Working"
 
         # Drive the movement engine until the queue drains.
         npc.advance_movement(tick_number=1)
@@ -427,10 +431,21 @@ class LiveBootSmokeTest(EvenniaTest):
         self.assertEqual(list(npc.db.movement_queue or []), [])
         self.assertEqual(
             npc.db.activity_status, "Working",
-            "a walked agent must land on its intended arrival status, not Idle",
+            "a walked, assigned agent must derive 'Working' on arrival, not Idle",
         )
-        # Consumed, so a later unrelated move doesn't inherit it.
-        self.assertIsNone(npc.db.arrival_status)
+
+    def test_unassigned_walked_agent_lands_on_idle(self):
+        """The mirror case: a real NPC with no role derives "Idle" on arrival —
+        confirming the authority isn't just hardcoding "Working"."""
+        room = self._make_planet_room("earth")
+        npc = self._make_agent(x=0, y=0, planet="earth", location=room)
+        room.coord_index.add(npc, 0, 0)
+        npc.db.role = ""  # unassigned
+
+        npc.set_movement_queue([(1, 0)])
+        npc.advance_movement(tick_number=1)
+
+        self.assertEqual(npc.db.activity_status, "Idle")
 
     # -------------------------------------------------------------- #
     #  Extractor notification — a harvester agent's production notifies its

@@ -226,8 +226,17 @@ class DeliveryState(StrEnum):
     RETURNING = "returning"
 
 
-#: Default/idle activity status shown in agent rosters and the map view.
-ACTIVITY_IDLE = "Idle"
+#: Resting activity-status strings — what an agent shows when it is stationed
+#: (not mid-action). These are DERIVED from the agent's role/assignment by
+#: ``world.utils.resting_activity_status``; no code path should write them by
+#: hand. Transient, moment-to-moment statuses (e.g. ``"Harvesting Wood"``,
+#: ``"Patrol blocked — retrying"``) are still set imperatively by the role
+#: scripts each tick and supersede the resting default.
+ACTIVITY_IDLE = "Idle"          # no role, or role with nothing to do
+ACTIVITY_WORKING = "Working"    # assigned to a building (engineer/harvester/...)
+ACTIVITY_READY = "Ready"        # army role (soldier/medic) on standby, no building
+ACTIVITY_RESERVE = "Reserve"    # benched by an owner demotion
+ACTIVITY_INCAPACITATED = "Incapacitated"  # downed; awaiting recovery
 
 # ------------------------------------------------------------------ #
 #  Building capabilities

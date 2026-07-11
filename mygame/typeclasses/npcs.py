@@ -13,7 +13,7 @@ import logging
 
 from typeclasses.combat_entity import CombatEntity
 from typeclasses.objects import GameEntity
-from world.constants import ACTIVITY_IDLE, compute_effective_delay
+from world.constants import compute_effective_delay
 
 logger = logging.getLogger("evennia.typeclasses.npcs")
 
@@ -145,14 +145,14 @@ class NPC(CombatEntity, GameEntity):
 
         # Check if queue is now empty → movement complete
         if not queue:
-            # Apply the arrival status the mover intended (e.g. "Working" for a
-            # building assignment), consuming it so it doesn't leak into the
-            # next move. Defaults to Idle when nothing was requested — a plain
-            # patrol/return leg with no per-tick status setter of its own.
-            arrival = getattr(self.db, "arrival_status", None)
-            self.db.activity_status = arrival or ACTIVITY_IDLE
-            if arrival is not None:
-                self.db.arrival_status = None
+            # The movement engine knows nothing about roles, so it does NOT
+            # guess the resting status — it asks the single authority, which
+            # derives it from the agent's role/assignment. This is what keeps an
+            # engineer that WALKED to its Armory reading "Working" (not "Idle")
+            # on arrival. A role script with a live, transient status
+            # ("Harvesting Wood", ...) overwrites this later the same tick.
+            from world.utils import resting_activity_status
+            self.db.activity_status = resting_activity_status(self)
             self.at_movement_complete()
 
         return True
@@ -162,14 +162,8 @@ class NPC(CombatEntity, GameEntity):
 
         Registers the NPC with the MovementSystem if available so it
         is tracked for per-tick processing.
-
-        Clears any pending ``arrival_status`` so a new leg starts clean —
-        ``_move_agent_to`` re-sets it right after this call when it wants a
-        specific arrival status; direct callers (patrol/delivery) leave it
-        unset so ``advance_movement`` falls back to Idle on arrival.
         """
         self.db.movement_queue = [[x, y] for x, y in path]
-        self.db.arrival_status = None
 
         # Register with MovementSystem if available
         movement_system = self._get_movement_system()

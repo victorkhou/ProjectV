@@ -40,6 +40,65 @@ def get_game_systems() -> dict:
 
 
 # ------------------------------------------------------------------ #
+#  Agent resting status (single derived authority)
+# ------------------------------------------------------------------ #
+
+def resting_activity_status(agent: Any) -> str:
+    """Return the *resting* activity status for *agent* — what it shows when
+    stationed and not mid-action.
+
+    This is the single authority for the resting status. It is a pure function
+    of the agent's persistent state (incapacitated / reserve / role /
+    role_target), so no caller has to *guess* the status and no two writers can
+    disagree. In particular the movement engine (``NPC.advance_movement``),
+    which knows nothing about roles, calls this on arrival instead of
+    hardcoding ``"Idle"`` — the defect that left an engineer at a producing
+    Armory stuck reading "Idle" (it has no per-tick status writer of its own).
+
+    Transient, moment-to-moment statuses (``"Harvesting Wood"``,
+    ``"Patrol blocked — retrying"``, ``"Delivering ..."``) are NOT resting
+    statuses: the role scripts set those imperatively each tick, after
+    movement, so they naturally supersede this default while the agent is
+    actively doing something. Precedence (highest first):
+
+        incapacitated > reserve > (role at a building) > (army role) > idle
+    """
+    from world.constants import (
+        ACTIVITY_IDLE, ACTIVITY_WORKING, ACTIVITY_READY,
+        ACTIVITY_RESERVE, ACTIVITY_INCAPACITATED,
+    )
+
+    db = getattr(agent, "db", None)
+    if db is None:
+        return ACTIVITY_IDLE
+
+    if getattr(db, "incapacitated", False):
+        return ACTIVITY_INCAPACITATED
+    if getattr(db, "reserve", False):
+        return ACTIVITY_RESERVE
+
+    role = getattr(db, "role", None) or ""
+    if not role:
+        return ACTIVITY_IDLE
+
+    # Assigned to a building (engineer/harvester/guard/scout/medic-at-Medbay):
+    # it's on station, doing (or ready to do) its building's work.
+    if getattr(db, "role_target", None) is not None:
+        return ACTIVITY_WORKING
+
+    # A building-less army role (soldier, or medic with no Medbay) is on
+    # standby — "Ready", not "Idle" (it has a job, just no fixed post).
+    try:
+        from world.systems.agent_constants import ARMY_ROLES
+        if role in ARMY_ROLES:
+            return ACTIVITY_READY
+    except Exception:  # noqa: BLE001 - role table unavailable (isolated import)
+        pass
+
+    return ACTIVITY_IDLE
+
+
+# ------------------------------------------------------------------ #
 #  Coordinates
 # ------------------------------------------------------------------ #
 

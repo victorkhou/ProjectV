@@ -20,12 +20,12 @@ from world.systems.agent_behavior import AgentBehaviorMixin
 from world.systems.agent_progression import AgentProgressionMixin
 from world.utils import get_building_attr as _get_building_attr_shared
 from world.utils import set_building_attr as _set_building_attr_shared
+from world.utils import resting_activity_status
 from world.constants import (
     TRAINING_PROGRESS_INTERVAL,
     DEFAULT_CARRY_CAPACITY,
     MIN_PATROL_WAYPOINTS,
     MAX_PATROL_WAYPOINTS,
-    ACTIVITY_IDLE,
     DeliveryState,
 )
 
@@ -321,12 +321,12 @@ class AgentSystem(AgentProgressionMixin, AgentBehaviorMixin, BaseSystem):
                                 planet_room.coord_index.add(agent, int(px), int(py))
 
                 # Walk to the building, or snap there if no path/already there.
-                # "Working" (not "Assigned as {role}") because the roster line
-                # already states the role — this describes what it's *doing*.
+                # The resting status on arrival ("Working") is derived from the
+                # now-set role/role_target by resting_activity_status — the
+                # mover no longer names it.
                 self._move_agent_to(
                     agent, bx, by,
                     moving_status=f"Moving to {role} assignment",
-                    arrived_status="Working",
                 )
             elif hasattr(agent, "move_to"):
                 # Legacy fallback: building doesn't have coordinates yet
@@ -378,7 +378,8 @@ class AgentSystem(AgentProgressionMixin, AgentBehaviorMixin, BaseSystem):
         agent.db.role = ""
         agent.db.role_target = None
 
-        # Compute path to HQ instead of teleporting
+        # Compute path to HQ instead of teleporting. role/role_target are
+        # already cleared above, so the derived resting status resolves to Idle.
         hq = self._find_hq(player)
         if hq is not None:
             hx = getattr(getattr(hq, "db", None), "coord_x", None)
@@ -388,15 +389,14 @@ class AgentSystem(AgentProgressionMixin, AgentBehaviorMixin, BaseSystem):
                 self._move_agent_to(
                     agent, int(hx), int(hy),
                     moving_status="Returning to HQ",
-                    arrived_status=ACTIVITY_IDLE,
                 )
             elif hasattr(agent, "move_to"):
                 # Legacy fallback: HQ doesn't have coordinates yet
                 loc = getattr(hq, "location", hq)
                 agent.move_to(loc, quiet=True)
-                agent.db.activity_status = ACTIVITY_IDLE
+                agent.db.activity_status = resting_activity_status(agent)
         else:
-            agent.db.activity_status = ACTIVITY_IDLE
+            agent.db.activity_status = resting_activity_status(agent)
 
         return True, f"Agent #{agent_id} unassigned and returned to HQ."
 
@@ -482,7 +482,10 @@ class AgentSystem(AgentProgressionMixin, AgentBehaviorMixin, BaseSystem):
         else:
             agent.db.movement_queue = []
 
-        agent.db.activity_status = ACTIVITY_IDLE
+        # Still assigned (only the patrol route was cleared), so the derived
+        # resting status is "Working" — a guard on station without an active
+        # patrol, not "Idle".
+        agent.db.activity_status = resting_activity_status(agent)
 
         return True, f"Agent #{agent_id} patrol route cleared."
 
@@ -511,8 +514,6 @@ class AgentSystem(AgentProgressionMixin, AgentBehaviorMixin, BaseSystem):
         else:
             agent.db.movement_queue = []
 
-        agent.db.activity_status = ACTIVITY_IDLE
-
         # Harvesters retain carried resources — no cleanup needed.
         # Just reset delivery_state so the behavior script can re-evaluate.
         role = getattr(agent.db, "role", "")
@@ -529,6 +530,10 @@ class AgentSystem(AgentProgressionMixin, AgentBehaviorMixin, BaseSystem):
         self._detach_behavior_script(agent)
         agent.db.role = ""
         agent.db.role_target = None
+
+        # Derive the resting status AFTER clearing the role, so a stopped agent
+        # correctly reads "Idle" (not the stale role's "Working").
+        agent.db.activity_status = resting_activity_status(agent)
 
         return True, f"Agent #{agent_id} stopped."
 
@@ -773,21 +778,19 @@ class AgentSystem(AgentProgressionMixin, AgentBehaviorMixin, BaseSystem):
 
     def _move_agent_to(
         self, agent: Any, gx: int, gy: int,
-        moving_status: str, arrived_status: str,
+        moving_status: str,
     ) -> None:
         """Path *agent* toward ``(gx, gy)``; on no-path/arrival, place it there.
 
         The shared "walk there, else snap to the tile" move used by both
         assign_agent (to the building) and unassign_agent (back to HQ) — was
-        duplicated between them. Sets ``activity_status`` to *moving_status*
-        while pathing (with the tile count) or *arrived_status* once placed.
-
-        When the agent walks a path, *arrived_status* is stashed on
-        ``db.arrival_status`` so the movement engine can apply it when the queue
-        drains — otherwise ``NPC.advance_movement`` would reset the agent to
-        plain "Idle" on arrival, discarding the "Working" status we intend for a
-        building assignment (an engineer/medic has no per-tick status setter to
-        restore it, so it would read "Idle" while its building is producing).
+        duplicated between them. While walking, sets a transient
+        ``"{moving_status} (N tiles)"`` status; once placed, the *resting*
+        status is left to the single authority (``resting_activity_status``,
+        applied by ``NPC.advance_movement`` on arrival, or set directly here on
+        the snap branch). Callers no longer pass an arrival status — deriving it
+        removes the old "the mover guesses the status" split that let the
+        movement engine overwrite an engineer's "Working" with "Idle".
         """
         ax = getattr(agent.db, "coord_x", None)
         ay = getattr(agent.db, "coord_y", None)
@@ -798,8 +801,7 @@ class AgentSystem(AgentProgressionMixin, AgentBehaviorMixin, BaseSystem):
         if path and hasattr(agent, "set_movement_queue"):
             agent.set_movement_queue(path)
             agent.db.activity_status = f"{moving_status} ({len(path)} tiles)"
-            # Preserved across the walk; consumed by move_step on arrival.
-            agent.db.arrival_status = arrived_status
+            # advance_movement applies the derived resting status on arrival.
         else:
             planet_room = getattr(agent, "location", None)
             if planet_room is not None and hasattr(planet_room, "move_entity"):
@@ -807,7 +809,8 @@ class AgentSystem(AgentProgressionMixin, AgentBehaviorMixin, BaseSystem):
             else:
                 agent.db.coord_x = gx
                 agent.db.coord_y = gy
-            agent.db.activity_status = arrived_status
+            # Already on the tile — resolve the resting status now.
+            agent.db.activity_status = resting_activity_status(agent)
 
     @staticmethod
     def _find_hq(player: Any) -> Any | None:
