@@ -103,6 +103,7 @@ from mygame.commands.game_commands import (  # noqa: E402
     CmdScore, CmdEquipment, CmdBuildings, CmdScan, CmdTechnology,
     CmdInventory, CmdMessage, CmdSay, CmdMap,
     CmdCloseExit, CmdOpenExit, CmdExit, CmdGet, CmdEnter, CmdLeave, CmdDrop,
+    CmdSell, CmdJunk,
 )
 
 # -------------------------------------------------------------- #
@@ -2554,6 +2555,71 @@ class TestGetAllAndLookMessages(unittest.TestCase):
             any("Combat Knife" in m for m in caller._messages),
             f"look/tile summary should list dropped items; got {caller._messages}",
         )
+
+
+class _InvGear:
+    """A carried, unequipped gear item (key + db.item_key, no count)."""
+    def __init__(self, key, item_key=None):
+        self.key = key
+        self.db = types.SimpleNamespace(item_key=item_key or key, count=None)
+
+
+class _RecordingEquip:
+    """Captures sell_item/junk_item calls for command-level assertions."""
+    def __init__(self):
+        self.sold = []
+
+    def sell_item(self, player, item):
+        self.sold.append(item)
+        return True
+
+    def junk_item(self, player, item):
+        self.sold.append(item)
+        return True
+
+
+class TestSellJunkResolution(unittest.TestCase):
+    """sell/junk resolve duplicate-named gear (interchangeable) and give an
+    actionable message only for genuinely different item types."""
+
+    def _caller(self, *items):
+        eq = _RecordingEquip()
+        caller = FakeCaller(systems={"equipment_system": eq})
+        caller.contents = list(items)
+        return caller, eq
+
+    def test_duplicate_named_items_sell_one_without_ambiguity(self):
+        # Three IDENTICAL boots — 'sell boot' must act on one, not error.
+        caller, eq = self._caller(
+            _InvGear("Combat Boots", "combat_boots"),
+            _InvGear("Combat Boots", "combat_boots"),
+            _InvGear("Combat Boots", "combat_boots"),
+        )
+        _make_cmd(CmdSell, caller, "boot").func()
+        self.assertEqual(len(eq.sold), 1, "should sell exactly one of the duplicates")
+        self.assertFalse(
+            any("more specific" in m or "several kinds" in m for m in caller._messages),
+            f"identical items must not be ambiguous; got {caller._messages}",
+        )
+
+    def test_different_types_give_actionable_ambiguity_message(self):
+        # 'combat' matches two DIFFERENT item types — name them + show a fix.
+        caller, eq = self._caller(
+            _InvGear("Combat Boots", "combat_boots"),
+            _InvGear("Combat Helmet", "combat_helmet"),
+        )
+        _make_cmd(CmdSell, caller, "combat").func()
+        self.assertEqual(eq.sold, [], "ambiguous match must not sell anything")
+        msg = caller._messages[-1]
+        self.assertIn("Combat Boots", msg)
+        self.assertIn("Combat Helmet", msg)
+        self.assertIn("sell", msg.lower())  # concrete next step
+
+    def test_no_match_reports_not_carrying(self):
+        caller, eq = self._caller(_InvGear("Combat Boots", "combat_boots"))
+        _make_cmd(CmdJunk, caller, "rifle").func()
+        self.assertEqual(eq.sold, [])
+        self.assertTrue(any("aren't carrying" in m for m in caller._messages))
 
 
 if __name__ == "__main__":

@@ -1217,41 +1217,102 @@ def _parse_coords(text):
     return None
 
 
+def _gear_identity(item):
+    """A canonical identity for a gear item (its item_key, else display key).
+
+    Two carried items with the same identity are the SAME kind of item and are
+    interchangeable for sell/junk (e.g. three identical Combat Boots).
+    """
+    return (
+        getattr(getattr(item, "db", None), "item_key", None)
+        or getattr(item, "key", None)
+    )
+
+
 def _resolve_carried_gear(caller, arg):
-    """Resolve *arg* to a single loose (carried, unequipped) Gear item.
+    """Resolve *arg* to a loose (carried, unequipped) Gear item to act on.
 
     Matches by display name or item_key, case-/separator-insensitive, preferring
-    exact over prefix over substring — the same leniency as equip/unequip.
-    Returns the ``GameItem`` on a unique match, ``"__ambiguous__"`` when a
-    partial name matches more than one, or ``None`` when nothing matches.
+    exact over prefix over substring (same leniency as equip/unequip).
+
+    Returns one of:
+
+    * a ``GameItem`` — a unique match, OR the first of several IDENTICAL items
+      (same identity): duplicates are interchangeable, so 'sell boot' with three
+      Combat Boots simply acts on one of them (no false "be more specific");
+    * a sorted ``list[str]`` of distinct candidate names — when the partial name
+      matches DIFFERENT item types (genuine ambiguity; the caller lists them);
+    * ``None`` — nothing matches.
     """
     loose = _carried_gear_items(caller)
     if not loose:
         return None
     norm = arg.strip().lower().replace("_", " ")
+
     exact, prefix, substr = [], [], []
     for item in loose:
-        for attr in ("key", "db"):
-            if attr == "db":
-                val = getattr(getattr(item, "db", None), "item_key", None)
-            else:
-                val = getattr(item, attr, None)
-            if not val:
-                continue
-            name = str(val).replace("_", " ").lower()
+        # The names this item is known by (display key + item_key).
+        names = []
+        key = getattr(item, "key", None)
+        if key:
+            names.append(str(key))
+        ik = getattr(getattr(item, "db", None), "item_key", None)
+        if ik:
+            names.append(str(ik))
+
+        best = None  # "exact" > "prefix" > "substr"
+        for val in names:
+            name = val.replace("_", " ").lower()
             if name == norm:
-                exact.append(item)
-            elif name.startswith(norm):
-                prefix.append(item)
+                best = "exact"
+                break
+            if name.startswith(norm):
+                best = best or "prefix"
             elif norm in name:
-                substr.append(item)
+                best = best or "substr"
+        if best == "exact":
+            exact.append(item)
+        elif best == "prefix":
+            prefix.append(item)
+        elif best == "substr":
+            substr.append(item)
+
     for tier in (exact, prefix, substr):
-        items = list(dict.fromkeys(tier))
-        if len(items) == 1:
-            return items[0]
-        if len(items) > 1:
-            return "__ambiguous__"
+        if not tier:
+            continue
+        # Collapse identical items: only DIFFERENT item types are ambiguous.
+        distinct = {}
+        for item in tier:
+            distinct.setdefault(_gear_identity(item), item)
+        if len(distinct) == 1:
+            return tier[0]  # one kind (maybe several copies) — act on one
+        # Multiple distinct item types matched — genuinely ambiguous.
+        return sorted({getattr(i, "key", str(_gear_identity(i))) for i in tier})
     return None
+
+
+def _resolve_carried_gear_or_msg(cmd, arg, verb):
+    """Resolve *arg* to a carried gear item, messaging the caller on failure.
+
+    Shared by ``sell`` and ``junk``. Returns the ``GameItem`` to act on, or
+    ``None`` after telling the caller why (not found, or a genuine multi-type
+    ambiguity that lists the distinct candidates with a concrete next step).
+    Identical duplicates are NOT ambiguous — the resolver returns one of them.
+    """
+    result = _resolve_carried_gear(cmd.caller, arg)
+    if result is None:
+        cmd.caller.msg(f"You aren't carrying gear matching '{arg}'.")
+        return None
+    if isinstance(result, list):
+        # Genuinely different item types matched — name them so the player can
+        # pick one. (Identical copies never reach here.)
+        names = ", ".join(result)
+        cmd.caller.msg(
+            f"'{arg}' matches several kinds of gear: {names}. "
+            f"Try '{verb} <full name>', e.g. '{verb} {result[0]}'."
+        )
+        return None
+    return result
 
 
 class CmdSell(GameCommand):
@@ -1286,14 +1347,8 @@ class CmdSell(GameCommand):
         equipment_system = self.require_system("equipment_system")
         if equipment_system is None:
             return
-        item = _resolve_carried_gear(self.caller, arg)
-        if item == "__ambiguous__":
-            self.caller.msg(
-                f"'{arg}' matches more than one carried item — be more specific."
-            )
-            return
+        item = _resolve_carried_gear_or_msg(self, arg, "sell")
         if item is None:
-            self.caller.msg(f"You aren't carrying gear matching '{arg}'.")
             return
         # The system emits the player-facing notification (sold / sell_failed).
         equipment_system.sell_item(self.caller, item)
@@ -1330,14 +1385,8 @@ class CmdJunk(GameCommand):
         equipment_system = self.require_system("equipment_system")
         if equipment_system is None:
             return
-        item = _resolve_carried_gear(self.caller, arg)
-        if item == "__ambiguous__":
-            self.caller.msg(
-                f"'{arg}' matches more than one carried item — be more specific."
-            )
-            return
+        item = _resolve_carried_gear_or_msg(self, arg, "junk")
         if item is None:
-            self.caller.msg(f"You aren't carrying gear matching '{arg}'.")
             return
         equipment_system.junk_item(self.caller, item)
 
