@@ -76,14 +76,38 @@ class NotificationSystem:
         event_name: str = "",
         attacker: Any = None,
         victim: Any = None,
+        attacker_owner: Any = None,
+        attacker_kind: str = "",
         **kwargs,
     ) -> None:
-        """Broadcast elimination notification."""
-        attacker_name = getattr(attacker, "key", "Unknown") if attacker else "Unknown"
+        """Broadcast elimination notification, attributed to the owning player.
+
+        A kill by A's turret or A's agent is announced as "Player A's Turret has
+        eliminated Player B" — the owning player (``attacker_owner``) is the
+        named killer, with ``attacker_kind`` ('turret'/'agent'/'building')
+        supplying the possessive unit suffix. A direct player kill (no unit
+        kind, or owner == attacker) reads plainly "Player A has eliminated ...".
+        """
+        killer = attacker_owner if attacker_owner is not None else attacker
+        killer_name = getattr(killer, "key", "Unknown") if killer else "Unknown"
         victim_name = getattr(victim, "key", "Unknown") if victim else "Unknown"
+
+        subject = f"{killer_name}{self._unit_suffix(killer, attacker, attacker_kind)}"
         self._broadcast(
-            f"|y[Combat] {attacker_name} has eliminated {victim_name}!|n"
+            f"|y[Combat] {subject} has eliminated {victim_name}!|n"
         )
+
+    @staticmethod
+    def _unit_suffix(killer: Any, attacker: Any, attacker_kind: str) -> str:
+        """Return a possessive unit suffix (" 's Turret") or '' for a direct kill.
+
+        Empty when the killer struck directly (the attacker IS the owner, or no
+        unit kind was supplied); otherwise names the unit that scored the kill.
+        """
+        if attacker is killer or not attacker_kind:
+            return ""
+        labels = {"turret": "Turret", "agent": "Agent", "building": "Building"}
+        return f"'s {labels.get(attacker_kind, 'unit')}"
 
     def on_rank_promoted(
         self,

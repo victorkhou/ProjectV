@@ -72,8 +72,12 @@ def on_combat_action(event_bus: "EventBus", **kwargs) -> None:
     if direct is not None and _is_player(direct):
         players.append(direct)
 
-    # Attacker / target from CombatEngine.resolve_tick
-    for key in ("attacker", "target"):
+    # Attacker / target from CombatEngine.resolve_tick, PLUS the owning players
+    # behind them (attacker_owner / target_owner). A fight involving A's turret
+    # or A's agent must put A into combat too — not only the units that traded
+    # blows. The owner kwargs are pre-resolved by the engine; each is a player
+    # (or None), so the same _is_player gate applies uniformly.
+    for key in ("attacker", "target", "attacker_owner", "target_owner"):
         entity = kwargs.get(key)
         if entity is not None and _is_player(entity) and entity not in players:
             players.append(entity)

@@ -59,6 +59,33 @@ class TestNotificationBroadcasts:
         bus.publish(PLAYER_ELIMINATED, attacker=_Player("Ann"), victim=_Player("Vic"))
         assert any("Ann has eliminated Vic" in m for m in notifier.sent)
 
+    def test_elimination_direct_player_kill_has_no_unit_suffix(self):
+        """A player killing directly (owner == attacker, no unit kind) reads
+        plainly, with no possessive suffix."""
+        bus, notifier, _ = _make()
+        ann = _Player("Ann")
+        bus.publish(PLAYER_ELIMINATED, attacker=ann, victim=_Player("Vic"),
+                    attacker_owner=ann, attacker_kind="")
+        assert any("Ann has eliminated Vic" in m for m in notifier.sent)
+        assert not any("'s" in m for m in notifier.sent)
+
+    def test_elimination_by_turret_attributed_to_owner(self):
+        """A turret kill is announced as 'A's Turret has eliminated B' — the
+        owning player is the named killer, with the unit suffix."""
+        bus, notifier, _ = _make()
+        turret = _Player("TU-11-10")  # a non-player entity; only its key matters
+        bus.publish(PLAYER_ELIMINATED, attacker=turret, victim=_Player("Bob"),
+                    attacker_owner=_Player("Ann"), attacker_kind="turret")
+        assert any("Ann's Turret has eliminated Bob" in m for m in notifier.sent)
+
+    def test_elimination_by_agent_attributed_to_owner(self):
+        """An agent kill is announced as 'A's Agent has eliminated B'."""
+        bus, notifier, _ = _make()
+        agent = _Player("Agent")
+        bus.publish(PLAYER_ELIMINATED, attacker=agent, victim=_Player("Bob"),
+                    attacker_owner=_Player("Ann"), attacker_kind="agent")
+        assert any("Ann's Agent has eliminated Bob" in m for m in notifier.sent)
+
     def test_promotion_broadcast(self):
         bus, notifier, _ = _make()
         bus.publish(RANK_PROMOTED, player=_Player("Cy"), new_rank=_Rank("Sergeant"))

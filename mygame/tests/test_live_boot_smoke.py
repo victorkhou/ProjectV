@@ -483,6 +483,60 @@ class LiveBootSmokeTest(EvenniaTest):
         finally:
             _teardown_game(systems)
 
+    # -------------------------------------------------------------- #
+    #  Owner-attributed combat — a real turret kill credits/announces/combats
+    #  the OWNING player, and pulls that player into combat mode.
+    # -------------------------------------------------------------- #
+
+    def test_turret_kill_attributes_to_owner_on_real_objects(self):
+        """On real Evennia objects (where an unset db attr is None, not a raise):
+        a turret killing player B credits A's kill XP, announces
+        "A's Turret has eliminated B", and puts A into combat mode."""
+        from server.conf.game_init import initialize_game
+        from world.event_bus import COMBAT_ACTION, PLAYER_ELIMINATED
+
+        systems = initialize_game()
+        try:
+            engine = systems["combat_engine"]
+            bus = systems["event_bus"]
+            room = self._make_planet_room("earth")
+
+            owner_a = self._make_player(x=5, y=5, planet="earth", location=room)
+            owner_a.db.combat_xp = 0
+            victim_b = self._make_player(x=6, y=5, planet="earth", location=room)
+            victim_b.db.combat_xp = 500  # enough to lose death-loss from
+            victim_b.db.hp = 1           # one hit ends it
+
+            turret = self._make_building("TU", x=5, y=5, planet="earth")
+            turret.db.owner = owner_a
+
+            eliminations = []
+            bus.subscribe(PLAYER_ELIMINATED, lambda **kw: eliminations.append(kw))
+            combat_actions = []
+            bus.subscribe(COMBAT_ACTION, lambda **kw: combat_actions.append(kw))
+
+            # A synthetic high-damage weapon; the attacker being a TU building is
+            # what drives owner attribution.
+            from world.systems.combat_engine import _TurretWeapon
+            engine.apply_direct_hit(turret, victim_b, _TurretWeapon(999, 10),
+                                    current_tick=1)
+
+            # 1. Kill XP credited to the OWNER, not the turret (turret has none).
+            self.assertEqual(owner_a.db.combat_xp,
+                             engine.registry.balance.xp_kill)
+            # 1b. Elimination event carries owner attribution.
+            self.assertTrue(eliminations)
+            elim = eliminations[-1]
+            self.assertIs(elim["attacker_owner"], owner_a)
+            self.assertEqual(elim["attacker_kind"], "turret")
+            # 2. The COMBAT_ACTION carried the owner so the timer pulls A in.
+            self.assertTrue(combat_actions)
+            self.assertIs(combat_actions[-1]["attacker_owner"], owner_a)
+            # 2b. A is actually in combat (timer expiry in the future).
+            self.assertGreater(owner_a.db.combat_timer_expires or 0, 1)
+        finally:
+            _teardown_game(systems)
+
 
 def _teardown_game(systems):
     """Best-effort teardown: stop any scripts initialize_game created so they

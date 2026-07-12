@@ -186,6 +186,32 @@ class TestCombatEngineIntegration(unittest.TestCase):
         self.assertEqual(target.db.combat_timer_expires, expected)
 
     @patch("world.combat_timer._get_current_tick", return_value=100)
+    def test_attacker_owner_enters_combat(self, _mock_tick):
+        """When A's turret (non-player attacker) hits player B, A's OWNING player
+        (passed as attacker_owner) also enters combat — not just B."""
+        turret = _FakeBuilding()          # non-player unit
+        owner_a = _FakePlayer()           # player A behind the turret
+        target_b = _FakePlayer()
+        on_combat_action(self.event_bus, attacker=turret, target=target_b,
+                         attacker_owner=owner_a)
+        expected = 100 + COMBAT_TIMER_DURATION
+        self.assertEqual(owner_a.db.combat_timer_expires, expected)
+        self.assertEqual(target_b.db.combat_timer_expires, expected)
+
+    @patch("world.combat_timer._get_current_tick", return_value=100)
+    def test_target_owner_enters_combat(self, _mock_tick):
+        """When B attacks A's agent (non-player target), A's OWNING player
+        (target_owner) enters combat too."""
+        attacker_b = _FakePlayer()
+        agent = _FakeBuilding()           # stands in for a non-player unit target
+        owner_a = _FakePlayer()
+        on_combat_action(self.event_bus, attacker=attacker_b, target=agent,
+                         target_owner=owner_a)
+        expected = 100 + COMBAT_TIMER_DURATION
+        self.assertEqual(owner_a.db.combat_timer_expires, expected)
+        self.assertEqual(attacker_b.db.combat_timer_expires, expected)
+
+    @patch("world.combat_timer._get_current_tick", return_value=100)
     def test_building_attacker_no_timer(self, _mock_tick):
         """Non-player entities (buildings) don't get combat timers."""
         building = _FakeBuilding()

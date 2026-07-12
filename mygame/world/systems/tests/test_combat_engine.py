@@ -983,6 +983,49 @@ class TestBuildingDamage(unittest.TestCase):
         self.assertTrue(len(other_player._messages) > 0)
         self.assertIn("Attacker", other_player._messages[0])
 
+    def test_agent_target_owner_notified_of_hit(self):
+        """When B attacks A's AGENT, A (the owner) is told its agent was hit —
+        the agent has no session of its own, so the notice must go to A."""
+        weapon = FakeWeapon(damage=10, weapon_range=5)
+        engine, _ = _make_engine()
+        owner_a = FakePlayer(name="OwnerA", oid=7,
+                             location=FakeTile(xyz=(5, 5, "earth")))
+        attacker_b = FakePlayer(name="Bandit", weapon=weapon, oid=9,
+                                location=FakeTile(xyz=(0, 0, "earth")))
+        agent = FakeAgent(name="MyGuard", hp=100,
+                          location=FakeTile(xyz=(1, 0, "earth")))
+        agent.db.owner = owner_a
+        engine.queue_attack(attacker_b, agent)
+        engine.resolve_tick()
+        self.assertTrue(
+            any("Bandit" in m and "MyGuard" in m for m in owner_a._messages),
+            owner_a._messages,
+        )
+
+    def test_turret_attacker_owner_notified_of_its_shot(self):
+        """When A's TURRET fires on B, A is told its turret struck B (offensive
+        notice), and B is told it was attacked (defensive notice)."""
+        engine, _ = _make_engine()
+        owner_a = FakePlayer(name="OwnerA", oid=7,
+                             location=FakeTile(xyz=(5, 5, "earth")))
+        turret = FakeBuilding(building_type="TU", owner=owner_a,
+                              location=FakeTile(xyz=(0, 0, "earth")))
+        target_b = FakePlayer(name="Raider", hp=100, oid=9,
+                              location=FakeTile(xyz=(1, 0, "earth")))
+        # Drive the turret hit through the shared finalize path. The synthetic
+        # weapon just needs a name/damage; the attacker being a TU building is
+        # what makes _unit_kind resolve to "turret".
+        engine.apply_direct_hit(turret, target_b,
+                                FakeWeapon(damage=15, weapon_range=20),
+                                current_tick=0)
+        # A hears the offensive notice about its turret.
+        self.assertTrue(
+            any("Turret" in m and "Raider" in m for m in owner_a._messages),
+            owner_a._messages,
+        )
+        # B hears the defensive "attacked" notice.
+        self.assertTrue(len(target_b._messages) > 0, target_b._messages)
+
     def test_hq_destruction_notifies_owner_base_deactivated(self):
         """Destroying a player's HQ fires the base_deactivated alert to the
         owner (the PvP 'no HQ = base inert' consequence)."""
@@ -1034,20 +1077,27 @@ class TestAgentDefeatXP(unittest.TestCase):
         engine.set_agent_xp_awarder(lambda: self.agent_system)
         return engine, extra
 
-    def test_agent_attacker_awarded_combat_xp_on_kill(self):
-        """An agent attacker that kills a victim is awarded "combat" XP."""
+    def test_agent_kill_credits_owning_player_not_agent(self):
+        """A kill by A's agent is credited to A (owning player), NOT banked on
+        the agent — the single-owner model. The agent's own combat_xp is
+        untouched, and no agent-XP award is routed through the AgentSystem."""
         weapon = FakeWeapon(damage=200, weapon_range=5)
         engine, _ = self._make_engine_with_awarder()
+        owner = FakePlayer(name="OwnerA", combat_xp=0, oid=7,
+                           location=FakeTile(xyz=(0, 0, "earth")))
         attacker = FakeAgent(name="AgentAttacker", weapon=weapon,
                              location=FakeTile(xyz=(0, 0, "earth")))
-        target = FakePlayer(name="Target", hp=100, combat_xp=200,
+        attacker.db.owner = owner
+        target = FakePlayer(name="Target", hp=100, combat_xp=200, oid=9,
                             location=FakeTile(xyz=(1, 0, "earth")))
         engine.queue_attack(attacker, target)
         engine.resolve_tick()
 
-        self.assertEqual(self.agent_system.awarded, [(attacker, "combat")])
-        # Agent attacker XP is NOT mutated via the player xp_kill path.
+        # Kill XP goes to the OWNER (via the player progression fallback), not
+        # the agent, and not through the agent-XP path.
+        self.assertEqual(self.agent_system.awarded, [])
         self.assertEqual(attacker.db.combat_xp, 0)
+        self.assertEqual(owner.db.combat_xp, engine.registry.balance.xp_kill)
 
     def test_killing_own_agent_awards_no_xp(self):
         """Friendly fire on your own agent grants the attacker no kill XP."""
@@ -1250,21 +1300,26 @@ class TestEnemyNPCDeath(unittest.TestCase):
         killed = [m for m in attacker._messages if "Guard #2" in m]
         self.assertTrue(killed, attacker._messages)
 
-    def test_agent_attacker_kill_routes_through_agent_system(self):
-        """An agent killing an enemy earns combat XP via the AgentSystem,
-        not the player xp_kill path (mirrors _handle_player_defeat)."""
+    def test_agent_kill_of_enemy_credits_owning_player(self):
+        """An agent killing an enemy credits its OWNER's kill XP (single-owner
+        model), not the agent's own progression (mirrors _handle_player_defeat)."""
         weapon = FakeWeapon(damage=200, weapon_range=5)
         agent_system = FakeAgentSystem()
         engine, _ = _make_engine()
         engine.set_agent_xp_awarder(lambda: agent_system)
+        owner = FakePlayer(name="OwnerA", combat_xp=0, oid=7,
+                           location=FakeTile(xyz=(0, 0, "earth")))
         attacker = FakeAgent(name="MyGuard", weapon=weapon,
                              location=FakeTile(xyz=(0, 0, "earth")))
         attacker.id = 5
+        attacker.db.owner = owner
         enemy = FakeEnemyNPC(name="Guard #1", hp=100, owner=self._sentinel(1),
                              location=FakeTile(xyz=(1, 0, "earth")), oid=3)
         engine.queue_attack(attacker, enemy)
         engine.resolve_tick()
-        self.assertEqual(agent_system.awarded, [(attacker, "combat")])
+        # Owner credited via the player progression fallback; agent-XP path unused.
+        self.assertEqual(agent_system.awarded, [])
+        self.assertEqual(owner.db.combat_xp, engine.registry.balance.xp_kill)
         self.assertTrue(enemy.deleted)
 
     def test_player_agent_still_respawns_regression(self):

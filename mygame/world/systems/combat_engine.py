@@ -301,14 +301,28 @@ class CombatEngine(BaseSystem):
         if self._is_player(target):
             self._set_combat_lockout(target, lockout_until)
 
+        # Resolve the owning player behind each side so a fight involving A's
+        # turret/agent pulls A (and the target's owner, if the target is a
+        # unit) into combat mode — not just the units that traded blows.
+        attacker_owner = self._owning_player(attacker)
+        target_owner = self._owning_player(target)
+        if lockout_attacker and attacker_owner is not None and attacker_owner is not attacker:
+            self._set_combat_lockout(attacker_owner, lockout_until)
+        if target_owner is not None and target_owner is not target:
+            self._set_combat_lockout(target_owner, lockout_until)
+
         # Publish combat_action event (drives the combat timer subscriber).
         # Include current_tick so the combat-timer subscriber doesn't have to
         # re-derive it with a per-hit search_script DB query — the engine already
         # holds the tick here (its injected clock, passed down as current_tick).
+        # attacker_owner/target_owner let the timer put the OWNING players (A,
+        # and the target's owner) into combat, not only the units involved.
         self.event_bus.publish(
             COMBAT_ACTION,
             attacker=attacker,
             target=target,
+            attacker_owner=attacker_owner,
+            target_owner=target_owner,
             item=weapon_item,
             damage=damage,
             current_tick=current_tick,
@@ -569,17 +583,19 @@ class CombatEngine(BaseSystem):
 
         Agents are ``CombatEntity`` NPCs that also carry ``db.combat_xp``, so
         they reach this handler through the same ``_is_player`` gate as players.
-        Their XP, however, is routed through the freeze-aware ``AgentSystem``
-        rather than the player XP balance:
+        XP is attributed under the single-owner model:
 
-        - When the attacker is an agent, award ``"combat"`` XP through
-          ``AgentSystem.award_agent_xp`` (freeze-aware); when the
-          attacker is a (non-agent) player, award the player ``xp_kill`` balance.
-        - When the victim is an agent, apply death loss through
-          ``AgentSystem.apply_agent_death_loss`` instead of the player
-          ``xp_death_loss`` deduction, so death loss is never double-applied.
+        - Kill XP goes to the attacker's OWNING PLAYER (``_owning_player``): a
+          kill by A's turret or A's agent credits A, a direct player kill
+          credits that player, and an enemy/ownerless attacker earns nothing.
+          Routed through the progression path so level/rank recompute and fire
+          events. Friendly fire (downing your own unit) grants no reward.
+        - When the victim is an agent, death loss goes through
+          ``AgentSystem.apply_agent_death_loss`` (the agent balance), not the
+          player ``xp_death_loss`` deduction, so it is never double-applied.
         - Respawn victim (reset HP).
-        - Publish player_eliminated event.
+        - Publish ``player_eliminated`` with owner attribution for the
+          announcement ("Player A's Turret has eliminated Player B").
 
         Args:
             victim: The defeated player or agent.
@@ -598,22 +614,17 @@ class CombatEngine(BaseSystem):
         victim_owner = getattr(getattr(victim, "db", None), "owner", None)
         own_victim = is_owner(attacker, victim_owner)
 
-        # Award XP to attacker.
+        # Award XP to the attacker's OWNING PLAYER — a kill by A's turret or A's
+        # agent is credited to A (single-owner model), not banked on the unit.
+        # A bare player is its own owner. Friendly fire and ownerless/enemy
+        # attackers earn nothing.
+        attacker_owner = self._owning_player(attacker)
         if own_victim:
-            pass  # no reward for friendly fire on your own agent
-        elif self._is_agent(attacker):
-            # Agent combat kill XP via the freeze-aware AgentSystem.
-            self._award_agent_combat_xp(attacker)
-        elif self._is_enemy_npc(attacker):
-            # Enemy NPC-base guards satisfy _is_player (they carry combat_xp),
-            # but they have no progression of their own — never bank kill XP on
-            # them (dead state; would also be a latent farming vector if guard
-            # XP ever became meaningful).
-            pass
-        elif self._is_player(attacker):
+            pass  # no reward for friendly fire on your own unit
+        elif attacker_owner is not None:
             # Route through the progression path (recompute level/rank + events),
             # not a raw db.combat_xp write.
-            self._award_player_combat_xp(attacker, xp_kill)
+            self._award_player_combat_xp(attacker_owner, xp_kill)
 
         # Deduct XP from victim.
         if self._is_agent(victim):
@@ -629,11 +640,15 @@ class CombatEngine(BaseSystem):
         hp_max = self._get_hp_max(victim)
         self._set_hp(victim, hp_max)
 
-        # Publish event
+        # Publish event with owner attribution so the announcement reads
+        # "Player A[ 's Turret/Agent] has eliminated Player B" — the kill is
+        # credited to the owning player, with the unit kind for phrasing.
         self.event_bus.publish(
             PLAYER_ELIMINATED,
             attacker=attacker,
             victim=victim,
+            attacker_owner=attacker_owner,
+            attacker_kind=self._unit_kind(attacker),
         )
 
     # ------------------------------------------------------------------ #
@@ -666,29 +681,26 @@ class CombatEngine(BaseSystem):
 
         xp_kill = self.registry.balance.xp_kill
 
-        # Award kill XP to a non-owner attacker (same anti-farm guard as
-        # players/buildings: no reward for killing your own unit).
+        # Award kill XP to the attacker's OWNING PLAYER (A's turret/agent kill is
+        # credited to A), under the same anti-farm guard: no reward for killing
+        # your own unit. A bare player is its own owner; enemy/ownerless
+        # attackers earn nothing.
         owner = getattr(getattr(victim, "db", None), "owner", None)
         own_victim = is_owner(attacker, owner)
+        attacker_owner = self._owning_player(attacker)
         if own_victim:
             pass  # friendly fire — no reward
-        elif self._is_agent(attacker):
-            self._award_agent_combat_xp(attacker)
-        elif self._is_enemy_npc(attacker):
-            # An enemy NPC satisfies _is_player (it carries combat_xp) but has no
-            # progression — never route its "kill" into the RankSystem. Mirrors
-            # the guard in _handle_player_defeat.
-            pass
-        elif self._is_player(attacker):
-            self._award_player_combat_xp(attacker, xp_kill)
+        elif attacker_owner is not None:
+            self._award_player_combat_xp(attacker_owner, xp_kill)
 
         tile = self._get_target_location(victim)
         victim_name = getattr(victim, "key", "enemy")
 
-        # Notify a (non-owner) player attacker of the kill + XP. Agents/turrets
-        # get no notification (guarded inside notify for a None/NPC player).
-        if not own_victim and self._is_player(attacker) and not self._is_agent(attacker):
-            self.notify(attacker, "npc_killed", name=victim_name, xp=xp_kill)
+        # Notify the attacker's owning player of the kill + XP (A hears it
+        # whether A, A's turret, or A's agent scored it). Guarded inside notify
+        # for a None/NPC player.
+        if not own_victim and attacker_owner is not None:
+            self.notify(attacker_owner, "npc_killed", name=victim_name, xp=xp_kill)
 
         # Publish BEFORE delete so subscribers can read victim state/coords.
         self.event_bus.publish(
@@ -696,6 +708,8 @@ class CombatEngine(BaseSystem):
             attacker=attacker,
             victim=victim,
             tile=tile,
+            attacker_owner=attacker_owner,
+            attacker_kind=self._unit_kind(attacker),
         )
 
         # Permanent death — delete the NPC (bumps the agent-index generation
@@ -766,17 +780,33 @@ class CombatEngine(BaseSystem):
     def _notify_target(
         self, target: Any, attacker: Any, weapon_item: Any, damage: int
     ) -> None:
-        """Notify the target of an attack.
+        """Send per-hit combat notices to the players behind both sides.
 
-        For player targets: msg() directly.
-        For building targets: msg() the owner.
+        Defensive side — the player who was hit (or whose unit was hit):
+          - player target → notified directly ("attacked").
+          - agent target  → its OWNER notified ("unit_attacked", agent).
+          - building target → its OWNER notified ("building_attacked").
+          Order matters: an agent satisfies ``_is_player`` (it carries
+          ``combat_xp``), so the agent/building cases are checked BEFORE the
+          plain-player branch — otherwise an agent hit would msg() the agent
+          (no session) and its owner would hear nothing.
+
+        Offensive side — when the attacker is a player's turret/agent, that
+        owning player is told its unit struck ("unit_attack"). A bare player
+        attacker gets no offensive notice (the target's "attacked" line covers
+        it), matching the pre-existing behavior.
         """
         attacker_name = getattr(attacker, "key", "Unknown")
         weapon_name = getattr(weapon_item, "key", str(weapon_item))
 
-        if self._is_player(target):
-            self.notify(target, "attacked", attacker_name=attacker_name,
-                        weapon_name=weapon_name, damage=damage)
+        # --- Defensive notice ---
+        if self._is_agent(target):
+            owner = getattr(getattr(target, "db", None), "owner", None)
+            if owner is not None:
+                self.notify(owner, "unit_attacked", unit_kind="agent",
+                            unit_name=getattr(target, "key", "Agent"),
+                            attacker_name=attacker_name, weapon_name=weapon_name,
+                            damage=damage)
         elif self._is_building(target):
             owner = self._get_building_owner(target)
             if owner is not None:
@@ -784,6 +814,19 @@ class CombatEngine(BaseSystem):
                 self.notify(owner, "building_attacked", building_name=building_name,
                             attacker_name=attacker_name, weapon_name=weapon_name,
                             damage=damage)
+        elif self._is_player(target):
+            self.notify(target, "attacked", attacker_name=attacker_name,
+                        weapon_name=weapon_name, damage=damage)
+
+        # --- Offensive notice: A's turret/agent struck someone. ---
+        attacker_owner = self._owning_player(attacker)
+        attacker_kind = self._unit_kind(attacker)
+        if (attacker_owner is not None and attacker_owner is not attacker
+                and attacker_kind):
+            self.notify(attacker_owner, "unit_attack", unit_kind=attacker_kind,
+                        unit_name=attacker_name,
+                        target_name=getattr(target, "key", "target"),
+                        weapon_name=weapon_name, damage=damage)
 
     # ------------------------------------------------------------------ #
     #  Internal helpers
@@ -967,6 +1010,46 @@ class CombatEngine(BaseSystem):
             return False
         return getattr(entity.db, "npc_type", None) == "enemy"
 
+    def _owning_player(self, entity: Any) -> Any | None:
+        """Resolve the *responsible player* behind a combat entity.
+
+        The single "who does this act on behalf of" resolver shared by kill
+        attribution, combat-mode entry, and owner notifications:
+
+        - A player is its own owner (returned as-is).
+        - A player-owned agent or a building returns its ``db.owner`` / ``.owner``
+          — so a turret/agent's kill is credited to, and combat/notices routed
+          to, the player who owns it.
+        - An enemy NPC-base guard (``npc_type == "enemy"``) has no player owner
+          for these purposes, so returns None (its ``db.owner`` is the NPC base).
+
+        Returns None when no player can be resolved (ownerless unit, raw double).
+        """
+        if entity is None:
+            return None
+        if self._is_enemy_npc(entity):
+            return None
+        if self._is_agent(entity):
+            return getattr(getattr(entity, "db", None), "owner", None)
+        if self._is_building(entity):
+            return self._get_building_owner(entity)
+        if self._is_player(entity):
+            return entity
+        return None
+
+    def _unit_kind(self, entity: Any) -> str:
+        """Return an attribution token for *entity*: 'turret', 'agent', or ''.
+
+        Used to phrase owner-attributed lines ("Player A's Turret has
+        eliminated ...", "Your Turret attacked ..."). A bare player returns ''
+        (no possessive unit suffix); anything unrecognized also returns ''.
+        """
+        if self._is_building(entity):
+            return "turret" if self._is_turret(entity) else "building"
+        if self._is_agent(entity):
+            return "agent"
+        return ""
+
     def _get_agent_system(self) -> Any | None:
         """Resolve the agent XP-awarder (the AgentSystem).
 
@@ -987,20 +1070,6 @@ class CombatEngine(BaseSystem):
             return game_systems.get("agent_system")
         except Exception:  # noqa: BLE001 - never let a missing system break combat
             return None
-
-    def _award_agent_combat_xp(self, agent: Any) -> None:
-        """Award combat-kill XP to an agent via the freeze-aware AgentSystem.
-
-        No-op (guarded) when the agent system is unavailable, so combat
-        resolution never breaks.
-        """
-        agent_system = self._get_agent_system()
-        if agent_system is None:
-            return
-        try:
-            agent_system.award_agent_xp(agent, "combat")
-        except Exception:  # noqa: BLE001 - never let XP award break combat
-            pass
 
     def _apply_agent_death_loss(self, agent: Any) -> None:
         """Apply agent death-loss XP via the AgentSystem.

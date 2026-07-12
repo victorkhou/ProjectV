@@ -80,6 +80,29 @@ def _fmt_building_attacked(d: dict) -> str:
     )
 
 
+_UNIT_LABELS = {"turret": "Turret", "agent": "Agent", "building": "Building"}
+
+
+def _fmt_unit_attacked(d: dict) -> str:
+    # One of the owner's units (currently an agent) took a hit.
+    label = _UNIT_LABELS.get(d.get("unit_kind"), "unit")
+    return (
+        f"|r[Combat] Your {label} ({d.get('unit_name', '?')}) was attacked by "
+        f"{d.get('attacker_name', 'Unknown')} with {d.get('weapon_name', 'a weapon')} "
+        f"for {d.get('damage', 0)} damage.|n"
+    )
+
+
+def _fmt_unit_attack(d: dict) -> str:
+    # One of the owner's units (turret/agent) struck a target.
+    label = _UNIT_LABELS.get(d.get("unit_kind"), "unit")
+    return (
+        f"|y[Combat] Your {label} ({d.get('unit_name', '?')}) attacked "
+        f"{d.get('target_name', 'a target')} with {d.get('weapon_name', 'a weapon')} "
+        f"for {d.get('damage', 0)} damage.|n"
+    )
+
+
 def _fmt_ability_active(d: dict) -> str:
     return f"|g[Ability] '{d['key']}' is now active for Agent #{d['agent_id']}.|n"
 
@@ -392,6 +415,8 @@ class NotificationPresenter:
         "harvest_drop": _fmt_harvest_drop,
         "attacked": _fmt_attacked,
         "building_attacked": _fmt_building_attacked,
+        "unit_attacked": _fmt_unit_attacked,
+        "unit_attack": _fmt_unit_attack,
         "ability_active": _fmt_ability_active,
         "ability_relocked": _fmt_ability_relocked,
         "ability_available": _fmt_ability_available,
