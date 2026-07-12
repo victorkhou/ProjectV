@@ -112,6 +112,8 @@ class TestFormatTable:
         assert "Rex" in msg
         assert "Axe" in msg
         assert "15" in msg
+        # Incoming attacks on the receiving player render in bright red (|R).
+        assert "|R" in msg
 
     def test_building_attacked(self):
         bus, n, _ = _make()
@@ -121,6 +123,18 @@ class TestFormatTable:
                           "weapon_name": "Club", "damage": 8})
         msg = n.sent[0][1]
         assert "Wall" in msg and "Orc" in msg and "8" in msg
+        assert "|R" in msg  # bright red for an incoming attack
+
+    def test_unit_attacked_is_bright_red(self):
+        bus, n, _ = _make()
+        p = _Player()
+        bus.publish(PLAYER_NOTIFICATION, player=p, kind="unit_attacked",
+                    data={"unit_kind": "agent", "unit_name": "Guard",
+                          "attacker_name": "Raider", "weapon_name": "Rifle",
+                          "damage": 12})
+        msg = n.sent[0][1]
+        assert "Guard" in msg and "Raider" in msg
+        assert "|R" in msg  # bright red for a hit on your unit
 
     def test_ability_active(self):
         bus, n, _ = _make()

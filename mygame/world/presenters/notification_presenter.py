@@ -66,17 +66,21 @@ def _fmt_harvest_drop(d: dict) -> str:
     )
 
 
+# Attacks landing on the receiving player (you, your building, or your unit)
+# are rendered in bright red (|R) so an incoming hit stands out from the
+# yellow/green informational lines.
 def _fmt_attacked(d: dict) -> str:
     return (
-        f"You were attacked by {d['attacker_name']} with {d['weapon_name']} "
-        f"for {d['damage']} damage."
+        f"|R[Combat] You were attacked by {d['attacker_name']} with "
+        f"{d['weapon_name']} for {d['damage']} damage.|n"
     )
 
 
 def _fmt_building_attacked(d: dict) -> str:
     return (
-        f"Your {d['building_name']} was attacked by {d['attacker_name']} "
-        f"with {d['weapon_name']} for {d['damage']} damage."
+        f"|R[Combat] Your {d['building_name']} was attacked by "
+        f"{d['attacker_name']} with {d['weapon_name']} for "
+        f"{d['damage']} damage.|n"
     )
 
 
@@ -84,10 +88,10 @@ _UNIT_LABELS = {"turret": "Turret", "agent": "Agent", "building": "Building"}
 
 
 def _fmt_unit_attacked(d: dict) -> str:
-    # One of the owner's units (currently an agent) took a hit.
+    # One of the owner's units (currently an agent) took a hit — bright red.
     label = _UNIT_LABELS.get(d.get("unit_kind"), "unit")
     return (
-        f"|r[Combat] Your {label} ({d.get('unit_name', '?')}) was attacked by "
+        f"|R[Combat] Your {label} ({d.get('unit_name', '?')}) was attacked by "
         f"{d.get('attacker_name', 'Unknown')} with {d.get('weapon_name', 'a weapon')} "
         f"for {d.get('damage', 0)} damage.|n"
     )
