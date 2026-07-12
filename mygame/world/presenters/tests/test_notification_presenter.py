@@ -112,8 +112,10 @@ class TestFormatTable:
         assert "Rex" in msg
         assert "Axe" in msg
         assert "15" in msg
-        # Incoming attacks on the receiving player render in bright red (|R).
-        assert "|R" in msg
+        # Incoming attacks on the receiving player render in bright red. In
+        # Evennia ANSI, |r is bright (HILITE+RED); |R is dark (UNHILITE+RED).
+        assert "|r" in msg
+        assert "|R" not in msg
 
     def test_building_attacked(self):
         bus, n, _ = _make()
@@ -123,7 +125,7 @@ class TestFormatTable:
                           "weapon_name": "Club", "damage": 8})
         msg = n.sent[0][1]
         assert "Wall" in msg and "Orc" in msg and "8" in msg
-        assert "|R" in msg  # bright red for an incoming attack
+        assert "|r" in msg and "|R" not in msg  # bright red for an incoming attack
 
     def test_unit_attacked_is_bright_red(self):
         bus, n, _ = _make()
@@ -134,7 +136,7 @@ class TestFormatTable:
                           "damage": 12})
         msg = n.sent[0][1]
         assert "Guard" in msg and "Raider" in msg
-        assert "|R" in msg  # bright red for a hit on your unit
+        assert "|r" in msg and "|R" not in msg  # bright red for a hit on your unit
 
     def test_ability_active(self):
         bus, n, _ = _make()
