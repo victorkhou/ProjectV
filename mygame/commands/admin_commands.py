@@ -280,9 +280,53 @@ class CmdAdminBuilding(AdminSubcommandRouter):
         self._log_admin("destroy", f"{bname} ({btype}) at ({cx}, {cy})")
         caller.msg(f"Destroyed {bname} ({btype}) at ({cx}, {cy}).")
 
+    def sub_open(self, args):
+        """Toggle whether the building at your tile is open or closed to ranged fire.
+
+        Usage:
+            @building open        — open it (ranged weapons/turrets can hit it)
+            @building open close  — close it (only melee attacks reach it)
+        """
+        caller = self.caller
+
+        planet_room = caller.location
+        cx = getattr(caller.db, "coord_x", None)
+        cy = getattr(caller.db, "coord_y", None)
+        if planet_room is None or cx is None or cy is None:
+            caller.msg("You have no coordinates set.")
+            return
+        if not hasattr(planet_room, "get_objects_at"):
+            caller.msg("Current location does not support coordinate queries.")
+            return
+
+        buildings = planet_room.get_objects_at(int(cx), int(cy), type_tag="building")
+        if not buildings:
+            caller.msg(f"No building found at ({cx}, {cy}).")
+            return
+
+        building = buildings[0]
+        # "close" -> closed; anything else (incl. no arg) -> open.
+        want_open = args.strip().lower() not in ("close", "closed", "off", "false", "no")
+
+        if hasattr(building, "set_open"):
+            building.set_open(want_open)
+        else:
+            building.attributes.add("open", want_open)
+
+        btype = building.attributes.get("building_type", default="??") \
+            if hasattr(building, "attributes") else "??"
+        bname = getattr(building, "key", btype)
+        state = "open" if want_open else "closed"
+        self._log_admin("open", f"{bname} ({btype}) at ({cx}, {cy}) -> {state}")
+        caller.msg(
+            f"{bname} ({btype}) at ({cx}, {cy}) is now |w{state}|n "
+            f"({'ranged + melee' if want_open else 'melee only'})."
+        )
+
     subcommands = {
         "spawn": (sub_spawn, "Spawn a building at your tile", "Builder"),
         "destroy": (sub_destroy, "Destroy building at your tile", "Builder"),
+        "open": (sub_open, "Open/close building to ranged fire", "Builder"),
     }
 
 

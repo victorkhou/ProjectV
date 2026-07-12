@@ -318,6 +318,27 @@ class TestBuildingDestroy(unittest.TestCase):
         cmd.func()
         self.assertTrue(any("No building" in m for m in caller._messages))
 
+    def test_open_close_toggles_building(self):
+        building = FakeBuilding(key="Wall", building_type="WA")
+        location = FakeLocation(buildings=[building])
+        caller = FakeCaller(perm_level="Builder")
+        caller.location = location
+        caller.db.coord_x = 3
+        caller.db.coord_y = 7
+
+        # Close it.
+        cmd = _make_cmd(CmdAdminBuilding, caller, " open close")
+        cmd.func()
+        self.assertFalse(building.attributes.get("open"))
+        self.assertTrue(any("closed" in m.lower() for m in caller._messages))
+
+        # Re-open it.
+        caller._messages.clear()
+        cmd = _make_cmd(CmdAdminBuilding, caller, " open")
+        cmd.func()
+        self.assertTrue(building.attributes.get("open"))
+        self.assertTrue(any("open" in m.lower() for m in caller._messages))
+
 
 # -------------------------------------------------------------- #
 #  CmdAdminAgent tests

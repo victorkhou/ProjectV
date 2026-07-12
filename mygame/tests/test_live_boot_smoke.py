@@ -542,6 +542,45 @@ class LiveBootSmokeTest(EvenniaTest):
         finally:
             _teardown_game(systems)
 
+    def test_closed_building_immune_to_ranged_on_real_objects(self):
+        """On real objects: a CLOSED building rejects a ranged attack but a melee
+        (adjacent) attack still lands; an OPEN building takes the ranged hit."""
+        from server.conf.game_init import initialize_game
+        from world.systems.combat_engine import _TurretWeapon, SyntheticWeapon
+
+        systems = initialize_game()
+        try:
+            engine = systems["combat_engine"]
+            attacker = self._make_player(x=0, y=0, planet="earth")
+            attacker.db.combat_xp = 100000  # ranked, irrelevant to the gate
+
+            closed = self._make_building("MM", x=3, y=0, planet="earth", hp=200)
+            closed.set_open(False)
+            open_b = self._make_building("MM", x=4, y=0, planet="earth", hp=200)
+            # open_b left at its factory default (open) — but this building was
+            # made directly, so set it explicitly to be unambiguous.
+            open_b.set_open(True)
+
+            ranged = _TurretWeapon(50, 10)  # no weapon_type -> ranged
+
+            # Ranged vs CLOSED building: rejected, no damage.
+            ok, msg = engine.queue_attack(attacker, closed, weapon=ranged)
+            self.assertFalse(ok)
+            self.assertIn("closed", msg.lower())
+
+            # Ranged vs OPEN building: allowed.
+            ok, _ = engine.queue_attack(attacker, open_b, weapon=ranged)
+            self.assertTrue(ok)
+
+            # Melee vs CLOSED building (attacker adjacent): allowed.
+            melee = SyntheticWeapon(50, 1, name="Fist")
+            melee.weapon_type = "melee"
+            attacker.db.coord_x, attacker.db.coord_y = 2, 0  # adjacent to (3,0)
+            ok, _ = engine.queue_attack(attacker, closed, weapon=melee)
+            self.assertTrue(ok)
+        finally:
+            _teardown_game(systems)
+
 
 def _teardown_game(systems):
     """Best-effort teardown: stop any scripts initialize_game created so they

@@ -1798,5 +1798,75 @@ class TestKillCounter(unittest.TestCase):
         self.assertEqual(getattr(owner.db, "kills", 0) or 0, 0)
 
 
+class TestClosedBuildingRangedImmunity(unittest.TestCase):
+    """A CLOSED building (db.open False) is immune to ranged attacks — only
+    melee (adjacent) player/agent attacks reach it. An OPEN building (default)
+    takes ranged fire as before.
+    """
+
+    @staticmethod
+    def _melee_weapon():
+        w = FakeWeapon(damage=25, weapon_range=1, key="combat_knife")
+        w.weapon_type = "melee"  # effective range 1, immune-bypassing
+        return w
+
+    def test_ranged_attack_on_closed_building_rejected(self):
+        engine, _ = _make_engine()
+        attacker = FakePlayer(name="Sniper",
+                              weapon=FakeWeapon(damage=25, weapon_range=8),
+                              location=FakeTile(xyz=(0, 0, "earth")))
+        building = FakeBuilding(building_type="MM", owner=FakePlayer(name="B"),
+                                hp=200, hp_max=200,
+                                location=FakeTile(xyz=(3, 0, "earth")))
+        building.attributes.add("open", False)  # closed
+        ok, msg = engine.queue_attack(attacker, building)
+        self.assertFalse(ok)
+        self.assertIn("closed", msg.lower())
+        # No action queued -> resolving does no damage.
+        engine.resolve_tick()
+        self.assertEqual(building.attributes.get("hp"), 200)
+
+    def test_melee_attack_on_closed_building_allowed(self):
+        engine, _ = _make_engine()
+        attacker = FakePlayer(name="Bruiser", weapon=self._melee_weapon(),
+                              location=FakeTile(xyz=(0, 0, "earth")))
+        building = FakeBuilding(building_type="MM", owner=FakePlayer(name="B"),
+                                hp=200, hp_max=200,
+                                location=FakeTile(xyz=(1, 0, "earth")))
+        building.attributes.add("open", False)  # closed, but attacker is adjacent
+        ok, _ = engine.queue_attack(attacker, building)
+        self.assertTrue(ok)
+        engine.resolve_tick()
+        self.assertEqual(building.attributes.get("hp"), 175)
+
+    def test_ranged_attack_on_open_building_allowed(self):
+        engine, _ = _make_engine()
+        attacker = FakePlayer(name="Sniper",
+                              weapon=FakeWeapon(damage=25, weapon_range=8),
+                              location=FakeTile(xyz=(0, 0, "earth")))
+        building = FakeBuilding(building_type="MM", owner=FakePlayer(name="B"),
+                                hp=200, hp_max=200,
+                                location=FakeTile(xyz=(3, 0, "earth")))
+        building.attributes.add("open", True)  # open
+        ok, _ = engine.queue_attack(attacker, building)
+        self.assertTrue(ok)
+        engine.resolve_tick()
+        self.assertEqual(building.attributes.get("hp"), 175)
+
+    def test_unset_open_defaults_to_open(self):
+        """A building with no 'open' attribute (legacy) reads as open — ranged
+        attacks still land, preserving prior behavior."""
+        engine, _ = _make_engine()
+        attacker = FakePlayer(name="Sniper",
+                              weapon=FakeWeapon(damage=25, weapon_range=8),
+                              location=FakeTile(xyz=(0, 0, "earth")))
+        building = FakeBuilding(building_type="MM", owner=FakePlayer(name="B"),
+                                hp=200, hp_max=200,
+                                location=FakeTile(xyz=(3, 0, "earth")))
+        # Note: no attributes.add("open", ...) — legacy building.
+        ok, _ = engine.queue_attack(attacker, building)
+        self.assertTrue(ok)
+
+
 if __name__ == "__main__":
     unittest.main()

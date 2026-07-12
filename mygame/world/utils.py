@@ -375,6 +375,19 @@ def is_building(entity: Any) -> bool:
     return get_building_type(entity) is not None
 
 
+def building_is_open(building: Any) -> bool:
+    """Return True if *building* is *open* to ranged fire (default when unset).
+
+    Open buildings can be targeted/hit by ranged weapons and turrets; closed
+    ones (``open`` explicitly False) only by adjacent melee player/agent
+    attacks. The single reader shared by the combat engine (direct/queued
+    attacks) and the throw-AoE targeting, so the open/closed rule lives in one
+    place. Reads the ``open`` attribute via ``get_obj_attr``; an unset value
+    reads as open, so pre-existing buildings keep their current behavior.
+    """
+    return bool(get_obj_attr(building, "open", True))
+
+
 def building_has_capability(building: Any, capability: str, provider: Any = None) -> bool:
     """Return True if *building*'s definition declares *capability*.
 

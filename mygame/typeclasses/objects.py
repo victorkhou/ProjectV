@@ -398,6 +398,17 @@ class Building(GameEntity):
         return bool(self.attributes.get("offline", default=False))
 
     @property
+    def is_open(self) -> bool:
+        """Return True if this building is *open* to ranged fire.
+
+        Open buildings can be hit by ranged weapons and turrets; closed ones
+        only by adjacent (melee) player/agent attacks. An unset attribute reads
+        as open (default True) so pre-existing buildings keep their current
+        behavior.
+        """
+        return bool(self.attributes.get("open", default=True))
+
+    @property
     def building_level(self) -> int:
         """Return the building level (1-5 for resource buildings)."""
         return self.attributes.get("building_level", default=1)
@@ -409,6 +420,10 @@ class Building(GameEntity):
     def set_offline(self, state: bool) -> None:
         """Set the offline protection state."""
         self.attributes.add("offline", state)
+
+    def set_open(self, state: bool) -> None:
+        """Set whether this building is open to ranged fire (True) or closed."""
+        self.attributes.add("open", bool(state))
 
     def take_damage(self, amount: int, attacker=None) -> None:
         """Apply *amount* damage to this building's HP.
@@ -462,6 +477,7 @@ class Building(GameEntity):
             "hp": self.attributes.get("hp", default=0),
             "hp_max": self.attributes.get("hp_max", default=0),
             "offline": self.is_offline,
+            "open": self.is_open,
         }
 
 

@@ -149,6 +149,13 @@ class CombatEngine(BaseSystem):
         is_melee = weapon_type == "melee"
         is_ranged = weapon_type == "ranged"
 
+        # 2b. Closed-building gate. A building that is not "open" can only be
+        # hit by a melee (adjacent) attack — ranged weapons and turrets cannot
+        # target it. This runs before range/ammo so a closed building never
+        # consumes a shot or reports a range error.
+        if self._ranged_blocked_by_closed_building(target, is_melee):
+            return False, "That building is closed — only melee attacks reach it."
+
         # 3. Range validation. A melee weapon's effective range is always 1,
         # ignoring any `range` stat on the item.
         if is_melee:
@@ -496,6 +503,24 @@ class CombatEngine(BaseSystem):
                     "weapon_item": _TurretWeapon(turret_damage, turret_radius),
                 }
                 self.pending_actions.append(turret_action)
+
+    def _ranged_blocked_by_closed_building(
+        self, target: Any, is_melee: bool
+    ) -> bool:
+        """Return True if a ranged attack must be refused against *target*.
+
+        A building that is not ``open`` (closed) can only be struck by a melee
+        (adjacent) attack — ranged weapons and turrets cannot reach it. Non-
+        building targets and open buildings are never blocked. The single gate
+        shared by every ``queue_attack`` caller (players, agents, guards, and
+        any future turret-vs-building path).
+        """
+        if is_melee:
+            return False
+        if not self._is_building(target):
+            return False
+        from world.utils import building_is_open
+        return not building_is_open(target)
 
     def _building_has_cap(self, building: Any, capability: str) -> bool:
         """Return True if *building*'s def declares *capability*.

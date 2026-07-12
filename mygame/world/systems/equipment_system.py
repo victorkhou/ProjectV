@@ -1376,7 +1376,9 @@ class EquipmentSystem(CarryWeightMixin, StorageMixin, BaseSystem):
         attacks reject own-building targets; a thrown explosive deliberately
         does not, so positioning matters.)
         """
-        from world.utils import get_coords, is_building, is_player
+        from world.utils import (
+            get_coords, is_building, is_player, building_is_open,
+        )
 
         location = getattr(player, "location", None)
         if location is None:
@@ -1398,7 +1400,12 @@ class EquipmentSystem(CarryWeightMixin, StorageMixin, BaseSystem):
         for obj in candidates:
             if obj is player:
                 continue
-            if not (is_player(obj) or is_building(obj)):
+            obj_is_building = is_building(obj)
+            if not (is_player(obj) or obj_is_building):
+                continue
+            # A thrown explosive is ranged: a closed building is immune to it
+            # (only adjacent melee reaches a closed building).
+            if obj_is_building and not building_is_open(obj):
                 continue
             coords = get_coords(obj)
             if coords is None:

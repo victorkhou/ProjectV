@@ -606,6 +606,28 @@ class TestThrow(unittest.TestCase):
         self.assertEqual(data.get("count"), 2)
         self.assertEqual(player.equipment.get_supply("frag_grenade"), 0)
 
+    def test_throw_skips_closed_buildings_hits_open_ones(self):
+        """A thrown explosive is ranged: it damages an OPEN building in radius
+        but not a CLOSED one (only melee reaches a closed building)."""
+        class _BuildingTarget:
+            def __init__(self, key, x, y, is_open):
+                # building_type -> is_building True; no combat_xp -> not a player.
+                self.key = key
+                self.db = DB(building_type="MM", coord_x=x, coord_y=y,
+                             hp=200, hp_max=200)
+                self.db.open = is_open
+                self.equipment = EquipmentHandler(self)
+
+        open_b = _BuildingTarget("open_wall", 1, 0, is_open=True)
+        closed_b = _BuildingTarget("closed_wall", 0, 1, is_open=False)
+        system, sink, engine, player = self._setup([open_b, closed_b])
+
+        self.assertTrue(system.throw(player, "frag_grenade", 0, 0))
+
+        hit = {t for t, _ in engine.applied}
+        self.assertIn(open_b, hit, "open building must take blast damage")
+        self.assertNotIn(closed_b, hit, "closed building must be immune to blast")
+
     def test_throw_finalizes_each_hit_for_defeat_and_notification(self):
         # Regression: the throw path must call _finalize_hit per target so a
         # lethal bomb actually defeats/destroys and notifies — not just set HP.

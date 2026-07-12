@@ -321,3 +321,26 @@ class TestRestingActivityStatus:
     def test_none_db_is_idle(self):
         from mygame.world.utils import resting_activity_status
         assert resting_activity_status(object()) == "Idle"
+
+
+class TestBuildingIsOpen:
+    """building_is_open reads the ``open`` attr, defaulting to open when unset."""
+
+    def _building(self, **kw):
+        b = _Building("MM")
+        for k, v in kw.items():
+            setattr(b.db, k, v)
+        return b
+
+    def test_open_true_when_explicitly_open(self):
+        from mygame.world.utils import building_is_open
+        assert building_is_open(self._building(open=True)) is True
+
+    def test_closed_when_explicitly_false(self):
+        from mygame.world.utils import building_is_open
+        assert building_is_open(self._building(open=False)) is False
+
+    def test_defaults_to_open_when_unset(self):
+        """A legacy building with no 'open' attribute reads as open."""
+        from mygame.world.utils import building_is_open
+        assert building_is_open(self._building()) is True
