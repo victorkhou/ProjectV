@@ -118,6 +118,7 @@ class FakeDB:
         self.hp = 80
         self.hp_max = 100
         self.kills = 7
+        self.deaths = 2
         self.resources = {"Iron": 10, "Wood": 5}
         self.researched_techs = {"basic_armor"}
         self.active_powerups = {}
@@ -1899,12 +1900,13 @@ class TestCmdScore(unittest.TestCase):
         self.assertIn("XP:", output)
         self.assertIn("Position:", output)
 
-    def test_shows_kill_tally(self):
+    def test_shows_kill_and_death_tally(self):
         caller = FakeCaller()
         cmd = _make_cmd(CmdScore, caller)
         cmd.func()
         output = "\n".join(caller._messages)
         self.assertIn("Kills: 7", output)
+        self.assertIn("Deaths: 2", output)
 
     def test_shows_aggregated_equipment_totals(self):
         caller = FakeCaller()

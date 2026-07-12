@@ -2099,11 +2099,12 @@ class CmdScore(GameCommand):
             xp_line += f"/{next_xp} to Level {level + 1}"
 
         kills = int(getattr(caller.db, "kills", 0) or 0)
+        deaths = int(getattr(caller.db, "deaths", 0) or 0)
 
         lines = [
             f"|w=== {name} ===|n",
             xp_line,
-            f"  HP: {hp}/{hp_max}  |  Kills: {kills}",
+            f"  HP: {hp}/{hp_max}  |  Kills: {kills}  |  Deaths: {deaths}",
             f"  Position: ({x}, {y}) on {planet}",
         ]
 

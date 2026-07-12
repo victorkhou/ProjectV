@@ -401,6 +401,7 @@ class CmdAgent(GameSubcommandRouter):
         db = getattr(agent, "db", None)
         role = getattr(db, "role", "") or "unassigned"
         kills = int(getattr(db, "kills", 0) or 0)
+        deaths = int(getattr(db, "deaths", 0) or 0)
         hp = getattr(db, "hp", "?")
         hp_max = getattr(db, "hp_max", "?")
         activity = getattr(db, "activity_status", None) or "Idle"
@@ -427,7 +428,7 @@ class CmdAgent(GameSubcommandRouter):
         lines = [
             f"|w=== Agent #{agent_id} ===|n",
             f"  Role: {role}  |  Station: {station}  |  {state}",
-            f"  HP: {hp}/{hp_max}  |  Kills: {kills}",
+            f"  HP: {hp}/{hp_max}  |  Kills: {kills}  |  Deaths: {deaths}",
             f"  Activity: {activity}",
         ]
 

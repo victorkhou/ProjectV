@@ -1699,13 +1699,15 @@ class TestFinalizeHit(unittest.TestCase):
 
 
 class TestKillCounter(unittest.TestCase):
-    """Cosmetic kill tally (db.kills) — a stat, never a progression input.
+    """Cosmetic kill/death tallies (db.kills / db.deaths) — stats, never
+    progression inputs.
 
     A player or agent tracks its OWN kills; a turret (no score sheet) tallies
-    on its owning player. Friendly fire records no kill.
+    on its owning player. Friendly fire records no kill. The victim's death
+    tallies on the victim, friendly fire included.
     """
 
-    def test_player_kill_increments_own_counter(self):
+    def test_player_kill_increments_own_counter_and_victim_death(self):
         weapon = FakeWeapon(damage=999, weapon_range=5)
         engine, _ = _make_engine()
         attacker = FakePlayer(name="Ace", weapon=weapon, combat_xp=0, oid=1,
@@ -1715,6 +1717,39 @@ class TestKillCounter(unittest.TestCase):
         engine.queue_attack(attacker, victim)
         engine.resolve_tick()
         self.assertEqual(attacker.db.kills, 1)
+        # The victim's death is tallied on the victim (mirror of the kill).
+        self.assertEqual(victim.db.deaths, 1)
+        self.assertEqual(getattr(attacker.db, "deaths", 0) or 0, 0)
+
+    def test_agent_victim_death_tallied_on_agent(self):
+        """A defeated agent tallies its own death (before respawn)."""
+        weapon = FakeWeapon(damage=999, weapon_range=5)
+        engine, _ = _make_engine()
+        attacker = FakePlayer(name="Ace", weapon=weapon, combat_xp=0, oid=1,
+                              location=FakeTile(xyz=(0, 0, "earth")))
+        victim_owner = FakePlayer(name="OwnerB", oid=3)
+        agent = FakeAgent(name="TheirGuard", hp=1, combat_xp=500,
+                          location=FakeTile(xyz=(1, 0, "earth")))
+        agent.db.owner = victim_owner
+        engine.queue_attack(attacker, agent)
+        engine.resolve_tick()
+        self.assertEqual(agent.db.deaths, 1)
+
+    def test_friendly_fire_death_still_tallied(self):
+        """A death counts even from friendly fire (no kill credit, but the
+        victim still died)."""
+        weapon = FakeWeapon(damage=999, weapon_range=5)
+        engine, _ = _make_engine()
+        owner = FakePlayer(name="Owner", weapon=weapon, combat_xp=0, oid=7,
+                           location=FakeTile(xyz=(0, 0, "earth")))
+        own_agent = FakeAgent(name="MyAgent", hp=1, combat_xp=500,
+                              location=FakeTile(xyz=(1, 0, "earth")))
+        own_agent.db.owner = owner
+        engine.queue_attack(owner, own_agent)
+        engine.resolve_tick()
+        # No kill credited (friendly fire), but the death is tallied.
+        self.assertEqual(getattr(owner.db, "kills", 0) or 0, 0)
+        self.assertEqual(own_agent.db.deaths, 1)
 
     def test_agent_kill_increments_agent_counter_not_owner(self):
         """An agent's kill tallies on the AGENT (its acknowledgment), while its

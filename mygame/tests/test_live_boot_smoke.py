@@ -534,9 +534,11 @@ class LiveBootSmokeTest(EvenniaTest):
             self.assertIs(combat_actions[-1]["attacker_owner"], owner_a)
             # 2b. A is actually in combat (timer expiry in the future).
             self.assertGreater(owner_a.db.combat_timer_expires or 0, 1)
-            # 3. Cosmetic kill tally: a turret has no score sheet, so the kill
-            #    tallies on the OWNER — on a real db (unset -> None) it reads 1.
+            # 3. Cosmetic tallies on a real db (unset -> None): the turret has
+            #    no score sheet so the kill tallies on the OWNER, and the
+            #    victim's death tallies on the victim.
             self.assertEqual(owner_a.db.kills, 1)
+            self.assertEqual(victim_b.db.deaths, 1)
         finally:
             _teardown_game(systems)
 

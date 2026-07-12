@@ -630,6 +630,11 @@ class CombatEngine(BaseSystem):
             # This does NOT feed XP/level/cap — it's a stat, not progression.
             self._record_kill(attacker)
 
+        # Cosmetic death tally on the victim (player or agent) — the mirror of
+        # the kill tally. Counts every defeat, including friendly fire (a death
+        # is a death); a stat only, never a progression input.
+        self._record_death(victim)
+
         # Deduct XP from victim.
         if self._is_agent(victim):
             # Agents use the agent death-loss balance, not the player one.
@@ -1061,6 +1066,23 @@ class CombatEngine(BaseSystem):
             return
         try:
             db.kills = int(getattr(db, "kills", 0) or 0) + 1
+        except Exception:  # noqa: BLE001 - a tally must never break combat
+            pass
+
+    def _record_death(self, victim: Any) -> None:
+        """Increment the cosmetic death tally on a defeated player/agent.
+
+        The mirror of :meth:`_record_kill`, tallied on the victim itself (both
+        players and agents carry a ``db`` counter and a score sheet). Counts
+        every defeat regardless of who dealt it (friendly fire included) —
+        purely a stat, never a progression input. Guarded so combat never
+        breaks. Not called for enemy-NPC deaths (they have no score sheet).
+        """
+        db = getattr(victim, "db", None)
+        if db is None:
+            return
+        try:
+            db.deaths = int(getattr(db, "deaths", 0) or 0) + 1
         except Exception:  # noqa: BLE001 - a tally must never break combat
             pass
 

@@ -216,7 +216,8 @@ class FakeCaller:
 class FakeAgent:
     """Fake agent NPC for list tests."""
 
-    def __init__(self, agent_id=1, role="soldier", kills=0, hp=100, hp_max=100):
+    def __init__(self, agent_id=1, role="soldier", kills=0, deaths=0,
+                 hp=100, hp_max=100):
         self.key = f"Agent-{agent_id}"
         self.db = FakeDB(
             agent_id=agent_id,
@@ -226,6 +227,7 @@ class FakeAgent:
             reserve=False,
             activity_status="Idle",
             kills=kills,
+            deaths=deaths,
             hp=hp,
             hp_max=hp_max,
         )
@@ -574,8 +576,8 @@ class TestAgentList(unittest.TestCase):
 class TestAgentScore(unittest.TestCase):
     """`agent score <id>` shows a single agent's stat sheet incl. kills."""
 
-    def test_score_shows_kills_and_level(self):
-        agents = [FakeAgent(agent_id=1, role="guard", kills=5)]
+    def test_score_shows_kills_deaths_and_level(self):
+        agents = [FakeAgent(agent_id=1, role="guard", kills=5, deaths=1)]
         views = {1: {"effective_level": 8, "rank_name": "Veteran",
                      "ability_status": {}, "capped_by_commander": False}}
         agent_sys = FakeAgentSystem(agents=agents, progression_views=views)
@@ -585,6 +587,7 @@ class TestAgentScore(unittest.TestCase):
         output = "\n".join(caller._messages)
         self.assertIn("Agent #1", output)
         self.assertIn("Kills: 5", output)
+        self.assertIn("Deaths: 1", output)
         self.assertIn("Level 8", output)
         self.assertIn("Veteran", output)
 
