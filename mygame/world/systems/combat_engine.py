@@ -149,12 +149,14 @@ class CombatEngine(BaseSystem):
         is_melee = weapon_type == "melee"
         is_ranged = weapon_type == "ranged"
 
-        # 2b. Closed-building gate. A building that is not "open" can only be
-        # hit by a melee (adjacent) attack — ranged weapons and turrets cannot
-        # target it. This runs before range/ammo so a closed building never
-        # consumes a shot or reports a range error.
-        if self._ranged_blocked_by_closed_building(target, is_melee):
-            return False, "That building is closed — only melee attacks reach it."
+        # 2b. Closed-cover gate. A ranged attack cannot hit a closed building
+        # or a player sheltered inside one — only an adjacent melee attack can.
+        # Runs before range/ammo so a blocked shot never consumes ammo or
+        # reports a range error.
+        if self._ranged_blocked(target, is_melee):
+            if self._is_building(target):
+                return False, "That building is closed — only melee attacks reach it."
+            return False, "They're sheltered inside — only a melee attack reaches them."
 
         # 3. Range validation. A melee weapon's effective range is always 1,
         # ignoring any `range` stat on the item.
@@ -473,6 +475,11 @@ class CombatEngine(BaseSystem):
                 if is_owner(player, owner):
                     continue
 
+                # A player sheltered inside a closed building is not a valid
+                # turret target (ranged fire can't reach them).
+                if self._is_sheltered(player):
+                    continue
+
                 p_coords = self._get_coords(player)
                 if p_coords is None:
                     p_loc = getattr(player, "location", player)
@@ -504,23 +511,35 @@ class CombatEngine(BaseSystem):
                 }
                 self.pending_actions.append(turret_action)
 
-    def _ranged_blocked_by_closed_building(
-        self, target: Any, is_melee: bool
-    ) -> bool:
+    @staticmethod
+    def _is_sheltered(target: Any) -> bool:
+        """Return True if *target* is a player sheltered inside a closed building.
+
+        Delegates to :func:`world.utils.player_is_sheltered` — the single shelter
+        authority shared with guard targeting. A sheltered player is immune to
+        ranged fire (turrets/ranged weapons/thrown explosives).
+        """
+        from world.utils import player_is_sheltered
+        return player_is_sheltered(target)
+
+    def _ranged_blocked(self, target: Any, is_melee: bool) -> bool:
         """Return True if a ranged attack must be refused against *target*.
 
-        A building that is not ``open`` (closed) can only be struck by a melee
-        (adjacent) attack — ranged weapons and turrets cannot reach it. Non-
-        building targets and open buildings are never blocked. The single gate
-        shared by every ``queue_attack`` caller (players, agents, guards, and
-        any future turret-vs-building path).
+        Two cases, both bypassed by a melee (adjacent) attack:
+          * the target is a CLOSED building — ranged weapons/turrets can't
+            damage a closed structure; and
+          * the target is a player SHELTERED inside a closed building — ranged
+            fire can't reach an occupant under cover.
+        Open buildings and players in the open are never blocked. The single
+        gate shared by every ``queue_attack`` caller (players, agents, guards,
+        and any future turret-vs-building path).
         """
         if is_melee:
             return False
-        if not self._is_building(target):
-            return False
-        from world.utils import building_is_open
-        return not building_is_open(target)
+        if self._is_building(target):
+            from world.utils import building_is_open
+            return not building_is_open(target)
+        return self._is_sheltered(target)
 
     def _building_has_cap(self, building: Any, capability: str) -> bool:
         """Return True if *building*'s def declares *capability*.

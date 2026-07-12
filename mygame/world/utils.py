@@ -376,16 +376,47 @@ def is_building(entity: Any) -> bool:
 
 
 def building_is_open(building: Any) -> bool:
-    """Return True if *building* is *open* to ranged fire (default when unset).
+    """Return True if *building* is *open* to ranged fire (CLOSED when unset).
 
-    Open buildings can be targeted/hit by ranged weapons and turrets; closed
-    ones (``open`` explicitly False) only by adjacent melee player/agent
-    attacks. The single reader shared by the combat engine (direct/queued
-    attacks) and the throw-AoE targeting, so the open/closed rule lives in one
-    place. Reads the ``open`` attribute via ``get_obj_attr``; an unset value
-    reads as open, so pre-existing buildings keep their current behavior.
+    Open buildings can be targeted/hit by ranged weapons and turrets and give
+    their occupants no cover; closed ones can only be hit by adjacent melee
+    attacks and shelter a player inside them. The single reader shared by the
+    combat engine (direct/queued attacks + turret targeting) and the throw-AoE
+    targeting, so the open/closed rule lives in one place. Reads the ``open``
+    attribute via ``get_obj_attr``; an unset value reads as CLOSED, so
+    pre-existing buildings are treated as cover.
     """
-    return bool(get_obj_attr(building, "open", True))
+    return bool(get_obj_attr(building, "open", False))
+
+
+def player_is_sheltered(player: Any) -> bool:
+    """Return True if *player* is sheltered from ranged fire.
+
+    A player is sheltered when they are INSIDE a building (``db.inside_building``)
+    that is CLOSED (:func:`building_is_open` is False for the building on their
+    tile). A sheltered player cannot be targeted or hit by turrets, ranged
+    weapons, or thrown explosives — only by an adjacent melee attack. The single
+    reader shared by turret targeting, guard targeting, ranged ``queue_attack``,
+    and throw-AoE, so the shelter rule lives in one place.
+
+    Returns False for anything that isn't a player inside a closed building
+    (agents/NPCs, players in the open, players inside an open building), so
+    callers stay guard-free. Never raises.
+    """
+    db = getattr(player, "db", None)
+    if db is None:
+        return False
+    if not getattr(db, "inside_building", False):
+        return False
+    room = getattr(player, "location", None)
+    x = getattr(db, "coord_x", None)
+    y = getattr(db, "coord_y", None)
+    if room is None or x is None or y is None:
+        return False
+    building = _building_on_tile(room, int(x), int(y))
+    if building is None:
+        return False
+    return not building_is_open(building)
 
 
 def building_has_capability(building: Any, capability: str, provider: Any = None) -> bool:

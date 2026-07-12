@@ -139,7 +139,14 @@ class GuardCombatSystem(BaseSystem):
             return
         gx, gy = coords
 
-        target = self._acquire_target(npc, owner, location, gx, gy, aggro_radius)
+        # Ranged guards (soldiers) cannot hit a player sheltered inside a closed
+        # building, so they don't acquire one; a melee guard still may (the
+        # melee-bypass mirrors the closed-building rule, with queue_attack the
+        # final gate).
+        is_ranged = role.lower() == "soldier"
+        target = self._acquire_target(
+            npc, owner, location, gx, gy, aggro_radius, skip_sheltered=is_ranged
+        )
         if target is None:
             # No hostile in range — a base guard that chased a now-departed
             # raider walks back to its post so the garrison doesn't drift off
@@ -179,9 +186,15 @@ class GuardCombatSystem(BaseSystem):
         gx: int,
         gy: int,
         aggro_radius: int,
+        skip_sheltered: bool = False,
     ) -> Any | None:
-        """Return the nearest non-owner player within *aggro_radius*, or None."""
-        from world.utils import is_owner
+        """Return the nearest non-owner player within *aggro_radius*, or None.
+
+        When *skip_sheltered* is True (ranged guards), a player sheltered inside
+        a closed building is not acquired — ranged fire can't reach an occupant
+        under cover.
+        """
+        from world.utils import is_owner, player_is_sheltered
 
         players = self._nearby_players(location, gx, gy, aggro_radius)
         nearest = None
@@ -189,6 +202,9 @@ class GuardCombatSystem(BaseSystem):
         for player in players:
             # Never attack the guard's own owner or a fellow unit of that owner.
             if is_owner(player, owner):
+                continue
+            # A ranged guard can't hit a player sheltered in a closed building.
+            if skip_sheltered and player_is_sheltered(player):
                 continue
             p_coords = self._get_coords(player)
             if p_coords is None:

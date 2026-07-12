@@ -340,7 +340,48 @@ class TestBuildingIsOpen:
         from mygame.world.utils import building_is_open
         assert building_is_open(self._building(open=False)) is False
 
-    def test_defaults_to_open_when_unset(self):
-        """A legacy building with no 'open' attribute reads as open."""
+    def test_defaults_to_closed_when_unset(self):
+        """A legacy building with no 'open' attribute reads as CLOSED (cover)."""
         from mygame.world.utils import building_is_open
-        assert building_is_open(self._building()) is True
+        assert building_is_open(self._building()) is False
+
+
+class TestPlayerIsSheltered:
+    """player_is_sheltered: True only for a player INSIDE a CLOSED building."""
+
+    class _Room:
+        def __init__(self, building):
+            self._b = building
+
+        def get_buildings_at(self, x, y):
+            return [self._b] if self._b is not None else []
+
+    def _player(self, inside, building):
+        p = type("P", (), {})()
+        p.db = _Db(inside_building=inside, coord_x=1, coord_y=1)
+        p.location = self._Room(building)
+        return p
+
+    def test_sheltered_inside_closed_building(self):
+        from mygame.world.utils import player_is_sheltered
+        closed = _Building("MM")  # unset open -> closed
+        assert player_is_sheltered(self._player(True, closed)) is True
+
+    def test_not_sheltered_inside_open_building(self):
+        from mygame.world.utils import player_is_sheltered
+        open_b = _Building("MM")
+        open_b.db.open = True
+        assert player_is_sheltered(self._player(True, open_b)) is False
+
+    def test_not_sheltered_when_not_inside(self):
+        from mygame.world.utils import player_is_sheltered
+        closed = _Building("MM")
+        assert player_is_sheltered(self._player(False, closed)) is False
+
+    def test_not_sheltered_with_no_building_on_tile(self):
+        from mygame.world.utils import player_is_sheltered
+        assert player_is_sheltered(self._player(True, None)) is False
+
+    def test_non_player_object_never_sheltered(self):
+        from mygame.world.utils import player_is_sheltered
+        assert player_is_sheltered(object()) is False

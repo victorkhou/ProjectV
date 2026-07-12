@@ -197,17 +197,24 @@ class FakeAttributes:
         self._data[key] = value
 
 class FakeBuilding:
-    """Lightweight stand-in for a Building object."""
+    """Lightweight stand-in for a Building object.
+
+    ``open`` mirrors production (unset -> CLOSED via building_is_open). A test
+    that needs a RANGED hit to land on the building passes ``open=True``.
+    """
     def __init__(self, building_type="VV", owner=None, hp=300,
-                 hp_max=300, offline=False, location=None):
+                 hp_max=300, offline=False, location=None, open=None):
         self.key = building_type
-        self.attributes = FakeAttributes({
+        attrs = {
             "building_type": building_type,
             "owner": owner,
             "hp": hp,
             "hp_max": hp_max,
             "offline": offline,
-        })
+        }
+        if open is not None:
+            attrs["open"] = open
+        self.attributes = FakeAttributes(attrs)
         self.location = location
         self._deleted = False
 
@@ -409,7 +416,7 @@ class TestProperty12AttackDamage(unittest.TestCase):
         other = FakePlayer(name="Other")
         building = FakeBuilding(
             building_type="MM", owner=other,
-            hp=building_hp, hp_max=building_hp, location=tile,
+            hp=building_hp, hp_max=building_hp, location=tile, open=True,
         )
 
         engine, _ = _make_engine()

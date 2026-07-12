@@ -190,17 +190,26 @@ class FakeAttributes:
         self._data[key] = value
 
 class FakeBuilding:
-    """Lightweight stand-in for a Building object."""
+    """Lightweight stand-in for a Building object.
+
+    ``open`` mirrors production: unset (None) reads as CLOSED via
+    ``building_is_open``, so a test that needs a RANGED hit to land on the
+    building must pass ``open=True`` (a closed building is immune to ranged fire
+    by design — see TestClosedBuildingRangedImmunity).
+    """
     def __init__(self, building_type="VV", owner=None, hp=300, hp_max=300,
-                 offline=False, location=None):
+                 offline=False, location=None, open=None):
         self.key = building_type
-        self.attributes = FakeAttributes({
+        attrs = {
             "building_type": building_type,
             "owner": owner,
             "hp": hp,
             "hp_max": hp_max,
             "offline": offline,
-        })
+        }
+        if open is not None:
+            attrs["open"] = open
+        self.attributes = FakeAttributes(attrs)
         self.location = location
         self._deleted = False
 
@@ -372,7 +381,7 @@ class TestQueueAttackValidation(unittest.TestCase):
         engine, _ = _make_engine()
         player = FakePlayer(name="Player", weapon=weapon,
                             location=FakeTile(xyz=(0, 0, "earth")))
-        building = FakeBuilding(owner=player,
+        building = FakeBuilding(owner=player, open=True,
                                 location=FakeTile(xyz=(1, 0, "earth")))
         ok, msg = engine.queue_attack(player, building)
         self.assertTrue(ok, msg)
@@ -619,7 +628,7 @@ class TestBuildingDestruction(unittest.TestCase):
                               location=FakeTile(xyz=(0, 0, "earth")))
         other_player = FakePlayer(name="Other")
         building = FakeBuilding(building_type="MM", owner=other_player,
-                                hp=100, hp_max=100,
+                                hp=100, hp_max=100, open=True,
                                 location=FakeTile(xyz=(1, 0, "earth")))
         engine.queue_attack(attacker, building)
         engine.resolve_tick()
@@ -632,7 +641,7 @@ class TestBuildingDestruction(unittest.TestCase):
                               location=FakeTile(xyz=(0, 0, "earth")))
         other_player = FakePlayer(name="Other")
         building = FakeBuilding(building_type="MM", owner=other_player,
-                                hp=100, hp_max=100,
+                                hp=100, hp_max=100, open=True,
                                 location=FakeTile(xyz=(1, 0, "earth")))
         engine.queue_attack(attacker, building)
         engine.resolve_tick()
@@ -646,7 +655,7 @@ class TestBuildingDestruction(unittest.TestCase):
         attacker = FakePlayer(name="Attacker", weapon=weapon, combat_xp=0,
                               location=FakeTile(xyz=(0, 0, "earth")))
         building = FakeBuilding(building_type="MM", owner=attacker,
-                                hp=100, hp_max=100,
+                                hp=100, hp_max=100, open=True,
                                 location=FakeTile(xyz=(1, 0, "earth")))
         engine.queue_attack(attacker, building)
         engine.resolve_tick()
@@ -663,7 +672,7 @@ class TestBuildingDestruction(unittest.TestCase):
                               location=FakeTile(xyz=(0, 0, "earth")))
         other_player = FakePlayer(name="Other")
         building = FakeBuilding(building_type="MM", owner=other_player,
-                                hp=100, hp_max=100,
+                                hp=100, hp_max=100, open=True,
                                 location=FakeTile(xyz=(1, 0, "earth")))
         engine.queue_attack(attacker, building)
         engine.resolve_tick()
@@ -693,6 +702,54 @@ class TestProcessTurrets(unittest.TestCase):
         engine.process_turrets([turret])
         self.assertEqual(len(engine.pending_actions), 1)
         self.assertEqual(engine.pending_actions[0]["target"], near_player)
+
+    def test_turret_skips_player_sheltered_in_closed_building(self):
+        """A player inside a CLOSED building is not a valid turret target."""
+        engine, _ = _make_engine()
+        owner = _hq_owner()
+
+        # A tile that reports a closed building on it (get_buildings_at).
+        class _ShelterTile(FakeTile):
+            def get_buildings_at(self, x, y):
+                b = FakeBuilding(building_type="MM")
+                b.attributes.add("open", False)  # closed -> shelter
+                return [b]
+
+        sheltered = FakePlayer(name="Hider",
+                               location=_ShelterTile(xyz=(2, 0, "earth")))
+        sheltered.db.inside_building = True
+        sheltered.db.coord_x, sheltered.db.coord_y = 2, 0
+
+        turret_tile = FakeTile(xyz=(0, 0, "earth"), nearby_players=[sheltered])
+        turret = FakeBuilding(building_type="TU", owner=owner,
+                              hp=300, hp_max=300, location=turret_tile)
+
+        engine.process_turrets([turret])
+        self.assertEqual(len(engine.pending_actions), 0,
+                         "turret must not target a sheltered player")
+
+    def test_turret_still_targets_player_in_open_building(self):
+        """Inside an OPEN building gives no cover — the turret still fires."""
+        engine, _ = _make_engine()
+        owner = _hq_owner()
+
+        class _OpenTile(FakeTile):
+            def get_buildings_at(self, x, y):
+                b = FakeBuilding(building_type="MM")
+                b.attributes.add("open", True)  # open -> no cover
+                return [b]
+
+        exposed = FakePlayer(name="Exposed",
+                             location=_OpenTile(xyz=(2, 0, "earth")))
+        exposed.db.inside_building = True
+        exposed.db.coord_x, exposed.db.coord_y = 2, 0
+
+        turret_tile = FakeTile(xyz=(0, 0, "earth"), nearby_players=[exposed])
+        turret = FakeBuilding(building_type="TU", owner=owner,
+                              hp=300, hp_max=300, location=turret_tile)
+
+        engine.process_turrets([turret])
+        self.assertEqual(len(engine.pending_actions), 1)
 
     def test_turret_gated_by_active_owner_ids_set(self):
         """When the precomputed active-owner-id set is supplied, the turret uses
@@ -962,7 +1019,7 @@ class TestBuildingDamage(unittest.TestCase):
                               location=FakeTile(xyz=(0, 0, "earth")))
         other_player = FakePlayer(name="Other")
         building = FakeBuilding(building_type="MM", owner=other_player,
-                                hp=200, hp_max=200,
+                                hp=200, hp_max=200, open=True,
                                 location=FakeTile(xyz=(1, 0, "earth")))
         engine.queue_attack(attacker, building)
         engine.resolve_tick()
@@ -976,7 +1033,7 @@ class TestBuildingDamage(unittest.TestCase):
                               location=FakeTile(xyz=(0, 0, "earth")))
         other_player = FakePlayer(name="Owner")
         building = FakeBuilding(building_type="MM", owner=other_player,
-                                hp=200, hp_max=200,
+                                hp=200, hp_max=200, open=True,
                                 location=FakeTile(xyz=(1, 0, "earth")))
         engine.queue_attack(attacker, building)
         engine.resolve_tick()
@@ -1035,7 +1092,7 @@ class TestBuildingDamage(unittest.TestCase):
                               location=FakeTile(xyz=(0, 0, "earth")))
         victim = FakePlayer(name="Victim")  # player -> _is_player(owner) True
         hq = FakeBuilding(building_type="HQ", owner=victim,
-                          hp=1, hp_max=500,
+                          hp=1, hp_max=500, open=True,
                           location=FakeTile(xyz=(1, 0, "earth")))
         engine.queue_attack(attacker, hq)
         engine.resolve_tick()
@@ -1052,7 +1109,7 @@ class TestBuildingDamage(unittest.TestCase):
                               location=FakeTile(xyz=(0, 0, "earth")))
         victim = FakePlayer(name="Victim")
         building = FakeBuilding(building_type="MM", owner=victim,
-                                hp=1, hp_max=200,
+                                hp=1, hp_max=200, open=True,
                                 location=FakeTile(xyz=(1, 0, "earth")))
         engine.queue_attack(attacker, building)
         engine.resolve_tick()
@@ -1853,9 +1910,9 @@ class TestClosedBuildingRangedImmunity(unittest.TestCase):
         engine.resolve_tick()
         self.assertEqual(building.attributes.get("hp"), 175)
 
-    def test_unset_open_defaults_to_open(self):
-        """A building with no 'open' attribute (legacy) reads as open — ranged
-        attacks still land, preserving prior behavior."""
+    def test_unset_open_defaults_to_closed(self):
+        """A building with no 'open' attribute (legacy) reads as CLOSED —
+        ranged attacks are rejected (buildings are cover by default)."""
         engine, _ = _make_engine()
         attacker = FakePlayer(name="Sniper",
                               weapon=FakeWeapon(damage=25, weapon_range=8),
@@ -1863,9 +1920,10 @@ class TestClosedBuildingRangedImmunity(unittest.TestCase):
         building = FakeBuilding(building_type="MM", owner=FakePlayer(name="B"),
                                 hp=200, hp_max=200,
                                 location=FakeTile(xyz=(3, 0, "earth")))
-        # Note: no attributes.add("open", ...) — legacy building.
-        ok, _ = engine.queue_attack(attacker, building)
-        self.assertTrue(ok)
+        # Note: no attributes.add("open", ...) — legacy building -> closed.
+        ok, msg = engine.queue_attack(attacker, building)
+        self.assertFalse(ok)
+        self.assertIn("closed", msg.lower())
 
 
 if __name__ == "__main__":

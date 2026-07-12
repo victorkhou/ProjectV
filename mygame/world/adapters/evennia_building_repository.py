@@ -53,10 +53,11 @@ class EvenniaBuildingFactory(BuildingFactory):
         building.attributes.add("owner", owner)
         building.attributes.add("building_level", 1)
         building.attributes.add("offline", False)
-        # Open buildings can be hit by ranged weapons and turrets; closed ones
-        # only by adjacent (melee) player/agent attacks. Defaults to open so
-        # behavior is unchanged unless a building is explicitly closed.
-        building.attributes.add("open", True)
+        # Open buildings can be hit by ranged weapons and turrets, and give
+        # their occupants no cover; closed buildings can only be hit by adjacent
+        # (melee) attacks and SHELTER a player standing inside them from ranged
+        # fire. Buildings default to CLOSED — a building is cover unless opened.
+        building.attributes.add("open", False)
         building.attributes.add("hp", building_def.max_health)
         building.attributes.add("hp_max", building_def.max_health)
         # Tag is auto-set by Building.at_object_creation via GameEntity.

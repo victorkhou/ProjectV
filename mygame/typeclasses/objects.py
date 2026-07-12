@@ -401,12 +401,13 @@ class Building(GameEntity):
     def is_open(self) -> bool:
         """Return True if this building is *open* to ranged fire.
 
-        Open buildings can be hit by ranged weapons and turrets; closed ones
-        only by adjacent (melee) player/agent attacks. An unset attribute reads
-        as open (default True) so pre-existing buildings keep their current
-        behavior.
+        Open buildings can be hit by ranged weapons and turrets and give their
+        occupants no cover; closed ones can only be hit by adjacent (melee)
+        attacks and shelter a player inside them from ranged fire. An unset
+        attribute reads as CLOSED (default False), so pre-existing buildings are
+        treated as cover.
         """
-        return bool(self.attributes.get("open", default=True))
+        return bool(self.attributes.get("open", default=False))
 
     @property
     def building_level(self) -> int:

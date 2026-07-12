@@ -179,9 +179,14 @@ class OutpostSpawnerSystem(BaseSystem):
             building = self._building_factory.create_building(
                 bdef, room, sentinel, x=bx, y=by
             )
-            if b.hp is not None and building is not None:
-                set_obj_attr(building, "hp", b.hp)
-                set_obj_attr(building, "hp_max", b.hp)
+            if building is not None:
+                # NPC-base buildings are OPEN — they exist to be raided, so
+                # ranged weapons and turrets can hit them (buildings default to
+                # closed/cover, which is a player-base concept, not an NPC one).
+                set_obj_attr(building, "open", True)
+                if b.hp is not None:
+                    set_obj_attr(building, "hp", b.hp)
+                    set_obj_attr(building, "hp_max", b.hp)
 
         # 3. Guards at the HQ tile.
         guard_hp = self._guard_hp(tier)

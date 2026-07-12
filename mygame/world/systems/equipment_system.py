@@ -1378,6 +1378,7 @@ class EquipmentSystem(CarryWeightMixin, StorageMixin, BaseSystem):
         """
         from world.utils import (
             get_coords, is_building, is_player, building_is_open,
+            player_is_sheltered,
         )
 
         location = getattr(player, "location", None)
@@ -1403,9 +1404,12 @@ class EquipmentSystem(CarryWeightMixin, StorageMixin, BaseSystem):
             obj_is_building = is_building(obj)
             if not (is_player(obj) or obj_is_building):
                 continue
-            # A thrown explosive is ranged: a closed building is immune to it
-            # (only adjacent melee reaches a closed building).
+            # A thrown explosive is ranged: a closed building is immune, and so
+            # is a player sheltered inside a closed building. Only adjacent melee
+            # reaches either.
             if obj_is_building and not building_is_open(obj):
+                continue
+            if not obj_is_building and player_is_sheltered(obj):
                 continue
             coords = get_coords(obj)
             if coords is None:

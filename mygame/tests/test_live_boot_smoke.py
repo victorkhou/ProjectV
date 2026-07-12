@@ -554,11 +554,11 @@ class LiveBootSmokeTest(EvenniaTest):
             attacker = self._make_player(x=0, y=0, planet="earth")
             attacker.db.combat_xp = 100000  # ranked, irrelevant to the gate
 
+            # Both buildings created directly; set open state explicitly (the
+            # factory default is CLOSED — buildings are cover unless opened).
             closed = self._make_building("MM", x=3, y=0, planet="earth", hp=200)
             closed.set_open(False)
             open_b = self._make_building("MM", x=4, y=0, planet="earth", hp=200)
-            # open_b left at its factory default (open) — but this building was
-            # made directly, so set it explicitly to be unambiguous.
             open_b.set_open(True)
 
             ranged = _TurretWeapon(50, 10)  # no weapon_type -> ranged
@@ -577,6 +577,53 @@ class LiveBootSmokeTest(EvenniaTest):
             melee.weapon_type = "melee"
             attacker.db.coord_x, attacker.db.coord_y = 2, 0  # adjacent to (3,0)
             ok, _ = engine.queue_attack(attacker, closed, weapon=melee)
+            self.assertTrue(ok)
+        finally:
+            _teardown_game(systems)
+
+    def test_player_is_sheltered_on_real_objects(self):
+        """On real objects (where an unset db attr is None, not a raise):
+        player_is_sheltered is True only for a player inside a CLOSED building,
+        and the combat engine refuses a ranged shot against such a player."""
+        from server.conf.game_init import initialize_game
+        from world.utils import player_is_sheltered
+        from world.systems.combat_engine import _TurretWeapon
+
+        systems = initialize_game()
+        try:
+            engine = systems["combat_engine"]
+            room = self._make_planet_room("earth")
+
+            player = self._make_player(x=6, y=5, planet="earth", location=room)
+            shelter = self._make_building("MM", x=6, y=5, planet="earth")
+            shelter.location = room
+            # Register the shelter in this room's coordinate index so
+            # get_buildings_at(6,5) (used by player_is_sheltered) resolves it.
+            room.coord_index.add(shelter, 6, 5)
+
+            # Standing on the tile but NOT inside -> exposed.
+            self.assertFalse(player_is_sheltered(player))
+
+            # Inside a CLOSED building (factory default is closed) -> sheltered.
+            player.db.inside_building = True
+            shelter.set_open(False)
+            self.assertTrue(player_is_sheltered(player))
+
+            # A ranged attack against a sheltered player is refused.
+            attacker = self._make_player(x=0, y=0, planet="earth", location=room)
+            ok, msg = engine.queue_attack(
+                attacker, player, weapon=_TurretWeapon(50, 10)
+            )
+            self.assertFalse(ok)
+            self.assertIn("sheltered", msg.lower())
+
+            # Open the building -> no cover -> exposed again, ranged allowed.
+            shelter.set_open(True)
+            self.assertFalse(player_is_sheltered(player))
+            attacker.db.coord_x, attacker.db.coord_y = 0, 5  # within range 10
+            ok, _ = engine.queue_attack(
+                attacker, player, weapon=_TurretWeapon(50, 10)
+            )
             self.assertTrue(ok)
         finally:
             _teardown_game(systems)
