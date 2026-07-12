@@ -1698,5 +1698,70 @@ class TestFinalizeHit(unittest.TestCase):
         self.assertEqual(attacker.db.combat_xp, 0)
 
 
+class TestKillCounter(unittest.TestCase):
+    """Cosmetic kill tally (db.kills) — a stat, never a progression input.
+
+    A player or agent tracks its OWN kills; a turret (no score sheet) tallies
+    on its owning player. Friendly fire records no kill.
+    """
+
+    def test_player_kill_increments_own_counter(self):
+        weapon = FakeWeapon(damage=999, weapon_range=5)
+        engine, _ = _make_engine()
+        attacker = FakePlayer(name="Ace", weapon=weapon, combat_xp=0, oid=1,
+                              location=FakeTile(xyz=(0, 0, "earth")))
+        victim = FakePlayer(name="Vic", hp=1, combat_xp=500, oid=2,
+                            location=FakeTile(xyz=(1, 0, "earth")))
+        engine.queue_attack(attacker, victim)
+        engine.resolve_tick()
+        self.assertEqual(attacker.db.kills, 1)
+
+    def test_agent_kill_increments_agent_counter_not_owner(self):
+        """An agent's kill tallies on the AGENT (its acknowledgment), while its
+        OWNER gets the XP — the two ledgers are separate."""
+        weapon = FakeWeapon(damage=999, weapon_range=5)
+        engine, _ = _make_engine()
+        owner = FakePlayer(name="OwnerA", combat_xp=0, oid=7,
+                           location=FakeTile(xyz=(0, 0, "earth")))
+        agent = FakeAgent(name="Guard", weapon=weapon,
+                          location=FakeTile(xyz=(0, 0, "earth")))
+        agent.db.owner = owner
+        victim = FakePlayer(name="Vic", hp=1, combat_xp=500, oid=2,
+                            location=FakeTile(xyz=(1, 0, "earth")))
+        engine.queue_attack(agent, victim)
+        engine.resolve_tick()
+        # Agent tallies its own kill; owner's tally is untouched (owner gets XP).
+        self.assertEqual(agent.db.kills, 1)
+        self.assertEqual(getattr(owner.db, "kills", 0) or 0, 0)
+        self.assertEqual(owner.db.combat_xp, engine.registry.balance.xp_kill)
+
+    def test_turret_kill_tallies_on_owner(self):
+        """A turret has no score sheet, so its kill tallies on the owner."""
+        engine, _ = _make_engine()
+        owner = FakePlayer(name="OwnerA", combat_xp=0, oid=7,
+                           location=FakeTile(xyz=(5, 5, "earth")))
+        turret = FakeBuilding(building_type="TU", owner=owner,
+                              location=FakeTile(xyz=(0, 0, "earth")))
+        victim = FakePlayer(name="Vic", hp=1, combat_xp=500, oid=2,
+                            location=FakeTile(xyz=(1, 0, "earth")))
+        engine.apply_direct_hit(turret, victim,
+                                FakeWeapon(damage=999, weapon_range=20),
+                                current_tick=0)
+        self.assertEqual(owner.db.kills, 1)
+
+    def test_friendly_fire_records_no_kill(self):
+        """Downing your own agent grants no XP and records no kill."""
+        weapon = FakeWeapon(damage=999, weapon_range=5)
+        engine, _ = _make_engine()
+        owner = FakePlayer(name="Owner", weapon=weapon, combat_xp=0, oid=7,
+                           location=FakeTile(xyz=(0, 0, "earth")))
+        own_agent = FakeAgent(name="MyAgent", hp=1, combat_xp=500,
+                              location=FakeTile(xyz=(1, 0, "earth")))
+        own_agent.db.owner = owner
+        engine.queue_attack(owner, own_agent)
+        engine.resolve_tick()
+        self.assertEqual(getattr(owner.db, "kills", 0) or 0, 0)
+
+
 if __name__ == "__main__":
     unittest.main()

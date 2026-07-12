@@ -38,6 +38,9 @@ class CombatEntity:
         self.db.combat_xp = 0
         self.db.level = 1
         self.db.rank_level = 1
+        # Cosmetic lifetime kill tally (players and agents). Shown on the score
+        # sheet; NOT a progression input — it never feeds XP/level/owner cap.
+        self.db.kills = 0
 
     # ------------------------------------------------------------------ #
     #  Progression (Entity_Progression) — owner-agnostic, pure Python

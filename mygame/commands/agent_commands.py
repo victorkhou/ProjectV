@@ -88,6 +88,7 @@ class CmdAgent(GameSubcommandRouter):
                     loc_str = "HQ"
 
                 activity = getattr(agent.db, "activity_status", None) or "Idle"
+                kills = int(getattr(agent.db, "kills", 0) or 0)
 
                 # Progression segment. Defensive: a missing or
                 # raising get_agent_progression_view must never break the roster.
@@ -124,9 +125,11 @@ class CmdAgent(GameSubcommandRouter):
                 except Exception:
                     prog_segment = ""
 
+                kill_segment = f"  |wK:{kills}|n" if kills else ""
+
                 lines.append(
                     f"  |c#{aid}|n  {role:<12s}  {loc_str:<10s}  "
-                    f"{status} — {activity}{prog_segment}"
+                    f"{status} — {activity}{prog_segment}{kill_segment}"
                 )
 
         # Show agents currently in training
@@ -367,6 +370,96 @@ class CmdAgent(GameSubcommandRouter):
 
         caller.msg("Usage: agent ability <id> [<key> on|off]")
 
+    def sub_score(self, args):
+        """Show one agent's stat sheet (the agent's version of 'score').
+
+        Usage:
+            agent score <id>
+
+        Mirrors the player 'score' for a single agent: its capped
+        level/rank, kill tally, HP, role/station, current activity, and
+        per-ability status.
+        """
+        caller = self.caller
+        agent_system = self.require_system("agent_system")
+        if agent_system is None:
+            return
+
+        args = args.strip()
+        if not args:
+            caller.msg("Usage: agent score <agent_id>")
+            return
+        agent_id = self.parse_int(args)
+        if agent_id is None:
+            return
+
+        agent = agent_system.get_agent_by_id(caller, agent_id)
+        if agent is None:
+            caller.msg(f"Agent #{agent_id} not found.")
+            return
+
+        db = getattr(agent, "db", None)
+        role = getattr(db, "role", "") or "unassigned"
+        kills = int(getattr(db, "kills", 0) or 0)
+        hp = getattr(db, "hp", "?")
+        hp_max = getattr(db, "hp_max", "?")
+        activity = getattr(db, "activity_status", None) or "Idle"
+
+        incap = getattr(db, "incapacitated", False)
+        reserve = getattr(db, "reserve", False)
+        if incap:
+            state = "|rIncapacitated|n"
+        elif reserve:
+            state = "|yReserved|n"
+        else:
+            state = "|gActive|n"
+
+        # Station (building type it's assigned to, or army/HQ).
+        target = getattr(db, "role_target", None)
+        if target is not None:
+            btype = getattr(getattr(target, "db", None), "building_type", None)
+            station = btype or "building"
+        elif role in ("soldier", "medic"):
+            station = "army"
+        else:
+            station = "HQ"
+
+        lines = [
+            f"|w=== Agent #{agent_id} ===|n",
+            f"  Role: {role}  |  Station: {station}  |  {state}",
+            f"  HP: {hp}/{hp_max}  |  Kills: {kills}",
+            f"  Activity: {activity}",
+        ]
+
+        # Capped level / rank + ability status, reusing the roster view.
+        try:
+            view = agent_system.get_agent_progression_view(agent)
+            eff = view.get("effective_level")
+            rank_name = (view.get("rank_name", "") or "").replace("_", " ")
+            capped = view.get("capped_by_commander", False)
+            level_line = f"  Level {eff} — {rank_name}"
+            if capped:
+                level_line += "  |y[capped by commander]|n"
+            lines.append(level_line)
+
+            from world.systems.agent_system import AgentSystem
+            ability_status = view.get("ability_status") or {}
+            ability_parts = []
+            qualifies = False
+            for key, wire in ability_status.items():
+                decoded_state, readable = AgentSystem.decode_ability_status(wire)
+                if decoded_state != "locked":
+                    qualifies = True
+                ability_parts.append(f"{key}: {readable}")
+            if ability_status and qualifies:
+                lines.append("  Abilities: " + ", ".join(ability_parts))
+            else:
+                lines.append("  Abilities: none")
+        except Exception:
+            pass
+
+        caller.msg("\n".join(lines))
+
     subcommands = {
         "list": (sub_list, "List your agents", ""),
         "assign": (sub_assign, "Assign an agent to a role", ""),
@@ -375,6 +468,7 @@ class CmdAgent(GameSubcommandRouter):
         "patrol": (sub_patrol, "Set or clear a patrol route", ""),
         "stop": (sub_stop, "Stop an agent's current action", ""),
         "ability": (sub_ability, "Enable/disable or view a gated ability", ""),
+        "score": (sub_score, "Show one agent's stat sheet", ""),
     }
 
 

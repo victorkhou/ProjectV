@@ -216,7 +216,7 @@ class FakeCaller:
 class FakeAgent:
     """Fake agent NPC for list tests."""
 
-    def __init__(self, agent_id=1, role="soldier"):
+    def __init__(self, agent_id=1, role="soldier", kills=0, hp=100, hp_max=100):
         self.key = f"Agent-{agent_id}"
         self.db = FakeDB(
             agent_id=agent_id,
@@ -225,6 +225,9 @@ class FakeAgent:
             incapacitated=False,
             reserve=False,
             activity_status="Idle",
+            kills=kills,
+            hp=hp,
+            hp_max=hp_max,
         )
 
 
@@ -245,6 +248,12 @@ class FakeAgentSystem:
 
     def get_agents(self, caller):
         return self._agents
+
+    def get_agent_by_id(self, caller, agent_id):
+        for a in self._agents:
+            if getattr(a.db, "agent_id", None) == agent_id:
+                return a
+        return None
 
     def get_agent_progression_view(self, agent):
         aid = getattr(agent.db, "agent_id", None)
@@ -546,6 +555,63 @@ class TestAgentList(unittest.TestCase):
         output = "\n".join(caller._messages)
         # Core agent info still rendered despite the progression failure.
         self.assertIn("#1", output)
+
+    def test_list_shows_kill_tally(self):
+        """The roster surfaces a non-zero kill tally (K:N)."""
+        agents = [FakeAgent(agent_id=1, role="guard", kills=3)]
+        agent_sys = FakeAgentSystem(agents=agents)
+        caller = FakeCaller(systems={"agent_system": agent_sys})
+        cmd = _make_cmd(caller, " list")
+        cmd.func()
+        output = "\n".join(caller._messages)
+        self.assertIn("K:3", output)
+
+
+# -------------------------------------------------------------- #
+#  agent score — one agent's stat sheet
+# -------------------------------------------------------------- #
+
+class TestAgentScore(unittest.TestCase):
+    """`agent score <id>` shows a single agent's stat sheet incl. kills."""
+
+    def test_score_shows_kills_and_level(self):
+        agents = [FakeAgent(agent_id=1, role="guard", kills=5)]
+        views = {1: {"effective_level": 8, "rank_name": "Veteran",
+                     "ability_status": {}, "capped_by_commander": False}}
+        agent_sys = FakeAgentSystem(agents=agents, progression_views=views)
+        caller = FakeCaller(systems={"agent_system": agent_sys})
+        cmd = _make_cmd(caller, " score 1")
+        cmd.func()
+        output = "\n".join(caller._messages)
+        self.assertIn("Agent #1", output)
+        self.assertIn("Kills: 5", output)
+        self.assertIn("Level 8", output)
+        self.assertIn("Veteran", output)
+
+    def test_score_unknown_agent(self):
+        agent_sys = FakeAgentSystem(agents=[])
+        caller = FakeCaller(systems={"agent_system": agent_sys})
+        cmd = _make_cmd(caller, " score 9")
+        cmd.func()
+        self.assertTrue(any("not found" in m for m in caller._messages))
+
+    def test_score_requires_id(self):
+        agent_sys = FakeAgentSystem(agents=[FakeAgent(agent_id=1)])
+        caller = FakeCaller(systems={"agent_system": agent_sys})
+        cmd = _make_cmd(caller, " score")
+        cmd.func()
+        self.assertTrue(any("Usage" in m for m in caller._messages))
+
+    def test_score_capped_flag_shown(self):
+        agents = [FakeAgent(agent_id=2, role="harvester", kills=0)]
+        views = {2: {"effective_level": 3, "rank_name": "Recruit",
+                     "ability_status": {}, "capped_by_commander": True}}
+        agent_sys = FakeAgentSystem(agents=agents, progression_views=views)
+        caller = FakeCaller(systems={"agent_system": agent_sys})
+        cmd = _make_cmd(caller, " score 2")
+        cmd.func()
+        output = "\n".join(caller._messages)
+        self.assertIn("capped", output.lower())
 
 
 # -------------------------------------------------------------- #

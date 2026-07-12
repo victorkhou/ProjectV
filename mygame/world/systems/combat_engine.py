@@ -625,6 +625,10 @@ class CombatEngine(BaseSystem):
             # Route through the progression path (recompute level/rank + events),
             # not a raw db.combat_xp write.
             self._award_player_combat_xp(attacker_owner, xp_kill)
+            # Cosmetic acknowledgment: tally the kill on the acting unit (a
+            # player or agent tracks its own; a turret's tallies on its owner).
+            # This does NOT feed XP/level/cap — it's a stat, not progression.
+            self._record_kill(attacker)
 
         # Deduct XP from victim.
         if self._is_agent(victim):
@@ -692,6 +696,8 @@ class CombatEngine(BaseSystem):
             pass  # friendly fire — no reward
         elif attacker_owner is not None:
             self._award_player_combat_xp(attacker_owner, xp_kill)
+            # Cosmetic kill tally on the acting unit (see _handle_player_defeat).
+            self._record_kill(attacker)
 
         tile = self._get_target_location(victim)
         victim_name = getattr(victim, "key", "enemy")
@@ -1036,6 +1042,27 @@ class CombatEngine(BaseSystem):
         if self._is_player(entity):
             return entity
         return None
+
+    def _record_kill(self, attacker: Any) -> None:
+        """Increment the cosmetic kill tally for a scored kill.
+
+        A player or agent tracks its OWN kills (shown on its score sheet); a
+        turret/building has no sheet, so its kill tallies on the owning player
+        instead. Purely a stat — it never feeds XP, level, or the owner cap
+        (that is the whole point of the acknowledgment-not-XP design). Guarded
+        so a missing/odd ``db`` never breaks combat resolution.
+        """
+        # The acting unit that gets the tally: player or agent tallies itself;
+        # anything else (a turret) tallies its owning player.
+        unit = attacker if (self._is_player(attacker) or self._is_agent(attacker)) \
+            else self._owning_player(attacker)
+        db = getattr(unit, "db", None)
+        if db is None:
+            return
+        try:
+            db.kills = int(getattr(db, "kills", 0) or 0) + 1
+        except Exception:  # noqa: BLE001 - a tally must never break combat
+            pass
 
     def _unit_kind(self, entity: Any) -> str:
         """Return an attribution token for *entity*: 'turret', 'agent', or ''.
