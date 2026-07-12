@@ -8,7 +8,7 @@ production_scaling:
   5: 1000
 
 turret_damage: 15
-turret_radius: 10
+turret_radius: 7
 
 xp_kill: 100
 xp_building_destroy: 50
