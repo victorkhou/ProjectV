@@ -1080,6 +1080,172 @@ class CmdAttack(GameCommand):
             self.caller.msg(msg)
 
 
+# Direction → unit (dx, dy) step for directional shooting. Mirrors CmdMove's
+# DIRECTION_MAP (north = +y).
+_SHOOT_DIRECTIONS = {
+    "north": (0, 1), "n": (0, 1),
+    "south": (0, -1), "s": (0, -1),
+    "east": (1, 0), "e": (1, 0),
+    "west": (-1, 0), "w": (-1, 0),
+}
+
+
+def _first_target_along_ray(caller, dx, dy, weapon_range):
+    """Return the first attackable entity along a ray from the caller, or None.
+
+    Walks tiles outward in the (dx, dy) direction up to *weapon_range*, and
+    returns the first player/agent/enemy/building found (the shot stops at the
+    first thing it hits — a building absorbs it). Uses the room's coordinate
+    index (``get_objects_at``); returns None if nothing is in the line of fire.
+    """
+    from world.utils import is_player, is_building
+
+    loc = getattr(caller, "location", None)
+    cx = getattr(caller.db, "coord_x", None)
+    cy = getattr(caller.db, "coord_y", None)
+    if loc is None or cx is None or cy is None or not hasattr(loc, "get_objects_at"):
+        return None
+    cx, cy = int(cx), int(cy)
+    for step in range(1, weapon_range + 1):
+        tx, ty = cx + dx * step, cy + dy * step
+        for obj in loc.get_objects_at(tx, ty):
+            if obj is caller:
+                continue
+            if is_building(obj) or is_player(obj):
+                return obj
+    return None
+
+
+class CmdTarget(GameCommand):
+    """Lock onto an enemy so ranged shots track them at higher accuracy.
+
+    Usage:
+      target <enemy>
+
+    Options:
+      <enemy>  a player/agent/enemy within your ranged weapon's range (a
+               partial name works; nearest match wins)
+
+    Notes:
+      Requires a ranged weapon equipped. Locking takes a few ticks (faster with
+      better gear); you'll be told when the lock completes. Once locked, 'shoot'
+      (no direction) fires at the target at higher accuracy and keeps hitting it
+      as it moves — until it leaves your weapon's range or you change areas,
+      which breaks the lock. See 'help combat'.
+    """
+
+    key = "target"
+    aliases = ["tg", "lock"]
+    help_category = "Game"
+
+    def func(self):
+        caller = self.caller
+        name = self.args.strip()
+        if not name:
+            caller.msg("Usage: target <enemy>")
+            return
+
+        targeting = self.require_system("targeting_system")
+        if targeting is None:
+            return
+
+        # Must hold a ranged weapon to lock on.
+        if targeting.get_ranged_weapon(caller) is None:
+            caller.msg("You need a ranged weapon equipped to lock on.")
+            return
+
+        # Resolve among in-view attackables (same scope as 'attack'), but only
+        # ENEMIES (not the caller's own units) are lockable.
+        target, err = _resolve_attack_target(caller, name)
+        if target is None:
+            caller.msg(err)
+            return
+        if is_owner(target, caller) or target is caller:
+            caller.msg("You can only lock onto an enemy.")
+            return
+
+        ok, msg = targeting.acquire(caller, target)
+        if not ok and msg:
+            caller.msg(msg)
+
+
+class CmdShoot(GameCommand):
+    """Fire your ranged weapon — at a locked target, or in a direction.
+
+    Usage:
+      shoot                 fire at your locked target (see 'target')
+      shoot <direction>     fire n/s/e/w along a line
+
+    Notes:
+      Alias: fire. Requires a ranged weapon. With no argument you fire at the
+      enemy you've 'target'-locked (higher accuracy). Otherwise you fire in a
+      compass direction and hit the first thing in the line of fire at lower
+      accuracy — you can only hit a specific player by locking onto them first.
+      A shot consumes ammo whether it hits or misses. See 'help combat'.
+    """
+
+    key = "shoot"
+    aliases = ["fire"]
+    help_category = "Game"
+
+    def func(self):
+        caller = self.caller
+        combat_engine = self.require_system("combat_engine")
+        if combat_engine is None:
+            return
+        targeting = self.require_system("targeting_system")
+        if targeting is None:
+            return
+
+        weapon = targeting.get_ranged_weapon(caller)
+        if weapon is None:
+            caller.msg("You need a ranged weapon equipped to shoot.")
+            return
+
+        arg = self.args.strip().lower()
+        if not arg:
+            self._shoot_locked(caller, combat_engine, targeting, weapon)
+        else:
+            self._shoot_directional(caller, combat_engine, targeting, weapon, arg)
+
+    def _shoot_locked(self, caller, combat_engine, targeting, weapon):
+        """Fire at the locked target (higher accuracy)."""
+        target = targeting.get_target(caller)
+        if target is None:
+            caller.msg(
+                "No target locked. Use 'target <enemy>' first, or "
+                "'shoot <direction>' to fire in a direction."
+            )
+            return
+        if not targeting.is_locked(caller):
+            caller.msg("Still locking on — hold fire until the lock completes.")
+            return
+        accuracy = targeting.targeted_accuracy(weapon)
+        _ok, msg = combat_engine.queue_attack(
+            caller, target, weapon=weapon, accuracy=accuracy
+        )
+        if msg:
+            caller.msg(msg)
+
+    def _shoot_directional(self, caller, combat_engine, targeting, weapon, arg):
+        """Fire in a compass direction at the first thing in the line of fire."""
+        step = _SHOOT_DIRECTIONS.get(arg)
+        if step is None:
+            caller.msg("Shoot which way? Use n/s/e/w, or 'shoot' at a locked target.")
+            return
+        weapon_range = targeting.weapon_range(weapon)
+        target = _first_target_along_ray(caller, step[0], step[1], weapon_range)
+        if target is None:
+            caller.msg("Nothing in the line of fire.")
+            return
+        accuracy = targeting.directional_accuracy(weapon)
+        _ok, msg = combat_engine.queue_attack(
+            caller, target, weapon=weapon, accuracy=accuracy
+        )
+        if msg:
+            caller.msg(msg)
+
+
 class CmdEquip(GameCommand):
     """Wear an item from your inventory in its slot.
 

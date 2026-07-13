@@ -108,6 +108,50 @@ def _fmt_unit_attack(d: dict) -> str:
     )
 
 
+def _fmt_shot_missed(d: dict) -> str:
+    # The shooter's ranged shot whiffed — no damage dealt.
+    return (
+        f"|y[Combat] Your shot at {d.get('target_name', 'the target')} with "
+        f"{d.get('weapon_name', 'your weapon')} missed.|n"
+    )
+
+
+def _fmt_shot_dodged(d: dict) -> str:
+    # A player was shot at but the attack missed — bright red (incoming).
+    return (
+        f"|r[Combat] {d.get('attacker_name', 'Someone')} shot at you with "
+        f"{d.get('weapon_name', 'a weapon')} and missed.|n"
+    )
+
+
+_LOCK_LOST_REASONS = {
+    "out_of_range": "your target moved out of range",
+    "left_area": "you left the area",
+    "no_weapon": "you no longer have a ranged weapon",
+    "target_gone": "your target is gone",
+}
+
+
+def _fmt_targeting(d: dict) -> str:
+    # Lock-on started; it completes after a few ticks.
+    return (
+        f"|y[Combat] Locking onto {d.get('target_name', 'the target')}... "
+        f"(~{d.get('ticks', '?')} ticks). Hold fire until locked.|n"
+    )
+
+
+def _fmt_locked(d: dict) -> str:
+    return (
+        f"|g[Combat] Locked onto {d.get('target_name', 'the target')} — "
+        f"'shoot' to fire.|n"
+    )
+
+
+def _fmt_lock_lost(d: dict) -> str:
+    why = _LOCK_LOST_REASONS.get(d.get("reason"), "the lock broke")
+    return f"|y[Combat] Lock lost — {why}.|n"
+
+
 def _fmt_ability_active(d: dict) -> str:
     return f"|g[Ability] '{d['key']}' is now active for Agent #{d['agent_id']}.|n"
 
@@ -422,6 +466,11 @@ class NotificationPresenter:
         "building_attacked": _fmt_building_attacked,
         "unit_attacked": _fmt_unit_attacked,
         "unit_attack": _fmt_unit_attack,
+        "shot_missed": _fmt_shot_missed,
+        "shot_dodged": _fmt_shot_dodged,
+        "targeting": _fmt_targeting,
+        "locked": _fmt_locked,
+        "lock_lost": _fmt_lock_lost,
         "ability_active": _fmt_ability_active,
         "ability_relocked": _fmt_ability_relocked,
         "ability_available": _fmt_ability_available,

@@ -96,6 +96,7 @@ def initialize_game() -> dict:
     from world.systems.equipment_system import EquipmentSystem
     from world.systems.agent_system import AgentSystem
     from world.systems.guard_combat_system import GuardCombatSystem
+    from world.systems.targeting_system import TargetingSystem
     from world.systems.outpost_spawner import OutpostSpawnerSystem
     from world.systems.base_elimination import BaseEliminationHandler
     from world.systems.movement_system import MovementSystem
@@ -179,6 +180,8 @@ def initialize_game() -> dict:
     _sight_blocked = make_sight_blocked(registry)
     combat_engine.set_sight_blocked_func(_sight_blocked)
     guard_combat_system.set_sight_blocked_func(_sight_blocked)
+    # Ranged lock-on ('target'/'shoot'): per-tick lock upkeep + accuracy model.
+    targeting_system = TargetingSystem(registry, event_bus)
     # Inject the PowerupSystem into EquipmentSystem so ``use`` applies a
     # consumable buff through the real timed-effect machinery (correct entry
     # shape + tick-based expiry) rather than reaching into game_systems.
@@ -494,6 +497,7 @@ def initialize_game() -> dict:
         "equipment_system": equipment_system,
         "agent_system": agent_system,
         "guard_combat_system": guard_combat_system,
+        "targeting_system": targeting_system,
         "outpost_spawner": outpost_spawner,
         "base_elimination": base_elimination,
         "movement_system": movement_system,

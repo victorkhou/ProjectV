@@ -338,6 +338,18 @@ class BalanceConfig:
     #: attacks the nearest non-owner player each tick.
     guard_aggro_radius: int = 5
 
+    # --- Ranged targeting: lock-on ('target') + shooting ('shoot') ---- #
+    #: Ticks to fully lock onto an enemy with 'target'. The effective time is
+    #: reduced by the weapon's ``lock_speed`` stat modifier (min 1 tick), so
+    #: better gear locks faster. A completed lock grants ``accuracy_targeted``.
+    target_lock_ticks: int = 3
+    #: Baseline hit chance (0..1) for a shot at a LOCKED target, before the
+    #: weapon's ``accuracy`` stat modifier is added. Clamped to [0, 1].
+    accuracy_targeted: float = 0.8
+    #: Baseline hit chance (0..1) for a DIRECTIONAL (unlocked) shot, before the
+    #: weapon's ``accuracy`` stat modifier is added. Clamped to [0, 1].
+    accuracy_directional: float = 0.5
+
     # --- NPC base spawner + elimination (PvE NPC bases, Phase 5) ------ #
     #: XP awarded for destroying an NPC base's HQ (the whole base is wiped) —
     #: far more than xp_building_destroy=50, so raiding is decisively rewarding.

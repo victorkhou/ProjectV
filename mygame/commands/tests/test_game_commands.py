@@ -97,7 +97,8 @@ _ensure_evennia_stubs()
 
 from mygame.commands.game_commands import (  # noqa: E402
     CmdMove, CmdHarvest, CmdBuild, CmdUpgrade, CmdRepair,
-    CmdAttack, CmdEquip, CmdUnequip, CmdUse, CmdThrow, CmdReload, CmdCraft,
+    CmdAttack, CmdTarget, CmdShoot,
+    CmdEquip, CmdUnequip, CmdUse, CmdThrow, CmdReload, CmdCraft,
     CmdDeposit, CmdWithdraw,
     CmdResearch, CmdPowerup,
     CmdScore, CmdEquipment, CmdBuildings, CmdScan, CmdTechnology,
@@ -1032,6 +1033,149 @@ class _FakeRangedWeapon:
 
     def get_stat(self, stat_name, default=0):
         return float(self.stat_modifiers.get(stat_name, default))
+
+
+class _FakeTargeting:
+    """Records target/shoot interactions for command tests."""
+    def __init__(self, ranged=True, locked=False, target=None):
+        self._ranged = ranged
+        self._locked = locked
+        self._target = target
+        self.acquired = []
+
+    def get_ranged_weapon(self, player):
+        return object() if self._ranged else None
+
+    def weapon_range(self, weapon):
+        return 8
+
+    def acquire(self, player, target):
+        self.acquired.append(target)
+        return True, ""
+
+    def get_target(self, player):
+        return self._target
+
+    def is_locked(self, player):
+        return self._locked
+
+    def targeted_accuracy(self, weapon):
+        return 0.8
+
+    def directional_accuracy(self, weapon):
+        return 0.5
+
+
+class _RecordingEngine:
+    def __init__(self):
+        self.calls = []
+
+    def queue_attack(self, attacker, target, weapon=None, accuracy=None):
+        self.calls.append((target, accuracy))
+        return True, ""
+
+
+class TestCmdTarget(unittest.TestCase):
+    def test_requires_ranged_weapon(self):
+        tg = _FakeTargeting(ranged=False)
+        caller = FakeCaller(systems={"targeting_system": tg,
+                                     "combat_engine": object()})
+        caller.location.contents = [_FakeAttackable("Guard", 5, 6)]
+        cmd = _make_cmd(CmdTarget, caller, " guard")
+        cmd.func()
+        self.assertTrue(any("ranged weapon" in m for m in caller._messages))
+        self.assertEqual(tg.acquired, [])
+
+    def test_locks_onto_in_view_enemy(self):
+        tg = _FakeTargeting(ranged=True)
+        caller = FakeCaller(systems={"targeting_system": tg,
+                                     "combat_engine": object()})
+        guard = _FakeAttackable("Outpost #1 Guard-1", 5, 6)
+        caller.location.contents = [guard]
+        cmd = _make_cmd(CmdTarget, caller, " guard")
+        cmd.func()
+        self.assertEqual(tg.acquired, [guard])
+
+    def test_no_args_shows_usage(self):
+        tg = _FakeTargeting()
+        caller = FakeCaller(systems={"targeting_system": tg})
+        cmd = _make_cmd(CmdTarget, caller, "")
+        cmd.func()
+        self.assertTrue(any("Usage" in m for m in caller._messages))
+
+
+class TestCmdShoot(unittest.TestCase):
+    def test_requires_ranged_weapon(self):
+        tg = _FakeTargeting(ranged=False)
+        engine = _RecordingEngine()
+        caller = FakeCaller(systems={"targeting_system": tg,
+                                     "combat_engine": engine})
+        cmd = _make_cmd(CmdShoot, caller, "")
+        cmd.func()
+        self.assertTrue(any("ranged weapon" in m for m in caller._messages))
+        self.assertEqual(engine.calls, [])
+
+    def test_shoot_locked_target_uses_targeted_accuracy(self):
+        target = _FakeAttackable("Guard", 3, 0)
+        tg = _FakeTargeting(ranged=True, locked=True, target=target)
+        engine = _RecordingEngine()
+        caller = FakeCaller(systems={"targeting_system": tg,
+                                     "combat_engine": engine})
+        cmd = _make_cmd(CmdShoot, caller, "")
+        cmd.func()
+        self.assertEqual(engine.calls, [(target, 0.8)])
+
+    def test_shoot_no_lock_no_dir_prompts(self):
+        tg = _FakeTargeting(ranged=True, locked=False, target=None)
+        engine = _RecordingEngine()
+        caller = FakeCaller(systems={"targeting_system": tg,
+                                     "combat_engine": engine})
+        cmd = _make_cmd(CmdShoot, caller, "")
+        cmd.func()
+        self.assertEqual(engine.calls, [])
+        self.assertTrue(any("No target locked" in m for m in caller._messages))
+
+    def test_shoot_still_locking_holds_fire(self):
+        target = _FakeAttackable("Guard", 3, 0)
+        tg = _FakeTargeting(ranged=True, locked=False, target=target)
+        engine = _RecordingEngine()
+        caller = FakeCaller(systems={"targeting_system": tg,
+                                     "combat_engine": engine})
+        cmd = _make_cmd(CmdShoot, caller, "")
+        cmd.func()
+        self.assertEqual(engine.calls, [])
+        self.assertTrue(any("locking on" in m.lower() for m in caller._messages))
+
+    def test_shoot_directional_hits_first_in_line_at_directional_accuracy(self):
+        tg = _FakeTargeting(ranged=True)
+        engine = _RecordingEngine()
+        caller = FakeCaller(systems={"targeting_system": tg,
+                                     "combat_engine": engine})
+        # Caller at (5,5); a foe two tiles north at (5,7).
+        foe = _FakeAttackable("Guard", 5, 7)
+        caller.location._objects_by_coord[(5, 7)] = [foe]
+        cmd = _make_cmd(CmdShoot, caller, " north")
+        cmd.func()
+        self.assertEqual(engine.calls, [(foe, 0.5)])
+
+    def test_shoot_directional_nothing_in_line(self):
+        tg = _FakeTargeting(ranged=True)
+        engine = _RecordingEngine()
+        caller = FakeCaller(systems={"targeting_system": tg,
+                                     "combat_engine": engine})
+        cmd = _make_cmd(CmdShoot, caller, " north")
+        cmd.func()
+        self.assertEqual(engine.calls, [])
+        self.assertTrue(any("line of fire" in m for m in caller._messages))
+
+    def test_shoot_bad_direction(self):
+        tg = _FakeTargeting(ranged=True)
+        engine = _RecordingEngine()
+        caller = FakeCaller(systems={"targeting_system": tg,
+                                     "combat_engine": engine})
+        cmd = _make_cmd(CmdShoot, caller, " up")
+        cmd.func()
+        self.assertEqual(engine.calls, [])
 
 
 class TestCmdEquip(unittest.TestCase):

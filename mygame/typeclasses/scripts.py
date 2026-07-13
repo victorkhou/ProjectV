@@ -55,6 +55,7 @@ TICK_STEP_ORDER = (
     ("agent_training", "Decrement training timers."),
     ("active_presence", "Online-player construction/harvest progress."),
     ("equipment_production", "Equipment buildings emit items."),
+    ("targeting_upkeep", "Advance/validate ranged lock-ons before shots resolve."),
     ("guard_combat", "Guards/soldiers acquire targets and queue attacks."),
     ("combat_resolution", "Resolve queued attacks before turrets/expiry."),
     ("turret_attacks", "Turrets fire at the post-resolution world state."),
@@ -456,6 +457,15 @@ class GameTickScript(DefaultScript):
             ``world.utils.active_hq_owner_ids``)."""
             from world.utils import active_hq_owner_ids
             return active_hq_owner_ids(tick_data["buildings"], provider=registry)
+
+        targeting_system = systems.get("targeting_system")
+        if targeting_system:
+            def process_targeting_upkeep():
+                # Only online players hold ranged locks; advance/validate each.
+                targeting_system.process_tick(
+                    tick_number, tick_data["online_players"]
+                )
+            registered["targeting_upkeep"] = process_targeting_upkeep
 
         guard_combat_system = systems.get("guard_combat_system")
         if guard_combat_system:

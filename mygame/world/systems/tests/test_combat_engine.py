@@ -334,7 +334,7 @@ def _hq_owner(name="Owner", planet="earth", oid=None):
         owner.id = oid
     return owner
 
-def _make_engine(registry=None, event_bus=None, current_tick=0):
+def _make_engine(registry=None, event_bus=None, current_tick=0, rng=None):
     """Create a CombatEngine with test defaults."""
     if registry is None:
         registry = _make_registry()
@@ -344,6 +344,7 @@ def _make_engine(registry=None, event_bus=None, current_tick=0):
         registry=registry,
         event_bus=event_bus,
         current_tick_func=lambda: current_tick,
+        rng=rng,
     )
     # Attack notifications are now emitted as PLAYER_NOTIFICATION events;
     # attach the real presenter so tests capturing target._messages see the
@@ -2152,6 +2153,65 @@ class TestClosedBuildingRangedImmunity(unittest.TestCase):
         engine.resolve_tick()
         # Target sheltered at resolution -> no damage applied.
         self.assertEqual(target.db.hp, 100)
+
+
+class _FixedRng:
+    """A deterministic rng whose random() always returns *value*."""
+    def __init__(self, value):
+        self._value = value
+
+    def random(self):
+        return self._value
+
+
+class TestAccuracyRoll(unittest.TestCase):
+    """A queued attack with an accuracy in [0,1] is rolled at resolution: a hit
+    deals damage, a miss deals none. accuracy=None (melee/guard/turret/throw)
+    always lands, preserving existing combat."""
+
+    @staticmethod
+    def _ranged_weapon():
+        w = FakeWeapon(damage=30, weapon_range=8, key="rifle")
+        w.weapon_type = "ranged"
+        return w
+
+    def _setup(self, roll):
+        # rng.random() returns `roll`; a shot HITS when roll < accuracy.
+        engine, _ = _make_engine(rng=_FixedRng(roll))
+        attacker = FakePlayer(name="Shooter", weapon=self._ranged_weapon(),
+                              location=FakeTile(xyz=(0, 0, "earth")))
+        target = FakePlayer(name="Victim", hp=100,
+                            location=FakeTile(xyz=(2, 0, "earth")))
+        return engine, attacker, target
+
+    def test_hit_when_roll_below_accuracy(self):
+        engine, attacker, target = self._setup(roll=0.5)
+        engine.queue_attack(attacker, target,
+                            weapon=self._ranged_weapon(), accuracy=0.8)
+        engine.resolve_tick()
+        self.assertLess(target.db.hp, 100)  # 0.5 < 0.8 -> hit
+
+    def test_miss_when_roll_at_or_above_accuracy(self):
+        engine, attacker, target = self._setup(roll=0.9)
+        engine.queue_attack(attacker, target,
+                            weapon=self._ranged_weapon(), accuracy=0.8)
+        engine.resolve_tick()
+        self.assertEqual(target.db.hp, 100)  # 0.9 >= 0.8 -> miss, no damage
+
+    def test_miss_locks_shooter_into_combat(self):
+        engine, attacker, target = self._setup(roll=0.99)
+        engine.queue_attack(attacker, target,
+                            weapon=self._ranged_weapon(), accuracy=0.5)
+        engine.resolve_tick()
+        # Even on a miss the shooter is in combat (they fired).
+        self.assertGreater(getattr(attacker.db, "combat_lockout_tick", 0), 0)
+
+    def test_no_accuracy_always_hits(self):
+        """accuracy=None (the melee/guard/turret default) never rolls."""
+        engine, attacker, target = self._setup(roll=0.999)
+        engine.queue_attack(attacker, target, weapon=self._ranged_weapon())
+        engine.resolve_tick()
+        self.assertLess(target.db.hp, 100)  # no roll -> always lands
 
 
 if __name__ == "__main__":

@@ -109,6 +109,15 @@ guard_ranged_damage: 15          # base damage for ranged guards (fortress)
 guard_ranged_range: 4            # weapon range (tiles) for ranged guards
 guard_aggro_radius: 5            # detection distance (tiles) for guard AI
 
+# --- Ranged targeting: lock-on ('target') + shooting ('shoot') ---
+# 'target <enemy>' locks on over target_lock_ticks (reduced by a weapon's
+# lock_speed stat). A locked shot hits at accuracy_targeted; an unlocked
+# directional 'shoot <dir>' hits at accuracy_directional. Both baselines are
+# raised by the weapon's 'accuracy' stat modifier and clamped to [0, 1].
+target_lock_ticks: 3             # ticks to fully lock onto a target
+accuracy_targeted: 0.8           # hit chance vs a locked target (baseline)
+accuracy_directional: 0.5        # hit chance for a directional shot (baseline)
+
 # --- NPC base spawner + elimination (PvE NPC bases, Phase 5) ---
 # NPC outposts/fortresses placed on the map at init; destroying a base's HQ
 # wipes the whole base and awards xp_hq_destroy + loot, then respawns it

@@ -603,6 +603,8 @@ class SchemaValidator:
             # Guard combat AI (PvE NPC bases feature, Phase 3).
             "guard_melee_damage", "guard_ranged_damage", "guard_ranged_range",
             "guard_aggro_radius",
+            # Ranged targeting / shooting lock-on.
+            "target_lock_ticks",
             # NPC base spawner + elimination (PvE NPC bases, Phase 5).
             "xp_hq_destroy", "outpost_respawn_ticks", "outpost_count",
             "fortress_count", "outpost_guard_hp", "fortress_guard_hp",
@@ -615,6 +617,8 @@ class SchemaValidator:
             "academy_training_reduction_per_level", "extractor_level_bonus",
             "turret_level_bonus", "demolish_refund_default",
             "hp_regen_percent", "repair_cost_fraction",
+            # Ranged shot baseline accuracies (0..1).
+            "accuracy_targeted", "accuracy_directional",
         ]
         bool_fields = ["metrics_enabled"]
         # Resource->int maps: keys are resource names, values positive ints

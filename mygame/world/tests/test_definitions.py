@@ -266,8 +266,10 @@ class TestDataclassContracts:
         #    — PvE Phase 5.
         #  + 3 tile item-capacity caps (room_capacity_empty,
         #    room_capacity_building, room_capacity_per_storage_level).
+        #  + 3 ranged targeting (target_lock_ticks, accuracy_targeted,
+        #    accuracy_directional).
         # Bump this when adding a balance tunable.
-        assert len(fields(BalanceConfig)) == 63
+        assert len(fields(BalanceConfig)) == 66
 
     def test_coordinate_space_def_field_count(self):
         assert len(fields(CoordinateSpaceDef)) == 14

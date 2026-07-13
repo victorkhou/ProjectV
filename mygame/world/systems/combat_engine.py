@@ -9,6 +9,7 @@ target's equipped armor-slot GameItem.
 
 from __future__ import annotations
 
+import random
 from typing import Any, Callable
 
 from world.data_registry import DataRegistry
@@ -49,10 +50,16 @@ class CombatEngine(BaseSystem):
         current_tick_func: Callable[[], int] | None = None,
         agent_xp_awarder_provider: Callable[[], Any] | None = None,
         player_xp_awarder_provider: Callable[[], Any] | None = None,
+        rng: "random.Random | None" = None,
     ) -> None:
         super().__init__(registry, event_bus)
         self._current_tick_func = current_tick_func or (lambda: 0)
         self.pending_actions: list[dict] = []
+        # RNG for per-shot accuracy rolls (ranged 'shoot'/'target'). Injected in
+        # tests for determinism; a real Random() otherwise. Melee/guard/turret/
+        # throw attacks pass no accuracy and are never rolled (always land), so
+        # this only affects the new probabilistic ranged fire.
+        self._rng = rng or random.Random()
         # Optional line-of-sight predicate (location, x1, y1, x2, y2) -> blocked.
         # Injected at the composition root so turrets don't fire through Walls;
         # None means "no LOS restriction" (unit tests, minimal setups).
@@ -103,7 +110,8 @@ class CombatEngine(BaseSystem):
     # ------------------------------------------------------------------ #
 
     def queue_attack(
-        self, attacker: Any, target: Any, weapon: Any = None
+        self, attacker: Any, target: Any, weapon: Any = None,
+        accuracy: float | None = None,
     ) -> tuple[bool, str]:
         """Queue an attack action for resolution on the next tick.
 
@@ -129,6 +137,12 @@ class CombatEngine(BaseSystem):
                 :class:`_GuardWeapon` for an NPC guard that wields no Game_Item),
                 it overrides the attacker's equipped-weapon lookup, so the same
                 validation/ammo pipeline runs against the supplied weapon.
+            accuracy: Optional hit chance in ``[0, 1]`` for a probabilistic
+                shot (the 'shoot'/'target' ranged commands). When set, the shot
+                is rolled at resolution: a miss deals no damage (but the shot
+                was still fired — ammo is consumed here at queue time). ``None``
+                (the default for melee/guard/turret/throw) means the attack
+                always lands, preserving all existing combat.
 
         Returns:
             (success, message) tuple.
@@ -251,6 +265,7 @@ class CombatEngine(BaseSystem):
             "attacker": attacker,
             "target": target,
             "weapon_item": weapon_item,
+            "accuracy": accuracy,
         }
         self.pending_actions.append(action)
 
@@ -298,6 +313,16 @@ class CombatEngine(BaseSystem):
             # building (or an attacker that did) between queue and resolve must
             # not be meleed across the boundary from an adjacent tile.
             if is_melee and self._melee_blocked(attacker, target):
+                continue
+
+            # Accuracy roll for probabilistic ranged fire ('shoot'/'target').
+            # accuracy is None for melee/guard/turret/throw — those always land.
+            # A miss deals no damage but the shot was still fired (ammo already
+            # spent at queue time): notify both sides and lock the shooter into
+            # combat so a miss still starts/refreshes the fight.
+            accuracy = action.get("accuracy")
+            if accuracy is not None and self._rng.random() >= accuracy:
+                self._finalize_miss(attacker, target, weapon_item, current_tick)
                 continue
 
             # Calculate damage
@@ -388,6 +413,38 @@ class CombatEngine(BaseSystem):
                 self._handle_player_defeat(target, attacker)
             elif self._is_building(target):
                 self._handle_building_destruction(target, attacker)
+
+    def _finalize_miss(
+        self, attacker: Any, target: Any, weapon_item: Any, current_tick: int
+    ) -> None:
+        """Resolve a MISSED probabilistic shot: no damage, but the shot fired.
+
+        A miss still (a) puts the shooter — and their owning player — into
+        combat lockout, because they opened fire, and (b) notifies both sides so
+        the shooter sees "you missed" and the target sees "shot at you (missed)".
+        No ``COMBAT_ACTION`` for the target's timer is published for a miss's
+        DAMAGE, but the shooter's own lockout is set directly so firing always
+        starts the fight. Never touches HP or defeat handling.
+        """
+        lockout_ticks = self.registry.balance.combat_lockout_ticks
+        lockout_until = current_tick + lockout_ticks
+        self._set_combat_lockout(attacker, lockout_until)
+        attacker_owner = self._owning_player(attacker)
+        if attacker_owner is not None and attacker_owner is not attacker:
+            self._set_combat_lockout(attacker_owner, lockout_until)
+
+        weapon_name = getattr(weapon_item, "key", str(weapon_item))
+        target_name = getattr(target, "key", "the target")
+        # Tell the shooter (the owning player) their shot missed.
+        shooter = attacker_owner if attacker_owner is not None else attacker
+        if self._is_player(shooter):
+            self.notify(shooter, "shot_missed", target_name=target_name,
+                        weapon_name=weapon_name)
+        # Tell a player target they were shot at (and dodged).
+        if self._is_player(target):
+            self.notify(target, "shot_dodged",
+                        attacker_name=getattr(attacker, "key", "Someone"),
+                        weapon_name=weapon_name)
 
     def apply_direct_hit(
         self,

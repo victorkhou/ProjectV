@@ -122,6 +122,8 @@ HELP_ENTRY_DICTS = [
             # Combat & Equipment
 
             |wattack <target>|n (|wa|n) — attack a player, building, or agent
+            |wtarget <enemy>|n (|wlock|n) — lock a ranged weapon onto an enemy
+            |wshoot|n (|wfire|n) — fire ranged: at a locked target, or a direction
             |wcraft <item>|n — make gear/ammo at an Armory, Lab, or Medbay
             |wequip <item>|n / |wunequip <slot>|n — manage worn gear (or |wall|n)
             |wequipment|n (|weq|n) — your full loadout (paperdoll)
@@ -351,6 +353,12 @@ HELP_ENTRY_DICTS = [
             # Attacking
 
             |wattack <target>|n (|wa|n) — attack a player, building, or agent in range. You can only target something within your |cview|n (what 'scan' lists), so 'attack guard' picks the nearest matching foe you can actually see. Your equipped |cweapon|n decides your damage and reach: melee weapons hit any of the eight tiles touching you — including diagonals — while ranged weapons reach further. Equip a weapon first (|whelp equipment|n).
+
+            # Ranged: Target & Shoot
+
+            With a |cranged weapon|n you can fight at a distance in two ways:
+            |wtarget <enemy>|n (|wlock|n) — lock onto an enemy in your weapon's range. It takes a few ticks to lock (faster with better gear); you're told when it completes. A |clocked|n shot is far more accurate (|c80%|n baseline) and keeps hitting the enemy even as they move — until they leave your range or you change areas, which breaks the lock.
+            |wshoot|n (|wfire|n) — fire your ranged weapon. With a |clocked|n target, plain |wshoot|n fires at them. Otherwise |wshoot <n/s/e/w>|n fires in a direction and hits the first thing in the line of fire, at lower accuracy (|c50%|n baseline). You can only hit a specific player by locking onto them first. Every shot spends ammo whether it hits or misses.
 
             # The Combat State
 
