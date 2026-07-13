@@ -2307,6 +2307,121 @@ class TestAccuracyRoll(unittest.TestCase):
         self.assertLess(target.db.hp, 100)  # the hit still lands
         self.assertFalse(any("you hit" in m.lower() for m in attacker._messages))
 
+    def test_miss_publishes_combat_action_so_both_sides_enter_combat_state(self):
+        """A miss must PUBLISH COMBAT_ACTION (damage=0) — that event is the only
+        trigger for combat_timer_expires, the state that gates wall-passage /
+        enter-leave / move-lag. Setting combat_lockout_tick alone (build gate) is
+        NOT the same thing. This is the HIGH review finding."""
+        events = []
+        event_bus = EventBus()
+        event_bus.subscribe("combat_action", lambda **kw: events.append(kw))
+        engine, _ = _make_engine(event_bus=event_bus, current_tick=10,
+                                 rng=_FixedRng(0.99))
+        attacker = FakePlayer(name="Shooter", oid=1,
+                              weapon=self._ranged_weapon(),
+                              location=FakeTile(xyz=(0, 0, "earth")))
+        target = FakePlayer(name="Victim", hp=100, oid=2,
+                            location=FakeTile(xyz=(2, 0, "earth")))
+        engine.queue_attack(attacker, target,
+                            weapon=self._ranged_weapon(), accuracy=0.5)
+        engine.resolve_tick()
+        self.assertEqual(len(events), 1, "a miss must publish COMBAT_ACTION")
+        self.assertEqual(events[0]["damage"], 0)
+        self.assertIs(events[0]["attacker"], attacker)
+        self.assertIs(events[0]["target"], target)
+
+    def test_miss_at_owned_agent_notifies_owner_not_agent(self):
+        """A missed shot at a player-owned agent must notify the OWNER (the agent
+        has no session), mirroring _notify_target's routing. Previously the
+        'shot_dodged' notice went to the session-less agent and the owner heard
+        nothing."""
+        engine, _ = _make_engine(rng=_FixedRng(0.99))
+        owner = FakePlayer(name="AgentOwner", oid=7,
+                           location=FakeTile(xyz=(5, 5, "earth")))
+        attacker = FakePlayer(name="Raider", oid=8,
+                              weapon=self._ranged_weapon(),
+                              location=FakeTile(xyz=(0, 0, "earth")))
+        agent = FakeAgent(name="MyDrone",
+                          location=FakeTile(xyz=(2, 0, "earth")))
+        agent.db.owner = owner
+        engine.queue_attack(attacker, agent,
+                            weapon=self._ranged_weapon(), accuracy=0.5)
+        engine.resolve_tick()
+        # Owner told their unit was shot at; the agent itself is not msg()'d.
+        self.assertTrue(any("shot at your" in m.lower() for m in owner._messages),
+                        "owner must hear their agent was shot at")
+        self.assertFalse(any("shot at you" in m.lower() for m in agent._messages))
+
+
+class TestDroppedShotRefundsAmmo(unittest.TestCase):
+    """A queued shot dropped at resolution (target took cover in the queue→resolve
+    gap) fires nothing, so its consumed ammo — magazine round(s) and resource
+    ammo_cost — is refunded rather than silently lost (review MED)."""
+
+    @staticmethod
+    def _sheltered_player(name, x, y):
+        class _ShelterTile(FakeTile):
+            def get_buildings_at(self, bx, by):
+                b = FakeBuilding(building_type="MM", open=False)  # closed -> cover
+                return [b]
+        p = FakePlayer(name=name, hp=100,
+                       location=_ShelterTile(xyz=(x, y, "earth")))
+        p.db.inside_building = True
+        p.db.coord_x, p.db.coord_y = x, y
+        return p
+
+    def test_magazine_round_refunded_when_shot_dropped_at_resolution(self):
+        engine, _ = _make_engine()
+        attacker = FakePlayer(name="Shooter",
+                              location=FakeTile(xyz=(0, 0, "earth")))
+        weapon = FakeTypedWeapon(weapon_type="ranged", damage=25,
+                                 weapon_range=10, ammo_type="rifle_round",
+                                 ammo_per_shot=3, loaded=9)
+        attacker.equipment.equip(weapon)
+        # Target exposed at queue time; queue deducts the magazine.
+        target = FakePlayer(name="Victim", hp=100,
+                            location=FakeTile(xyz=(3, 0, "earth")))
+        ok, _ = engine.queue_attack(attacker, target, weapon=weapon)
+        self.assertTrue(ok)
+        self.assertEqual(weapon.db.loaded, 6)  # 9 - 3 deducted at queue
+        # Target takes cover before resolution -> shot dropped -> refund.
+        engine.pending_actions[0]["target"] = self._sheltered_player("Victim", 3, 0)
+        engine.resolve_tick()
+        self.assertEqual(weapon.db.loaded, 9, "dropped shot must refund the magazine")
+
+    def test_resource_ammo_refunded_when_shot_dropped_at_resolution(self):
+        engine, _ = _make_engine()
+        attacker = FakePlayer(name="Shooter", resources={"Iron": 5},
+                              location=FakeTile(xyz=(0, 0, "earth")))
+        weapon = FakeWeapon(damage=25, weapon_range=10, ammo_cost={"Iron": 2})
+        weapon.weapon_type = "ranged"
+        attacker.equipment.equip(weapon)
+        target = FakePlayer(name="Victim", hp=100,
+                            location=FakeTile(xyz=(3, 0, "earth")))
+        ok, _ = engine.queue_attack(attacker, target, weapon=weapon)
+        self.assertTrue(ok)
+        self.assertEqual(attacker.get_resource("Iron"), 3)  # 5 - 2 at queue
+        engine.pending_actions[0]["target"] = self._sheltered_player("Victim", 3, 0)
+        engine.resolve_tick()
+        self.assertEqual(attacker.get_resource("Iron"), 5, "dropped shot refunds Iron")
+
+    def test_landed_and_missed_shots_do_not_refund(self):
+        """A shot that actually FIRES (hit or rolled miss) keeps its spent ammo —
+        only a dropped-at-resolution shot is refunded."""
+        # roll high -> miss, but the shot still fired: no refund.
+        engine, _ = _make_engine(rng=_FixedRng(0.99))
+        attacker = FakePlayer(name="Shooter",
+                              location=FakeTile(xyz=(0, 0, "earth")))
+        weapon = FakeTypedWeapon(weapon_type="ranged", damage=25,
+                                 weapon_range=10, ammo_type="rifle_round",
+                                 ammo_per_shot=3, loaded=9)
+        attacker.equipment.equip(weapon)
+        target = FakePlayer(name="Victim", hp=100,
+                            location=FakeTile(xyz=(3, 0, "earth")))
+        engine.queue_attack(attacker, target, weapon=weapon, accuracy=0.5)
+        engine.resolve_tick()
+        self.assertEqual(weapon.db.loaded, 6, "a fired (missed) shot keeps its ammo")
+
 
 if __name__ == "__main__":
     unittest.main()

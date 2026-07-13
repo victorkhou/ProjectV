@@ -282,6 +282,70 @@ class TestGuardTargetAcquisition(unittest.TestCase):
         self.assertEqual(engine.pending_actions[0]["target"], inside)
 
 
+class TestGuardChebyshevDistance(unittest.TestCase):
+    """Guard distance math uses Chebyshev (a diagonal = distance 1), matching the
+    combat/vision metric. Every OTHER guard test is axis-aligned (y=0), where
+    Chebyshev and Manhattan agree — these diagonal cases are the ones that catch
+    a silent revert to Manhattan (which would read a diagonal as distance 2)."""
+
+    def test_melee_guard_reaches_diagonal_target(self):
+        """A melee guard (range 1) hits a target one tile DIAGONALLY away —
+        Chebyshev(1,1)=1 (in reach). Under Manhattan that tile is distance 2 and
+        the shot would be wrongly rejected."""
+        system, engine = _make_system(guard_aggro_radius=5)
+        owner = _hq_owner()
+        diag = FakePlayer(name="Diag", x=1, y=1, oid=2)  # Cheb 1, Manhattan 2
+        tile = FakeTile(nearby_players=[diag])
+        guard = FakeGuard(role="guard", owner=owner, x=0, y=0, location=tile)
+
+        system.process_tick(1, [guard])
+        self.assertEqual(len(engine.pending_actions), 1,
+                         "melee guard must reach a diagonal-adjacent target")
+        self.assertEqual(engine.pending_actions[0]["target"], diag)
+
+    def test_ranged_soldier_reaches_diagonal_within_chebyshev_range(self):
+        """A soldier with range 4 hits a target at (3,3): Chebyshev 3 (in range).
+        Manhattan would read 6 and reject it."""
+        system, engine = _make_system(guard_aggro_radius=10, guard_ranged_range=4)
+        owner = _hq_owner()
+        diag = FakePlayer(name="Diag", x=3, y=3, oid=2)  # Cheb 3, Manhattan 6
+        tile = FakeTile(nearby_players=[diag])
+        soldier = FakeGuard(role="soldier", owner=owner, x=0, y=0, location=tile)
+
+        system.process_tick(1, [soldier])
+        self.assertEqual(len(engine.pending_actions), 1,
+                         "ranged guard must reach a diagonal target within range")
+
+    def test_aggro_uses_chebyshev_for_diagonal(self):
+        """Aggro acquisition is Chebyshev: a target at (4,4) is Chebyshev-4 (in a
+        5-radius aggro) though Manhattan-8 (which would exclude it)."""
+        system, engine = _make_system(guard_aggro_radius=5, guard_ranged_range=8)
+        owner = _hq_owner()
+        diag = FakePlayer(name="Diag", x=4, y=4, oid=2)  # Cheb 4, Manhattan 8
+        tile = FakeTile(nearby_players=[diag])
+        soldier = FakeGuard(role="soldier", owner=owner, x=0, y=0, location=tile)
+
+        system.process_tick(1, [soldier])
+        self.assertEqual(len(engine.pending_actions), 1,
+                         "diagonal target within Chebyshev aggro must be acquired")
+
+    def test_nearest_target_by_chebyshev_not_manhattan(self):
+        """Target selection picks the Chebyshev-nearest. A diagonal foe at (2,2)
+        (Cheb 2) is chosen over an axis foe at (3,0) (Cheb 3) — even though
+        Manhattan would rank them 4 vs 3 and pick the axis foe instead."""
+        system, engine = _make_system(guard_aggro_radius=8, guard_ranged_range=8)
+        owner = _hq_owner()
+        diag = FakePlayer(name="Diag", x=2, y=2, oid=2)   # Cheb 2, Manhattan 4
+        axis = FakePlayer(name="Axis", x=3, y=0, oid=3)   # Cheb 3, Manhattan 3
+        tile = FakeTile(nearby_players=[axis, diag])
+        soldier = FakeGuard(role="soldier", owner=owner, x=0, y=0, location=tile)
+
+        system.process_tick(1, [soldier])
+        self.assertEqual(len(engine.pending_actions), 1)
+        self.assertEqual(engine.pending_actions[0]["target"], diag,
+                         "Chebyshev-nearest (the diagonal foe) must be chosen")
+
+
 class TestGuardWeaponSelection(unittest.TestCase):
 
     def test_melee_guard_range_one_blocks_distant_target(self):

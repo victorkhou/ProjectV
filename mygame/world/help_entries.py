@@ -352,7 +352,7 @@ HELP_ENTRY_DICTS = [
 
             # Attacking
 
-            |wattack <target>|n (|wa|n) — attack a player, building, or agent in range. You can only target something within your |cview|n (what 'scan' lists), so 'attack guard' picks the nearest matching foe you can actually see. Your equipped |cweapon|n decides your damage and reach: melee weapons hit any of the eight tiles touching you — including diagonals — while ranged weapons reach further. Equip a weapon first (|whelp equipment|n).
+            |wattack <target>|n (|wa|n) — attack a player, building, or agent in reach. You can target anything within your |creach|n — whichever is greater of what you can |csee|n ('scan') and your equipped weapon's |crange|n — so 'attack guard' picks the nearest matching foe within reach (a long-range weapon like a sniper rifle can hit a foe beyond your sight range). Your equipped |cweapon|n decides your damage and reach: melee weapons hit any of the eight tiles touching you — including diagonals — while ranged weapons reach further. Equip a weapon first (|whelp equipment|n).
 
             # Ranged: Target & Shoot
 

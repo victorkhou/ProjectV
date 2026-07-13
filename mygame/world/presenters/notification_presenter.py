@@ -132,6 +132,17 @@ def _fmt_shot_dodged(d: dict) -> str:
     )
 
 
+def _fmt_unit_shot_dodged(d: dict) -> str:
+    # One of the owner's units (agent/building) was shot at but the shot missed —
+    # bright red (incoming). The unit has no session, so the OWNER hears it.
+    label = _UNIT_LABELS.get(d.get("unit_kind"), "unit")
+    return (
+        f"|r[Combat] {d.get('attacker_name', 'Someone')} shot at your {label} "
+        f"({d.get('unit_name', '?')}) with {d.get('weapon_name', 'a weapon')} "
+        f"and missed.|n"
+    )
+
+
 _LOCK_LOST_REASONS = {
     "out_of_range": "your target moved out of range",
     "left_area": "you left the area",
@@ -478,6 +489,7 @@ class NotificationPresenter:
         "unit_attack": _fmt_unit_attack,
         "shot_missed": _fmt_shot_missed,
         "shot_dodged": _fmt_shot_dodged,
+        "unit_shot_dodged": _fmt_unit_shot_dodged,
         "targeting": _fmt_targeting,
         "locked": _fmt_locked,
         "lock_lost": _fmt_lock_lost,

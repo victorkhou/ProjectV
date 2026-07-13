@@ -1038,11 +1038,13 @@ class CmdAttack(GameCommand):
       attack turret
 
     Notes:
-      Aliases: at, a. You can only attack a target within your view (what
-      'scan' shows) — the name matches the nearest such foe. Damage is your
-      equipped weapon's power plus bonuses, minus the target's armor. Melee
-      weapons reach any of the 8 adjacent tiles (including diagonals); ranged
-      weapons reach further and fire from a loaded magazine (see 'reload').
+      Aliases: at, a. You can attack a target within your reach — the greater
+      of your view ('scan' range) and your weapon's range, so a long-range
+      weapon can hit a foe beyond sight. The name matches the nearest such foe.
+      Damage is your equipped weapon's power plus bonuses, minus the target's
+      armor. Melee weapons reach any of the 8 adjacent tiles (including
+      diagonals); ranged weapons reach further and fire from a loaded magazine
+      (see 'reload').
       Equip a weapon first with 'equip'. Friendly fire is allowed — you can
       attack your own buildings and agents, but it grants no XP and still puts
       you in combat. Any attack puts you 'in combat' briefly (see 'score').
@@ -1177,12 +1179,17 @@ class CmdTarget(GameCommand):
             return
 
         # Resolve among in-view attackables (same scope as 'attack'), but only
-        # ENEMIES (not the caller's own units) are lockable.
+        # ENEMIES (not the caller's own units) are lockable. is_owner(caller,
+        # owner) compares caller-vs-owner, so we must pass the TARGET's owner as
+        # the second arg — a player-owned agent/building carries db.owner; a bare
+        # player/enemy has none. (Passing the target itself was a no-op that only
+        # re-checked target-is-caller.)
         target, err = _resolve_attack_target(caller, name)
         if target is None:
             caller.msg(err)
             return
-        if is_owner(target, caller) or target is caller:
+        target_owner = getattr(getattr(target, "db", None), "owner", None)
+        if target is caller or is_owner(caller, target_owner):
             caller.msg("You can only lock onto an enemy.")
             return
 

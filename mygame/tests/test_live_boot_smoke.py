@@ -876,6 +876,84 @@ class LiveBootSmokeTest(EvenniaTest):
         finally:
             _teardown_game(systems)
 
+    def test_lock_onto_agent_without_coord_planet_survives_upkeep(self):
+        """Regression (review): a player-owned agent carries coords but NOT
+        coord_planet. Locking onto one must survive upkeep — _planet falls back
+        to the agent's ROOM planet, which matches the shooter. Without the
+        fallback the lock dropped on the first tick as 'left the area'."""
+        from server.conf.game_init import initialize_game
+        from world.definitions import ItemDef
+        from typeclasses.objects import spawn_gear_drop
+
+        systems = initialize_game()
+        try:
+            targeting = systems["targeting_system"]
+            room = self._make_planet_room("earth")
+            shooter = self._make_player(x=0, y=0, planet="earth", location=room)
+            shooter.db.combat_xp = 100000
+            rifle_def = ItemDef(key="rifle", name="Rifle", slot="weapon",
+                                category="weapon",
+                                stat_modifiers={"damage": 20, "range": 8},
+                                weapon_type="ranged")
+            rifle = spawn_gear_drop(room, rifle_def, x=0, y=0)
+            systems["equipment_system"].equip(shooter, rifle)
+
+            # A real agent NPC in the same room, with coords but NO coord_planet.
+            agent = self._make_agent(x=3, y=0, location=room)
+            agent.db.coord_planet = None  # the gap the fallback closes
+            self.assertEqual(room.planet_name, "earth")
+
+            ok, _ = targeting.acquire(shooter, agent)
+            self.assertTrue(ok)
+            targeting.process_tick(1, [shooter])
+            self.assertIsNotNone(
+                targeting.get_target(shooter),
+                "lock must survive when target planet resolves via its room")
+        finally:
+            _teardown_game(systems)
+
+    def test_missed_shot_puts_both_sides_in_combat_on_real_objects(self):
+        """On real objects: a MISSED ranged shot publishes COMBAT_ACTION, so the
+        wired combat-timer subscriber sets combat_timer_expires on BOTH shooter
+        and target — the state that actually gates wall-passage/enter-leave. A
+        miss that set only combat_lockout_tick would leave both free to move."""
+        from server.conf.game_init import initialize_game
+        from world.definitions import ItemDef
+        from typeclasses.objects import spawn_gear_drop
+
+        systems = initialize_game()
+        try:
+            engine = systems["combat_engine"]
+            room = self._make_planet_room("earth")
+            shooter = self._make_player(x=0, y=0, planet="earth", location=room)
+            shooter.db.combat_xp = 100000
+            rifle_def = ItemDef(key="rifle", name="Rifle", slot="weapon",
+                                category="weapon",
+                                stat_modifiers={"damage": 20, "range": 8},
+                                weapon_type="ranged")
+            rifle = spawn_gear_drop(room, rifle_def, x=0, y=0)
+            systems["equipment_system"].equip(shooter, rifle)
+            target = self._make_player(x=3, y=0, planet="earth", location=room)
+            target.key = "Victim"
+
+            # Force a MISS: rng.random() always returns ~1.0 (>= any accuracy).
+            class _AlwaysMiss:
+                def random(self):
+                    return 0.999999
+            engine._rng = _AlwaysMiss()
+
+            engine.queue_attack(shooter, target, weapon=rifle, accuracy=0.5)
+            engine.resolve_tick()
+
+            # No damage (it missed) but BOTH are now "in combat" via the timer.
+            self.assertEqual(target.db.hp, target.db.hp_max)
+            self.assertGreater(shooter.db.combat_timer_expires or 0, 0,
+                               "shooter must be in combat after firing (even a miss)")
+            self.assertGreater(target.db.combat_timer_expires or 0, 0,
+                               "target must be in combat after being shot at")
+        finally:
+            _teardown_game(systems)
+
 
 def _teardown_game(systems):
     """Best-effort teardown: stop any scripts initialize_game created so they

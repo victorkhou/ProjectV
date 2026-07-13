@@ -198,6 +198,38 @@ class TestUpkeep(unittest.TestCase):
         sys.process_tick(1, [p])
         self.assertIsNone(p.db.lock_target)
 
+    def test_lock_broken_when_target_deleted(self):
+        """A locked target that has been deleted (pk is None — e.g. a guard died
+        and its DB row was removed) drops the lock with reason 'target_gone'."""
+        sys, sink = _make()
+        p = _Player(weapon=_Weapon(weapon_range=8))
+        enemy = _Enemy(x=2, y=0)
+        sys.acquire(p, enemy)
+        enemy.pk = None  # target deleted
+        sys.process_tick(1, [p])
+        self.assertIsNone(p.db.lock_target)
+        self.assertIn("lock_lost", sink.kinds)
+
+    def test_lock_survives_when_target_has_no_coord_planet_but_shares_room(self):
+        """An agent/building target carries coords but NOT coord_planet. The lock
+        must NOT break on the planet check — _planet falls back to the target's
+        room planet, which matches the shooter's. (Regression: a lock onto such a
+        target used to break on the first upkeep tick.)"""
+        sys, _ = _make(target_lock_ticks=3)
+        room = types.SimpleNamespace(planet_name="earth")
+        p = _Player(weapon=_Weapon(weapon_range=8))
+        p.location = room
+        # A building-like target: coords, no coord_planet, same room.
+        target = types.SimpleNamespace(
+            key="Enemy Turret",
+            db=types.SimpleNamespace(coord_x=2, coord_y=0),  # NO coord_planet
+            location=room, pk=1,
+        )
+        sys.acquire(p, target)
+        sys.process_tick(1, [p])
+        self.assertIs(p.db.lock_target, target,
+                      "lock must hold when target's planet resolves via its room")
+
     def test_upkeep_isolates_errors(self):
         sys, _ = _make()
 
@@ -230,6 +262,18 @@ class TestAccuracyHelpers(unittest.TestCase):
         sys, _ = _make(accuracy_targeted=0.8)
         # +0.5 would exceed 1.0 -> clamped.
         self.assertEqual(sys.targeted_accuracy(_Weapon(accuracy=0.5)), 1.0)
+
+    def test_negative_weapon_accuracy_clamps_at_zero(self):
+        """A large negative accuracy modifier can't push the hit chance below 0
+        (the low-end clamp of _clamp01)."""
+        sys, _ = _make(accuracy_directional=0.5)
+        self.assertEqual(sys.directional_accuracy(_Weapon(accuracy=-0.9)), 0.0)
+
+    def test_clamp01_bounds(self):
+        from world.systems.targeting_system import _clamp01
+        self.assertEqual(_clamp01(-3.0), 0.0)
+        self.assertEqual(_clamp01(0.4), 0.4)
+        self.assertEqual(_clamp01(9.0), 1.0)
 
 
 if __name__ == "__main__":

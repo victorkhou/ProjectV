@@ -239,6 +239,7 @@ class CombatEngine(BaseSystem):
         loaded = 0
         ammo_per_shot = 0
         magazine_draw = False
+        consumed_ammo_cost = None  # resource cost actually deducted (for refund)
         if not is_melee:
             # 4a. Magazine gating for ranged weapons that declare an ammo_type.
             # A shot draws from the weapon's loaded magazine (db.loaded); the
@@ -269,19 +270,25 @@ class CombatEngine(BaseSystem):
                 if err:
                     return False, err
                 attacker.deduct_resources(ammo_cost)
+                consumed_ammo_cost = ammo_cost
 
             # 5. Deduct the magazine on a proceeding shot (after all checks pass,
             # so a rejected attack never mutates loaded rounds).
             if magazine_draw:
                 self._set_loaded(weapon_item, loaded - ammo_per_shot)
 
-        # Queue the action
+        # Queue the action. Record the ammo consumed here so it can be REFUNDED
+        # if the shot is dropped at resolution (target took cover in the 1-tick
+        # gap) — a dropped shot fires nothing, so its rounds/resources are
+        # returned rather than silently lost.
         action = {
             "attacker": attacker,
             "target": target,
             "weapon_item": weapon_item,
             "accuracy": accuracy,
             "breach": breach,
+            "ammo_per_shot": ammo_per_shot if magazine_draw else 0,
+            "ammo_cost": consumed_ammo_cost,
         }
         self.pending_actions.append(action)
 
@@ -324,11 +331,17 @@ class CombatEngine(BaseSystem):
             # ranged shot. Melee actions bypass (cover doesn't stop melee).
             is_melee = self._get_weapon_attr(weapon_item, "weapon_type", None) == "melee"
             if self._ranged_blocked(target, is_melee, breach=action.get("breach", False)):
+                # Shot dropped (target took cover between queue and resolve): it
+                # fired nothing, so refund the ammo consumed at queue time.
+                self._refund_ammo(action)
                 continue
             # Re-check the melee room gate too: a target that stepped into a
             # building (or an attacker that did) between queue and resolve must
             # not be meleed across the boundary from an adjacent tile.
             if is_melee and self._melee_blocked(attacker, target):
+                # Melee weapons never consume ammo, but refund defensively in
+                # case a synthetic/ranged action reached this gate.
+                self._refund_ammo(action)
                 continue
 
             # Accuracy roll for probabilistic ranged fire ('shoot'/'target').
@@ -443,12 +456,17 @@ class CombatEngine(BaseSystem):
     ) -> None:
         """Resolve a MISSED probabilistic shot: no damage, but the shot fired.
 
-        A miss still (a) puts BOTH sides into combat lockout — the shooter (and
-        their owning player) because they opened fire, and the target (and its
-        owner) because they are being fired upon — and (b) notifies both sides so
-        the shooter sees "you missed" and the target sees "shot at you (missed)".
-        Combat entry mirrors a landed hit; only the damage/defeat handling is
-        skipped. Never touches HP.
+        A miss still (a) puts BOTH sides into the combat STATE and (b) notifies
+        both sides so the shooter sees "you missed" and the target sees "shot at
+        you (missed)". Combat entry mirrors a landed hit exactly; only the
+        damage/defeat handling is skipped. Never touches HP.
+
+        Combat entry is driven the SAME way as a hit: by publishing
+        ``COMBAT_ACTION`` (with ``damage=0``). That event is the ONLY trigger for
+        the combat-timer subscriber that sets ``combat_timer_expires`` — the
+        state that actually gates wall-passage, enter/leave, and move-lag. It
+        also sets ``combat_lockout_tick`` (which separately gates the build
+        command) so both combat clocks advance identically to a hit.
         """
         lockout_ticks = self.registry.balance.combat_lockout_ticks
         lockout_until = current_tick + lockout_ticks
@@ -465,6 +483,21 @@ class CombatEngine(BaseSystem):
         if target_owner is not None and target_owner is not target:
             self._set_combat_lockout(target_owner, lockout_until)
 
+        # Publish COMBAT_ACTION (damage=0) so the combat-timer subscriber puts
+        # both sides — and their owning players — "in combat" exactly as a hit
+        # would. Without this a miss set only combat_lockout_tick (build gate)
+        # and neither side actually entered the movement/wall combat state.
+        self.event_bus.publish(
+            COMBAT_ACTION,
+            attacker=attacker,
+            target=target,
+            attacker_owner=attacker_owner,
+            target_owner=target_owner,
+            item=weapon_item,
+            damage=0,
+            current_tick=current_tick,
+        )
+
         weapon_name = getattr(weapon_item, "key", str(weapon_item))
         target_name = getattr(target, "key", "the target")
         # Tell the shooter (the owning player) their shot missed.
@@ -472,10 +505,27 @@ class CombatEngine(BaseSystem):
         if self._is_player(shooter):
             self.notify(shooter, "shot_missed", target_name=target_name,
                         weapon_name=weapon_name)
-        # Tell a player target they were shot at (and dodged).
-        if self._is_player(target):
+        # Tell the DEFENDING side they were shot at (and dodged). Mirror
+        # _notify_target's routing: an agent/building has no session, so notify
+        # its OWNER; a bare player is notified directly. Order matters — an agent
+        # satisfies _is_player (carries combat_xp), so the agent/building cases
+        # must be checked before the plain-player branch.
+        attacker_name = getattr(attacker, "key", "Someone")
+        if self._is_agent(target):
+            owner = getattr(getattr(target, "db", None), "owner", None)
+            if owner is not None:
+                self.notify(owner, "unit_shot_dodged", unit_kind="agent",
+                            unit_name=getattr(target, "key", "Agent"),
+                            attacker_name=attacker_name, weapon_name=weapon_name)
+        elif self._is_building(target):
+            owner = self._get_building_owner(target)
+            if owner is not None:
+                self.notify(owner, "unit_shot_dodged", unit_kind="building",
+                            unit_name=getattr(target, "key", "building"),
+                            attacker_name=attacker_name, weapon_name=weapon_name)
+        elif self._is_player(target):
             self.notify(target, "shot_dodged",
-                        attacker_name=getattr(attacker, "key", "Someone"),
+                        attacker_name=attacker_name,
                         weapon_name=weapon_name)
 
     def apply_direct_hit(
@@ -1151,6 +1201,32 @@ class CombatEngine(BaseSystem):
     def _set_loaded(weapon_item: Any, value: int) -> bool:
         """Write a ranged weapon's loaded-round count; True on success."""
         return set_loaded(weapon_item, value)
+
+    def _refund_ammo(self, action: dict) -> None:
+        """Return the ammo an action consumed at queue time, if it fired nothing.
+
+        Called when a queued shot is DROPPED at resolution (the target took
+        cover in the queue→resolve gap), so its magazine round(s) and any
+        resource ammo_cost — both deducted in ``queue_attack`` — are given back
+        rather than silently lost. A hit or a rolled MISS both actually fired,
+        so this is never called for them. Safe to call for any action (a melee
+        or ammo-free action recorded zero consumption). Never raises.
+        """
+        attacker = action.get("attacker")
+        weapon_item = action.get("weapon_item")
+        try:
+            ammo_per_shot = int(action.get("ammo_per_shot", 0) or 0)
+            if ammo_per_shot and weapon_item is not None:
+                loaded_val = self._get_loaded(weapon_item)
+                loaded = int(loaded_val) if loaded_val is not None else 0
+                self._set_loaded(weapon_item, loaded + ammo_per_shot)
+            ammo_cost = action.get("ammo_cost")
+            if ammo_cost and attacker is not None and hasattr(attacker, "add_resource"):
+                for resource, amount in ammo_cost.items():
+                    attacker.add_resource(resource, amount)
+        except Exception:  # noqa: BLE001 - a refund must never break resolution
+            from world.systems.agent_constants import logger
+            logger.exception("Ammo refund failed for dropped shot")
 
     def _get_attacker_bonus(self, attacker: Any) -> float:
         """Get tech/powerup/equipment damage bonus for the attacker."""

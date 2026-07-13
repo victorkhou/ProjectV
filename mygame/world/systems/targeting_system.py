@@ -241,8 +241,21 @@ class TargetingSystem(BaseSystem):
 
     @staticmethod
     def _planet(entity: Any) -> Any:
+        """Resolve the entity's planet for the same-planet lock check.
+
+        Prefers ``db.coord_planet`` (players and enemy guards carry it), falling
+        back to the entity's room ``location.planet_name`` — player-owned agents
+        and buildings are stamped with coords but NOT ``coord_planet``, so
+        without this fallback a lock onto one would break instantly on the very
+        first upkeep (its planet reads None ≠ the shooter's planet). Returns None
+        only when neither source resolves. Never raises.
+        """
         db = getattr(entity, "db", None)
-        return getattr(db, "coord_planet", None) if db is not None else None
+        planet = getattr(db, "coord_planet", None) if db is not None else None
+        if planet is not None:
+            return planet
+        loc = getattr(entity, "location", None)
+        return getattr(loc, "planet_name", None) if loc is not None else None
 
     @staticmethod
     def _in_range(a: Any, b: Any, weapon_range: int) -> bool:

@@ -1125,6 +1125,38 @@ class TestCmdTarget(unittest.TestCase):
         cmd.func()
         self.assertTrue(any("Usage" in m for m in caller._messages))
 
+    def test_cannot_lock_own_agent(self):
+        """You can't lock onto your OWN unit — the guard resolves the target's
+        db.owner and compares it to the caller (previously a no-op that only
+        re-checked target-is-caller)."""
+        tg = _FakeTargeting(ranged=True)
+        caller = FakeCaller(systems={"targeting_system": tg,
+                                     "combat_engine": object()})
+        caller.id = 42
+        my_agent = _FakeAttackable("MyDrone", 5, 6)
+        my_agent.db.owner = caller  # owned by the caller
+        caller.location.contents = [my_agent]
+        cmd = _make_cmd(CmdTarget, caller, " drone")
+        cmd.func()
+        self.assertEqual(tg.acquired, [], "must refuse to lock your own unit")
+        self.assertTrue(any("only lock onto an enemy" in m.lower()
+                            for m in caller._messages))
+
+    def test_can_lock_enemy_owned_unit(self):
+        """An enemy player's unit (owner is someone else) IS lockable."""
+        tg = _FakeTargeting(ranged=True)
+        caller = FakeCaller(systems={"targeting_system": tg,
+                                     "combat_engine": object()})
+        caller.id = 42
+        enemy_owner = FakeCaller(name="Rival")
+        enemy_owner.id = 7
+        enemy_unit = _FakeAttackable("RivalDrone", 5, 6)
+        enemy_unit.db.owner = enemy_owner
+        caller.location.contents = [enemy_unit]
+        cmd = _make_cmd(CmdTarget, caller, " drone")
+        cmd.func()
+        self.assertEqual(tg.acquired, [enemy_unit])
+
 
 class TestCmdShoot(unittest.TestCase):
     def test_requires_ranged_weapon(self):
