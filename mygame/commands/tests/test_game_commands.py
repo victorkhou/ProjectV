@@ -1037,17 +1037,26 @@ class _FakeRangedWeapon:
 
 class _FakeTargeting:
     """Records target/shoot interactions for command tests."""
-    def __init__(self, ranged=True, locked=False, target=None):
+    def __init__(self, ranged=True, locked=False, target=None, in_range=True):
         self._ranged = ranged
         self._locked = locked
         self._target = target
+        self._in_range = in_range
         self.acquired = []
+        self.cleared = []
 
     def get_ranged_weapon(self, player):
         return object() if self._ranged else None
 
     def weapon_range(self, weapon):
         return 8
+
+    def in_weapon_range(self, player, target, weapon):
+        return self._in_range
+
+    def clear_lock(self, player, reason=None):
+        self.cleared.append(reason)
+        self._target = None
 
     def acquire(self, player, target):
         self.acquired.append(target)
@@ -1124,6 +1133,21 @@ class TestCmdShoot(unittest.TestCase):
         cmd = _make_cmd(CmdShoot, caller, "")
         cmd.func()
         self.assertEqual(engine.calls, [(target, 0.8)])
+
+    def test_shoot_locked_out_of_range_breaks_lock_no_shot(self):
+        """If the locked target stepped out of range this tick, 'shoot' refuses
+        with feedback and clears the lock instead of wasting ammo silently."""
+        target = _FakeAttackable("Guard", 30, 0)
+        tg = _FakeTargeting(ranged=True, locked=True, target=target,
+                            in_range=False)
+        engine = _RecordingEngine()
+        caller = FakeCaller(systems={"targeting_system": tg,
+                                     "combat_engine": engine})
+        cmd = _make_cmd(CmdShoot, caller, "")
+        cmd.func()
+        self.assertEqual(engine.calls, [])  # no shot queued
+        self.assertEqual(tg.cleared, ["out_of_range"])
+        self.assertTrue(any("out of range" in m for m in caller._messages))
 
     def test_shoot_no_lock_no_dir_prompts(self):
         tg = _FakeTargeting(ranged=True, locked=False, target=None)
@@ -2849,7 +2873,9 @@ class TestGetAllAndLookMessages(unittest.TestCase):
                 self.tags = _ItemTags()
 
         class _ItemTags:
-            def get(self, key, category=None):
+            # Mirror Evennia's TagHandler.get: key is optional/keyword too, so a
+            # category-only call (tags.get(category="npc_type")) works.
+            def get(self, key=None, category=None):
                 return "item" if (key == "item" and category == "object_type") else None
 
         loc = FakeLocation()
@@ -2863,6 +2889,47 @@ class TestGetAllAndLookMessages(unittest.TestCase):
             any("Combat Knife" in m for m in caller._messages),
             f"look/tile summary should list dropped items; got {caller._messages}",
         )
+
+    def test_tile_summary_lists_hostile_npcs(self):
+        """An enemy guard on the caller's tile shows under 'Hostiles here' with
+        an [Enemy] tag — previously invisible to look/move."""
+        from mygame.commands.game_commands import _show_tile_summary
+
+        class _NpcTags:
+            def get(self, key=None, category=None):
+                return "enemy" if category == "npc_type" else None
+
+        class _Sentinel:
+            def __init__(self):
+                self.db = types.SimpleNamespace(is_sentinel=True)
+
+            @property
+            def attributes(self):
+                class _A:
+                    @staticmethod
+                    def get(k, default=None):
+                        return True if k == "is_sentinel" else default
+                return _A()
+
+        class _Guard:
+            def __init__(self, key, owner):
+                self.key = key
+                self.tags = _NpcTags()
+                self.db = types.SimpleNamespace(
+                    owner=owner, role="guard", agent_id=1,
+                    coord_x=5, coord_y=5,
+                )
+
+        loc = FakeLocation()
+        guard = _Guard("Outpost #1 Guard-1", _Sentinel())
+        loc._objects_by_coord[(5, 5)] = [guard]
+        caller = FakeCaller(location=loc)
+
+        _show_tile_summary(caller, loc)
+        out = "\n".join(caller._messages)
+        self.assertIn("Hostiles here:", out)
+        self.assertIn("Outpost #1 Guard-1", out)
+        self.assertIn("[Enemy]", out)
 
 
 class _InvGear:

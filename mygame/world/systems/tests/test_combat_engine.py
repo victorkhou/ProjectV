@@ -2206,12 +2206,48 @@ class TestAccuracyRoll(unittest.TestCase):
         # Even on a miss the shooter is in combat (they fired).
         self.assertGreater(getattr(attacker.db, "combat_lockout_tick", 0), 0)
 
+    def test_miss_locks_target_into_combat(self):
+        """Being shot at — even by a miss — pulls the TARGET into combat too."""
+        engine, attacker, target = self._setup(roll=0.99)
+        engine.queue_attack(attacker, target,
+                            weapon=self._ranged_weapon(), accuracy=0.5)
+        engine.resolve_tick()
+        self.assertGreater(getattr(target.db, "combat_lockout_tick", 0), 0)
+
+    def test_miss_notifies_both_sides(self):
+        engine, attacker, target = self._setup(roll=0.99)
+        engine.queue_attack(attacker, target,
+                            weapon=self._ranged_weapon(), accuracy=0.5)
+        engine.resolve_tick()
+        shooter_msgs = "\n".join(attacker._messages)
+        target_msgs = "\n".join(target._messages)
+        self.assertIn("missed", shooter_msgs.lower())
+        self.assertIn("missed", target_msgs.lower())
+
     def test_no_accuracy_always_hits(self):
         """accuracy=None (the melee/guard/turret default) never rolls."""
         engine, attacker, target = self._setup(roll=0.999)
         engine.queue_attack(attacker, target, weapon=self._ranged_weapon())
         engine.resolve_tick()
         self.assertLess(target.db.hp, 100)  # no roll -> always lands
+
+    def test_player_hit_notifies_attacker(self):
+        """A bare player whose shot lands hears 'You hit X for N' (attack_hit)."""
+        engine, attacker, target = self._setup(roll=0.1)  # 0.1 < 0.8 -> hit
+        engine.queue_attack(attacker, target,
+                            weapon=self._ranged_weapon(), accuracy=0.8)
+        engine.resolve_tick()
+        self.assertLess(target.db.hp, 100)
+        self.assertTrue(any("you hit" in m.lower() for m in attacker._messages))
+
+    def test_aoe_direct_hit_does_not_send_attack_hit(self):
+        """The throw-AoE path (apply_direct_hit) must NOT send the per-victim
+        'You hit' notice — the thrower gets one 'bombed' summary instead."""
+        engine, attacker, target = self._setup(roll=0.0)
+        engine.apply_direct_hit(attacker, target, self._ranged_weapon(),
+                                include_attacker_bonus=False)
+        self.assertLess(target.db.hp, 100)  # the hit still lands
+        self.assertFalse(any("you hit" in m.lower() for m in attacker._messages))
 
 
 if __name__ == "__main__":

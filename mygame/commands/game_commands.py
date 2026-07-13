@@ -1221,6 +1221,14 @@ class CmdShoot(GameCommand):
         if not targeting.is_locked(caller):
             caller.msg("Still locking on — hold fire until the lock completes.")
             return
+        # Re-check range at fire time: the target may have stepped out of range
+        # this tick before the upkeep step re-validated the lock. Without this
+        # the shot would queue, consume ammo, then be silently dropped by the
+        # engine's range check. Break the lock and tell the player instead.
+        if not targeting.in_weapon_range(caller, target, weapon):
+            caller.msg("Your target is out of range — lock lost.")
+            targeting.clear_lock(caller, reason="out_of_range")
+            return
         accuracy = targeting.targeted_accuracy(weapon)
         _ok, msg = combat_engine.queue_attack(
             caller, target, weapon=weapon, accuracy=accuracy
@@ -3092,6 +3100,31 @@ def _show_tile_summary(caller, planet_room):
             others.append(getattr(p, "key", "?"))
     if others:
         parts.append(f"Players: {', '.join(others)}")
+
+    # Hostile NPCs on the tile (enemy-base guards, other players' units). Without
+    # this an enemy guard standing on your tile was invisible to 'look'/move —
+    # you'd be attacked with nothing shown. Own agents are listed separately.
+    from world.utils import get_obj_attr
+    own_agents, hostiles = [], []
+    for obj in planet_room.get_objects_at(x, y):
+        if obj is caller:
+            continue
+        if not (hasattr(obj, "tags") and obj.tags.get(category="npc_type")):
+            continue
+        npc_owner = getattr(getattr(obj, "db", None), "owner", None)
+        role = getattr(getattr(obj, "db", None), "role", "") or "unit"
+        if npc_owner is caller:
+            aid = getattr(obj.db, "agent_id", "?")
+            own_agents.append(f"Agent #{aid} ({role})")
+        else:
+            enemy = bool(get_obj_attr(npc_owner, "is_sentinel", False)) if npc_owner else False
+            tag = "|R[Enemy]|n " if enemy else ""
+            hostiles.append(f"{tag}{getattr(obj, 'key', 'unit')} ({role})")
+    if own_agents:
+        parts.append(f"Agents here: {', '.join(own_agents)}")
+    if hostiles:
+        parts.append(f"|rHostiles here:|n {', '.join(hostiles)}")
+
     if parts:
         caller.msg("\n".join(parts))
 

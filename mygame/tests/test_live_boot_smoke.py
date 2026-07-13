@@ -807,6 +807,44 @@ class LiveBootSmokeTest(EvenniaTest):
         finally:
             _teardown_game(systems)
 
+    def test_lock_onto_real_enemy_guard_survives_upkeep(self):
+        """Regression: a real enemy guard (via the NPC-base factory) carries
+        coord_planet, so locking onto one does NOT instantly drop with 'left the
+        area' on the next upkeep tick (the reported bug)."""
+        from server.conf.game_init import initialize_game
+        from world.adapters.evennia_npc_base_factory import EvenniaNpcBaseFactory
+        from world.definitions import ItemDef
+        from typeclasses.objects import spawn_gear_drop
+
+        systems = initialize_game()
+        try:
+            targeting = systems["targeting_system"]
+            room = self._make_planet_room("earth")
+
+            shooter = self._make_player(x=0, y=0, planet="earth", location=room)
+            shooter.db.combat_xp = 100000
+            rifle_def = ItemDef(key="rifle", name="Rifle", slot="weapon",
+                                category="weapon",
+                                stat_modifiers={"damage": 20, "range": 8},
+                                weapon_type="ranged")
+            rifle = spawn_gear_drop(room, rifle_def, x=0, y=0)
+            systems["equipment_system"].equip(shooter, rifle)
+
+            factory = EvenniaNpcBaseFactory()
+            sentinel = factory.create_sentinel("Outpost #1", room, "earth")
+            guard = factory.create_enemy_guard(sentinel, room, 3, 0, "guard", 80)
+            # The fix: the guard is stamped with the planet.
+            self.assertEqual(guard.db.coord_planet, "earth")
+
+            ok, _ = targeting.acquire(shooter, guard)
+            self.assertTrue(ok)
+            # One upkeep tick must NOT drop the lock as 'left the area'.
+            targeting.process_tick(1, [shooter])
+            self.assertIsNotNone(targeting.get_target(shooter),
+                                 "lock must survive: guard is on the same planet")
+        finally:
+            _teardown_game(systems)
+
 
 def _teardown_game(systems):
     """Best-effort teardown: stop any scripts initialize_game created so they

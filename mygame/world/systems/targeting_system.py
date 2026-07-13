@@ -106,6 +106,16 @@ class TargetingSystem(BaseSystem):
     #  Lock queries / mutation
     # ------------------------------------------------------------------ #
 
+    def in_weapon_range(self, player: Any, target: Any, weapon: Any) -> bool:
+        """True if *target* is within *weapon*'s range of *player* (Chebyshev).
+
+        The public range check used by ``shoot`` to re-validate a locked target
+        at fire time (before the per-tick upkeep runs), so a shot at a target
+        that just stepped out of range is refused with feedback rather than
+        silently dropped by the engine after consuming ammo.
+        """
+        return self._in_range(player, target, self.weapon_range(weapon))
+
     @staticmethod
     def get_target(player: Any) -> Any | None:
         """Return the enemy *player* is locking/locked onto, or None."""

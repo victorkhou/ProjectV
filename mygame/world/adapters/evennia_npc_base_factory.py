@@ -75,6 +75,14 @@ class EvenniaNpcBaseFactory(NpcBaseFactory):
 
         npc.db.coord_x = int(x)
         npc.db.coord_y = int(y)
+        # Stamp the planet so coordinate/planet-scoped logic (e.g. a player's
+        # ranged lock-on, which drops when shooter and target aren't on the same
+        # planet) sees the guard as a real map actor. Read from the tile's
+        # planet_name, falling back to the owner sentinel's coord_planet.
+        planet = getattr(tile, "planet_name", None)
+        if planet is None:
+            planet = getattr(getattr(owner, "db", None), "coord_planet", None)
+        npc.db.coord_planet = planet
         # Home anchor: the spawn tile. GuardCombatSystem leashes a chasing guard
         # to within aggro_radius of home so it defends its base instead of being
         # lured away.

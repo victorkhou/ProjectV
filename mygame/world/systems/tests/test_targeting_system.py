@@ -91,6 +91,13 @@ class TestRangedWeaponGate(unittest.TestCase):
         sys, _ = _make()
         self.assertIsNone(sys.get_ranged_weapon(_Player()))
 
+    def test_in_weapon_range(self):
+        sys, _ = _make()
+        p = _Player(x=0, y=0)
+        weapon = _Weapon(weapon_range=4)
+        self.assertTrue(sys.in_weapon_range(p, _Enemy(x=3, y=0), weapon))
+        self.assertFalse(sys.in_weapon_range(p, _Enemy(x=10, y=0), weapon))
+
 
 # -------------------------------------------------------------- #
 #  Acquire

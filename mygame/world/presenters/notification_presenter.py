@@ -77,6 +77,14 @@ def _fmt_attacked(d: dict) -> str:
     )
 
 
+def _fmt_attack_hit(d: dict) -> str:
+    # The attacking player's own hit landed — green (your offensive success).
+    return (
+        f"|g[Combat] You hit {d.get('target_name', 'the target')} with "
+        f"{d.get('weapon_name', 'your weapon')} for {d.get('damage', 0)} damage.|n"
+    )
+
+
 def _fmt_building_attacked(d: dict) -> str:
     return (
         f"|r[Combat] Your {d['building_name']} was attacked by "
@@ -464,6 +472,7 @@ class NotificationPresenter:
         "agent_training_progress": _fmt_agent_training_progress,
         "harvest_drop": _fmt_harvest_drop,
         "attacked": _fmt_attacked,
+        "attack_hit": _fmt_attack_hit,
         "building_attacked": _fmt_building_attacked,
         "unit_attacked": _fmt_unit_attacked,
         "unit_attack": _fmt_unit_attack,

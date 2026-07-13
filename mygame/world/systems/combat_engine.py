@@ -344,6 +344,7 @@ class CombatEngine(BaseSystem):
         damage: int,
         current_tick: int,
         lockout_attacker: bool = True,
+        notify_attacker_hit: bool = True,
     ) -> None:
         """Resolve everything that follows applying damage to a target.
 
@@ -362,6 +363,11 @@ class CombatEngine(BaseSystem):
             lockout_attacker: Whether to place the attacker in combat lockout.
                 True for direct/queued attacks and throws; a turret is a
                 building and takes no lockout regardless.
+            notify_attacker_hit: Whether to send the attacking player the
+                per-hit "You hit X" notice. True for a single wielded shot/melee;
+                False for the throw-AoE path, which resolves many victims through
+                here and reports one ``bombed`` summary instead (no per-victim
+                spam).
         """
         lockout_ticks = self.registry.balance.combat_lockout_ticks
         lockout_until = current_tick + lockout_ticks
@@ -397,8 +403,10 @@ class CombatEngine(BaseSystem):
             current_tick=current_tick,
         )
 
-        # Notify the target (or building owner) of the hit.
-        self._notify_target(target, attacker, weapon_item, damage)
+        # Notify the target (or building owner) of the hit, and — unless
+        # suppressed for the throw-AoE fan-out — the attacker of their landed hit.
+        self._notify_target(target, attacker, weapon_item, damage,
+                            notify_attacker_hit=notify_attacker_hit)
 
         # Defeat / destruction when HP has reached zero.
         #
@@ -419,12 +427,12 @@ class CombatEngine(BaseSystem):
     ) -> None:
         """Resolve a MISSED probabilistic shot: no damage, but the shot fired.
 
-        A miss still (a) puts the shooter — and their owning player — into
-        combat lockout, because they opened fire, and (b) notifies both sides so
+        A miss still (a) puts BOTH sides into combat lockout — the shooter (and
+        their owning player) because they opened fire, and the target (and its
+        owner) because they are being fired upon — and (b) notifies both sides so
         the shooter sees "you missed" and the target sees "shot at you (missed)".
-        No ``COMBAT_ACTION`` for the target's timer is published for a miss's
-        DAMAGE, but the shooter's own lockout is set directly so firing always
-        starts the fight. Never touches HP or defeat handling.
+        Combat entry mirrors a landed hit; only the damage/defeat handling is
+        skipped. Never touches HP.
         """
         lockout_ticks = self.registry.balance.combat_lockout_ticks
         lockout_until = current_tick + lockout_ticks
@@ -432,6 +440,14 @@ class CombatEngine(BaseSystem):
         attacker_owner = self._owning_player(attacker)
         if attacker_owner is not None and attacker_owner is not attacker:
             self._set_combat_lockout(attacker_owner, lockout_until)
+        # Being shot at — even by a miss — pulls the target (and its owner) into
+        # combat: they're in a firefight, so wall-passage/enter-leave lock the
+        # same as when a shot lands. Mirrors _finalize_hit's target lockout.
+        if self._is_player(target):
+            self._set_combat_lockout(target, lockout_until)
+        target_owner = self._owning_player(target)
+        if target_owner is not None and target_owner is not target:
+            self._set_combat_lockout(target_owner, lockout_until)
 
         weapon_name = getattr(weapon_item, "key", str(weapon_item))
         target_name = getattr(target, "key", "the target")
@@ -484,7 +500,10 @@ class CombatEngine(BaseSystem):
             include_attacker_bonus=include_attacker_bonus,
         )
         self._apply_damage(target, damage, attacker)
-        self._finalize_hit(attacker, target, weapon_item, damage, current_tick)
+        # notify_attacker_hit=False: the throw-AoE path fans many victims through
+        # here and reports one 'bombed' summary — no per-victim "You hit" spam.
+        self._finalize_hit(attacker, target, weapon_item, damage, current_tick,
+                           notify_attacker_hit=False)
         return damage
 
     # ------------------------------------------------------------------ #
@@ -951,7 +970,8 @@ class CombatEngine(BaseSystem):
     # ------------------------------------------------------------------ #
 
     def _notify_target(
-        self, target: Any, attacker: Any, weapon_item: Any, damage: int
+        self, target: Any, attacker: Any, weapon_item: Any, damage: int,
+        notify_attacker_hit: bool = True,
     ) -> None:
         """Send per-hit combat notices to the players behind both sides.
 
@@ -964,10 +984,11 @@ class CombatEngine(BaseSystem):
           plain-player branch — otherwise an agent hit would msg() the agent
           (no session) and its owner would hear nothing.
 
-        Offensive side — when the attacker is a player's turret/agent, that
-        owning player is told its unit struck ("unit_attack"). A bare player
-        attacker gets no offensive notice (the target's "attacked" line covers
-        it), matching the pre-existing behavior.
+        Offensive side — the attacking player is told their blow landed:
+          - a player's turret/agent → the owning player hears "Your Turret/Agent
+            attacked X" ("unit_attack").
+          - a bare player attacker → they hear "You hit X for N" ("attack_hit").
+        So a shooter always gets feedback that their shot connected.
         """
         attacker_name = getattr(attacker, "key", "Unknown")
         weapon_name = getattr(weapon_item, "key", str(weapon_item))
@@ -991,14 +1012,22 @@ class CombatEngine(BaseSystem):
             self.notify(target, "attacked", attacker_name=attacker_name,
                         weapon_name=weapon_name, damage=damage)
 
-        # --- Offensive notice: A's turret/agent struck someone. ---
+        # --- Offensive notice: tell the attacking player their blow landed. ---
         attacker_owner = self._owning_player(attacker)
         attacker_kind = self._unit_kind(attacker)
+        target_name = getattr(target, "key", "target")
         if (attacker_owner is not None and attacker_owner is not attacker
                 and attacker_kind):
+            # A's turret/agent struck someone → tell A.
             self.notify(attacker_owner, "unit_attack", unit_kind=attacker_kind,
                         unit_name=attacker_name,
-                        target_name=getattr(target, "key", "target"),
+                        target_name=target_name,
+                        weapon_name=weapon_name, damage=damage)
+        elif self._is_player(attacker) and notify_attacker_hit:
+            # A bare player landed a hit → confirm it to them (e.g. a 'shoot' or
+            # 'attack' that connected). Without this a shooter got no feedback.
+            # Suppressed for the throw-AoE fan-out (one 'bombed' summary instead).
+            self.notify(attacker, "attack_hit", target_name=target_name,
                         weapon_name=weapon_name, damage=damage)
 
     # ------------------------------------------------------------------ #
