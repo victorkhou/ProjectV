@@ -1149,13 +1149,17 @@ class _FakeTargeting:
 
 
 class _RecordingEngine:
-    """Records both queued (locked shot) and instant (directional shot / attack)
-    resolution so command tests can assert target + accuracy + breach + which
-    path was taken."""
+    """Records both queued and instant resolution so command tests can assert
+    target + accuracy + breach + which path was taken. Both locked and
+    directional player shots now resolve INSTANTLY (resolve_now)."""
     def __init__(self):
         self.calls = []          # (target, accuracy) — queued OR instant
         self.breach_calls = []   # breach flag per call, same order
         self.instant_calls = []  # (target, accuracy) resolved via resolve_now
+        # Present so the wall-clock cooldown gate can read balance (falls back
+        # to a 1.0s default if absent, but be explicit).
+        self.registry = types.SimpleNamespace(
+            balance=types.SimpleNamespace(attack_cooldown_seconds=1.0))
 
     def queue_attack(self, attacker, target, weapon=None, accuracy=None,
                      breach=False):
@@ -1252,6 +1256,34 @@ class TestCmdShoot(unittest.TestCase):
         cmd = _make_cmd(CmdShoot, caller, "")
         cmd.func()
         self.assertEqual(engine.calls, [(target, 0.8)])
+
+    def test_shoot_locked_resolves_instantly_not_queued(self):
+        """A locked shot is the player's own deliberate fire, so it now resolves
+        INSTANTLY (resolve_now), not tick-queued — matching directional shoot."""
+        target = _FakeAttackable("Guard", 3, 0)
+        tg = _FakeTargeting(ranged=True, locked=True, target=target)
+        engine = _RecordingEngine()
+        caller = FakeCaller(systems={"targeting_system": tg,
+                                     "combat_engine": engine})
+        cmd = _make_cmd(CmdShoot, caller, "")
+        cmd.func()
+        self.assertEqual(engine.instant_calls, [(target, 0.8)],
+                         "locked shot must resolve via resolve_now (instant)")
+        self.assertEqual(engine.breach_calls, [False])  # a locked shot never breaches
+
+    def test_shoot_locked_cooldown_blocks_rapid_second_shot(self):
+        """The locked shot is wall-clock cooldown-gated like directional/attack:
+        an immediate second locked shot is refused."""
+        target = _FakeAttackable("Guard", 3, 0)
+        tg = _FakeTargeting(ranged=True, locked=True, target=target)
+        engine = _RecordingEngine()
+        engine.registry.balance.attack_cooldown_seconds = 10.0
+        caller = FakeCaller(systems={"targeting_system": tg,
+                                     "combat_engine": engine})
+        _make_cmd(CmdShoot, caller, "").func()
+        _make_cmd(CmdShoot, caller, "").func()  # immediate second
+        self.assertEqual(len(engine.instant_calls), 1, "second shot must be blocked")
+        self.assertTrue(any("not ready" in m.lower() for m in caller._messages))
 
     def test_shoot_locked_out_of_range_breaks_lock_no_shot(self):
         """If the locked target stepped out of range this tick, 'shoot' refuses

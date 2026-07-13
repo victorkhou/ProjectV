@@ -368,9 +368,12 @@ class TestPvERaidLoop(unittest.TestCase):
         self.assertEqual(len(guards), 2)
         self.assertEqual(len(self.spawner._active_bases), 1)
 
-        # --- 2. Player approaches: stand adjacent to the base (11, 10). ---
+        # --- 2. Player raids the base: stand ON the HQ tile (10, 10), where the
+        # outpost's melee guards are stationed. Melee is same-tile only, so the
+        # raider must be on the guard's tile to be attacked (an adjacent raider
+        # would just be chased). ---
         weapon = FakeWeapon(damage=250, weapon_range=5)  # enough to one-shot HQ
-        player = FakePlayer(name="Raider", x=11, y=10, weapon=weapon)
+        player = FakePlayer(name="Raider", x=10, y=10, weapon=weapon)
         self.room.add_player(player)
 
         # --- 3. Guards fight back: guard AI queues, combat resolves same tick. ---

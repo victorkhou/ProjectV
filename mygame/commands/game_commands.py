@@ -1334,10 +1334,20 @@ class CmdShoot(GameCommand):
             caller.msg("Your target is out of range — lock lost.")
             targeting.clear_lock(caller, reason="out_of_range")
             return
+        # A locked shot is the player's own deliberate fire, so it resolves
+        # INSTANTLY (like directional shoot), throttled by the wall-clock
+        # cooldown — not tick-queued. Gate AFTER the lock/range checks so a
+        # held-fire or lock-lost doesn't burn the cooldown.
+        ready, wait = _instant_attack_gate(caller, combat_engine)
+        if not ready:
+            caller.msg(f"Weapon not ready — {wait:.1f}s until you can fire again.")
+            return
         accuracy = targeting.targeted_accuracy(weapon)
-        _ok, msg = combat_engine.queue_attack(
+        ok, msg = combat_engine.resolve_now(
             caller, target, weapon=weapon, accuracy=accuracy
         )
+        if not ok:
+            caller.ndb.next_attack_time = 0.0  # nothing fired — refund cooldown
         if msg:
             caller.msg(msg)
 

@@ -155,6 +155,12 @@ class FakePlayer:
         if resources:
             self._resources.update(resources)
         self.location = location or FakeTile()
+        # Mirror the tile coords onto db (real CombatCharacter always has them);
+        # the same-tile melee gate + get_coords read db, not the location.
+        loc_db = getattr(self.location, "db", None)
+        if loc_db is not None:
+            self.db.coord_x = getattr(loc_db, "coord_x", None)
+            self.db.coord_y = getattr(loc_db, "coord_y", None)
         self.equipment = FakeEquipmentHandler()
         self._messages = []
         if weapon:
@@ -862,10 +868,12 @@ _GEAR_SLOTS = [
 # -------------------------------------------------------------- #
 
 class TestProperty6MeleeRange(unittest.TestCase):
-    """Property 6: Melee range.
+    """Property 6: Melee is SAME-TILE only.
 
-    A melee weapon's effective attack range is always 1, regardless of any
-    ``range`` stat on the item, and a melee attack never consumes ammo.
+    A melee attack connects only when the attacker and target share the exact
+    tile (grappling range), regardless of any ``range`` stat on the item, and a
+    melee attack never consumes ammo. An adjacent foe (even diagonal) is out of
+    reach until someone closes onto the other's tile.
 
     **Validates: Requirements 4.2, 4.4**
     """
@@ -877,8 +885,7 @@ class TestProperty6MeleeRange(unittest.TestCase):
         loaded=st.integers(min_value=0, max_value=30),
     )
     @settings(max_examples=200)
-    def test_melee_effective_range_is_one(self, range_stat, dx, dy, loaded):
-        assume(dx + dy > 0)  # distinct tiles so attacker is not the target
+    def test_melee_is_same_tile_only(self, range_stat, dx, dy, loaded):
         weapon = FakeTypedWeapon(
             weapon_type="melee", damage=25, weapon_range=range_stat,
             ammo_type="rifle_rounds", ammo_per_shot=3,
@@ -892,9 +899,10 @@ class TestProperty6MeleeRange(unittest.TestCase):
 
         ok, _ = engine.queue_attack(attacker, target)
 
-        # Success iff within an effective range of 1 (Chebyshev — any of the 8
-        # adjacent tiles incl. diagonals), ignoring range_stat.
-        self.assertEqual(ok, max(dx, dy) <= 1)
+        # Success iff the target is on the SAME tile (dx == dy == 0), ignoring
+        # range_stat. A same-tile attacker is not the same OBJECT as the target,
+        # so this is a valid melee (distinct players on one tile).
+        self.assertEqual(ok, dx == 0 and dy == 0)
         # Melee never touches the magazine, whether it hit or missed.
         self.assertEqual(weapon.db.loaded, loaded)
 

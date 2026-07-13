@@ -354,7 +354,7 @@ HELP_ENTRY_DICTS = [
 
             # Attacking
 
-            |wattack <target>|n (|wa|n) — attack a player, building, or agent in reach. You can target anything within your |creach|n — whichever is greater of what you can |csee|n ('scan') and your equipped weapon's |crange|n — so 'attack guard' picks the nearest matching foe within reach (a long-range weapon like a sniper rifle can hit a foe beyond your sight range). Your equipped |cweapon|n decides your damage and reach: melee weapons hit any of the eight tiles touching you — including diagonals — while ranged weapons reach further. Equip a weapon first (|whelp equipment|n).
+            |wattack <target>|n (|wa|n) — attack a player, building, or agent in reach. You can target anything within your |creach|n — whichever is greater of what you can |csee|n ('scan') and your equipped weapon's |crange|n — so 'attack guard' picks the nearest matching foe within reach (a long-range weapon like a sniper rifle can hit a foe beyond your sight range). Your equipped |cweapon|n decides your damage and reach: a melee weapon only reaches a foe on your |csame tile|n (close in first — an adjacent enemy is not yet in melee reach), while ranged weapons strike at a distance. Buildings can be meleed from an adjacent tile (to break a wall by hand). Equip a weapon first (|whelp equipment|n).
 
             # Ranged: Target & Shoot
 
@@ -384,11 +384,11 @@ HELP_ENTRY_DICTS = [
 
             # Buildings as Cover
 
-            Being |cinside a building|n is like being in its own room. A |cmelee|n attacker can only hit you if they're on the |csame tile|n — inside the same building — so a guard standing next door can't reach you until it steps in (and you must step out, or into their tile, to melee them). |cRanged|n fire and |cturrets|n depend on the building: a |cclosed|n building fully shelters the |coccupant|n from ranged attacks, while an |copen|n one (like the raidable buildings in enemy bases) does not — you can still be shot inside it. So ducking into an open enemy structure stops melee guards reaching you, but not their turrets or soldiers. A |cclosed|n building still protects the |cperson|n inside — but the |cbuilding itself|n can be shot down: a directional |wshoot|n breaches the structure (the round hits the wall, not the occupant), which is how you knock down a |cWall|n or a sealed structure from range.
+            A |cmelee|n attacker only reaches a foe on their |csame tile|n — an enemy standing on the next tile over is not yet in reach, so someone has to close in first (guards chase onto your tile; you step onto theirs). Being |cinside a building|n adds ranged cover on top of this: |cRanged|n fire and |cturrets|n depend on the building — a |cclosed|n building fully shelters the |coccupant|n from ranged attacks, while an |copen|n one (like the raidable buildings in enemy bases) does not — you can still be shot inside it. So ducking into an open enemy structure stops nothing ranged, and melee still needs the same tile either way. A |cclosed|n building still protects the |cperson|n inside — but the |cbuilding itself|n can be shot down: a directional |wshoot|n breaches the structure (the round hits the wall, not the occupant), which is how you knock down a |cWall|n or a sealed structure from range.
 
             # Guards
 
-            A |cGuard|n agent (or |cSoldier|n) automatically attacks any enemy that comes within range each tick — so assigning one actually defends your base. Melee guards strike an adjacent tile (and will chase onto your tile to reach you if you duck inside a building — see Buildings as Cover); ranged soldiers reach several tiles out. This cuts both ways: enemy |coutpost|n and |cfortress|n guards attack you the same way when you raid them (|whelp outposts|n).
+            A |cGuard|n agent (or |cSoldier|n) automatically attacks any enemy that comes within range each tick — so assigning one actually defends your base. Melee guards must be on your |csame tile|n to strike, so they chase onto it to reach you; ranged soldiers reach several tiles out. This cuts both ways: enemy |coutpost|n and |cfortress|n guards attack you the same way when you raid them (|whelp outposts|n).
 
             # Destroying a Base
 

@@ -181,7 +181,9 @@ class TestGuardTargetAcquisition(unittest.TestCase):
     def test_guard_targets_nearest_non_owner(self):
         system, engine = _make_system()
         owner = _hq_owner()
-        near = FakePlayer(name="Near", x=1, y=0, oid=2)
+        # A melee guard attacks only a SAME-TILE foe, so put the nearest on the
+        # guard's tile (0,0); the far one at (3,0) is in aggro but not attacked.
+        near = FakePlayer(name="Near", x=0, y=0, oid=2)
         far = FakePlayer(name="Far", x=3, y=0, oid=3)
         tile = FakeTile(nearby_players=[far, near])
         guard = FakeGuard(role="guard", owner=owner, x=0, y=0, location=tile)
@@ -205,7 +207,8 @@ class TestGuardTargetAcquisition(unittest.TestCase):
     def test_guard_fires_on_distinct_id(self):
         system, engine = _make_system()
         owner = _hq_owner(oid=7)
-        hostile = FakePlayer(name="Hostile", x=1, y=0, oid=99)
+        # Same tile as the melee guard so it's in melee reach and fires.
+        hostile = FakePlayer(name="Hostile", x=0, y=0, oid=99)
         tile = FakeTile(nearby_players=[hostile])
         guard = FakeGuard(role="guard", owner=owner, x=0, y=0, location=tile)
 
@@ -288,20 +291,21 @@ class TestGuardChebyshevDistance(unittest.TestCase):
     Chebyshev and Manhattan agree — these diagonal cases are the ones that catch
     a silent revert to Manhattan (which would read a diagonal as distance 2)."""
 
-    def test_melee_guard_reaches_diagonal_target(self):
-        """A melee guard (range 1) hits a target one tile DIAGONALLY away —
-        Chebyshev(1,1)=1 (in reach). Under Manhattan that tile is distance 2 and
-        the shot would be wrongly rejected."""
+    def test_melee_guard_chases_diagonal_adjacent_target(self):
+        """A melee guard does NOT hit a diagonal-adjacent target — melee is
+        same-tile only, so it chases onto the target's tile instead. (Aggro
+        acquisition still uses Chebyshev; the diagonal foe IS acquired.)"""
         system, engine = _make_system(guard_aggro_radius=5)
         owner = _hq_owner()
-        diag = FakePlayer(name="Diag", x=1, y=1, oid=2)  # Cheb 1, Manhattan 2
+        diag = FakePlayer(name="Diag", x=1, y=1, oid=2)  # Chebyshev 1 (adjacent)
         tile = FakeTile(nearby_players=[diag])
-        guard = FakeGuard(role="guard", owner=owner, x=0, y=0, location=tile)
+        guard = _ChaseGuard(role="guard", owner=owner, x=0, y=0, location=tile)
 
         system.process_tick(1, [guard])
-        self.assertEqual(len(engine.pending_actions), 1,
-                         "melee guard must reach a diagonal-adjacent target")
-        self.assertEqual(engine.pending_actions[0]["target"], diag)
+        # No attack (not same tile) — the guard queues a one-axis step toward the
+        # target (greedy step moves the larger axis first; ties pick x).
+        self.assertEqual(len(engine.pending_actions), 0)
+        self.assertEqual(guard.queued_path, [(1, 0)])
 
     def test_ranged_soldier_reaches_diagonal_within_chebyshev_range(self):
         """A soldier with range 4 hits a target at (3,3): Chebyshev 3 (in range).
@@ -360,10 +364,11 @@ class TestGuardWeaponSelection(unittest.TestCase):
         system.process_tick(1, [guard])
         self.assertEqual(len(engine.pending_actions), 0)
 
-    def test_melee_guard_fires_at_range_one(self):
+    def test_melee_guard_fires_at_same_tile(self):
         system, engine = _make_system()
         owner = _hq_owner()
-        target = FakePlayer(name="T", x=1, y=0, oid=2)
+        # Melee guard fires only at a same-tile foe.
+        target = FakePlayer(name="T", x=0, y=0, oid=2)
         tile = FakeTile(nearby_players=[target])
         guard = FakeGuard(role="guard", owner=owner, x=0, y=0, location=tile)
 
@@ -488,7 +493,7 @@ class TestGuardActiveOwnerIdsGate(unittest.TestCase):
         # Owner has NO get_buildings (would fail the fallback live query), but is
         # present in the precomputed active set — so the guard still fires.
         owner = FakePlayer(name="Sentinel", oid=42)
-        hostile = FakePlayer(name="Hostile", x=1, y=0, oid=2)
+        hostile = FakePlayer(name="Hostile", x=0, y=0, oid=2)  # same tile -> melee
         tile = FakeTile(nearby_players=[hostile])
         guard = FakeGuard(role="guard", owner=owner, x=0, y=0, location=tile)
 
@@ -653,7 +658,7 @@ class TestGuardRobustness(unittest.TestCase):
         """A guard that raises during processing is isolated; others still fire."""
         system, engine = _make_system()
         owner = _hq_owner()
-        hostile = FakePlayer(name="Hostile", x=1, y=0, oid=2)
+        hostile = FakePlayer(name="Hostile", x=0, y=0, oid=2)  # same tile -> melee
         tile = FakeTile(nearby_players=[hostile])
         good = FakeGuard(role="guard", owner=owner, x=0, y=0, location=tile)
 

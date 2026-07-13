@@ -149,6 +149,14 @@ class FakePlayer:
         if resources:
             self._resources.update(resources)
         self.location = location or FakeTile()
+        # Mirror the tile's coords onto db.coord_x/coord_y so this fake matches a
+        # real CombatCharacter (which always carries db coords). The same-tile
+        # melee gate + get_coords read db, not the location, so a player built
+        # with only a location=FakeTile(...) must still expose its coords there.
+        loc_db = getattr(self.location, "db", None)
+        if loc_db is not None:
+            self.db.coord_x = getattr(loc_db, "coord_x", None)
+            self.db.coord_y = getattr(loc_db, "coord_y", None)
         self.equipment = FakeEquipmentHandler()
         self._messages = []
         # Optional stable id for is_owner (.id) friend/foe comparisons.
@@ -415,20 +423,31 @@ class TestQueueAttackValidation(unittest.TestCase):
         w.weapon_type = "melee"
         return w
 
-    def test_melee_reaches_diagonal_neighbour(self):
-        """Chebyshev range: a melee attacker hits a foe one tile diagonally
-        away (1 north + 1 west) — the reported case, now in reach."""
+    def test_melee_rejects_adjacent_target(self):
+        """Melee is SAME-TILE only: an adjacent foe (even diagonal, Chebyshev 1)
+        can't be meleed — you must close onto their tile first."""
         engine, _ = _make_engine()
         attacker = FakePlayer(name="Attacker", weapon=self._melee_weapon(),
                               location=FakeTile(xyz=(0, 0, "earth")))
         target = FakePlayer(name="Target",
                             location=FakeTile(xyz=(1, 1, "earth")))  # diagonal
+        ok, msg = engine.queue_attack(attacker, target)
+        self.assertFalse(ok)
+        self.assertIn("same tile", msg.lower())
+
+    def test_melee_hits_same_tile_target(self):
+        """A melee attack lands on a foe sharing the exact tile."""
+        engine, _ = _make_engine()
+        attacker = FakePlayer(name="Attacker", weapon=self._melee_weapon(),
+                              location=FakeTile(xyz=(3, 3, "earth")))
+        target = FakePlayer(name="Target",
+                            location=FakeTile(xyz=(3, 3, "earth")))  # same tile
         ok, _ = engine.queue_attack(attacker, target)
         self.assertTrue(ok)
 
     def test_melee_rejects_two_tiles_away(self):
-        """A foe two tiles away on an axis (Chebyshev 2) is still out of melee
-        range 1."""
+        """A foe two tiles away is out of melee reach (same-tile gate rejects it
+        before the range check)."""
         engine, _ = _make_engine()
         attacker = FakePlayer(name="Attacker", weapon=self._melee_weapon(),
                               location=FakeTile(xyz=(0, 0, "earth")))
@@ -436,7 +455,7 @@ class TestQueueAttackValidation(unittest.TestCase):
                             location=FakeTile(xyz=(2, 0, "earth")))
         ok, msg = engine.queue_attack(attacker, target)
         self.assertFalse(ok)
-        self.assertIn("out of range", msg)
+        self.assertIn("same tile", msg.lower())
 
     def test_insufficient_ammo_rejected(self):
         weapon = FakeWeapon(damage=25, weapon_range=5, ammo_cost={"Iron": 1})
@@ -1630,22 +1649,22 @@ class TestMagazineDraw(unittest.TestCase):
 class TestMeleeGating(unittest.TestCase):
     """A melee weapon's effective range is always 1 and never uses ammo."""
 
-    def test_melee_ignores_range_stat_out_of_range(self):
+    def test_melee_adjacent_target_rejected_same_tile_gate(self):
         weapon = FakeTypedWeapon(
-            weapon_type="melee", damage=25, weapon_range=10,  # big stat
+            weapon_type="melee", damage=25, weapon_range=10,  # big stat, ignored
         )
         engine, _ = _make_engine()
         attacker = FakePlayer(name="Attacker", weapon=weapon,
                               location=FakeTile(xyz=(0, 0, "earth")))
-        # Distance 3 > effective melee range 1 -> rejected despite range=10.
+        # An adjacent foe is not in melee reach: melee is same-tile only, so the
+        # same-tile gate rejects it (before any range check).
         target = FakePlayer(name="Target",
-                            location=FakeTile(xyz=(3, 0, "earth")))
+                            location=FakeTile(xyz=(1, 0, "earth")))
         ok, msg = engine.queue_attack(attacker, target)
         self.assertFalse(ok)
-        self.assertIn("out of range", msg)
-        self.assertIn("max 1", msg)
+        self.assertIn("same tile", msg.lower())
 
-    def test_melee_hits_adjacent_target(self):
+    def test_melee_hits_same_tile_target(self):
         weapon = FakeTypedWeapon(
             weapon_type="melee", damage=25, weapon_range=10,
         )
@@ -1653,7 +1672,7 @@ class TestMeleeGating(unittest.TestCase):
         attacker = FakePlayer(name="Attacker", weapon=weapon,
                               location=FakeTile(xyz=(0, 0, "earth")))
         target = FakePlayer(name="Target",
-                            location=FakeTile(xyz=(1, 0, "earth")))
+                            location=FakeTile(xyz=(0, 0, "earth")))  # same tile
         ok, _ = engine.queue_attack(attacker, target)
         self.assertTrue(ok)
 
@@ -1669,7 +1688,7 @@ class TestMeleeGating(unittest.TestCase):
         attacker = FakePlayer(name="Attacker", weapon=weapon,
                               location=FakeTile(xyz=(0, 0, "earth")))
         target = FakePlayer(name="Target",
-                            location=FakeTile(xyz=(1, 0, "earth")))
+                            location=FakeTile(xyz=(0, 0, "earth")))  # same tile
         ok, _ = engine.queue_attack(attacker, target)
         self.assertTrue(ok)
         self.assertEqual(weapon.db.loaded, 5)  # untouched
@@ -1991,7 +2010,7 @@ class TestMeleeRoomGate(unittest.TestCase):
         target = self._inside_player("Raider", 0, 1, is_open=True)
         ok, msg = engine.queue_attack(attacker, target)
         self.assertFalse(ok)
-        self.assertIn("same building", msg.lower())
+        self.assertIn("same tile", msg.lower())
 
     def test_same_tile_attacker_can_melee_inside_player(self):
         """An attacker who has entered the same building (same tile) can melee."""
@@ -2129,8 +2148,8 @@ class TestClosedBuildingRangedImmunity(unittest.TestCase):
         self.assertIn("inside", msg.lower())
 
     def test_inside_player_cannot_melee_adjacent_tile(self):
-        """Buildings are rooms for melee: a player inside a building can't melee
-        a target on a neighbouring tile — they must be on the same tile."""
+        """Melee is same-tile only: a player (here, inside a building) can't melee
+        a target on a neighbouring tile — they must share the exact tile."""
         engine, _ = _make_engine()
         attacker = self._sheltered_player("Puncher", 5, 5)
         attacker.equipment.equip(self._melee_weapon())
@@ -2138,7 +2157,7 @@ class TestClosedBuildingRangedImmunity(unittest.TestCase):
                             location=FakeTile(xyz=(6, 5, "earth")))
         ok, msg = engine.queue_attack(attacker, victim)
         self.assertFalse(ok)
-        self.assertIn("same building", msg.lower())
+        self.assertIn("same tile", msg.lower())
 
     def test_inside_player_can_melee_same_tile_target(self):
         """A melee attack lands when both are on the same tile (inside the same
@@ -2524,7 +2543,10 @@ class TestResolveNow(unittest.TestCase):
         melee = FakeWeapon(damage=20, weapon_range=1, key="knife")
         melee.weapon_type = "melee"
         attacker.equipment.equip(melee)
-        target.db.coord_x, target.db.coord_y = 1, 0  # adjacent
+        # Melee is same-tile only — put the target on the attacker's tile.
+        target.location = FakeTile(xyz=(0, 0, "earth"))
+        target.db.coord_x, target.db.coord_y = 0, 0
+        attacker.db.coord_x, attacker.db.coord_y = 0, 0
         ok, _ = engine.resolve_now(attacker, target)  # accuracy=None
         self.assertTrue(ok)
         self.assertLess(target.db.hp, 100)

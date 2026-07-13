@@ -167,15 +167,12 @@ class GuardCombatSystem(BaseSystem):
         dist = (chebyshev_distance(gx, gy, tcoords[0], tcoords[1])
                 if tcoords else None)
 
-        # A melee guard can only reach a target who is INSIDE a building from the
-        # SAME tile (buildings are rooms for melee — see CombatEngine._melee_
-        # blocked). So a raider who ducked into a structure must be closed to
-        # exactly, not merely stood next to; the guard chases onto their tile.
-        effective_range = weapon_range
-        if is_melee:
-            from world.utils import target_inside_building
-            if target_inside_building(target):
-                effective_range = 0
+        # A melee guard must be on the SAME tile as its target to strike it —
+        # melee is grappling range, not a reach into the neighbouring tile (see
+        # CombatEngine._melee_blocked). So a melee guard's effective range is 0:
+        # it chases onto the target's tile before it can attack, rather than
+        # hitting a raider who merely stands adjacent.
+        effective_range = 0 if is_melee else weapon_range
 
         if dist is not None and dist <= effective_range:
             # In weapon range — attack. queue_attack still runs the full

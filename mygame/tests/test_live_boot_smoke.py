@@ -636,10 +636,10 @@ class LiveBootSmokeTest(EvenniaTest):
         finally:
             _teardown_game(systems)
 
-    def test_melee_reaches_diagonal_on_real_objects(self):
-        """On real objects: Chebyshev melee range — a range-1 melee weapon hits a
-        target one tile diagonally away (the reported '1 north + 1 west' case),
-        but not a target two tiles off on an axis."""
+    def test_melee_is_same_tile_only_on_real_objects(self):
+        """On real objects: melee connects only when attacker and target share
+        the exact tile — an adjacent (even diagonal) foe is out of reach until
+        someone closes in."""
         from server.conf.game_init import initialize_game
         from world.systems.combat_engine import SyntheticWeapon
 
@@ -652,16 +652,16 @@ class LiveBootSmokeTest(EvenniaTest):
             melee = SyntheticWeapon(30, 1, name="Fist")
             melee.weapon_type = "melee"
 
-            # Diagonal neighbour (6,6): Chebyshev distance 1 -> in reach.
+            # Diagonal neighbour (6,6): adjacent but NOT same tile -> refused.
             diag = self._make_player(x=6, y=6, planet="earth", location=room)
-            ok, _ = engine.queue_attack(attacker, diag, weapon=melee)
-            self.assertTrue(ok, "diagonal neighbour should be in melee reach")
+            ok, msg = engine.queue_attack(attacker, diag, weapon=melee)
+            self.assertFalse(ok, "adjacent foe is not in melee reach")
+            self.assertIn("same tile", msg.lower())
 
-            # Two tiles away on an axis (7,5): Chebyshev distance 2 -> out.
-            far = self._make_player(x=7, y=5, planet="earth", location=room)
-            ok, msg = engine.queue_attack(attacker, far, weapon=melee)
-            self.assertFalse(ok)
-            self.assertIn("out of range", msg.lower())
+            # Same tile (5,5): in reach.
+            same = self._make_player(x=5, y=5, planet="earth", location=room)
+            ok, _ = engine.queue_attack(attacker, same, weapon=melee)
+            self.assertTrue(ok, "a same-tile foe is in melee reach")
         finally:
             _teardown_game(systems)
 
@@ -757,7 +757,7 @@ class LiveBootSmokeTest(EvenniaTest):
             guard = self._make_player(x=5, y=5, planet="earth", location=room)
             ok, msg = engine.queue_attack(guard, raider, weapon=melee)
             self.assertFalse(ok, "adjacent melee must not reach into a building")
-            self.assertIn("same building", msg.lower())
+            self.assertIn("same tile", msg.lower())
 
             # Same tile (6,5) -> melee lands.
             guard.db.coord_x, guard.db.coord_y = 6, 5
@@ -973,7 +973,8 @@ class LiveBootSmokeTest(EvenniaTest):
                                 weapon_type="melee")
             knife = spawn_gear_drop(room, knife_def, x=0, y=0)
             systems["equipment_system"].equip(attacker, knife)
-            target = self._make_player(x=1, y=0, planet="earth", location=room)
+            # Melee is same-tile only — put the victim on the attacker's tile.
+            target = self._make_player(x=0, y=0, planet="earth", location=room)
             target.key = "Victim"
             hp0 = target.db.hp
 

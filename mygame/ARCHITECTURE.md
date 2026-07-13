@@ -481,15 +481,17 @@ Three deactivation/elimination rules — all keyed on ownership, not on "is this
   `BASE_ELIMINATED`. A *player* HQ destruction does **not** wipe — it deactivates.
 
 **Cover model (two independent gates in `CombatEngine`, both re‑checked at
-`resolve_tick` for TOCTOU).** A building is a *room*: a player inside one
-(`db.inside_building`, `world.utils.target_inside_building`) can be **meleed only
-from the same tile** — `_melee_blocked` refuses an adjacent melee across the
-boundary, symmetric in both directions, regardless of open/closed. A **closed**
-building additionally shelters its occupant from *ranged* fire (`_ranged_blocked`
-+ `player_is_sheltered`); an **open** one (all NPC‑base buildings) gives no ranged
-cover. So a raider who ducks into an open enemy structure stops melee guards from
-reaching them (the guard must chase onto the tile) but is still shot by turrets
-and soldiers.
+`resolve_tick` for TOCTOU).** Melee is **same‑tile only**: `_melee_blocked` refuses
+a melee against any *mobile* combatant (player/agent/enemy NPC) unless the
+attacker and target share the exact tile (`world.utils.same_tile`) — grappling
+range, not a reach into the neighbouring tile. An adjacent foe must be closed onto
+first (melee guards chase; players step in). **Buildings are exempt** — a building
+may be meleed from an adjacent tile (Chebyshev 1, enforced by the range check), so
+a melee‑only raider can break an impassable Wall by hand. A **closed** building
+additionally shelters its occupant from *ranged* fire (`_ranged_blocked` +
+`player_is_sheltered`); an **open** one (all NPC‑base buildings) gives no ranged
+cover. So an adjacent raider is safe from a melee guard (which chases onto the
+tile) but still shot by turrets and soldiers.
 
 **Distance metric — Chebyshev everywhere in combat.** All combat range/adjacency,
 guard/turret target acquisition, and throw AoE use `world.utils.chebyshev_distance`
