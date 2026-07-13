@@ -42,7 +42,7 @@ graph TD
 
     subgraph L6["Orchestration Layer"]
         Boot["game_init.initialize_game()<br/>+ game_systems dict"]
-        Tick["GameTickScript.at_repeat()<br/>(14 ordered steps)"]
+        Tick["GameTickScript.at_repeat()<br/>(TICK_STEP_ORDER — 17 steps)"]
         Hooks["at_server_startstop hooks"]
     end
 
@@ -259,8 +259,10 @@ sequenceDiagram
     Reg->>Prog: build_thresholds(registry.ranks)
     Init->>Bus: import event_bus singleton
     Init->>Sys: construct each system(registry, event_bus, <ports…>)
-    Note over Sys: Building · Combat · Rank · Resource · Powerup<br/>Tech · Equipment · Agent · Movement · Chunk · Chat<br/>(adapters injected: Agent/Building repos+factories, TerrainProvider)
+    Note over Sys: Building · Combat · Rank · Resource · Regen · Powerup<br/>Tech · Equipment · Agent · Movement · Chunk · Chat<br/>GuardCombat · OutpostSpawner · BaseElimination<br/>(adapters injected: Agent/Building repos+factories, TerrainProvider)
     Init->>Sys: build procedural world<br/>(PlanetRegistry, TerrainGenerators, FogOfWar,<br/>MapDataProvider, ProceduralMapRenderer, PlanetRooms)
+    Init->>Sys: OutpostSpawner.spawn_initial(planet) per planet<br/>(idempotent — skipped if any sentinel already exists on restart)
+    Init->>Subs: BaseEliminationHandler subscribes BUILDING_DESTROYED;<br/>OutpostSpawner subscribes BASE_ELIMINATED
     Init->>Subs: NotificationSystem(event_bus, notifier=EvenniaNotifier()) auto-subscribes
     Init->>Subs: NotificationPresenter(event_bus, EvenniaPlayerNotifier())<br/>subscribes PLAYER_NOTIFICATION
     Init->>Subs: subscribe_combat_timer(event_bus)
@@ -296,16 +298,26 @@ flowchart TD
     S3 --> S3b["3b · agent_training<br/>AgentSystem.process_training_tick()"]
     S3b --> S4["4 · active_presence<br/>BuildingSystem.process_construction_tick()<br/>ResourceSystem.process_harvest_tick() per online player"]
     S4 --> S5["5 · equipment_production<br/>EquipmentSystem.process_production()"]
-    S5 --> S6["6 · combat_resolution<br/>CombatEngine.resolve_tick()"]
-    S6 --> S7["7 · turret_attacks<br/>CombatEngine.process_turrets()"]
-    S7 --> S8["8 · combat_timer_decrement (inline)"]
-    S8 --> S9["9 · powerup_ticks<br/>PowerupSystem.process_tick()"]
-    S9 --> S10["10 · tech_research<br/>TechLabSystem.process_tick()"]
-    S10 --> S11["11 · resource_respawns<br/>ResourceSystem.process_respawns()"]
-    S11 --> S12["12 · tick_completed<br/>EventBus.publish(TICK_COMPLETED)"]
+    S5 --> SG["6 · guard_combat<br/>GuardCombatSystem.process_tick(): guards/soldiers<br/>acquire targets & queue attacks (before resolution)"]
+    SG --> S6["7 · combat_resolution<br/>CombatEngine.resolve_tick()"]
+    S6 --> S7["8 · turret_attacks<br/>CombatEngine.process_turrets()"]
+    S7 --> S8["9 · combat_timer_decrement (inline)"]
+    S8 --> SR["10 · hp_regen<br/>RegenSystem.process_tick() (players/agents, post-combat)"]
+    SR --> S9["11 · powerup_ticks<br/>PowerupSystem.process_tick()"]
+    S9 --> S10["12 · tech_research<br/>TechLabSystem.process_tick()"]
+    S10 --> S11["13 · resource_respawns<br/>ResourceSystem.process_respawns()"]
+    S11 --> SO["14 · outpost_respawn<br/>OutpostSpawnerSystem.process_respawns():<br/>respawn cleared NPC bases whose cooldown elapsed"]
+    SO --> S12["15 · tick_completed<br/>EventBus.publish(TICK_COMPLETED)"]
     S12 --> M["metrics.record_tick(duration_ms)"]
     M --> End
 ```
+
+> The canonical order is the `TICK_STEP_ORDER` tuple in
+> [`typeclasses/scripts.py`](typeclasses/scripts.py) — the single source of truth
+> (17 entries incl. the `active_chunks`/`terrain_epochs` setup steps). Adding or
+> reordering a step means editing that tuple, not moving code. `guard_combat` runs
+> **before** `combat_resolution` (guards queue, the engine resolves) and
+> `turret_attacks` runs **after** it (turrets fire at the settled world) — see §5b.
 
 Behavior scripts (`HarvesterScript`, `DeliveryBehavior`, `PatrolBehavior`,
 `EngineerScript`, …) all use `interval=0` — they are **externally clocked** from
@@ -374,15 +386,26 @@ graph LR
 | System | Tick step | Responsibility | Notable collaborators |
 |---|---|---|---|
 | **AgentSystem** | 3, 3b | Train/assign/patrol agents; freeze‑aware XP; gated‑ability convergence; demotion/promotion reserve | progression, Movement, EventBus (`LEVEL_CHANGED` subscriber), agent scripts |
-| **CombatEngine** | 6, 7 | Queue + resolve attacks, damage w/ armor+tech+powerup mods, death/destruction, turrets | Agent (lazy), Equipment, Powerup, EventBus |
+| **CombatEngine** | 7, 8 | Queue + resolve attacks, damage w/ armor+tech+powerup mods, player death/respawn, enemy‑NPC permanent death (`_handle_enemy_death`), building destruction, turrets; owner‑attributed kills | Agent (lazy), Equipment, Powerup, EventBus |
+| **GuardCombatSystem** | 6 | Per‑tick guard/soldier target acquisition — nearest non‑owner within aggro radius via `get_nearby_players`; queues melee/ranged attacks through the engine; gated on `owner_has_active_hq` (ownerless/deactivated‑base guards skip); skips incapacitated/reserved/dead. Defends **player and NPC bases alike** | CombatEngine (queue_attack), utils (`owner_has_active_hq`), PlanetRoom (spatial query) |
+| **OutpostSpawnerSystem** | 14 | Spawns NPC bases (outposts/fortresses) at init via templates; respawns cleared bases on cooldown (`process_respawns`, subscribes `BASE_ELIMINATED`); placement (bounds/passable/unoccupied/min‑separation) | registry (templates + balance), NPC/building factories, PlanetRoom, EventBus |
+| **BaseEliminationHandler** | event‑driven | Subscribes `BUILDING_DESTROYED`; on a **sentinel‑owned HQ** destruction wipes the whole base (buildings + guards + sentinel), awards `xp_hq_destroy` + drops loot, publishes `BASE_ELIMINATED`. Player HQ untouched (PvP fork = deactivation, not deletion) | EventBus, PlanetRoom, CombatEngine (XP) |
 | **RankSystem** | event‑driven | Level 1‑60 → rank 1‑12; XP thresholds; tech unlock/revoke; **publishes** `LEVEL_CHANGED`/`RANK_*` | progression, EventBus |
-| **ResourceSystem** | 4, 11 | Manual + presence harvest, Extractor inventory, respawns | Movement, terrain, EventBus |
+| **ResourceSystem** | 4, 13 | Manual + presence harvest, Extractor inventory, respawns | Movement, terrain, EventBus |
 | **BuildingSystem** | 4 | Construct/upgrade validation + timers (player‑presence & engineer‑agent) | terrain, EventBus |
 | **EquipmentSystem** | 5 | Per‑tick item production **and** the use‑case mediating equip/unequip/use/throw/reload/deposit/withdraw + carry‑weight/rank/ammo checks (see §12) | registry, EquipmentHandler, injected area‑damage applier + PowerupSystem + supply/resource‑drop spawners |
 | **EquipmentHandler** | — | Per‑character Gear slots (equip/unequip) + stat aggregation + Supply‑bag storage | (standalone; per `CombatEntity`) |
 | **MovementSystem** | 2 | In‑memory moving‑NPC set; per‑tick advance; pathfinding throttle | pathfinding |
-| **PowerupSystem** | 9 | Timed buffs, cooldowns, combat stat modifiers | RankSystem, EventBus |
-| **TechLabSystem** | 10 | Research timers, apply tech effects/unlocks | RankSystem, EventBus |
+| **RegenSystem** | 10 | Passive HP regen (`hp_regen_percent` of `hp_max`/interval) for living, non‑incapacitated players/agents; buildings never passively heal | EventBus (via BaseSystem) |
+| **PowerupSystem** | 11 | Timed buffs, cooldowns, combat stat modifiers | RankSystem, EventBus |
+| **TechLabSystem** | 12 | Research timers, apply tech effects/unlocks | RankSystem, EventBus |
+
+> **PvE is ownership‑generic.** The three PvE systems add no PvE‑only combat path:
+> guards, turrets, and base‑elimination all key off *ownership* (`db.owner`,
+> `owner_has_active_hq`, sentinel‑owned‑HQ), so every defensive mechanic works
+> identically for player bases (PvP) and NPC bases (PvE). The only PvE‑specific
+> forks are enemy‑NPC **permanent death** (vs. player respawn) and HQ‑destruction
+> **base wipe** (vs. player‑HQ deactivation). See the PvE flow below.
 
 ---
 
@@ -431,6 +454,60 @@ freeze.
 
 ---
 
+## 5b. PvE — NPC Bases (raid → wipe → respawn)
+
+Enemy bases (outposts & fortresses) are the PvE loop. The signature property is that
+**every defensive mechanic is ownership‑generic** — the same turret/guard/elimination
+code runs for player bases (PvP). A base is a `SentinelCharacter` (a never‑puppeted
+`CombatCharacter` whose `msg()` is a no‑op) that *owns* the base's buildings and
+guards, exactly as a player owns theirs. Enemy guards are `NPC`s with
+`db.npc_type == "enemy"`, which is what flips their death from respawn to permanent.
+
+Three deactivation/elimination rules — all keyed on ownership, not on "is this PvE":
+
+- **Base inert without an HQ** — `owner_has_active_hq(owner, planet)` gates turrets,
+  guards, production, and building commands. Applies to any owner (PvP: lose your HQ →
+  base goes inert until rebuilt; PvE: a wiped base is gone).
+- **Enemy‑NPC permanent death** — `CombatEngine._is_enemy_npc` is checked in
+  `_finalize_hit` **before** the player‑respawn path, so an enemy at 0 HP is `delete()`d
+  (publishing `NPC_ELIMINATED` first) instead of respawning. Player agents still respawn.
+- **HQ destruction → base wipe** — the `BaseEliminationHandler` reacts to a
+  sentinel‑owned HQ's `BUILDING_DESTROYED`, wipes the whole base, and publishes
+  `BASE_ELIMINATED`. A *player* HQ destruction does **not** wipe — it deactivates.
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant Spawn as OutpostSpawnerSystem
+    participant Guard as GuardCombatSystem
+    participant Eng as CombatEngine
+    participant Bus as EventBus
+    participant Elim as BaseEliminationHandler
+    participant P as Player (raider)
+
+    Note over Spawn: init / respawn cooldown
+    Spawn->>Spawn: spawn_base() — sentinel owns buildings + guards
+    loop each tick while raider in range
+        Guard->>Eng: queue_attack(guard → nearest non-owner)  %% gated on owner_has_active_hq
+        Eng->>Eng: resolve_tick() — guards you kill stay dead (enemy NPC delete)
+        P->>Eng: attack enemy HQ / buildings
+    end
+    Eng->>Bus: BUILDING_DESTROYED (enemy HQ)
+    Bus-->>Elim: on_building_destroyed()
+    Elim->>Elim: sentinel-owned HQ? → wipe buildings+guards+sentinel
+    Elim->>P: award xp_hq_destroy + drop loot at (x,y)
+    Elim->>Bus: BASE_ELIMINATED
+    Bus-->>Spawn: on_base_eliminated() → queue respawn at tick + outpost_respawn_ticks
+```
+
+Base templates load from an optional `data/definitions/outposts.yaml` (absent → no
+bases; hot‑reloadable). Balance knobs (`outpost_count`/`fortress_count`,
+`*_guard_hp`, `guard_*` damage/range/aggro, `xp_hq_destroy`, `outpost_respawn_ticks`)
+live in `balance.yaml`. Admins drive it manually with `@outpost spawn|list`. Player
+help: `help outposts` and the "Guards"/"Destroying a Base" sections of `help combat`.
+
+---
+
 ## 6. EventBus Wiring (publishers → events → subscribers)
 
 ```mermaid
@@ -445,6 +522,7 @@ graph LR
         AGT[AgentSystem / progression]
         CHAR[CombatCharacter login/logout]
         TICK[GameTickScript]
+        ELIM[BaseEliminationHandler]
     end
 
     subgraph Events
@@ -452,7 +530,9 @@ graph LR
         e2((RANK_PROMOTED / RANK_DEMOTED))
         e3((COMBAT_ACTION))
         e4((PLAYER_ELIMINATED))
+        e4b((NPC_ELIMINATED))
         e5((BUILDING_DESTROYED / *))
+        e5b((BASE_ELIMINATED))
         e6((PLAYER_LOGIN / LOGOUT))
         e7((POWERUP_* / TECHNOLOGY_RESEARCHED / RESOURCE_GATHERED))
         e8((TICK_COMPLETED))
@@ -464,6 +544,8 @@ graph LR
         NOTIF[NotificationSystem<br/>broadcast → Notifier port]
         PRES[NotificationPresenter<br/>format → PlayerNotifier port]
         CT[CombatTimer]
+        ELIMS[BaseEliminationHandler.on_building_destroyed]
+        SPAWN[OutpostSpawnerSystem.on_base_eliminated<br/>queue respawn]
     end
 
     RANK --> e1 --> AGENT
@@ -471,8 +553,11 @@ graph LR
     RANK --> e2 --> NOTIF
     COMBAT --> e3 --> CT
     COMBAT --> e4 --> NOTIF
+    COMBAT --> e4b
     COMBAT --> e5
     BLD --> e5
+    e5 --> ELIMS
+    ELIM --> e5b --> SPAWN
     CHAR --> e6 --> NOTIF
     RES --> e7
     PWR --> e7
@@ -483,11 +568,18 @@ graph LR
     BLD --> e9
     RES --> e9
     AGT --> e9
+    ELIM --> e9
     CT -->|publishes| CTS((COMBAT_TIMER_STARTED))
 ```
 
 The bus swallows subscriber exceptions (logs, never propagates) so a bad handler
 can't break a publisher.
+
+> `NPC_ELIMINATED` is published by `CombatEngine` **before** the victim is deleted
+> (so a subscriber could still read the victim's coords/owner), but currently has no
+> subscriber — it's an extension point. The raider's own "killed +XP" feedback rides
+> the `npc_killed` `PLAYER_NOTIFICATION` kind instead. `NotificationSystem` subscribes
+> only to the login/logout/`PLAYER_ELIMINATED`/rank events (§10), not the PvE events.
 
 **`PLAYER_NOTIFICATION` — the presentation seam.** Domain systems never compose
 per‑player text. Instead `BaseSystem.notify(player, kind, **data)` publishes a
@@ -497,11 +589,14 @@ builds the string, and delivers it through the injected `PlayerNotifier` port.
 Restyling or re‑wording any player message — the original combat/economy kinds
 (`rank_level_up`, `building_progress`/`building_complete`,
 `agent_training_progress`/`agent_training_complete`, `harvest_drop`, `attacked`,
-`building_attacked`, `ability_active`/`ability_relocked`/`ability_available`)
-plus the equipment/storage kinds added by the equipment‑items feature
+`building_attacked`, `ability_active`/`ability_relocked`/`ability_available`),
+the equipment/storage kinds from the equipment‑items feature
 (`equip_denied`, `out_of_ammo`, `reloaded`, `reload_failed`, `healed`,
 `buff_applied`, `bombed`, `carry_full`, `storage_full`, `deposited`, `withdrew`;
-thrown victims reuse `attacked`) — is a one‑line edit to
+thrown victims reuse `attacked`), and the combat‑attribution + PvE kinds
+(`unit_attacked`/`unit_attack` — your base/agent was hit or hit someone, in bright
+red; `harvester_produced`; `npc_killed`; `base_eliminated`;
+`base_deactivated`/`base_reactivated`) — is a one‑line edit to
 [`presenters/notification_presenter.py`](world/presenters/notification_presenter.py) —
 with **zero** edits to the use‑case systems. (A `kind` with no formatter is
 silently dropped by `on_notification`, so every kind a system emits must have a
@@ -531,6 +626,10 @@ classDiagram
         db.researched_techs / activity_state
         get_buildings() get_structured_status()
     }
+    class SentinelCharacter {
+        db.is_sentinel : owns NPC-base buildings + guards
+        msg() no-op (never puppeted)
+    }
     class GameEntity {
         _object_type_tag
         coord_x, coord_y
@@ -541,6 +640,7 @@ classDiagram
         db.role / db.role_target / db.reserve
         db.movement_queue / db.delivery_state
         advance_movement() set_movement_queue()
+        enemy npc_type dies permanently
     }
     class Building {
         db.building_type / db.owner / db.building_level
@@ -564,6 +664,7 @@ classDiagram
 
     DefaultCharacter <|-- CombatCharacter
     CombatEntity <|.. CombatCharacter
+    CombatCharacter <|-- SentinelCharacter
     DefaultObject <|-- GameEntity
     GameEntity <|-- Building
     GameEntity <|-- GameItem
@@ -575,6 +676,8 @@ classDiagram
 
     CombatCharacter "1" o-- "*" Building : owns
     CombatCharacter "1" o-- "*" NPC : commands
+    SentinelCharacter "1" o-- "*" Building : owns (NPC base)
+    SentinelCharacter "1" o-- "*" NPC : guards (enemy)
     Building "1" o-- "0..1" NPC : assigned_agent
     NPC "1" *-- "*" AgentScript : attached
     PlanetRoom "1" o-- "*" Building : contains
@@ -812,7 +915,26 @@ erDiagram
         int    rank_requirement "a LEVEL 1..60"
     }
     BALANCE_CONFIG {
-        singleton config "xp_*, turret_*, agent_xp_*, chunk_size, vision radii …"
+        singleton config "xp_*, turret_*, agent_xp_*, guard_*, outpost_*, chunk_size, vision radii …"
+    }
+    BASE_TEMPLATE_DEF {
+        string tier PK "outpost | fortress | … (optional outposts.yaml)"
+        string display_name
+        list   buildings "TemplateBuildingDef[]"
+        list   guards "TemplateGuardDef[]"
+        dict   loot "keys soft → RESOURCE"
+    }
+    TEMPLATE_BUILDING_DEF {
+        string building_type FK "soft → BUILDING_DEF.abbreviation"
+        tuple  offset "(dx,dy) from HQ tile"
+        int    hp "nullable; overrides BuildingDef default"
+        int    level "default 1"
+    }
+    TEMPLATE_GUARD_DEF {
+        string role "guard (melee) | soldier (ranged)"
+        string weapon_type "melee | ranged"
+        int    count "default 1"
+        int    hp "nullable; tier default from balance"
     }
 
     %% ---- ENFORCED foreign keys (cross_validate rejects dangling refs) ----
@@ -831,6 +953,10 @@ erDiagram
     ITEM_DEF              }o..o{ RESOURCE     : "ammo_cost (soft)"
     TECHNOLOGY_DEF        }o..o{ RESOURCE     : "resource_cost (soft)"
     BUILDING_DEF          }o..o{ BUILDING_DEF : "unlocks by abbr (soft)"
+    BASE_TEMPLATE_DEF     ||--o{ TEMPLATE_BUILDING_DEF : "buildings (composition)"
+    BASE_TEMPLATE_DEF     ||--o{ TEMPLATE_GUARD_DEF     : "guards (composition)"
+    TEMPLATE_BUILDING_DEF }o..o| BUILDING_DEF : "building_type by abbr (soft)"
+    BASE_TEMPLATE_DEF     }o..o{ RESOURCE     : "loot (soft)"
     RANK_DEF             }o..o{ BUILDING_DEF : "unlocks by NAME (soft)"
     RANK_DEF             }o..o{ COORDINATE_SPACE_DEF : "planet_access (soft)"
     COORDINATE_SPACE_DEF }o..o{ TERRAIN_DEF  : "terrain_weights keys (soft)"
@@ -850,6 +976,7 @@ erDiagram
 | `PlanetDef` | `terrain.yaml` (`planets:`) | `registry.planets` | `name` |
 | `AbilityGateDef` | `ability_gates.yaml` | `registry.ability_gates` | `key` |
 | `BalanceConfig` | `config/balance.yaml` (optional) | `registry.balance` | singleton |
+| `BaseTemplateDef` | `definitions/outposts.yaml` (**optional**) | `registry.base_templates` | `tier` |
 | `CoordinateSpaceDef` | `planets.yaml` | **`PlanetRegistry`** (separate) | `planet_key` |
 
 ### Cross‑reference notes (things the schema does *not* protect you from)
@@ -869,6 +996,12 @@ erDiagram
   checked against each other at load.
 - **`rank_requirement` is a misnomer** on both `BuildingDef` and `CoordinateSpaceDef`:
   per the YAML comments it now holds a **level (1–60)**, not a rank (1–12).
+- **NPC‑base templates are optional and lightly checked.** `outposts.yaml` is absent by
+  default (→ no NPC bases; `registry.base_templates` empty), and
+  `TemplateBuildingDef.building_type` is a **soft** reference to a `BuildingDef`
+  abbreviation — a typo isn't caught by `cross_validate`, it just fails to place that
+  building at spawn time. `guard_hp`/loot amounts default from `BalanceConfig` when a
+  template omits them.
 
 ---
 
