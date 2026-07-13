@@ -1116,6 +1116,7 @@ class CmdTeleport(BaseCommand):
 
     Usage:
       @teleport <x> <y> [planet]
+      goto <x> <y> [z]
 
     Options:
       <x> <y>   destination coordinates (spaces or commas: "25 25" or "25,25")
@@ -1126,13 +1127,16 @@ class CmdTeleport(BaseCommand):
       @teleport 25 25
       @teleport 25,25
       @teleport 50 50 earth
+      goto 25 25
+      goto 50 50 2
 
     Notes:
-      Aliases: @tel. Builder+ only.
+      Aliases: @tel, goto. The third argument is the same in every form —
+      a planet name, prefix, or z-level (0/1/2). Builder+ only.
     """
 
     key = "@teleport"
-    aliases = ["@tel"]
+    aliases = ["@tel", "goto"]
     locks = "cmd:perm(Builder);view:perm(Builder)"
     help_category = "Admin"
 

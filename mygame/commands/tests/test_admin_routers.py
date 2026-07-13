@@ -904,6 +904,35 @@ class TestTeleportSuppressesNotifications(unittest.TestCase):
         self.assertEqual((tx, ty), (25, 25))
         self.assertFalse(notify)  # notifications suppressed
 
+    def test_goto_is_registered_as_an_alias(self):
+        """'goto <x> <y> [z]' is an alias for @teleport."""
+        self.assertIn("goto", CmdTeleport.aliases)
+
+    def test_goto_teleports_like_at_teleport(self):
+        """Invoking via the 'goto' alias moves to the parsed coordinates."""
+        room = _RecordingRoom()
+        caller = FakeCaller(
+            perm_level="Builder",
+            systems={"planet_registry": _FakePlanetRegistry()},
+        )
+        caller.db.coord_planet = "earth"
+        caller.location = room
+
+        from server.conf import game_init
+        original = getattr(game_init, "game_systems", None)
+        game_init.game_systems = {"planet_rooms": {"earth": room}}
+        try:
+            cmd = _make_cmd(CmdTeleport, caller, " 50 50 2")
+            cmd.cmdstring = "goto"  # invoked via the alias
+            cmd.func()
+        finally:
+            if original is not None:
+                game_init.game_systems = original
+
+        self.assertEqual(len(room.calls), 1)
+        _obj, tx, ty, _notify = room.calls[0]
+        self.assertEqual((tx, ty), (50, 50))
+
 
 # -------------------------------------------------------------- #
 #  CmdAdminOutpost tests
