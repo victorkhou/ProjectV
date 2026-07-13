@@ -31,7 +31,7 @@ Nine decisions are locked (see requirements D1–D9):
 3. **use/throw ship in this feature**, AoE via synthetic weapon.
 4. **`required_rank` enforced on equip/use/throw** (the field already load-validates as a real rank).
 5. **Magazine/reload adopted** — ranged weapons fire from a loaded magazine (`db.loaded` up to `magazine_size`); a `reload` action refills it from the counted-ammo Supply_Bag. Shots draw from the magazine, not the bag.
-6. **`max_hp` from gear intended but deferred** — declared and load-validated as a numeric stat, but not wired to `hp_max` in this feature (low-priority follow-up).
+6. **`max_hp` from gear — now wired (was deferred D6)** — `CombatEntity.refresh_equipment_hp_max()` folds `Σ max_hp(gear)` into `hp_max` on equip/unequip; equipping raises the ceiling (no free heal), unequipping lowers it and clamps current HP. See "Resolved decisions & deferred follow-up" and task 6.4.
 7. **Weight-based carry cap replaces the count cap** — every item (`Item_Def.weight`) and resource (`BalanceConfig.resource_weights`) has a weight; a holder's carried weight (Supplies + on-person resources, **excluding equipped Gear**) must stay under `BASE_CARRY_WEIGHT + Σ carry_capacity(gear)`. Admins (Builder+) exempt; players and Agents subject.
 8. **Real Vault/HQ storage added** — `db.resources` stays the carry-capped **spend pool** (unchanged for all cost checks); Storage_Buildings gain a real stored-resource pool with enforced `storage_capacity`; `deposit`/`withdraw` move between them; harvester delivery fills the building.
 9. **Over-capacity inflow spills to the ground** — passive inflow past a carry/storage limit adds up to the limit and spawns the remainder as a `ResourceDrop` (reusing `_spawn_resource_drop`); resources are never destroyed.
@@ -452,8 +452,11 @@ its buff via a `PowerupSystem` entry point, not a hand-written dict (see §4 `us
 - **Magazine/reload — resolved: adopted (D5).** Ranged weapons fire from `db.loaded` (0..`magazine_size`);
   the `reload` action refills from the counted-ammo Supply_Bag. Shots never touch the bag; running dry
   requires a reload. Fresh ranged weapons start full. This is core to the feature (Requirements 5, 11).
-- **`max_hp` from gear — resolved: intended but deferred (D6).** `max_hp` is a desired capability but is
-  **out of scope for this feature and low priority.** For now it is a declared, load-validated numeric
-  stat with no HP effect. The wiring is a small, ready follow-up: fold `get_stat_total("max_hp")` into
-  `hp_max` on `CombatEntity` and clamp current HP on unequip (task 6.4). Left unimplemented until
-  prioritized so it can be balanced deliberately rather than shipped incidentally.
+- **`max_hp` from gear — wired (D6 follow-up delivered, task 6.4).** Originally deferred out of this
+  feature; now implemented. `CombatEntity.refresh_equipment_hp_max()` recomputes the ceiling from the
+  *current* equipped set (not a running delta), tracking the applied contribution in
+  `db.equipment_hp_bonus` so it layers cleanly on top of the tech-tree `max_hp` bonus (which also
+  mutates `hp_max`). `EquipmentSystem.equip`/`unequip` invoke it after the handler mutates: equipping
+  raises the ceiling with **no free heal** (headroom only, so it's not exploitable), and unequipping
+  lowers the ceiling and **clamps current HP down** to the new max. Content opts in per-item via a
+  `max_hp` `stat_modifier`; with no such gear the ceiling is unchanged.

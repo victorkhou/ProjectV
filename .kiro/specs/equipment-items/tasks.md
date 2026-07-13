@@ -120,7 +120,7 @@ left unchecked for a later prioritized pass.
     - **Validates: Requirements 12.12**
     - Test file: `mygame/world/presenters/tests/test_notification_presenter.py` + e2e in system tests
 
-- [ ] 6. Utility-stat wiring
+- [x] 6. Utility-stat wiring
   - [x] 6.1 `move_speed` for players
     - Apply `get_stat_total("move_speed")` to player movement via the same equipment-derived mechanism agents use (`npcs.py:182` analog)
     - _Requirements: 6.1_
@@ -130,8 +130,8 @@ left unchecked for a later prioritized pass.
   - [x] 6.3 `carry_capacity` gear stat raises the weight limit
     - Consumed by `carry_limit` (task 9); add a focused test that a `carry_capacity` gear piece raises the cap
     - _Requirements: 6.3, 15.5_
-  - [ ] 6.4 (deferred, D6) `max_hp` from gear — NOT in this feature
-    - Reserved follow-up: fold `get_stat_total("max_hp")` into `hp_max` on `CombatEntity` and clamp current HP on unequip. Left unchecked/unimplemented until prioritized; for this feature `max_hp` is validated as a numeric stat with no HP effect (task 1.4)
+  - [x] 6.4 (was deferred D6) `max_hp` from gear — now wired
+    - `CombatEntity.refresh_equipment_hp_max()` folds `get_stat_total("max_hp")` into `hp_max` from the current equipped set (recompute-from-truth, not a running delta), tracked via `db.equipment_hp_bonus` so it layers on top of the tech-tree `max_hp` bonus. `EquipmentSystem.equip`/`unequip` call it after the handler mutates: equipping raises the ceiling with no free heal, unequipping lowers it and clamps current HP down. Tests in `test_combat_entity.py` (`TestRefreshEquipmentHpMax`) and `test_equipment_system.py` (`TestMaxHpGear`).
     - _Requirements: 6.4_
 
 - [x] 7. Player-facing commands (`commands/game_commands.py`)

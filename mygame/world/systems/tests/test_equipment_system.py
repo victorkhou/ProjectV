@@ -897,6 +897,79 @@ class TestCarryLimit(unittest.TestCase):
 
 
 # -------------------------------------------------------------- #
+#  max_hp gear wiring (task 6.4) — equip raises ceiling, unequip clamps
+# -------------------------------------------------------------- #
+
+from mygame.typeclasses.combat_entity import CombatEntity  # noqa: E402
+
+
+class _HpEntity(CombatEntity):
+    """A CombatEntity-backed player double with a real EquipmentHandler.
+
+    The system-level ``FakePlayer`` deliberately lacks ``CombatEntity``
+    methods, so these tests use a genuine entity to exercise the
+    ``equip`` -> ``refresh_equipment_hp_max`` wiring end to end.
+    """
+
+    def __init__(self, level=60):
+        self.key = "HpPlayer"
+        self.db = DB(level=level, combat_xp=0)
+        self.at_combat_entity_init()
+        # ``equipment`` is a read-only property on CombatEntity; seed the
+        # cached handler it returns.
+        self._equipment_handler = EquipmentHandler(self)
+        self.location = None
+        self._admin = False
+
+    def check_permstring(self, perm):
+        return False
+
+
+class TestMaxHpGear(unittest.TestCase):
+    """Equipping ``max_hp`` gear raises the ceiling (no free heal); unequipping
+    lowers it and clamps current HP.
+
+    Validates: Requirement 6.4 (deferred D6 follow-up).
+    """
+
+    def test_equip_raises_hp_max_without_healing(self):
+        system, _, _ = _make_system()
+        player = _HpEntity()
+        player.take_damage(40)  # hp 60 / 100
+        vest = FakeItem("vitality_vest", "torso", {"max_hp": 50})
+        self.assertTrue(system.equip(player, vest))
+        self.assertEqual(player.db.hp_max, 150)
+        self.assertEqual(player.db.hp, 60)  # ceiling raised, HP unchanged
+
+    def test_unequip_lowers_hp_max_and_clamps_current_hp(self):
+        system, _, _ = _make_system()
+        player = _HpEntity()
+        vest = FakeItem("vitality_vest", "torso", {"max_hp": 50})
+        system.equip(player, vest)
+        player.heal(100)  # hp 150 / 150
+        self.assertTrue(system.unequip(player, "torso"))
+        self.assertEqual(player.db.hp_max, 100)
+        self.assertEqual(player.db.hp, 100)  # clamped to the new ceiling
+
+    def test_swap_to_larger_piece_updates_ceiling(self):
+        system, _, _ = _make_system()
+        player = _HpEntity()
+        system.equip(player, FakeItem("small_vest", "torso", {"max_hp": 30}))
+        self.assertEqual(player.db.hp_max, 130)
+        # Swapping the same slot auto-unequips the old piece first.
+        system.equip(player, FakeItem("big_vest", "torso", {"max_hp": 80}))
+        self.assertEqual(player.db.hp_max, 180)
+        self.assertEqual(player.db.equipment_hp_bonus, 80)
+
+    def test_non_max_hp_gear_leaves_ceiling_unchanged(self):
+        system, _, _ = _make_system()
+        player = _HpEntity()
+        system.equip(player, FakeItem("helmet", "head", {"damage_reduction": 3}))
+        self.assertEqual(player.db.hp_max, 100)
+        self.assertEqual(player.db.equipment_hp_bonus, 0)
+
+
+# -------------------------------------------------------------- #
 #  Weight / storage fakes (task 9.7)
 # -------------------------------------------------------------- #
 

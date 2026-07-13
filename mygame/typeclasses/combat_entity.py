@@ -30,6 +30,11 @@ class CombatEntity:
         """Called from ``at_object_creation()`` of the host typeclass."""
         self.db.hp = 100
         self.db.hp_max = 100
+        # Portion of ``hp_max`` currently contributed by equipped ``max_hp``
+        # gear. Tracked so the contribution can be backed out and refolded on
+        # any equip/unequip without disturbing the base (or the tech-tree
+        # bonus, which also raises ``hp_max``). See ``refresh_equipment_hp_max``.
+        self.db.equipment_hp_bonus = 0
         self.db.equipment_slots = {}       # slot_name -> item_ref
         self.db.incapacitated = False
         self.db.respawn_timer = 0          # ticks remaining
@@ -179,6 +184,58 @@ class CombatEntity:
                 exc_info=True,
             )
             return 0
+
+    def refresh_equipment_hp_max(self) -> int:
+        """Re-fold the equipped ``max_hp`` bonus into ``db.hp_max``.
+
+        Recomputes the entity's max-HP ceiling from the *current* equipped set
+        rather than tracking a running delta, so it stays correct across
+        arbitrary equip/unequip/swap sequences (the same
+        recompute-from-truth discipline used for ``move_speed``).
+
+        The stored ``db.equipment_hp_bonus`` records how much of the current
+        ``hp_max`` came from gear; this backs that out and folds in the fresh
+        total (``hp_max = hp_max - old_bonus + new_bonus``). That leaves the
+        base ceiling — and any tech-tree ``max_hp`` bonus, which mutates
+        ``hp_max`` directly — untouched.
+
+        Raising the ceiling (equipping) does **not** heal: current ``hp`` is
+        left as-is, so gear grants headroom, not free health. Lowering the
+        ceiling (unequipping) clamps current ``hp`` down to the new max so an
+        entity is never left above its maximum.
+
+        Returns the new ``db.hp_max``. Never raises into the equip path — a
+        lookup failure leaves ``hp_max`` unchanged.
+        """
+        equipment = getattr(self, "equipment", None)
+        if equipment is None or not hasattr(equipment, "get_stat_total"):
+            return self.db.hp_max
+        try:
+            new_bonus = int(equipment.get_stat_total("max_hp"))
+        except Exception:
+            logger.debug(
+                "max_hp lookup failed for entity %s; leaving hp_max unchanged",
+                getattr(self, "id", "?"),
+                exc_info=True,
+            )
+            return self.db.hp_max
+
+        if new_bonus < 0:
+            new_bonus = 0
+        old_bonus = self.db.equipment_hp_bonus or 0
+        if new_bonus == old_bonus:
+            return self.db.hp_max
+
+        base_max = (self.db.hp_max or 0) - old_bonus
+        new_max = max(1, base_max + new_bonus)
+        self.db.hp_max = new_max
+        self.db.equipment_hp_bonus = new_bonus
+
+        # Clamp current HP down if the ceiling dropped (e.g. unequip). Never
+        # heals on a raise — headroom only.
+        if (self.db.hp or 0) > new_max:
+            self.db.hp = new_max
+        return new_max
 
     # ------------------------------------------------------------------ #
     #  Status queries

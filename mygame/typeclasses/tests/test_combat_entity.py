@@ -249,5 +249,103 @@ class TestGetStructuredState(unittest.TestCase):
         self.assertEqual(state["respawn_timer"], DEFAULT_RESPAWN_TICKS)
 
 
+# ------------------------------------------------------------------ #
+#  Tests: refresh_equipment_hp_max (task 6.4 — max_hp from gear)
+# ------------------------------------------------------------------ #
+
+class _FakeEquip:
+    """Minimal equipment handler exposing a settable ``max_hp`` stat total."""
+    def __init__(self, max_hp=0):
+        self.max_hp = max_hp
+
+    def get_stat_total(self, stat_name):
+        return float(self.max_hp) if stat_name == "max_hp" else 0.0
+
+
+def _make_with_equip(max_hp=0):
+    e = _make()
+    e._equipment_handler = _FakeEquip(max_hp)
+    return e
+
+
+class TestRefreshEquipmentHpMax(unittest.TestCase):
+    def test_bonus_defaults_to_zero(self):
+        e = _make()
+        self.assertEqual(e.db.equipment_hp_bonus, 0)
+
+    def test_equipping_raises_ceiling_without_healing(self):
+        """A max_hp gear piece raises hp_max but does not restore current HP."""
+        e = _make_with_equip(0)
+        e.take_damage(40)              # hp 60 / 100
+        e._equipment_handler.max_hp = 50
+        new_max = e.refresh_equipment_hp_max()
+        self.assertEqual(new_max, 150)
+        self.assertEqual(e.db.hp_max, 150)
+        self.assertEqual(e.db.equipment_hp_bonus, 50)
+        self.assertEqual(e.db.hp, 60)  # headroom only — no free heal
+
+    def test_unequipping_lowers_ceiling_and_clamps_current_hp(self):
+        e = _make_with_equip(50)
+        e.refresh_equipment_hp_max()   # hp_max 150
+        e.heal(100)                    # hp 150 / 150
+        self.assertEqual(e.db.hp, 150)
+        e._equipment_handler.max_hp = 0
+        new_max = e.refresh_equipment_hp_max()
+        self.assertEqual(new_max, 100)
+        self.assertEqual(e.db.hp, 100)  # clamped down to the new ceiling
+
+    def test_unequip_does_not_raise_hp_when_below_new_max(self):
+        e = _make_with_equip(50)
+        e.refresh_equipment_hp_max()   # hp_max 150, hp still 100 (no heal)
+        e.heal(50)                     # hp 150 / 150
+        e.take_damage(120)             # hp 30 / 150
+        e._equipment_handler.max_hp = 0
+        e.refresh_equipment_hp_max()
+        self.assertEqual(e.db.hp_max, 100)
+        self.assertEqual(e.db.hp, 30)  # already below ceiling — untouched
+
+    def test_swap_recomputes_from_current_set_not_a_running_delta(self):
+        """Re-folding from the live total stays correct across bonus changes."""
+        e = _make_with_equip(30)
+        e.refresh_equipment_hp_max()
+        self.assertEqual(e.db.hp_max, 130)
+        e._equipment_handler.max_hp = 80  # swapped to a bigger piece
+        e.refresh_equipment_hp_max()
+        self.assertEqual(e.db.hp_max, 180)
+        self.assertEqual(e.db.equipment_hp_bonus, 80)
+
+    def test_layers_on_top_of_a_tech_raised_base(self):
+        """A tech-tree hp_max bump is preserved; gear folds on top of it."""
+        e = _make_with_equip(0)
+        e.db.hp_max = 120              # simulate a tech-tree max_hp bonus
+        e._equipment_handler.max_hp = 40
+        e.refresh_equipment_hp_max()
+        self.assertEqual(e.db.hp_max, 160)  # 120 base + 40 gear
+        e._equipment_handler.max_hp = 0
+        e.refresh_equipment_hp_max()
+        self.assertEqual(e.db.hp_max, 120)  # gear removed, tech base intact
+
+    def test_negative_stat_total_treated_as_zero(self):
+        e = _make_with_equip(-25)
+        new_max = e.refresh_equipment_hp_max()
+        self.assertEqual(new_max, 100)
+        self.assertEqual(e.db.equipment_hp_bonus, 0)
+
+    def test_no_handler_leaves_hp_max_unchanged(self):
+        e = _make()
+        e._equipment_handler = None
+        self.assertEqual(e.refresh_equipment_hp_max(), 100)
+        self.assertEqual(e.db.hp_max, 100)
+
+    def test_idempotent_when_bonus_unchanged(self):
+        e = _make_with_equip(50)
+        e.refresh_equipment_hp_max()   # hp_max 150, hp still 100 (no heal)
+        e.heal(50)                     # hp 150 / 150
+        e.take_damage(10)              # hp 140 / 150
+        e.refresh_equipment_hp_max()   # same bonus -> no change, no clamp
+        self.assertEqual(e.db.hp_max, 150)
+        self.assertEqual(e.db.hp, 140)
+
+
 if __name__ == "__main__":
     unittest.main()

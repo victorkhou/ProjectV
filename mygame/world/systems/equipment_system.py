@@ -543,6 +543,10 @@ class EquipmentSystem(CarryWeightMixin, StorageMixin, BaseSystem):
 
         ok, _msg = handler.equip(item)
         if ok:
+            # Re-fold any ``max_hp`` gear bonus into the entity's ceiling now
+            # that the equipped set is final (covers swaps too). Raising the
+            # ceiling grants headroom, not free HP.
+            self._refresh_hp_max(player)
             # Unequip message first, then the equip message — the order the
             # player experiences the swap.
             if displaced is not None:
@@ -627,6 +631,9 @@ class EquipmentSystem(CarryWeightMixin, StorageMixin, BaseSystem):
             self.notify(player, "unequip_failed", slot=slot, reason="empty")
             return False
 
+        # Re-fold the (now smaller) ``max_hp`` gear bonus; if the ceiling
+        # dropped below current HP, ``refresh_equipment_hp_max`` clamps it down.
+        self._refresh_hp_max(player)
         self.notify(
             player, "unequipped", item_name=self._item_name(item), slot=slot
         )
@@ -1531,6 +1538,26 @@ class EquipmentSystem(CarryWeightMixin, StorageMixin, BaseSystem):
         if callable(heal):
             return int(heal(amount))
         return 0
+
+    @staticmethod
+    def _refresh_hp_max(player: Any) -> None:
+        """Re-fold *player*'s equipped ``max_hp`` bonus into ``db.hp_max``.
+
+        Delegates to :meth:`CombatEntity.refresh_equipment_hp_max`, which
+        recomputes the ceiling from the current equipped set and clamps current
+        HP down on a drop. Defensive: entities (or test doubles) without the
+        method are simply skipped, and the call never raises into the equip path.
+        """
+        refresh = getattr(player, "refresh_equipment_hp_max", None)
+        if not callable(refresh):
+            return
+        try:
+            refresh()
+        except Exception:  # pragma: no cover - defensive
+            logger.debug(
+                "refresh_equipment_hp_max failed for %s",
+                getattr(player, "key", "?"), exc_info=True,
+            )
 
     @staticmethod
     def _hp_pair(player: Any) -> tuple[int, int]:
