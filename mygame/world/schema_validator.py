@@ -11,6 +11,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 from world.constants import (
+    BOMB_CATEGORIES,
     EFFECT_TYPES,
     EQUIPMENT_SLOTS,
     GEAR_CATEGORIES,
@@ -316,9 +317,9 @@ class SchemaValidator:
                     f"{prefix}: weight must be a number >= 0, got {weight!r}"
                 )
 
-            # ---- effect.type for consumable/throwable (Req 6.4, 13.5) --- #
+            # ---- effect.type for consumable/throwable/mine (Req 6.4, 13.5) - #
             effect = entry.get("effect")
-            if effect is not None and effective_category in ("consumable", "throwable"):
+            if effect is not None and effective_category in ("consumable", "throwable", "mine"):
                 if not isinstance(effect, dict):
                     errors.append(
                         f"{prefix}: effect must be a dict, got {type(effect).__name__}"
@@ -330,8 +331,57 @@ class SchemaValidator:
                             f"{prefix}: effect.type must be one of {list(EFFECT_TYPES)}, "
                             f"got {etype!r}"
                         )
+                    # ---- bomb fuse fields (grenades + mines) ------------- #
+                    # A bomb (throwable/mine) declares a fuse the player must set
+                    # before deploying. Validate bomb_type and the fuse bounds so
+                    # a misconfigured bomb fails at LOAD, not at detonation time.
+                    if effective_category in BOMB_CATEGORIES:
+                        errors.extend(
+                            self._validate_bomb_effect(prefix, effect, effective_category)
+                        )
 
         return errors
+
+    @staticmethod
+    def _validate_bomb_effect(prefix: str, effect: dict, category: str) -> list:
+        """Validate the bomb-specific effect fields (bomb_type + fuse bounds).
+
+        A ``throwable`` item must be ``bomb_type: grenade`` and a ``mine`` item
+        ``bomb_type: mine`` (the category and the discriminator must agree, so a
+        grenade can never be armed as a mine or vice-versa). ``fuse_min`` /
+        ``fuse_max`` / ``fuse_default`` (if present) must be positive ints with
+        ``fuse_min <= fuse_default <= fuse_max``. Absent fuse fields fall back to
+        the module-level DEFAULT_BOMB_FUSE_* constants at runtime, so they are
+        optional here — but a declared value must be well-formed.
+        """
+        out = []
+        expected = "grenade" if category == "throwable" else "mine"
+        bomb_type = effect.get("bomb_type")
+        if bomb_type is not None and bomb_type != expected:
+            out.append(
+                f"{prefix}: effect.bomb_type must be '{expected}' for a "
+                f"'{category}' item, got {bomb_type!r}"
+            )
+        fuse_vals = {}
+        for fkey in ("fuse_min", "fuse_max", "fuse_default"):
+            v = effect.get(fkey)
+            if v is None:
+                continue
+            if not isinstance(v, int) or isinstance(v, bool) or v <= 0:
+                out.append(f"{prefix}: effect.{fkey} must be a positive integer, got {v!r}")
+            else:
+                fuse_vals[fkey] = v
+        fmin = fuse_vals.get("fuse_min")
+        fmax = fuse_vals.get("fuse_max")
+        fdef = fuse_vals.get("fuse_default")
+        if fmin is not None and fmax is not None and fmin > fmax:
+            out.append(f"{prefix}: effect.fuse_min ({fmin}) must be <= fuse_max ({fmax})")
+        if fdef is not None:
+            if fmin is not None and fdef < fmin:
+                out.append(f"{prefix}: effect.fuse_default ({fdef}) must be >= fuse_min ({fmin})")
+            if fmax is not None and fdef > fmax:
+                out.append(f"{prefix}: effect.fuse_default ({fdef}) must be <= fuse_max ({fmax})")
+        return out
 
     # ------------------------------------------------------------------ #
     #  Ranks
@@ -619,6 +669,8 @@ class SchemaValidator:
             "hp_regen_percent", "repair_cost_fraction",
             # Ranged shot baseline accuracies (0..1).
             "accuracy_targeted", "accuracy_directional",
+            # Wall-clock cooldown (seconds) between a player's instant attacks.
+            "attack_cooldown_seconds",
         ]
         bool_fields = ["metrics_enabled"]
         # Resource->int maps: keys are resource names, values positive ints
@@ -654,6 +706,7 @@ class SchemaValidator:
         # False), so a malformed float can't slip through the type check.
         non_negative_fields = [
             "hp_regen_percent", "hp_regen_interval_ticks", "repair_cost_fraction",
+            "attack_cooldown_seconds",
         ]
         for field in non_negative_fields:
             val = data.get(field)

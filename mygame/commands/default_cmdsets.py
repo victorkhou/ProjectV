@@ -20,6 +20,7 @@ from commands.game_commands import (
     CmdMove, CmdHarvest, CmdBuild, CmdUpgrade, CmdDemolish, CmdRepair,
     CmdAttack, CmdTarget, CmdShoot,
     CmdEquip, CmdUnequip, CmdUse, CmdThrow, CmdReload, CmdCraft,
+    CmdSetFuse, CmdArm,
     CmdDeposit, CmdWithdraw,
     CmdResearch, CmdPowerup,
     CmdScore, CmdEquipment, CmdBuildings, CmdScan, CmdTechnology,
@@ -122,6 +123,8 @@ class CharacterCmdSet(default_cmds.CharacterCmdSet):
         self.add(CmdUnequip())
         self.add(CmdUse())
         self.add(CmdThrow())
+        self.add(CmdSetFuse())
+        self.add(CmdArm())
         self.add(CmdReload())
         self.add(CmdCraft())
         self.add(CmdDeposit())

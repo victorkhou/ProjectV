@@ -2423,5 +2423,95 @@ class TestDroppedShotRefundsAmmo(unittest.TestCase):
         self.assertEqual(weapon.db.loaded, 6, "a fired (missed) shot keeps its ammo")
 
 
+class TestResolveNow(unittest.TestCase):
+    """resolve_now validates + resolves a single attack INSTANTLY (no queue),
+    for a player's own attack/directional shoot. Turrets/guards/locked shots
+    keep using queue_attack + resolve_tick."""
+
+    @staticmethod
+    def _ranged_weapon(**kw):
+        w = FakeWeapon(damage=30, weapon_range=8, key="rifle", **kw)
+        w.weapon_type = "ranged"
+        return w
+
+    def _setup(self, roll=0.0):
+        engine, _ = _make_engine(rng=_FixedRng(roll))
+        attacker = FakePlayer(name="Shooter",
+                              location=FakeTile(xyz=(0, 0, "earth")))
+        target = FakePlayer(name="Victim", hp=100,
+                            location=FakeTile(xyz=(2, 0, "earth")))
+        return engine, attacker, target
+
+    def test_resolve_now_applies_damage_immediately(self):
+        """Damage lands in the SAME call — nothing is queued to pending_actions."""
+        engine, attacker, target = self._setup()
+        ok, _ = engine.resolve_now(attacker, target, weapon=self._ranged_weapon())
+        self.assertTrue(ok)
+        self.assertLess(target.db.hp, 100)
+        self.assertEqual(len(engine.pending_actions), 0,
+                         "resolve_now must NOT touch the tick queue")
+
+    def test_resolve_now_rejection_consumes_no_ammo(self):
+        """A rejected instant shot (out of range) deducts no magazine/resource."""
+        engine, attacker, _ = self._setup()
+        weapon = FakeTypedWeapon(weapon_type="ranged", damage=25,
+                                 weapon_range=3, ammo_type="rifle_round",
+                                 ammo_per_shot=3, loaded=9)
+        attacker.equipment.equip(weapon)
+        far = FakePlayer(name="Far", hp=100,
+                         location=FakeTile(xyz=(20, 0, "earth")))
+        ok, msg = engine.resolve_now(attacker, far, weapon=weapon)
+        self.assertFalse(ok)
+        self.assertIn("range", msg.lower())
+        self.assertEqual(weapon.db.loaded, 9, "rejected shot must not spend ammo")
+
+    def test_resolve_now_consumes_ammo_on_hit(self):
+        engine, attacker, target = self._setup()
+        weapon = FakeTypedWeapon(weapon_type="ranged", damage=25,
+                                 weapon_range=10, ammo_type="rifle_round",
+                                 ammo_per_shot=3, loaded=9)
+        attacker.equipment.equip(weapon)
+        ok, _ = engine.resolve_now(attacker, target, weapon=weapon)
+        self.assertTrue(ok)
+        self.assertEqual(weapon.db.loaded, 6, "instant shot spends its round")
+
+    def test_resolve_now_miss_deals_no_damage_but_enters_combat(self):
+        """accuracy roll: a miss applies no HP change but still enters combat
+        (publishes COMBAT_ACTION) and notifies — mirroring the queued path."""
+        events = []
+        event_bus = EventBus()
+        event_bus.subscribe("combat_action", lambda **kw: events.append(kw))
+        engine, _ = _make_engine(event_bus=event_bus, current_tick=10,
+                                 rng=_FixedRng(0.99))
+        attacker = FakePlayer(name="Shooter", oid=1,
+                              location=FakeTile(xyz=(0, 0, "earth")))
+        target = FakePlayer(name="Victim", hp=100, oid=2,
+                            location=FakeTile(xyz=(2, 0, "earth")))
+        ok, _ = engine.resolve_now(attacker, target,
+                                   weapon=self._ranged_weapon(), accuracy=0.5)
+        self.assertTrue(ok)
+        self.assertEqual(target.db.hp, 100, "a miss deals no damage")
+        self.assertEqual(len(events), 1, "a miss still enters combat")
+        self.assertEqual(events[0]["damage"], 0)
+
+    def test_resolve_now_notifies_attacker_hit(self):
+        """A landed instant hit tells the attacker 'You hit ...' (attack_hit),
+        unlike the AoE fan-out which suppresses it."""
+        engine, attacker, target = self._setup(roll=0.0)
+        engine.resolve_now(attacker, target, weapon=self._ranged_weapon(),
+                           accuracy=0.9)
+        self.assertTrue(any("you hit" in m.lower() for m in attacker._messages))
+
+    def test_resolve_now_melee_no_accuracy_always_lands(self):
+        engine, attacker, target = self._setup(roll=0.999)
+        melee = FakeWeapon(damage=20, weapon_range=1, key="knife")
+        melee.weapon_type = "melee"
+        attacker.equipment.equip(melee)
+        target.db.coord_x, target.db.coord_y = 1, 0  # adjacent
+        ok, _ = engine.resolve_now(attacker, target)  # accuracy=None
+        self.assertTrue(ok)
+        self.assertLess(target.db.hp, 100)
+
+
 if __name__ == "__main__":
     unittest.main()

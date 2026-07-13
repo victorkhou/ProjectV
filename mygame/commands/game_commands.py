@@ -1024,6 +1024,65 @@ def _resolve_attack_target(caller, target_name):
     return None, f"You don't see '{target_name}' nearby to attack."
 
 
+def _attack_cooldown_seconds(caller, combat_engine):
+    """The wall-clock cooldown (seconds) between this caller's instant attacks.
+
+    A player's own ``attack``/``shoot`` resolve instantly (not tick-queued), so
+    a wall-clock cooldown throttles them in place of the 1-second tick. The
+    equipped weapon may override the global ``balance.attack_cooldown_seconds``
+    with an ``attack_cooldown`` stat modifier (e.g. a heavy weapon fires slower).
+    Returns a non-negative float; falls back to 1.0 if balance is unavailable.
+    """
+    default = 1.0
+    registry = getattr(combat_engine, "registry", None)
+    balance = getattr(registry, "balance", None)
+    if balance is not None:
+        default = float(getattr(balance, "attack_cooldown_seconds", 1.0))
+    weapon = None
+    equipment = getattr(caller, "equipment", None)
+    if equipment is not None and hasattr(equipment, "get_equipped"):
+        try:
+            weapon = equipment.get_equipped("weapon")
+        except Exception:  # pragma: no cover - defensive
+            weapon = None
+    if weapon is not None and hasattr(weapon, "get_stat"):
+        try:
+            override = float(weapon.get_stat("attack_cooldown", 0) or 0)
+            if override > 0:
+                return override
+        except Exception:  # pragma: no cover - defensive
+            pass
+    return max(0.0, default)
+
+
+def _instant_attack_gate(caller, combat_engine):
+    """Return (ok, wait_seconds): is the caller off cooldown for an instant attack?
+
+    Tracks the earliest wall-clock time the caller may attack again on
+    ``caller.db.next_attack_time`` (a ``time.monotonic()`` stamp). On success
+    (ok=True) it STAMPS the next-allowed time and returns wait=0.0; on cooldown
+    (ok=False) it returns the remaining seconds and stamps nothing. Wall-clock
+    (not tick) so instant attacks between ticks are throttled precisely; a
+    reload resets monotonic() so any stale stamp simply expires harmlessly.
+    """
+    import time
+    now = time.monotonic()
+    ready_at = getattr(caller.db, "next_attack_time", 0.0) or 0.0
+    try:
+        ready_at = float(ready_at)
+    except (TypeError, ValueError):
+        ready_at = 0.0
+    # A stamp far in the future (e.g. after a server restart reset monotonic to
+    # a small value) can never block forever: treat an unreachable stamp as due.
+    if ready_at > now + 3600:
+        ready_at = 0.0
+    if now < ready_at:
+        return False, ready_at - now
+    cooldown = _attack_cooldown_seconds(caller, combat_engine)
+    caller.db.next_attack_time = now + cooldown
+    return True, 0.0
+
+
 class CmdAttack(GameCommand):
     """Attack a player, building, or agent.
 
@@ -1075,9 +1134,22 @@ class CmdAttack(GameCommand):
             self.caller.msg(err)
             return
 
-        success, msg = combat_engine.queue_attack(self.caller, target)
+        # A player's direct attack resolves INSTANTLY (not tick-queued), gated by
+        # a wall-clock cooldown instead of the 1-second tick. Check the cooldown
+        # BEFORE resolving so a rejected attack consumes no ammo. (Turrets/guards/
+        # locked-tracking shots still queue via queue_attack — the tick delay is
+        # their dodge window.)
+        ready, wait = _instant_attack_gate(self.caller, combat_engine)
+        if not ready:
+            self.caller.msg(f"Weapon not ready — {wait:.1f}s until you can attack again.")
+            return
+
+        success, msg = combat_engine.resolve_now(self.caller, target)
         # Some rejections (e.g. empty magazine) deliver their feedback via the
-        # presenter and return an empty string — don't msg a blank line.
+        # presenter and return an empty string — don't msg a blank line. On a
+        # rejection nothing fired, so refund the cooldown stamp we just set.
+        if not success:
+            self.caller.db.next_attack_time = 0.0
         if msg:
             self.caller.msg(msg)
 
@@ -1294,10 +1366,20 @@ class CmdShoot(GameCommand):
             if target is None:
                 caller.msg("Nothing in the line of fire.")
                 return
+        # A directional shot resolves INSTANTLY (not tick-queued), gated by the
+        # wall-clock cooldown. Gate AFTER target resolution so an empty line of
+        # fire doesn't burn the cooldown. A LOCKED tracking shot (_shoot_locked)
+        # deliberately stays tick-queued and is NOT cooldown-gated.
+        ready, wait = _instant_attack_gate(caller, combat_engine)
+        if not ready:
+            caller.msg(f"Weapon not ready — {wait:.1f}s until you can fire again.")
+            return
         accuracy = targeting.directional_accuracy(weapon)
-        _ok, msg = combat_engine.queue_attack(
+        ok, msg = combat_engine.resolve_now(
             caller, target, weapon=weapon, accuracy=accuracy, breach=True
         )
+        if not ok:
+            caller.db.next_attack_time = 0.0  # nothing fired — refund cooldown
         if msg:
             caller.msg(msg)
 
@@ -1777,91 +1859,156 @@ class CmdUse(GameCommand):
         equipment_system.use(self.caller, item_key)
 
 
-class CmdThrow(GameCommand):
-    """Throw a throwable at a target or a map location.
+class CmdSetFuse(GameCommand):
+    """Set the fuse (seconds) on a bomb before you throw or arm it.
 
     Usage:
-      throw <item> <target>
-      throw <item> <x> <y>
-      throw <item> <x>,<y>
+      set <bomb> <seconds>
+      set all <seconds>
 
     Options:
-      <item>    a throwable you carry (e.g. frag_grenade)
-      <target>  a nearby thing to center the blast on
-      <x> <y>   explicit coordinates (space- or comma-separated)
+      <bomb>     a grenade or mine you carry (e.g. frag_grenade, land_mine)
+      <seconds>  fuse length; clamped to the bomb's min/max
+      all        set every bomb type in your inventory to <seconds> (each
+                 clamped to its own min/max)
 
     Examples:
-      throw frag_grenade goblin
-      throw frag_grenade 12 8
-      throw frag_grenade 12,8
+      set frag_grenade 3
+      set land_mine 10
+      set all 5
 
     Notes:
-      Alias: th. Area damage hits everything in range — including your own
-      agents and buildings, so mind your placement. Throwables come from a
-      Lab. See 'help combat'.
+      You must set a fuse before every throw/arm — it is consumed when the bomb
+      is deployed. See 'help bombs'.
+    """
+
+    key = "set"
+    help_category = "Game"
+
+    _USAGE = "Usage: set <bomb> <seconds>  (or 'set all <seconds>')"
+
+    def func(self):
+        caller = self.caller
+        tokens = self.args.split()
+        if len(tokens) < 2:
+            caller.msg(self._USAGE)
+            return
+
+        bomb_system = self.require_system("bomb_system")
+        if bomb_system is None:
+            return
+
+        seconds_token = tokens[-1]
+        if not _is_int_token(seconds_token):
+            caller.msg(self._USAGE)
+            return
+        seconds = int(seconds_token)
+        if seconds <= 0:
+            caller.msg("The fuse must be a positive number of seconds.")
+            return
+
+        target = " ".join(tokens[:-1]).strip()
+        # 'set all <seconds>' sets every bomb type in the inventory.
+        if target.lower() == "all":
+            bomb_system.set_all(caller, seconds)
+            return
+
+        item_key = _resolve_item_key(caller, target)
+        if item_key is None:
+            caller.msg(f"Unknown item '{target}'.")
+            return
+        bomb_system.set_fuse(caller, item_key, seconds)
+
+
+class CmdArm(GameCommand):
+    """Arm a mine on your current tile; its set fuse begins to tick.
+
+    Usage:
+      arm <mine>
+
+    Options:
+      <mine>  a mine you carry (e.g. land_mine, proximity_mine)
+
+    Examples:
+      arm land_mine
+
+    Notes:
+      Set a fuse first with 'set <mine> <seconds>'. Once armed the mine ticks
+      down where you stand and then explodes — anyone on the tile sees it arm
+      and tick. Grenades are thrown ('throw'), not armed. See 'help bombs'.
+    """
+
+    key = "arm"
+    help_category = "Game"
+
+    def func(self):
+        caller = self.caller
+        item_name = self.args.strip()
+        if not item_name:
+            caller.msg("Usage: arm <mine>")
+            return
+
+        bomb_system = self.require_system("bomb_system")
+        if bomb_system is None:
+            return
+        if self.require_coords() is None:
+            return
+
+        item_key = _resolve_item_key(caller, item_name)
+        if item_key is None:
+            caller.msg(f"Unknown item '{item_name}'.")
+            return
+        # The system verifies it's a held mine with a set fuse, places the live
+        # bomb, and emits the notifications (mine_armed / need_fuse / …).
+        bomb_system.arm_mine(caller, item_key)
+
+
+class CmdThrow(GameCommand):
+    """Throw a grenade in a direction; it lands and its fuse ticks down.
+
+    Usage:
+      throw <grenade> <n/s/e/w>
+
+    Options:
+      <grenade>   a grenade you carry (e.g. frag_grenade, plasma_grenade)
+      <n/s/e/w>   the compass direction to throw
+
+    Examples:
+      throw frag_grenade n
+      throw plasma_grenade east
+
+    Notes:
+      Alias: th. Set a fuse first with 'set <grenade> <seconds>'. The grenade
+      flies in the chosen direction until it hits the first obstacle (a building
+      or a unit) or reaches its max range, then LANDS and ticks down before
+      exploding. Anyone on the tile it lands on sees it. The blast hits
+      everything in radius — enemies, your own units, and YOU if you're too
+      close — so mind the fuse and your distance. Mines are armed in place
+      ('arm'), not thrown. See 'help bombs'.
     """
 
     key = "throw"
     aliases = ["th"]
     help_category = "Game"
 
-    _USAGE = "Usage: throw <item> <target> (or <x> <y>)"
+    _USAGE = "Usage: throw <grenade> <n/s/e/w>"
 
     def func(self):
         caller = self.caller
-
         tokens = self.args.split()
-        if not tokens:
-            caller.msg(self._USAGE)
-            return
-
-        equipment_system = self.require_system("equipment_system")
-        if equipment_system is None:
-            return
-
-        # A throw always needs both an item and a target location.
         if len(tokens) < 2:
             caller.msg(self._USAGE)
             return
 
-        # Ensure the thrower has a resolvable position (the system measures
-        # throw range from it).
+        bomb_system = self.require_system("bomb_system")
+        if bomb_system is None:
+            return
         if self.require_coords() is None:
             return
 
-        # Target parse: trailing coordinates as "<x> <y>" or "<x>,<y>" are
-        # explicit; otherwise the final token is a target name resolved to its
-        # coordinates via caller.search.
-        tx = ty = None
-        # "<x> <y>" — last two tokens are a coordinate pair (needs item + 2).
-        if len(tokens) >= 3:
-            pair = _parse_coords(" ".join(tokens[-2:]))
-            if pair is not None:
-                tx, ty = pair
-                item_str = " ".join(tokens[:-2])
-        # "<x>,<y>" — single trailing comma token is a coordinate pair.
-        if tx is None and len(tokens) >= 2:
-            pair = _parse_coords(tokens[-1])
-            if pair is not None:
-                tx, ty = pair
-                item_str = " ".join(tokens[:-1])
-
-        if tx is None:
-            target_name = tokens[-1]
-            item_str = " ".join(tokens[:-1])
-            target = caller.search(target_name) if hasattr(caller, "search") else None
-            if target is None:
-                # caller.search already messages "Could not find ..." on miss;
-                # guard for fakes that return None silently.
-                caller.msg(f"Could not find target '{target_name}'.")
-                return
-            tx = getattr(getattr(target, "db", None), "coord_x", None)
-            ty = getattr(getattr(target, "db", None), "coord_y", None)
-            if tx is None or ty is None:
-                caller.msg(f"Cannot determine the position of '{target_name}'.")
-                return
-            tx, ty = int(tx), int(ty)
-
+        # Last token is the direction; everything before it is the grenade name.
+        direction = tokens[-1].lower()
+        item_str = " ".join(tokens[:-1]).strip()
         if not item_str:
             caller.msg(self._USAGE)
             return
@@ -1870,12 +2017,10 @@ class CmdThrow(GameCommand):
         if item_key is None:
             caller.msg(f"Unknown item '{item_str}'.")
             return
-
-        # The system verifies the item is held, is a throwable, applies the
-        # range/rank gates and AoE damage, and emits the player-facing
-        # notification (bombed / throw_failed) via the presenter. The command
-        # composes no action-outcome string here.
-        equipment_system.throw(caller, item_key, tx, ty)
+        # The system verifies it's a held grenade with a set fuse, resolves the
+        # landing tile along the direction, places the live bomb, and emits the
+        # notifications (grenade_thrown / need_fuse / throw_failed / …).
+        bomb_system.throw_grenade(caller, item_key, direction)
 
 
 class CmdReload(GameCommand):

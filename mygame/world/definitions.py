@@ -349,6 +349,12 @@ class BalanceConfig:
     #: Baseline hit chance (0..1) for a DIRECTIONAL (unlocked) shot, before the
     #: weapon's ``accuracy`` stat modifier is added. Clamped to [0, 1].
     accuracy_directional: float = 0.5
+    #: Default cooldown (WALL-CLOCK seconds) between a player's own instant
+    #: attacks — direct ``attack`` and directional ``shoot`` resolve immediately
+    #: (not tick-queued) and are throttled by this instead of the 1-second tick.
+    #: A weapon may override it with an ``attack_cooldown`` stat modifier. Does
+    #: NOT apply to turrets/guards/locked-tracking shots (those stay tick-queued).
+    attack_cooldown_seconds: float = 1.0
 
     # --- NPC base spawner + elimination (PvE NPC bases, Phase 5) ------ #
     #: XP awarded for destroying an NPC base's HQ (the whole base is wiped) —

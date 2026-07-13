@@ -72,7 +72,16 @@ EQUIPMENT_SLOTS = ("head", "eyes", "face", "torso", "arms", "hands",
 GEAR_CATEGORIES = ("armor", "weapon", "accessory")
 
 #: Item categories stored as counted stacks in the Supply_Bag ``db.supplies``.
-SUPPLY_CATEGORIES = ("ammo", "consumable", "throwable")
+#: ``throwable`` = grenades (thrown in a direction, land, then fuse); ``mine`` =
+#: mines (armed in place via ``arm``, then fuse). Both are "bombs": a fused AoE
+#: explosive placed on a tile, differing only in how they're deployed.
+SUPPLY_CATEGORIES = ("ammo", "consumable", "throwable", "mine")
+
+#: The two bomb families (fused AoE explosives). A ``throwable`` item is a
+#: grenade; a ``mine`` item is a mine. Used to gate the ``throw`` vs ``arm``
+#: commands and to label a live bomb. Kept separate from the category tuple so a
+#: future non-bomb throwable/mine wouldn't silently become a bomb.
+BOMB_CATEGORIES = ("throwable", "mine")
 
 #: The full controlled vocabulary of item categories. The schema validator
 #: rejects any item whose ``category`` is outside this set.
@@ -105,6 +114,14 @@ DEFAULT_RESOURCE_WEIGHT = 1.0
 
 #: Default throw range (Chebyshev) for a throwable whose effect declares none.
 DEFAULT_THROW_RANGE = 4
+
+#: Bomb fuse bounds (WALL-CLOCK seconds, == ticks at 1 tick/s) used when a bomb's
+#: effect does not declare its own ``fuse_min``/``fuse_max``/``fuse_default``.
+#: The ``set <bomb> <seconds>`` command clamps the requested fuse to
+#: [fuse_min, fuse_max]; a bomb thrown/armed without a set fuse is rejected.
+DEFAULT_BOMB_FUSE_MIN = 1
+DEFAULT_BOMB_FUSE_MAX = 30
+DEFAULT_BOMB_FUSE = 3
 
 # ------------------------------------------------------------------ #
 #  Agent training

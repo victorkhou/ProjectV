@@ -59,6 +59,7 @@ TICK_STEP_ORDER = (
     ("guard_combat", "Guards/soldiers acquire targets and queue attacks."),
     ("combat_resolution", "Resolve queued attacks before turrets/expiry."),
     ("turret_attacks", "Turrets fire at the post-resolution world state."),
+    ("bomb_fuse", "Tick down live bombs; detonate + AoE those whose fuse hits 0."),
     ("combat_timer_decrement", "Expire combat lockouts."),
     ("hp_regen", "Passive HP regen for players/agents (after combat)."),
     ("powerup_ticks", "Expire powerups after this tick's combat resolved."),
@@ -494,6 +495,16 @@ class GameTickScript(DefaultScript):
                     tick_data["buildings"],
                     active_owner_ids=_active_hq_owner_ids(),
                 )
+            )
+
+        bomb_system = systems.get("bomb_system")
+        if bomb_system:
+            # Tick down every live bomb each second and detonate those that hit
+            # 0. BombSystem tracks its own live-bomb list (a mine in an abandoned
+            # area still counts down), so this needs no tick_data — pass the tick
+            # number for parity with the other timed systems.
+            registered["bomb_fuse"] = (
+                lambda: bomb_system.process_tick(tick_number)
             )
 
         def decrement_combat_timers():

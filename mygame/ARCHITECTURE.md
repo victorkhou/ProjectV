@@ -42,7 +42,7 @@ graph TD
 
     subgraph L6["Orchestration Layer"]
         Boot["game_init.initialize_game()<br/>+ game_systems dict"]
-        Tick["GameTickScript.at_repeat()<br/>(TICK_STEP_ORDER — 18 steps)"]
+        Tick["GameTickScript.at_repeat()<br/>(TICK_STEP_ORDER — 19 steps)"]
         Hooks["at_server_startstop hooks"]
     end
 
@@ -302,23 +302,25 @@ flowchart TD
     ST --> SG["7 · guard_combat<br/>GuardCombatSystem.process_tick(): guards/soldiers<br/>acquire targets & queue attacks (before resolution)"]
     SG --> S6["8 · combat_resolution<br/>CombatEngine.resolve_tick()"]
     S6 --> S7["9 · turret_attacks<br/>CombatEngine.process_turrets()"]
-    S7 --> S8["10 · combat_timer_decrement (inline)"]
-    S8 --> SR["11 · hp_regen<br/>RegenSystem.process_tick() (players/agents, post-combat)"]
-    SR --> S9["12 · powerup_ticks<br/>PowerupSystem.process_tick()"]
-    S9 --> S10["13 · tech_research<br/>TechLabSystem.process_tick()"]
-    S10 --> S11["14 · resource_respawns<br/>ResourceSystem.process_respawns()"]
-    S11 --> SO["15 · outpost_respawn<br/>OutpostSpawnerSystem.process_respawns():<br/>respawn cleared NPC bases whose cooldown elapsed"]
-    SO --> S12["16 · tick_completed<br/>EventBus.publish(TICK_COMPLETED)"]
+    S7 --> SB["10 · bomb_fuse<br/>BombSystem.process_tick(): tick live bombs,<br/>detonate + AoE those whose fuse hits 0"]
+    SB --> S8["11 · combat_timer_decrement (inline)"]
+    S8 --> SR["12 · hp_regen<br/>RegenSystem.process_tick() (players/agents, post-combat)"]
+    SR --> S9["13 · powerup_ticks<br/>PowerupSystem.process_tick()"]
+    S9 --> S10["14 · tech_research<br/>TechLabSystem.process_tick()"]
+    S10 --> S11["15 · resource_respawns<br/>ResourceSystem.process_respawns()"]
+    S11 --> SO["16 · outpost_respawn<br/>OutpostSpawnerSystem.process_respawns():<br/>respawn cleared NPC bases whose cooldown elapsed"]
+    SO --> S12["17 · tick_completed<br/>EventBus.publish(TICK_COMPLETED)"]
     S12 --> M["metrics.record_tick(duration_ms)"]
     M --> End
 ```
 
 > The canonical order is the `TICK_STEP_ORDER` tuple in
 > [`typeclasses/scripts.py`](typeclasses/scripts.py) — the single source of truth
-> (18 entries incl. the `active_chunks`/`terrain_epochs` setup steps). Adding or
+> (19 entries incl. the `active_chunks`/`terrain_epochs` setup steps). Adding or
 > reordering a step means editing that tuple, not moving code. `guard_combat` runs
 > **before** `combat_resolution` (guards queue, the engine resolves) and
-> `turret_attacks` runs **after** it (turrets fire at the settled world) — see §5b.
+> `turret_attacks` runs **after** it (turrets fire at the settled world); `bomb_fuse`
+> runs after both, so a detonation resolves against the settled world state — see §5b.
 
 Behavior scripts (`HarvesterScript`, `DeliveryBehavior`, `PatrolBehavior`,
 `EngineerScript`, …) all use `interval=0` — they are **externally clocked** from
@@ -387,15 +389,16 @@ graph LR
 | System | Tick step | Responsibility | Notable collaborators |
 |---|---|---|---|
 | **AgentSystem** | 3, 3b | Train/assign/patrol agents; freeze‑aware XP; gated‑ability convergence; demotion/promotion reserve | progression, Movement, EventBus (`LEVEL_CHANGED` subscriber), agent scripts |
-| **CombatEngine** | 8, 9 | Queue + resolve attacks, damage w/ armor+tech+powerup mods, per‑shot **accuracy roll** (ranged shoot/target; `None`=always hit), player death/respawn, enemy‑NPC permanent death (`_handle_enemy_death`), building destruction, turrets; owner‑attributed kills | Agent (lazy), Equipment, Powerup, EventBus, injected `rng` |
+| **CombatEngine** | 8, 9 | Queue + resolve attacks, damage w/ armor+tech+powerup mods, per‑shot **accuracy roll** (ranged shoot/target; `None`=always hit), player death/respawn, enemy‑NPC permanent death (`_handle_enemy_death`), building destruction, turrets; owner‑attributed kills. Two entry points share `_prepare_attack` validation: **`queue_attack`** (tick‑resolved — turrets/guards/locked shots) and **`resolve_now`** (instant — a player's own `attack`/directional `shoot`, throttled by a wall‑clock cooldown in the command layer) | Agent (lazy), Equipment, Powerup, EventBus, injected `rng` |
 | **TargetingSystem** | 6 | Per‑player ranged **lock‑on** for the `target`/`shoot` commands: `acquire` starts a lock, per‑tick upkeep advances it to ready and **interrupts** it when the target leaves weapon range, the shooter changes planet, or the weapon is unequipped; the lock also breaks the instant the **shooter moves** (via `CombatCharacter.at_coord_change`, so there's no move‑then‑shoot window). Supplies targeted/directional accuracy (baseline + weapon `accuracy`, clamped). State on the shooter's `db` (`lock_target`/`lock_progress`/`lock_ready`) | utils (`chebyshev_distance`), EquipmentHandler, EventBus |
 | **GuardCombatSystem** | 7 | Per‑tick guard/soldier target acquisition — nearest non‑owner within aggro radius via `get_nearby_players`; queues melee/ranged attacks through the engine; gated on `owner_has_active_hq` (ownerless/deactivated‑base guards skip); skips incapacitated/reserved/dead. Defends **player and NPC bases alike** | CombatEngine (queue_attack), utils (`owner_has_active_hq`), PlanetRoom (spatial query) |
+| **BombSystem** | 10 | Fused explosives: **grenades** (`throw <g> <dir>` — flies to first obstacle/max range, lands) and **mines** (`arm <m>` — placed in‑place); `set <bomb> <sec>` / `set all <sec>` set the fuse (per‑type, consumed on deploy). Each tick decrements every live `LiveBomb`'s fuse and broadcasts the countdown to players on its tile (`get_players_at`); at 0 it detonates an **indiscriminate** Chebyshev‑radius AoE via `CombatEngine.apply_direct_hit` (hits the placer + own units too; closed‑building/sheltered immune) and deletes the bomb. Tracks live bombs in memory; `rebuild_from_world` re‑tracks them after a restart | registry, injected `spawn_bomb` factory + area‑damage applier, EventBus, PlanetRoom |
 | **OutpostSpawnerSystem** | 15 | Spawns NPC bases (outposts/fortresses) at init via templates; respawns cleared bases on cooldown (`process_respawns`, subscribes `BASE_ELIMINATED`); placement (bounds/passable/unoccupied/min‑separation) | registry (templates + balance), NPC/building factories, PlanetRoom, EventBus |
 | **BaseEliminationHandler** | event‑driven | Subscribes `BUILDING_DESTROYED`; on a **sentinel‑owned HQ** destruction wipes the whole base (buildings + guards + sentinel), awards `xp_hq_destroy` + drops loot, publishes `BASE_ELIMINATED`. Player HQ untouched (PvP fork = deactivation, not deletion) | EventBus, PlanetRoom, CombatEngine (XP) |
 | **RankSystem** | event‑driven | Level 1‑60 → rank 1‑12; XP thresholds; tech unlock/revoke; **publishes** `LEVEL_CHANGED`/`RANK_*` | progression, EventBus |
 | **ResourceSystem** | 4, 14 | Manual + presence harvest, Extractor inventory, respawns | Movement, terrain, EventBus |
 | **BuildingSystem** | 4 | Construct/upgrade validation + timers (player‑presence & engineer‑agent) | terrain, EventBus |
-| **EquipmentSystem** | 5 | Per‑tick item production **and** the use‑case mediating equip/unequip/use/throw/reload/deposit/withdraw + carry‑weight/rank/ammo checks (see §12) | registry, EquipmentHandler, injected area‑damage applier + PowerupSystem + supply/resource‑drop spawners |
+| **EquipmentSystem** | 5 | Per‑tick item production **and** the use‑case mediating equip/unequip/use/reload/deposit/withdraw + carry‑weight/rank/ammo checks (see §12). (Grenades/mines are now deployed via **BombSystem**, not `throw` here) | registry, EquipmentHandler, injected area‑damage applier + PowerupSystem + supply/resource‑drop spawners |
 | **EquipmentHandler** | — | Per‑character Gear slots (equip/unequip) + stat aggregation + Supply‑bag storage | (standalone; per `CombatEntity`) |
 | **MovementSystem** | 2 | In‑memory moving‑NPC set; per‑tick advance; pathfinding throttle | pathfinding |
 | **RegenSystem** | 11 | Passive HP regen (`hp_regen_percent` of `hp_max`/interval) for living, non‑incapacitated players/agents; buildings never passively heal | EventBus (via BaseSystem) |

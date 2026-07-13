@@ -99,6 +99,7 @@ from mygame.commands.game_commands import (  # noqa: E402
     CmdMove, CmdHarvest, CmdBuild, CmdUpgrade, CmdRepair,
     CmdAttack, CmdTarget, CmdShoot,
     CmdEquip, CmdUnequip, CmdUse, CmdThrow, CmdReload, CmdCraft,
+    CmdSetFuse, CmdArm,
     CmdDeposit, CmdWithdraw,
     CmdResearch, CmdPowerup,
     CmdScore, CmdEquipment, CmdBuildings, CmdScan, CmdTechnology,
@@ -963,9 +964,9 @@ class TestCmdAttack(unittest.TestCase):
         queued = []
 
         class _Engine:
-            def queue_attack(self, attacker, target):
+            def resolve_now(self, attacker, target):
                 queued.append((attacker, target))
-                return True, "Attack queued."
+                return True, ""
 
         caller = FakeCaller(systems={"combat_engine": _Engine()})
         guard = _FakeAttackable("Outpost #2 Guard-1", 5, 6)
@@ -981,9 +982,9 @@ class TestCmdAttack(unittest.TestCase):
         queued = []
 
         class _Engine:
-            def queue_attack(self, attacker, target):
+            def resolve_now(self, attacker, target):
                 queued.append((attacker, target))
-                return True, "Attack queued."
+                return True, ""
 
         caller = FakeCaller(systems={"combat_engine": _Engine()})
         faraway = _FakeAttackable("Outpost #9 Guard-1", 90, 90)
@@ -1001,9 +1002,9 @@ class TestCmdAttack(unittest.TestCase):
         queued = []
 
         class _Engine:
-            def queue_attack(self, attacker, target):
+            def resolve_now(self, attacker, target):
                 queued.append(target)
-                return True, "queued"
+                return True, ""
 
         caller = FakeCaller(systems={"combat_engine": _Engine()})
         # Equip a range-12 weapon (no registry → vision defaults to 10).
@@ -1013,6 +1014,45 @@ class TestCmdAttack(unittest.TestCase):
         cmd = _make_cmd(CmdAttack, caller, " soldier")
         cmd.func()
         self.assertEqual(len(queued), 1)
+
+    def test_instant_attack_cooldown_blocks_rapid_second_attack(self):
+        """A player's attack resolves instantly but is wall-clock cooldown-gated:
+        a second attack fired immediately is rejected with a wait message and
+        does not reach the engine."""
+        resolved = []
+
+        class _Engine:
+            registry = types.SimpleNamespace(
+                balance=types.SimpleNamespace(attack_cooldown_seconds=10.0))
+
+            def resolve_now(self, attacker, target):
+                resolved.append(target)
+                return True, ""
+
+        caller = FakeCaller(systems={"combat_engine": _Engine()})
+        guard = _FakeAttackable("Outpost #2 Guard-1", 5, 6)
+        caller.location.contents = [guard]
+        _make_cmd(CmdAttack, caller, " guard").func()
+        _make_cmd(CmdAttack, caller, " guard").func()  # immediate second
+        self.assertEqual(len(resolved), 1, "second attack must be cooldown-blocked")
+        self.assertTrue(any("not ready" in m.lower() for m in caller._messages))
+
+    def test_rejected_instant_attack_refunds_cooldown(self):
+        """If the instant attack is rejected by the engine (nothing fired), the
+        cooldown stamp is refunded so the player can immediately try again."""
+        class _Engine:
+            registry = types.SimpleNamespace(
+                balance=types.SimpleNamespace(attack_cooldown_seconds=10.0))
+
+            def resolve_now(self, attacker, target):
+                return False, "No weapon equipped."
+
+        caller = FakeCaller(systems={"combat_engine": _Engine()})
+        guard = _FakeAttackable("Outpost #2 Guard-1", 5, 6)
+        caller.location.contents = [guard]
+        _make_cmd(CmdAttack, caller, " guard").func()
+        # A rejected attack must not leave the player on cooldown.
+        self.assertEqual(getattr(caller.db, "next_attack_time", 0.0), 0.0)
 
 
 class _FakeAttackable:
@@ -1086,14 +1126,25 @@ class _FakeTargeting:
 
 
 class _RecordingEngine:
+    """Records both queued (locked shot) and instant (directional shot / attack)
+    resolution so command tests can assert target + accuracy + breach + which
+    path was taken."""
     def __init__(self):
-        self.calls = []
-        self.breach_calls = []
+        self.calls = []          # (target, accuracy) — queued OR instant
+        self.breach_calls = []   # breach flag per call, same order
+        self.instant_calls = []  # (target, accuracy) resolved via resolve_now
 
     def queue_attack(self, attacker, target, weapon=None, accuracy=None,
                      breach=False):
         self.calls.append((target, accuracy))
         self.breach_calls.append(breach)
+        return True, ""
+
+    def resolve_now(self, attacker, target, weapon=None, accuracy=None,
+                    breach=False):
+        self.calls.append((target, accuracy))
+        self.breach_calls.append(breach)
+        self.instant_calls.append((target, accuracy))
         return True, ""
 
 
@@ -1632,13 +1683,34 @@ class TestCmdUse(unittest.TestCase):
         self.assertEqual(calls, [(caller, "medkit")])
 
 
+class _FakeBombSystem:
+    """Records bomb-command delegations (throw/arm/set/set_all)."""
+    def __init__(self):
+        self.thrown = []      # (player, item_key, direction)
+        self.armed = []       # (player, item_key)
+        self.set_calls = []   # (player, item_key, seconds)
+        self.set_all_calls = []  # (player, seconds)
+
+    def throw_grenade(self, player, item_key, direction):
+        self.thrown.append((player, item_key, direction))
+        return True
+
+    def arm_mine(self, player, item_key):
+        self.armed.append((player, item_key))
+        return True
+
+    def set_fuse(self, player, item_key, seconds):
+        self.set_calls.append((player, item_key, seconds))
+        return True
+
+    def set_all(self, player, seconds):
+        self.set_all_calls.append((player, seconds))
+        return 1
+
+
 class TestCmdThrow(unittest.TestCase):
-    def _system(self, calls):
-        class FakeEquipmentSystem:
-            def throw(self, player, item_key, tx, ty):
-                calls.append((player, item_key, tx, ty))
-                return True
-        return FakeEquipmentSystem()
+    """Grenades are now thrown DIRECTIONALLY (throw <grenade> <n/s/e/w>) and
+    delegated to BombSystem.throw_grenade."""
 
     def test_no_args(self):
         caller = FakeCaller()
@@ -1646,97 +1718,128 @@ class TestCmdThrow(unittest.TestCase):
         cmd.func()
         self.assertTrue(any("Usage" in m for m in caller._messages))
 
-    def test_missing_target(self):
+    def test_missing_direction(self):
         caller = FakeCaller(systems={
-            "equipment_system": self._system([]),
+            "bomb_system": _FakeBombSystem(),
             "registry": _FakeRegistry({"frag_grenade"}),
         })
         cmd = _make_cmd(CmdThrow, caller, " frag_grenade")
         cmd.func()
         self.assertTrue(any("Usage" in m for m in caller._messages))
 
-    def test_explicit_coordinates(self):
-        calls = []
+    def test_directional_throw_delegates(self):
+        bomb = _FakeBombSystem()
         caller = FakeCaller(systems={
-            "equipment_system": self._system(calls),
+            "bomb_system": bomb,
             "registry": _FakeRegistry({"frag_grenade"}),
         })
-        cmd = _make_cmd(CmdThrow, caller, " frag_grenade 12 8")
+        cmd = _make_cmd(CmdThrow, caller, " frag_grenade n")
         cmd.func()
-        self.assertEqual(calls, [(caller, "frag_grenade", 12, 8)])
+        self.assertEqual(bomb.thrown, [(caller, "frag_grenade", "n")])
 
-    def test_negative_coordinates(self):
-        calls = []
+    def test_multiword_grenade_name_with_direction(self):
+        bomb = _FakeBombSystem()
         caller = FakeCaller(systems={
-            "equipment_system": self._system(calls),
+            "bomb_system": bomb,
             "registry": _FakeRegistry({"frag_grenade"}),
         })
-        cmd = _make_cmd(CmdThrow, caller, " frag_grenade -3 -4")
+        cmd = _make_cmd(CmdThrow, caller, " frag grenade east")
         cmd.func()
-        self.assertEqual(calls, [(caller, "frag_grenade", -3, -4)])
-
-    def test_multiword_item_name_with_coords(self):
-        calls = []
-        caller = FakeCaller(systems={
-            "equipment_system": self._system(calls),
-            "registry": _FakeRegistry({"frag_grenade"}),
-        })
-        cmd = _make_cmd(CmdThrow, caller, " frag grenade 1 2")
-        cmd.func()
-        self.assertEqual(calls, [(caller, "frag_grenade", 1, 2)])
-
-    def test_target_name_resolves_to_coords(self):
-        calls = []
-        caller = FakeCaller(systems={
-            "equipment_system": self._system(calls),
-            "registry": _FakeRegistry({"frag_grenade"}),
-        })
-        caller._search_results = {"goblin": _FakeTarget(7, 9)}
-        cmd = _make_cmd(CmdThrow, caller, " frag_grenade goblin")
-        cmd.func()
-        self.assertEqual(calls, [(caller, "frag_grenade", 7, 9)])
-
-    def test_target_not_found(self):
-        calls = []
-        caller = FakeCaller(systems={
-            "equipment_system": self._system(calls),
-            "registry": _FakeRegistry({"frag_grenade"}),
-        })
-        cmd = _make_cmd(CmdThrow, caller, " frag_grenade ghost")
-        cmd.func()
-        self.assertEqual(calls, [])
-        self.assertTrue(any("Could not find" in m for m in caller._messages))
+        self.assertEqual(bomb.thrown, [(caller, "frag_grenade", "east")])
 
     def test_unknown_item(self):
-        calls = []
+        bomb = _FakeBombSystem()
         caller = FakeCaller(systems={
-            "equipment_system": self._system(calls),
+            "bomb_system": bomb,
             "registry": _FakeRegistry({"frag_grenade"}),
         })
-        cmd = _make_cmd(CmdThrow, caller, " rock 1 2")
+        cmd = _make_cmd(CmdThrow, caller, " rock n")
         cmd.func()
-        self.assertEqual(calls, [])
+        self.assertEqual(bomb.thrown, [])
         self.assertTrue(any("Unknown item" in m for m in caller._messages))
-
-    def test_target_found_but_missing_coordinates(self):
-        """A resolvable target with no coordinates aborts before delegating."""
-        calls = []
-        caller = FakeCaller(systems={
-            "equipment_system": self._system(calls),
-            "registry": _FakeRegistry({"frag_grenade"}),
-        })
-        # Target resolves via search but carries no coord_x/coord_y.
-        caller._search_results = {"blob": types.SimpleNamespace(db=types.SimpleNamespace())}
-        cmd = _make_cmd(CmdThrow, caller, " frag_grenade blob")
-        cmd.func()
-        self.assertEqual(calls, [])
-        self.assertTrue(
-            any("Cannot determine the position" in m for m in caller._messages)
-        )
 
     def test_system_unavailable(self):
         caller = FakeCaller()
-        cmd = _make_cmd(CmdThrow, caller, " frag_grenade 1 2")
+        cmd = _make_cmd(CmdThrow, caller, " frag_grenade n")
+        cmd.func()
+        self.assertTrue(any("unavailable" in m for m in caller._messages))
+
+
+class TestCmdSetFuse(unittest.TestCase):
+    def test_set_fuse_delegates(self):
+        bomb = _FakeBombSystem()
+        caller = FakeCaller(systems={
+            "bomb_system": bomb,
+            "registry": _FakeRegistry({"frag_grenade"}),
+        })
+        cmd = _make_cmd(CmdSetFuse, caller, " frag_grenade 5")
+        cmd.func()
+        self.assertEqual(bomb.set_calls, [(caller, "frag_grenade", 5)])
+
+    def test_set_all_delegates(self):
+        bomb = _FakeBombSystem()
+        caller = FakeCaller(systems={"bomb_system": bomb,
+                                     "registry": _FakeRegistry(set())})
+        cmd = _make_cmd(CmdSetFuse, caller, " all 8")
+        cmd.func()
+        self.assertEqual(bomb.set_all_calls, [(caller, 8)])
+        self.assertEqual(bomb.set_calls, [])
+
+    def test_non_numeric_seconds_shows_usage(self):
+        bomb = _FakeBombSystem()
+        caller = FakeCaller(systems={"bomb_system": bomb,
+                                     "registry": _FakeRegistry({"frag_grenade"})})
+        cmd = _make_cmd(CmdSetFuse, caller, " frag_grenade soon")
+        cmd.func()
+        self.assertEqual(bomb.set_calls, [])
+        self.assertTrue(any("Usage" in m for m in caller._messages))
+
+    def test_non_positive_seconds_rejected(self):
+        bomb = _FakeBombSystem()
+        caller = FakeCaller(systems={"bomb_system": bomb,
+                                     "registry": _FakeRegistry({"frag_grenade"})})
+        cmd = _make_cmd(CmdSetFuse, caller, " frag_grenade 0")
+        cmd.func()
+        self.assertEqual(bomb.set_calls, [])
+        self.assertTrue(any("positive" in m for m in caller._messages))
+
+    def test_unknown_bomb_item(self):
+        bomb = _FakeBombSystem()
+        caller = FakeCaller(systems={"bomb_system": bomb,
+                                     "registry": _FakeRegistry({"frag_grenade"})})
+        cmd = _make_cmd(CmdSetFuse, caller, " rock 5")
+        cmd.func()
+        self.assertEqual(bomb.set_calls, [])
+        self.assertTrue(any("Unknown item" in m for m in caller._messages))
+
+
+class TestCmdArm(unittest.TestCase):
+    def test_arm_delegates(self):
+        bomb = _FakeBombSystem()
+        caller = FakeCaller(systems={"bomb_system": bomb,
+                                     "registry": _FakeRegistry({"land_mine"})})
+        cmd = _make_cmd(CmdArm, caller, " land_mine")
+        cmd.func()
+        self.assertEqual(bomb.armed, [(caller, "land_mine")])
+
+    def test_no_args_shows_usage(self):
+        caller = FakeCaller(systems={"bomb_system": _FakeBombSystem()})
+        cmd = _make_cmd(CmdArm, caller, "")
+        cmd.func()
+        self.assertTrue(any("Usage" in m for m in caller._messages))
+
+    def test_unknown_item(self):
+        bomb = _FakeBombSystem()
+        caller = FakeCaller(systems={"bomb_system": bomb,
+                                     "registry": _FakeRegistry({"land_mine"})})
+        cmd = _make_cmd(CmdArm, caller, " pebble")
+        cmd.func()
+        self.assertEqual(bomb.armed, [])
+        self.assertTrue(any("Unknown item" in m for m in caller._messages))
+
+    def test_system_unavailable(self):
+        caller = FakeCaller()
+        cmd = _make_cmd(CmdArm, caller, " land_mine")
         cmd.func()
         self.assertTrue(any("unavailable" in m for m in caller._messages))
 

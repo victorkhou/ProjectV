@@ -954,6 +954,110 @@ class LiveBootSmokeTest(EvenniaTest):
         finally:
             _teardown_game(systems)
 
+    def test_instant_attack_resolves_immediately_on_real_objects(self):
+        """On real objects: a player's direct attack via resolve_now applies
+        damage in the SAME call (instant), without touching the tick queue."""
+        from server.conf.game_init import initialize_game
+        from world.definitions import ItemDef
+        from typeclasses.objects import spawn_gear_drop
+
+        systems = initialize_game()
+        try:
+            engine = systems["combat_engine"]
+            room = self._make_planet_room("earth")
+            attacker = self._make_player(x=0, y=0, planet="earth", location=room)
+            attacker.db.combat_xp = 100000
+            knife_def = ItemDef(key="knife", name="Knife", slot="weapon",
+                                category="weapon",
+                                stat_modifiers={"damage": 15, "range": 1},
+                                weapon_type="melee")
+            knife = spawn_gear_drop(room, knife_def, x=0, y=0)
+            systems["equipment_system"].equip(attacker, knife)
+            target = self._make_player(x=1, y=0, planet="earth", location=room)
+            target.key = "Victim"
+            hp0 = target.db.hp
+
+            ok, _ = engine.resolve_now(attacker, target)
+            self.assertTrue(ok)
+            self.assertLess(target.db.hp, hp0, "instant attack applies damage now")
+            self.assertEqual(len(engine.pending_actions), 0,
+                             "resolve_now must not queue to the tick")
+        finally:
+            _teardown_game(systems)
+
+    def test_mine_arm_tick_and_detonate_on_real_objects(self):
+        """On real objects: arm a mine (LiveBomb placed + indexed), tick its fuse
+        down, and confirm it detonates — a co-located victim takes damage and the
+        bomb object is deleted. Exercises the real BombSystem + spawn_bomb +
+        coordinate index + AoE-through-combat-engine path end to end."""
+        from server.conf.game_init import initialize_game
+
+        systems = initialize_game()
+        try:
+            bomb_system = systems["bomb_system"]
+            self.assertIsNotNone(bomb_system, "bomb_system must be wired")
+            room = self._make_planet_room("earth")
+
+            placer = self._make_player(x=4, y=4, planet="earth", location=room)
+            placer.db.combat_xp = 100000
+            placer.equipment.add_supply("land_mine", 1)
+
+            # A victim standing on the same tile as the armed mine. Register in
+            # the coordinate index (as movement would) so the blast area-query
+            # finds them — _make_player sets coords but doesn't index.
+            victim = self._make_player(x=4, y=4, planet="earth", location=room)
+            victim.key = "Victim"
+            room.coord_index.add(victim, 4, 4)
+            hp0 = victim.db.hp
+
+            # Set a 2s fuse and arm the mine on the placer's tile.
+            self.assertTrue(bomb_system.set_fuse(placer, "land_mine", 2))
+            self.assertTrue(bomb_system.arm_mine(placer, "land_mine"))
+            # The mine is now a placed, indexed LiveBomb on (4,4).
+            bombs = room.get_objects_at(4, 4, type_tag="bomb")
+            self.assertEqual(len(bombs), 1)
+            mine = bombs[0]
+            self.assertEqual(mine.db.fuse_remaining, 2)
+
+            # Tick once: fuse 2 -> 1, still live, no damage yet.
+            bomb_system.process_tick(1)
+            self.assertEqual(mine.db.fuse_remaining, 1)
+            self.assertEqual(victim.db.hp, hp0)
+
+            # Tick again: fuse 1 -> 0 -> detonate. Victim takes the blast and the
+            # bomb is removed from the world + the coordinate index.
+            bomb_system.process_tick(2)
+            self.assertLess(victim.db.hp, hp0, "co-located victim caught in blast")
+            self.assertIsNone(getattr(mine, "pk", None),
+                              "detonated mine must be deleted")
+            self.assertEqual(room.get_objects_at(4, 4, type_tag="bomb"), [],
+                             "detonated mine must be de-indexed")
+        finally:
+            _teardown_game(systems)
+
+    def test_armed_mine_survives_reboot_via_rebuild(self):
+        """A mine armed before a restart resumes its fuse: rebuild_from_world
+        re-tracks the persisted LiveBomb so it keeps ticking (its fuse state and
+        coords persist on db; only the in-memory countdown list is rebuilt)."""
+        from server.conf.game_init import initialize_game
+
+        systems = initialize_game()
+        try:
+            bomb_system = systems["bomb_system"]
+            room = self._make_planet_room("earth")
+            placer = self._make_player(x=2, y=2, planet="earth", location=room)
+            placer.db.combat_xp = 100000
+            placer.equipment.add_supply("land_mine", 1)
+            bomb_system.set_fuse(placer, "land_mine", 5)
+            bomb_system.arm_mine(placer, "land_mine")
+
+            # Simulate a reboot: drop the in-memory list, then rebuild from world.
+            bomb_system._live_bombs = []
+            n = bomb_system.rebuild_from_world({"earth": room})
+            self.assertEqual(n, 1, "the armed mine must be re-tracked after reboot")
+        finally:
+            _teardown_game(systems)
+
 
 def _teardown_game(systems):
     """Best-effort teardown: stop any scripts initialize_game created so they

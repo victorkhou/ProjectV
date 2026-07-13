@@ -182,6 +182,17 @@ def initialize_game() -> dict:
     guard_combat_system.set_sight_blocked_func(_sight_blocked)
     # Ranged lock-on ('target'/'shoot'): per-tick lock upkeep + accuracy model.
     targeting_system = TargetingSystem(registry, event_bus)
+    # Bombs (grenades + mines): fuse config, throw/arm, per-tick fuse countdown,
+    # and AoE detonation. The spawn_bomb factory places a LiveBomb on a tile;
+    # the area-damage applier resolves the blast through the CombatEngine.
+    from world.systems.bomb_system import BombSystem
+    from typeclasses.objects import spawn_bomb as _spawn_bomb
+    bomb_system = BombSystem(
+        registry, event_bus,
+        spawn_bomb_func=_spawn_bomb,
+        area_damage_applier=lambda: combat_engine,
+        current_tick_func=_get_current_tick,
+    )
     # Inject the PowerupSystem into EquipmentSystem so ``use`` applies a
     # consumable buff through the real timed-effect machinery (correct entry
     # shape + tick-based expiry) rather than reaching into game_systems.
@@ -498,6 +509,7 @@ def initialize_game() -> dict:
         "agent_system": agent_system,
         "guard_combat_system": guard_combat_system,
         "targeting_system": targeting_system,
+        "bomb_system": bomb_system,
         "outpost_spawner": outpost_spawner,
         "base_elimination": base_elimination,
         "movement_system": movement_system,
@@ -547,6 +559,17 @@ def initialize_game() -> dict:
                     )
     except Exception:
         logger.exception("Initial NPC-base spawn skipped (search unavailable).")
+
+    # Re-track any live bombs (armed mines / landed grenades) that were counting
+    # down before a restart, so their fuses resume rather than freezing (the
+    # fuse state persists on each LiveBomb's db; the in-memory countdown list is
+    # non-persistent). Best-effort — a failure just means no pre-restart bombs.
+    try:
+        n = bomb_system.rebuild_from_world(planet_rooms)
+        if n:
+            logger.info("Re-tracked %d live bomb(s) after restart.", n)
+    except Exception:
+        logger.exception("Live-bomb rebuild skipped.")
 
     # ---------------------------------------------------------- #
     #  8. Start GameTickScript and AutoSaveScript

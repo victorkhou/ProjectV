@@ -293,16 +293,24 @@ items:
     required_rank: null
 
   # ------------------------------------------------------------------ #
-  #  Throwables (Supply)
+  #  Throwables — GRENADES (Supply). Thrown in a compass direction; fly to the
+  #  first obstacle or max `range`, land, then a set fuse ticks down before the
+  #  AoE explosion. `bomb_type: grenade` + fuse_min/fuse_max/fuse_default bound
+  #  the `set <bomb> <sec>` fuse. `range` is the max throw distance (Chebyshev),
+  #  `radius` the blast radius, `amount` the flat blast damage.
   # ------------------------------------------------------------------ #
   - key: frag_grenade
     name: Frag Grenade
     category: throwable
     effect:
       type: aoe_damage
+      bomb_type: grenade
       amount: 40
       radius: 2
       range: 5
+      fuse_min: 1
+      fuse_max: 10
+      fuse_default: 3
     craft_cost:
       Iron: 10
       Energy: 10
@@ -310,6 +318,71 @@ items:
     max_stack: 10
     classification: modern
     required_rank: null
+
+  - key: plasma_grenade
+    name: Plasma Grenade
+    category: throwable
+    effect:
+      type: aoe_damage
+      bomb_type: grenade
+      amount: 70
+      radius: 2
+      range: 6
+      fuse_min: 1
+      fuse_max: 10
+      fuse_default: 3
+    craft_cost:
+      Energy: 25
+      Circuits: 10
+    weight: 3.0
+    max_stack: 10
+    classification: futuristic
+    required_rank: Sergeant
+
+  # ------------------------------------------------------------------ #
+  #  Mines (Supply). Armed in place with `arm <mine>` (no throw); the set fuse
+  #  then ticks down before the AoE explosion on the arming tile. `bomb_type:
+  #  mine`; no `range` (not thrown). Longer fuse ceilings than grenades so they
+  #  can be laid as timed traps.
+  # ------------------------------------------------------------------ #
+  - key: land_mine
+    name: Land Mine
+    category: mine
+    effect:
+      type: aoe_damage
+      bomb_type: mine
+      amount: 60
+      radius: 1
+      fuse_min: 1
+      fuse_max: 30
+      fuse_default: 5
+    craft_cost:
+      Iron: 15
+      Energy: 5
+    weight: 4.0
+    max_stack: 10
+    classification: modern
+    required_rank: null
+
+  - key: proximity_mine
+    name: Proximity Mine
+    category: mine
+    effect:
+      type: aoe_damage
+      bomb_type: mine
+      amount: 90
+      radius: 2
+      fuse_min: 1
+      fuse_max: 30
+      fuse_default: 5
+    craft_cost:
+      Iron: 20
+      Energy: 20
+      Circuits: 10
+    weight: 5.0
+    max_stack: 10
+    classification: futuristic
+    required_rank: Staff_Sergeant
 
 # Production routing by building (task 8.3).
 #
@@ -344,10 +417,13 @@ production_map:
   MB:
     - medkit
     - combat_stim
-  # Lab: futuristic gear + throwables
+  # Lab: futuristic gear + throwables (grenades) + mines
   LB:
     - plasma_rifle
     - power_armor
     - jetpack
     - energy_cell
     - frag_grenade
+    - plasma_grenade
+    - land_mine
+    - proximity_mine

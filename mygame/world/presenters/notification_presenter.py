@@ -247,6 +247,7 @@ def _fmt_throw_failed(d: dict) -> str:
         "not_held": f"You aren't carrying {item}.",
         "not_throwable": f"{item} can't be thrown.",
         "no_position": "You have no position to throw from.",
+        "bad_direction": "Throw which way? Use n/s/e/w.",
         "out_of_range": (
             f"{item} is out of range "
             f"({d.get('distance', '?')} > {d.get('range', '?')})."
@@ -259,6 +260,117 @@ def _fmt_bombed(d: dict) -> str:
     return (
         f"|y[Throw] Hit {d.get('count', 0)} target(s) "
         f"at ({d.get('x', '?')},{d.get('y', '?')}).|n"
+    )
+
+
+# ------------------------------------------------------------------ #
+#  Bombs — grenades (thrown, directional) + mines (armed in place). A set fuse
+#  ticks down before an AoE blast. Everyone on a bomb's tile sees it arm/tick.
+# ------------------------------------------------------------------ #
+
+def _fmt_not_a_bomb(d: dict) -> str:
+    return f"|y[Bomb] {d.get('item_name', 'That')} isn't a bomb.|n"
+
+
+def _fmt_not_a_mine(d: dict) -> str:
+    return f"|y[Bomb] {d.get('item_name', 'That')} isn't a mine — throw it instead.|n"
+
+
+def _fmt_bomb_not_held(d: dict) -> str:
+    return f"|y[Bomb] You aren't carrying {d.get('item_name', 'that')}.|n"
+
+
+def _fmt_fuse_set(d: dict) -> str:
+    item = d.get("item_name", "bomb")
+    secs = d.get("seconds", 0)
+    if d.get("clamped"):
+        return (
+            f"|y[Bomb] Fuse for {item} set to {secs}s "
+            f"(clamped to {d.get('fuse_min', '?')}–{d.get('fuse_max', '?')}s).|n"
+        )
+    return f"|y[Bomb] Fuse for {item} set to {secs}s.|n"
+
+
+def _fmt_fuse_all_set(d: dict) -> str:
+    count = d.get("count", 0)
+    if not count:
+        return "|y[Bomb] No bombs in your inventory to set.|n"
+    return (
+        f"|y[Bomb] Fuse set to {d.get('seconds', 0)}s on {count} bomb type(s) "
+        f"(clamped per bomb).|n"
+    )
+
+
+def _fmt_need_fuse(d: dict) -> str:
+    item = d.get("item_name", "bomb")
+    return (
+        f"|y[Bomb] Set a fuse first: 'set {item} <seconds>' "
+        f"(or 'set all <seconds>').|n"
+    )
+
+
+def _fmt_arm_failed(d: dict) -> str:
+    item = d.get("item_name", "mine")
+    reason = d.get("reason")
+    messages = {
+        "no_position": "You have no position to arm from.",
+    }
+    return f"|y[Bomb] {messages.get(reason, f'Cannot arm {item}.')}|n"
+
+
+def _fmt_grenade_thrown(d: dict) -> str:
+    # The thrower's confirmation — the grenade is away and ticking (yellow).
+    return (
+        f"|y[Bomb] You throw {d.get('item_name', 'a grenade')} to "
+        f"({d.get('x', '?')},{d.get('y', '?')}) — {d.get('seconds', '?')}s fuse.|n"
+    )
+
+
+def _fmt_mine_armed(d: dict) -> str:
+    # The placer's confirmation for arming a mine.
+    return (
+        f"|y[Bomb] You arm {d.get('item_name', 'a mine')} here — "
+        f"{d.get('seconds', '?')}s fuse. It begins to |rtick|n|y.|n"
+    )
+
+
+def _fmt_bomb_landed(d: dict) -> str:
+    # Seen by OTHERS on the tile a grenade lands on (incoming — bright red).
+    return (
+        f"|r[Bomb] {d.get('item_name', 'A grenade')} lands here, "
+        f"ticking ({d.get('seconds', '?')}s)!|n"
+    )
+
+
+def _fmt_bomb_armed(d: dict) -> str:
+    # Seen by OTHERS on the tile where a mine is armed (incoming — bright red).
+    return (
+        f"|r[Bomb] {d.get('item_name', 'A mine')} is armed here, "
+        f"ticking ({d.get('seconds', '?')}s)!|n"
+    )
+
+
+def _fmt_bomb_tick(d: dict) -> str:
+    # Per-second countdown shown to everyone on the bomb's tile (bright red).
+    return (
+        f"|r[Bomb] {d.get('item_name', 'A bomb')} ticks... "
+        f"{d.get('seconds', '?')}s.|n"
+    )
+
+
+def _fmt_bomb_exploded(d: dict) -> str:
+    # Seen by everyone still on the blast tile (bright red).
+    return (
+        f"|r[Bomb] {d.get('item_name', 'A bomb')} EXPLODES! "
+        f"{d.get('count', 0)} caught in the blast.|n"
+    )
+
+
+def _fmt_bomb_detonated(d: dict) -> str:
+    # The placer's outcome summary (informational yellow).
+    return (
+        f"|y[Bomb] Your {d.get('item_name', 'bomb')} detonated at "
+        f"({d.get('x', '?')},{d.get('y', '?')}) — {d.get('count', 0)} hit.|n"
     )
 
 
@@ -505,6 +617,21 @@ class NotificationPresenter:
         "buff_applied": _fmt_buff_applied,
         "throw_failed": _fmt_throw_failed,
         "bombed": _fmt_bombed,
+        # Bomb feature kinds (grenades + mines): fuse config, deploy, tick, blast.
+        "not_a_bomb": _fmt_not_a_bomb,
+        "not_a_mine": _fmt_not_a_mine,
+        "bomb_not_held": _fmt_bomb_not_held,
+        "fuse_set": _fmt_fuse_set,
+        "fuse_all_set": _fmt_fuse_all_set,
+        "need_fuse": _fmt_need_fuse,
+        "arm_failed": _fmt_arm_failed,
+        "grenade_thrown": _fmt_grenade_thrown,
+        "mine_armed": _fmt_mine_armed,
+        "bomb_landed": _fmt_bomb_landed,
+        "bomb_armed": _fmt_bomb_armed,
+        "bomb_tick": _fmt_bomb_tick,
+        "bomb_exploded": _fmt_bomb_exploded,
+        "bomb_detonated": _fmt_bomb_detonated,
         "out_of_ammo": _fmt_out_of_ammo,
         "reloaded": _fmt_reloaded,
         "reload_failed": _fmt_reload_failed,

@@ -128,7 +128,9 @@ HELP_ENTRY_DICTS = [
             |wequip <item>|n / |wunequip <slot>|n — manage worn gear (or |wall|n)
             |wequipment|n (|weq|n) — your full loadout (paperdoll)
             |wuse <item>|n — use a consumable (medkit, stim)
-            |wthrow <item> …|n — throw a grenade at a target or coords
+            |wset <bomb> <sec>|n — set a bomb's fuse (or |wset all <sec>|n)
+            |wthrow <grenade> <n/s/e/w>|n — throw a grenade in a direction
+            |warm <mine>|n — arm a mine where you stand
             |wreload|n — refill your ranged weapon's magazine
 
             # Agents
@@ -360,6 +362,10 @@ HELP_ENTRY_DICTS = [
             |wtarget <enemy>|n (|wlock|n) — lock onto an enemy in your weapon's range. It takes a few ticks to lock (faster with better gear); you're told when it completes. A lock is a |cheld aim|n — |rhold still while it locks, because moving in any direction breaks it|n. Once locked, your shot is far more accurate (|c80%|n baseline) and keeps hitting the enemy even as |cthey|n move — until they leave your range (or you move).
             |wshoot|n (|wfire|n) — fire your ranged weapon. With a |clocked|n target, plain |wshoot|n fires at them. Otherwise |wshoot <n/s/e/w>|n fires in a direction and hits the first thing in the line of fire, at lower accuracy (|c50%|n baseline). You can only hit a specific player by locking onto them first. A directional shot |cbreaches cover|n — it damages a |cbuilding|n (open or closed) in the line of fire, so it's how you shoot down a |cWall|n; and if you're |cinside|n a building, any direction fires at the structure around you, letting you shoot your way out. Every shot spends ammo whether it hits or misses.
 
+            # Timing: Instant vs. Ticked
+
+            Your own |wattack|n and directional |wshoot|n resolve |cinstantly|n — the hit lands the moment you act, throttled by a short per-weapon |ccooldown|n (you'll be told if you fire again too soon). |cTurrets|n, |cguards|n, and a |clocked|n tracking shot resolve on the world |ctick|n instead: that tiny delay is their dodge window (you can duck into cover between a turret locking on and firing).
+
             # The Combat State
 
             Dealing or taking damage puts you |rin combat|n for a short time — you'll get a |r[Combat]|n notice when it starts, and |wscore|n shows the seconds remaining. Each new hit resets the timer. While in combat you can't slip through your own |cWalls|n, you can't manually |wenter|n or |wleave|n a building, and moving is slower (better |cmove speed|n gear eases this). It clears on its own once the timer runs out.
@@ -388,9 +394,9 @@ HELP_ENTRY_DICTS = [
 
             Destroying an owner's |cHeadquarters|n is decisive. Wreck an |cenemy base|n's HQ and the whole base is eliminated at once — every building and guard is wiped and loot drops on the spot: |g[Combat] Outpost eliminated! +X XP. Loot dropped at (x,y).|n Lose your |cown|n HQ (in PvP) and nothing is deleted — your base goes |rinert|n instead: turrets stop, production halts, agents idle, and building commands are refused until you |wbuild|n a new HQ.
 
-            # Grenades
+            # Bombs: Grenades & Mines
 
-            |wthrow frag_grenade <x> <y>|n hits everything in a radius — hostile or not, so mind your own agents and buildings. Throwables come from a |cLab|n.
+            Bombs are |cfused|n explosives — set a fuse first with |wset <bomb> <seconds>|n (or |wset all <seconds>|n for your whole inventory), then deploy. A |cgrenade|n is |wthrow|n-n in a direction (|wthrow frag_grenade n|n): it flies until it hits the first obstacle or its max range, |clands|n, and ticks down before exploding. A |cmine|n is |warm|n-ed in place (|warm land_mine|n): it ticks down where you stand. Anyone on a bomb's tile sees it |rtick|n. The blast hits everything in radius — enemies, your own units, and |ryou|n if you're too close — so mind the fuse and your distance. See |whelp bombs|n. Bombs come from a |cLab|n.
 
             # After a Fight
 
@@ -398,7 +404,40 @@ HELP_ENTRY_DICTS = [
 
             # See Also
 
-            |whelp equipment|n · |whelp outposts|n · |whelp agents|n · |whelp buildings|n
+            |whelp equipment|n · |whelp bombs|n · |whelp outposts|n · |whelp agents|n · |whelp buildings|n
+        """,
+    },
+    # ----------------------------------------------------------------- #
+    #  Bombs — grenades & mines (fused explosives)
+    # ----------------------------------------------------------------- #
+    {
+        "key": "bombs",
+        "aliases": ["bomb", "grenade", "grenades", "mine", "mines", "fuse"],
+        "category": "Game",
+        "text": """
+            |wBombs: Grenades & Mines|n
+
+            Bombs are |cfused|n area explosives. There are two families: |cgrenades|n (thrown) and |cmines|n (placed) — with variants of each (e.g. |cFrag|n and |cPlasma|n grenades; |cLand|n and |cProximity|n mines). Both come from a |cLab|n (|wcraft|n one, or assign an Engineer).
+
+            # Set the Fuse First
+
+            You must set a fuse before every throw or arm — |wset <bomb> <seconds>|n. The fuse is clamped to that bomb's min/max (grenades short, mines longer). |wset all <seconds>|n sets every bomb type in your inventory at once (each clamped to its own limits). The set fuse is |cconsumed|n when you deploy — set it again for the next one.
+
+            # Grenades — throw in a direction
+
+            |wthrow <grenade> <n/s/e/w>|n (alias |wth|n) hurls the grenade in a compass direction. It flies until it hits the |cfirst obstacle|n (a building or a unit) or reaches its |cmax range|n, then |clands|n on that tile and the fuse ticks down before it explodes. You can't pick a grenade up once it's away.
+
+            # Mines — arm in place
+
+            |warm <mine>|n plants the mine on |cyour current tile|n and starts its fuse. A mine can't be thrown, and once armed it can't be picked up — it ticks down where you left it. Good as a timed trap on a chokepoint.
+
+            # Ticking & the Blast
+
+            Everyone standing on a bomb's tile sees it |rtick|n each second (and sees a grenade |cland|n or a mine |carm|n). When the fuse reaches zero it explodes: everything within the blast |cradius|n takes flat damage minus armor — |renemies, your own agents and buildings, and you|n if you're in range. A |cclosed building|n and anyone |csheltered|n inside one are safe from the blast (it can't reach inside cover), though they still see the tick. Kills you cause credit you.
+
+            # See Also
+
+            |whelp combat|n · |whelp equipment|n · |whelp buildings|n
         """,
     },
     # ----------------------------------------------------------------- #

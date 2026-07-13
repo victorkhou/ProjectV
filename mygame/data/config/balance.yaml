@@ -118,6 +118,13 @@ target_lock_ticks: 3             # ticks to fully lock onto a target
 accuracy_targeted: 0.8           # hit chance vs a locked target (baseline)
 accuracy_directional: 0.5        # hit chance for a directional shot (baseline)
 
+# --- Hybrid real-time combat ---
+# A player's own 'attack' (direct) and directional 'shoot' resolve INSTANTLY
+# (not queued to the tick); this wall-clock cooldown (seconds) throttles them
+# in place of the 1-second tick. A weapon may override via an 'attack_cooldown'
+# stat modifier. Turrets/guards/locked-tracking shots stay tick-queued.
+attack_cooldown_seconds: 1.0     # seconds between a player's instant attacks
+
 # --- NPC base spawner + elimination (PvE NPC bases, Phase 5) ---
 # NPC outposts/fortresses placed on the map at init; destroying a base's HQ
 # wipes the whole base and awards xp_hq_destroy + loot, then respawns it

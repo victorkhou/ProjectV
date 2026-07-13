@@ -1,0 +1,620 @@
+"""
+Bomb System — fused explosives (grenades + mines).
+
+Two bomb families, both a fused AoE explosive placed on a tile:
+
+* **Grenades** (``throwable`` items) are THROWN in a compass direction with
+  ``throw <grenade> <n/s/e/w>``. The grenade flies until it hits the first
+  obstacle (a building/unit) or reaches the item's max ``range``, LANDS on that
+  tile, and a countdown fuse ticks down before it explodes.
+* **Mines** (``mine`` items) are ARMED in place with ``arm <mine>``; the same
+  fuse then ticks down before the explosion on the arming tile.
+
+Both require the player to have SET a fuse first with ``set <bomb> <seconds>``
+(or ``set all <seconds>`` for the whole inventory). A bomb thrown/armed without
+a set fuse is rejected. The fuse is stored per-bomb-type on the player
+(``db.bomb_fuses = {item_key: seconds}``) and consumed when the bomb is deployed
+— matching the "must set each time" rule.
+
+A live bomb is a :class:`~typeclasses.objects.LiveBomb` resting on its tile.
+Each tick the system decrements every live bomb's fuse and shows the countdown
+to everyone standing on that tile; at zero it detonates as an indiscriminate
+AoE blast (hitting enemies, the placer's own units, AND the placer if they are
+in the radius — kills credit the placer) and the bomb is removed.
+
+Framework-free: all Evennia I/O (creating the LiveBomb, querying a planet's
+tiles, resolving the placing player) is injected as callables at the
+composition root. The system owns fuse math, the throw ray, the countdown, and
+detonation.
+"""
+
+from __future__ import annotations
+
+import logging
+from typing import Any, Callable
+
+from world.constants import (
+    BOMB_CATEGORIES,
+    DEFAULT_BOMB_FUSE,
+    DEFAULT_BOMB_FUSE_MAX,
+    DEFAULT_BOMB_FUSE_MIN,
+    DEFAULT_THROW_RANGE,
+)
+from world.data_registry import DataRegistry
+from world.event_bus import EventBus
+from world.systems.base_system import BaseSystem
+
+logger = logging.getLogger("evennia.world.systems.bomb_system")
+
+#: Compass direction -> unit (dx, dy) step for throwing a grenade. Mirrors
+#: CmdMove.DIRECTION_MAP (north = +y).
+_DIRECTIONS = {
+    "north": (0, 1), "n": (0, 1),
+    "south": (0, -1), "s": (0, -1),
+    "east": (1, 0), "e": (1, 0),
+    "west": (-1, 0), "w": (-1, 0),
+}
+
+
+class BombSystem(BaseSystem):
+    """Owns bomb fuse config, throwing/arming, the fuse countdown, and blasts.
+
+    Injected collaborators (all optional so the system is testable in isolation
+    and degrades gracefully before composition-root wiring):
+
+    * ``spawn_bomb_func(location, item_def, x, y, owner, bomb_type, fuse,
+      amount, radius) -> LiveBomb|None`` — create a live bomb on a tile.
+    * ``area_damage_applier() -> combat_engine`` — resolve the AoE blast; the
+      engine's ``apply_direct_hit`` deals the flat blast damage and runs the
+      shared post-damage pipeline (lockout, event, notify, defeat).
+    * ``current_tick_func() -> int`` — the game tick (unused for the pure
+      relative countdown, accepted for parity with other systems).
+    """
+
+    def __init__(
+        self,
+        registry: DataRegistry,
+        event_bus: EventBus,
+        spawn_bomb_func: Callable | None = None,
+        area_damage_applier: Callable[[], Any] | None = None,
+        current_tick_func: Callable[[], int] | None = None,
+    ) -> None:
+        super().__init__(registry, event_bus)
+        self._spawn_bomb_func = spawn_bomb_func
+        self._area_damage_applier = area_damage_applier
+        self._current_tick_func = current_tick_func or (lambda: 0)
+        #: Live bombs currently counting down. An in-memory list so the per-tick
+        #: countdown does not DB-scan every second; rebuilt from the world on
+        #: restart via :meth:`rebuild_from_world` (fuse state persists on the
+        #: LiveBomb's db, so a reboot resumes rather than resets).
+        self._live_bombs: list = []
+
+    # ------------------------------------------------------------------ #
+    #  Setters for late-bound collaborators (composition root)
+    # ------------------------------------------------------------------ #
+
+    def set_spawn_bomb_func(self, fn: Callable) -> None:
+        self._spawn_bomb_func = fn
+
+    def set_area_damage_applier(self, provider: Callable[[], Any]) -> None:
+        self._area_damage_applier = provider
+
+    # ------------------------------------------------------------------ #
+    #  Fuse configuration ('set <bomb> <sec>' / 'set all <sec>')
+    # ------------------------------------------------------------------ #
+
+    def _bomb_item_def(self, item_key: str):
+        """Resolve *item_key* to its ItemDef iff it is a bomb, else None."""
+        idef = self.registry.resolve_item(item_key)
+        if idef is None:
+            return None
+        if getattr(idef, "category", None) not in BOMB_CATEGORIES:
+            return None
+        return idef
+
+    @staticmethod
+    def _fuse_bounds(item_def) -> tuple[int, int, int]:
+        """Return (fuse_min, fuse_max, fuse_default) for a bomb def.
+
+        Reads the bomb's ``effect`` dict, falling back to the module defaults
+        for any bound the item does not declare.
+        """
+        effect = getattr(item_def, "effect", None) or {}
+
+        def _as_int(key, default):
+            try:
+                v = int(effect.get(key, default))
+                return v if v > 0 else default
+            except (TypeError, ValueError):
+                return default
+
+        fmin = _as_int("fuse_min", DEFAULT_BOMB_FUSE_MIN)
+        fmax = _as_int("fuse_max", DEFAULT_BOMB_FUSE_MAX)
+        fdef = _as_int("fuse_default", DEFAULT_BOMB_FUSE)
+        if fmin > fmax:
+            fmin, fmax = fmax, fmin
+        fdef = max(fmin, min(fmax, fdef))
+        return fmin, fmax, fdef
+
+    def set_fuse(self, player: Any, item_key: str, seconds: int) -> bool:
+        """Set the fuse (seconds) for one bomb type the player holds.
+
+        Clamps to the bomb's [fuse_min, fuse_max] and stores it on the player's
+        ``db.bomb_fuses`` map, consumed at throw/arm. Rejects a non-bomb item or
+        one the player does not hold. Notifies the outcome via the presenter.
+        """
+        item_def = self._bomb_item_def(item_key)
+        item_name = getattr(item_def, "name", None) or item_key
+        if item_def is None:
+            self.notify(player, "not_a_bomb", item_name=item_name)
+            return False
+        handler = getattr(player, "equipment", None)
+        if handler is None or handler.get_supply(item_key) <= 0:
+            self.notify(player, "bomb_not_held", item_name=item_name)
+            return False
+        fmin, fmax, _ = self._fuse_bounds(item_def)
+        clamped = max(fmin, min(fmax, int(seconds)))
+        self._store_fuse(player, item_key, clamped)
+        self.notify(player, "fuse_set", item_name=item_name, seconds=clamped,
+                    clamped=(clamped != int(seconds)), fuse_min=fmin, fuse_max=fmax)
+        return True
+
+    def set_all(self, player: Any, seconds: int) -> int:
+        """Set the fuse for EVERY bomb type in the player's inventory.
+
+        Each bomb type is clamped to its own [fuse_min, fuse_max] (they may
+        differ), so 'set all 20' gives a grenade its max 10 and a mine 20.
+        Returns the number of bomb types set; notifies a summary.
+        """
+        handler = getattr(player, "equipment", None)
+        if handler is None:
+            self.notify(player, "fuse_all_set", count=0, seconds=int(seconds))
+            return 0
+        count = 0
+        for item_key in list(handler.get_supplies().keys()):
+            item_def = self._bomb_item_def(item_key)
+            if item_def is None:
+                continue
+            fmin, fmax, _ = self._fuse_bounds(item_def)
+            clamped = max(fmin, min(fmax, int(seconds)))
+            self._store_fuse(player, item_key, clamped)
+            count += 1
+        self.notify(player, "fuse_all_set", count=count, seconds=int(seconds))
+        return count
+
+    @staticmethod
+    def _store_fuse(player: Any, item_key: str, seconds: int) -> None:
+        fuses = dict(getattr(player.db, "bomb_fuses", None) or {})
+        fuses[item_key] = int(seconds)
+        player.db.bomb_fuses = fuses
+
+    @staticmethod
+    def _pending_fuse(player: Any, item_key: str):
+        """Return the fuse the player has SET for *item_key*, or None if unset."""
+        fuses = getattr(player.db, "bomb_fuses", None) or {}
+        val = fuses.get(item_key)
+        return int(val) if val is not None else None
+
+    @staticmethod
+    def _clear_fuse(player: Any, item_key: str) -> None:
+        """Consume the set fuse after a bomb is deployed (must set each time)."""
+        fuses = dict(getattr(player.db, "bomb_fuses", None) or {})
+        if item_key in fuses:
+            del fuses[item_key]
+            player.db.bomb_fuses = fuses
+
+    # ------------------------------------------------------------------ #
+    #  Grenade throw (directional) + mine arm
+    # ------------------------------------------------------------------ #
+
+    def throw_grenade(self, player: Any, item_key: str, direction: str) -> bool:
+        """Throw a grenade in a compass direction; it lands and starts its fuse.
+
+        The grenade flies from the player's tile in *direction* until it hits
+        the first obstacle (a building or another unit) or reaches the item's
+        max throw ``range`` (Chebyshev), and LANDS on that tile — landing on the
+        obstacle's own tile, or on the max-range tile if the line is clear. A
+        :class:`LiveBomb` is placed there with the player's set fuse; everyone on
+        the landing tile is told a grenade landed and is ticking. Requires a set
+        fuse (``set <bomb> <sec>``) — rejects otherwise.
+        """
+        item_def = self._bomb_item_def(item_key)
+        item_name = getattr(item_def, "name", None) or item_key
+
+        # Gate: is it a grenade the player holds?
+        if item_def is None or getattr(item_def, "category", None) != "throwable":
+            self.notify(player, "throw_failed", item_name=item_name,
+                        reason="not_throwable")
+            return False
+        handler = getattr(player, "equipment", None)
+        if handler is None or handler.get_supply(item_key) <= 0:
+            self.notify(player, "throw_failed", item_name=item_name,
+                        reason="not_held")
+            return False
+
+        step = _DIRECTIONS.get(direction)
+        if step is None:
+            self.notify(player, "throw_failed", item_name=item_name,
+                        reason="bad_direction")
+            return False
+
+        # Fuse must be set first (must set each time).
+        fuse = self._pending_fuse(player, item_key)
+        if fuse is None:
+            self.notify(player, "need_fuse", item_name=item_name)
+            return False
+
+        from world.utils import get_coords
+        p_coords = get_coords(player)
+        location = getattr(player, "location", None)
+        if p_coords is None or location is None:
+            self.notify(player, "throw_failed", item_name=item_name,
+                        reason="no_position")
+            return False
+
+        effect = getattr(item_def, "effect", None) or {}
+        try:
+            throw_range = int(effect.get("range", DEFAULT_THROW_RANGE))
+        except (TypeError, ValueError):
+            throw_range = DEFAULT_THROW_RANGE
+
+        lx, ly = self._grenade_landing(location, p_coords[0], p_coords[1],
+                                       step[0], step[1], throw_range)
+        amount, radius = self._blast_stats(effect)
+
+        # Place the live bomb FIRST; only consume the grenade + its set fuse on a
+        # successful placement, so a placement failure never eats the item.
+        bomb = self._place_bomb(location, item_def, lx, ly, player,
+                                "grenade", fuse, amount, radius)
+        if bomb is None:
+            self.notify(player, "throw_failed", item_name=item_name,
+                        reason="no_position")
+            return False
+        handler.remove_supply(item_key, 1)
+        self._clear_fuse(player, item_key)
+        # Tell the thrower it's away, and everyone on the landing tile.
+        self.notify(player, "grenade_thrown", item_name=item_name,
+                    x=lx, y=ly, seconds=fuse)
+        self._broadcast_tile(location, lx, ly, "bomb_landed",
+                             exclude=player, item_name=item_name, seconds=fuse)
+        return True
+
+    def arm_mine(self, player: Any, item_key: str) -> bool:
+        """Arm a mine on the player's current tile; its fuse starts counting.
+
+        Requires a set fuse. Places a :class:`LiveBomb` on the player's tile and
+        announces the arming to everyone on that tile (including the placer, via
+        a distinct 'you armed' notice).
+        """
+        item_def = self._bomb_item_def(item_key)
+        item_name = getattr(item_def, "name", None) or item_key
+
+        if item_def is None or getattr(item_def, "category", None) != "mine":
+            self.notify(player, "not_a_mine", item_name=item_name)
+            return False
+        handler = getattr(player, "equipment", None)
+        if handler is None or handler.get_supply(item_key) <= 0:
+            self.notify(player, "bomb_not_held", item_name=item_name)
+            return False
+        fuse = self._pending_fuse(player, item_key)
+        if fuse is None:
+            self.notify(player, "need_fuse", item_name=item_name)
+            return False
+
+        from world.utils import get_coords
+        p_coords = get_coords(player)
+        location = getattr(player, "location", None)
+        if p_coords is None or location is None:
+            self.notify(player, "arm_failed", item_name=item_name,
+                        reason="no_position")
+            return False
+
+        effect = getattr(item_def, "effect", None) or {}
+        amount, radius = self._blast_stats(effect)
+        ax, ay = int(p_coords[0]), int(p_coords[1])
+
+        # Place FIRST; consume the mine + its fuse only on success so a failed
+        # placement never eats the item.
+        bomb = self._place_bomb(location, item_def, ax, ay, player,
+                                "mine", fuse, amount, radius)
+        if bomb is None:
+            self.notify(player, "arm_failed", item_name=item_name,
+                        reason="no_position")
+            return False
+        handler.remove_supply(item_key, 1)
+        self._clear_fuse(player, item_key)
+        self.notify(player, "mine_armed", item_name=item_name, seconds=fuse)
+        # Everyone else on the tile sees it arm (the placer got 'mine_armed').
+        self._broadcast_tile(location, ax, ay, "bomb_armed",
+                             exclude=player, item_name=item_name, seconds=fuse)
+        return True
+
+    @staticmethod
+    def _blast_stats(effect: dict) -> tuple[int, int]:
+        """Read (amount, radius) from a bomb effect, defaulting safely."""
+        try:
+            amount = int(effect.get("amount", 0))
+        except (TypeError, ValueError):
+            amount = 0
+        try:
+            radius = int(effect.get("radius", 0))
+        except (TypeError, ValueError):
+            radius = 0
+        return amount, radius
+
+    @staticmethod
+    def _grenade_landing(location, cx, cy, dx, dy, throw_range) -> tuple[int, int]:
+        """Return the tile a thrown grenade lands on (direction to first obstacle).
+
+        Walks outward from ``(cx, cy)`` in the ``(dx, dy)`` direction up to
+        *throw_range* tiles. Lands on the first tile holding a building or a
+        unit (the shot is stopped by it), else on the furthest (max-range) tile
+        when the line is clear. Reuses the room's coordinate index the same way
+        directional 'shoot' resolves its ray.
+        """
+        from world.utils import is_building, is_player
+        cx, cy = int(cx), int(cy)
+        last = (cx, cy)
+        get_at = getattr(location, "get_objects_at", None)
+        for step in range(1, int(throw_range) + 1):
+            tx, ty = cx + dx * step, cy + dy * step
+            last = (tx, ty)
+            if callable(get_at):
+                for obj in get_at(tx, ty):
+                    if is_building(obj) or is_player(obj):
+                        return (tx, ty)  # stopped by the first obstacle
+        return last  # clear line — lands at max range
+
+    def _place_bomb(self, location, item_def, x, y, owner, bomb_type,
+                    fuse, amount, radius):
+        """Create + register a live bomb via the injected spawner, tracking it."""
+        if self._spawn_bomb_func is None:
+            logger.warning("bomb: no spawn_bomb_func wired; bomb not placed")
+            return None
+        try:
+            bomb = self._spawn_bomb_func(location, item_def, x, y, owner,
+                                         bomb_type, fuse, amount, radius)
+        except Exception:  # noqa: BLE001 - placement must not raise into a command
+            logger.exception("bomb: spawn_bomb_func failed")
+            return None
+        if bomb is not None:
+            self._live_bombs.append(bomb)
+        return bomb
+
+    # ------------------------------------------------------------------ #
+    #  Per-tick fuse countdown + detonation
+    # ------------------------------------------------------------------ #
+
+    def process_tick(self, tick_number: int | None = None) -> None:
+        """Advance every live bomb's fuse by one; detonate those that reach 0.
+
+        For each live bomb: skip if deleted (pk None); decrement
+        ``fuse_remaining``; if it reaches 0 detonate + delete; otherwise show
+        the countdown to everyone on the bomb's tile. Each bomb is isolated so a
+        single bad bomb never halts the step. Detonated/dead bombs are pruned
+        from the in-memory list.
+        """
+        if not self._live_bombs:
+            return
+        survivors = []
+        for bomb in self._live_bombs:
+            try:
+                keep = self._tick_one(bomb)
+            except Exception:  # noqa: BLE001 - one bad bomb must not halt the step
+                logger.exception("bomb: fuse tick failed for %r",
+                                 getattr(bomb, "key", "?"))
+                keep = False
+            if keep:
+                survivors.append(bomb)
+        self._live_bombs = survivors
+
+    def _tick_one(self, bomb: Any) -> bool:
+        """Tick a single bomb. Return True to keep it live, False to drop it."""
+        if getattr(bomb, "pk", True) is None:  # deleted out from under us
+            return False
+        db = getattr(bomb, "db", None)
+        if db is None:
+            return False
+        remaining = int(getattr(db, "fuse_remaining", 0) or 0) - 1
+        db.fuse_remaining = remaining
+        location = getattr(bomb, "location", None)
+        bx = getattr(db, "coord_x", None)
+        by = getattr(db, "coord_y", None)
+        if remaining <= 0:
+            self._detonate(bomb)
+            return False
+        # Still ticking — show the countdown to everyone on the tile.
+        if location is not None and bx is not None and by is not None:
+            item_name = getattr(bomb, "key", "bomb")
+            self._broadcast_tile(location, int(bx), int(by), "bomb_tick",
+                                 exclude=None, item_name=item_name,
+                                 seconds=remaining)
+        return True
+
+    def _detonate(self, bomb: Any) -> None:
+        """Resolve a bomb's AoE blast, then delete the bomb.
+
+        The blast is indiscriminate (like a thrown grenade today): every player,
+        agent, and building within the Chebyshev *radius* takes flat
+        ``amount − armor`` — including the placer's own units AND the placer if
+        they are in the radius. A player sheltered inside a CLOSED building and a
+        closed building itself are immune (a blast can't reach inside cover),
+        matching the existing throw-AoE rule. Kills credit the placing player.
+        """
+        db = getattr(bomb, "db", None)
+        location = getattr(bomb, "location", None)
+        if db is None or location is None:
+            self._delete_bomb(bomb)
+            return
+        bx = getattr(db, "coord_x", None)
+        by = getattr(db, "coord_y", None)
+        owner = getattr(db, "owner", None)
+        amount = int(getattr(db, "amount", 0) or 0)
+        radius = int(getattr(db, "radius", 0) or 0)
+        item_name = getattr(bomb, "key", "bomb")
+        if bx is None or by is None:
+            self._delete_bomb(bomb)
+            return
+        bx, by = int(bx), int(by)
+
+        targets = self._blast_targets(location, bx, by, radius)
+        count = self._apply_blast(owner, targets, amount, radius, item_name, bomb)
+        # Announce the explosion to everyone still on the blast's center tile.
+        self._broadcast_tile(location, bx, by, "bomb_exploded", exclude=None,
+                             item_name=item_name, count=count)
+        # Notify the placer of the outcome (owner may be off-tile).
+        if owner is not None:
+            self.notify(owner, "bomb_detonated", item_name=item_name,
+                        x=bx, y=by, count=count)
+        self._delete_bomb(bomb)
+
+    @staticmethod
+    def _blast_targets(location, bx, by, radius) -> list:
+        """Return players/agents/buildings in Chebyshev *radius* of the blast.
+
+        Indiscriminate: includes the placer and their own units (friendly fire
+        is intentional). Excludes a closed building and a player sheltered inside
+        a closed building (a blast can't reach inside cover) — the same rule the
+        existing throw-AoE uses.
+        """
+        from world.utils import (
+            get_coords, is_building, is_player, building_is_open,
+            player_is_sheltered, chebyshev_distance,
+        )
+        x1, y1, x2, y2 = bx - radius, by - radius, bx + radius, by + radius
+        candidates: list = []
+        getter = getattr(location, "get_objects_in_area", None)
+        if callable(getter):
+            candidates = list(getter(x1, y1, x2, y2))
+        else:
+            idx = getattr(location, "coord_index", None)
+            if idx is not None and hasattr(idx, "get_in_area"):
+                candidates = list(idx.get_in_area(x1, y1, x2, y2))
+        targets = []
+        for obj in candidates:
+            obj_is_building = is_building(obj)
+            if not (is_player(obj) or obj_is_building):
+                continue
+            if obj_is_building and not building_is_open(obj):
+                continue
+            if not obj_is_building and player_is_sheltered(obj):
+                continue
+            coords = get_coords(obj)
+            if coords is None:
+                continue
+            if chebyshev_distance(coords[0], coords[1], bx, by) <= radius:
+                targets.append(obj)
+        return targets
+
+    def _apply_blast(self, owner, targets, amount, radius, item_name, bomb) -> int:
+        """Apply flat blast damage to each target via the injected combat engine.
+
+        Attributes the blast to the placing *owner* so a kill credits them. When
+        the owner is gone (None — e.g. logged out/deleted), the bomb itself is
+        the attacker (a valid combat entity with no owner), so the blast still
+        resolves. Returns the number of targets damaged.
+        """
+        if not targets:
+            return 0
+        if self._area_damage_applier is None:
+            return len(targets)
+        try:
+            engine = self._area_damage_applier()
+        except Exception:  # noqa: BLE001
+            engine = None
+        if engine is None:
+            logger.warning("bomb: no area-damage applier; %d target(s) unharmed",
+                           len(targets))
+            return len(targets)
+
+        from world.systems.combat_engine import SyntheticWeapon
+        weapon = SyntheticWeapon(amount, radius, name=item_name)
+        attacker = owner if owner is not None else bomb
+        hit = 0
+        for target in targets:
+            try:
+                engine.apply_direct_hit(attacker, target, weapon,
+                                        include_attacker_bonus=False)
+                hit += 1
+            except Exception:  # noqa: BLE001 - one bad target must not abort
+                logger.warning("bomb: blast failed on %r",
+                               getattr(target, "key", target))
+        return hit
+
+    @staticmethod
+    def _delete_bomb(bomb: Any) -> None:
+        """Remove a spent bomb from the world (de-indexes via at_object_delete)."""
+        if getattr(bomb, "pk", True) is None:
+            return
+        try:
+            bomb.delete()
+        except Exception:  # noqa: BLE001
+            logger.exception("bomb: failed to delete spent bomb")
+
+    # ------------------------------------------------------------------ #
+    #  Tile broadcast
+    # ------------------------------------------------------------------ #
+
+    def _broadcast_tile(self, location, x, y, kind, exclude=None, **data) -> None:
+        """Notify every player standing on tile ``(x, y)`` with *kind* + *data*.
+
+        Uses ``get_players_at`` (players on the exact tile — including any
+        inside a building on it, since inside_building does not change coords),
+        skipping *exclude* (the actor, who gets their own distinct notice) and
+        any stale/deleted refs. This is how 'everyone in the same room sees the
+        bomb arm and TICK' is delivered — one notify per player through the
+        presenter contract.
+        """
+        get_players = getattr(location, "get_players_at", None)
+        if not callable(get_players):
+            return
+        try:
+            players = list(get_players(int(x), int(y)))
+        except Exception:  # noqa: BLE001
+            return
+        for p in players:
+            if p is exclude:
+                continue
+            if getattr(p, "pk", True) is None:
+                continue
+            self.notify(p, kind, **data)
+
+    # ------------------------------------------------------------------ #
+    #  Restart recovery
+    # ------------------------------------------------------------------ #
+
+    def rebuild_from_world(self, planet_rooms) -> int:
+        """Repopulate the live-bomb list from placed LiveBomb objects on restart.
+
+        The fuse state persists on each LiveBomb's ``db`` (and its coords, so the
+        coordinate index rebuilds for free), but the in-memory countdown list is
+        non-persistent — without this a bomb armed before a reboot would sit
+        inert forever. Scans each PlanetRoom's bomb objects and re-tracks any
+        with a positive remaining fuse. Returns the number re-tracked.
+        """
+        self._live_bombs = []
+        rooms = planet_rooms.values() if hasattr(planet_rooms, "values") else planet_rooms
+        for room in rooms:
+            get_at = getattr(room, "get_objects_at", None)
+            # Prefer a whole-room bomb scan when available (get_in_room), else
+            # fall back to nothing — a room with no bomb query yields no bombs.
+            bombs = []
+            finder = getattr(room, "get_all_bombs", None)
+            if callable(finder):
+                try:
+                    bombs = list(finder())
+                except Exception:  # noqa: BLE001
+                    bombs = []
+            else:
+                # Scan contents for the bomb object_type tag.
+                for obj in getattr(room, "contents", []):
+                    tags = getattr(obj, "tags", None)
+                    if tags is not None and tags.get("bomb", category="object_type"):
+                        bombs.append(obj)
+            for bomb in bombs:
+                db = getattr(bomb, "db", None)
+                if db is None:
+                    continue
+                if int(getattr(db, "fuse_remaining", 0) or 0) > 0:
+                    self._live_bombs.append(bomb)
+        return len(self._live_bombs)

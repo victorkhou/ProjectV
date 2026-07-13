@@ -816,3 +816,102 @@ def spawn_supply_drop(location, item_key, count, x=None, y=None):
         if hasattr(location, "coord_index"):
             location.coord_index.add(drop, x, y)
     return drop
+
+
+class LiveBomb(GameEntity):
+    """An armed/landed bomb resting on a tile with a running fuse.
+
+    A LiveBomb is created when a grenade LANDS (thrown in a direction) or a mine
+    is ARMED in place. It carries a countdown fuse (``fuse_remaining``, in ticks
+    == seconds) that :class:`~world.systems.bomb_system.BombSystem` decrements
+    each tick; at zero it detonates as an AoE blast and is deleted. Everyone on
+    the bomb's tile sees it arm and tick.
+
+    A LiveBomb is NOT pickupable (``get:false()``): you can't pocket an armed
+    mine. It is its own ``object_type`` tag (``"bomb"``) so it neither counts
+    against the ground-item tile capacity nor merges with loose gear/supply
+    drops (see ``world.utils._GROUND_ITEM_TAGS``).
+
+    Attributes (all on ``db``, so they survive a reload and the fuse keeps
+    running after the coordinate index is rebuilt):
+        item_key (str): the source bomb ItemDef key (for its name / display).
+        bomb_type (str): ``"grenade"`` or ``"mine"``.
+        owner: the player who placed it — credited with blast kills, and named
+            when the blast is attributed. May be ``None`` (e.g. after the owner
+            is deleted); the blast still resolves.
+        amount (int): flat blast damage (``amount − armor`` per victim).
+        radius (int): Chebyshev blast radius.
+        fuse_remaining (int): ticks/seconds left before detonation.
+    """
+
+    _object_type_tag = "bomb"
+
+    def at_object_creation(self):
+        """Set bomb defaults and make it un-pickupable."""
+        super().at_object_creation()
+        self.db.item_key = ""
+        self.db.bomb_type = "grenade"
+        self.db.owner = None
+        self.db.amount = 0
+        self.db.radius = 1
+        self.db.fuse_remaining = 0
+        # An armed bomb can't be picked up (no pocketing a live mine).
+        self.locks.add("get:false()")
+
+    def get_display_name(self, looker=None, **kwargs):
+        """Show the bomb's item name (e.g. 'Land Mine') rather than its key."""
+        return self.key
+
+    def get_structured_state(self) -> dict:
+        state = super().get_structured_state()
+        state.update({
+            "item_key": self.db.item_key,
+            "bomb_type": self.db.bomb_type,
+            "fuse_remaining": self.db.fuse_remaining,
+        })
+        return state
+
+
+def spawn_bomb(location, item_def, x, y, owner, bomb_type, fuse, amount, radius):
+    """Create a :class:`LiveBomb` on tile ``(x, y)`` of *location*.
+
+    The placement recipe mirrors ``spawn_gear_drop``: create the object in the
+    PlanetRoom, set its coords, then MANUALLY register it in the coordinate
+    index (``at_object_receive`` skipped it because coords were ``None`` during
+    ``create_object``) so ``get_objects_at``/``get_players_at``/scan/look all see
+    it. A bomb does NOT consume the ground-item tile cap (its own ``bomb`` tag),
+    so it is never refused for a "full" tile — a mine can always be laid.
+
+    Args:
+        location: the PlanetRoom to place the bomb in.
+        item_def: the source bomb ``ItemDef`` (for name/key).
+        x, y: landing/arming tile coordinates.
+        owner: the placing player (blast attribution); may be None.
+        bomb_type: ``"grenade"`` or ``"mine"``.
+        fuse: fuse length in ticks/seconds (already clamped by the caller).
+        amount: flat blast damage.
+        radius: Chebyshev blast radius.
+
+    Returns:
+        The created ``LiveBomb``, or ``None`` when *location* is falsy.
+    """
+    if location is None:
+        return None
+    import evennia
+
+    bomb = evennia.create_object(
+        "typeclasses.objects.LiveBomb",
+        key=getattr(item_def, "name", "Bomb"),
+        location=location,
+    )
+    bomb.db.item_key = getattr(item_def, "key", "")
+    bomb.db.bomb_type = bomb_type
+    bomb.db.owner = owner
+    bomb.db.amount = int(amount)
+    bomb.db.radius = int(radius)
+    bomb.db.fuse_remaining = int(fuse)
+    bomb.db.coord_x = int(x)
+    bomb.db.coord_y = int(y)
+    if hasattr(location, "coord_index"):
+        location.coord_index.add(bomb, int(x), int(y))
+    return bomb

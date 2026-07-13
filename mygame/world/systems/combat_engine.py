@@ -155,15 +155,81 @@ class CombatEngine(BaseSystem):
         Returns:
             (success, message) tuple.
         """
+        ok, msg, action = self._prepare_attack(attacker, target, weapon, breach)
+        if not ok:
+            return False, msg
+        # Per-call fields the tick-resolution path reads.
+        action["accuracy"] = accuracy
+        self.pending_actions.append(action)
+        weapon_name = getattr(action["weapon_item"], "key", str(action["weapon_item"]))
+        return True, f"Attack queued with {weapon_name}."
+
+    def resolve_now(
+        self, attacker: Any, target: Any, weapon: Any = None,
+        accuracy: float | None = None, breach: bool = False,
+    ) -> tuple[bool, str]:
+        """Validate and resolve a single attack IMMEDIATELY (no tick queue).
+
+        The instant counterpart to :meth:`queue_attack` for a player's own
+        deliberate, self-paced actions (direct ``attack``, directional
+        ``shoot``): runs the identical validation + ammo consumption, then
+        resolves the hit/miss inline in this same call instead of on the next
+        tick — so combat feels responsive rather than lagging up to one second.
+
+        Turrets, guards, and locked-on tracking shots still go through
+        ``queue_attack``/``resolve_tick``: the tick delay is their dodge window
+        (a target can take cover between lock-on and fire) and their
+        within-tick ordering guarantee. Because ``resolve_now`` validates and
+        resolves in the same synchronous call there is NO queue→resolve gap, so
+        no TOCTOU re-check and no ammo refund are needed (a resolved shot always
+        fired).
+
+        Returns:
+            (ok, message): ``(False, reason)`` if rejected (nothing consumed);
+            ``(True, "")`` on a resolved hit or miss — player-facing feedback is
+            delivered via the notification presenter exactly like the queued
+            path (``attack_hit`` / ``shot_missed`` / ``shot_dodged``), so the
+            caller need not compose an outcome string.
+        """
+        ok, msg, action = self._prepare_attack(attacker, target, weapon, breach)
+        if not ok:
+            return False, msg
+        current_tick = self._current_tick_func()
+        weapon_item = action["weapon_item"]
+        # Accuracy roll (directional shoot). accuracy=None (melee attack) always
+        # lands. A miss enters combat + notifies both sides, mirroring the tick.
+        if accuracy is not None and self._rng.random() >= accuracy:
+            self._finalize_miss(attacker, target, weapon_item, current_tick)
+            return True, ""
+        damage = self._calculate_damage(attacker, target, weapon_item)
+        self._apply_damage(target, damage, attacker)
+        self._finalize_hit(attacker, target, weapon_item, damage, current_tick,
+                           lockout_attacker=True, notify_attacker_hit=True)
+        return True, ""
+
+    def _prepare_attack(
+        self, attacker: Any, target: Any, weapon: Any, breach: bool,
+    ) -> tuple[bool, str, dict | None]:
+        """Validate an attack and consume its ammo; return (ok, message, action).
+
+        The shared front half of :meth:`queue_attack` and :meth:`resolve_now`:
+        runs the full gate sequence (weapon / self / closed-cover / symmetric
+        cover / melee-room / range) and, on a proceeding ranged shot, deducts
+        the magazine round(s) and any resource ``ammo_cost``. On success returns
+        ``(True, "", action)`` where *action* carries attacker/target/weapon_item,
+        the ``breach`` flag (the tick re-check reads it), and the consumed ammo
+        (``ammo_per_shot``/``ammo_cost``) for a possible refund. On rejection
+        returns ``(False, message, None)`` having consumed nothing.
+        """
         # 1. Weapon check — a supplied weapon (synthetic guard weapon) overrides
         # the attacker's equipped-slot lookup.
         weapon_item = weapon if weapon is not None else self._get_weapon_item(attacker)
         if weapon_item is None:
-            return False, "No weapon equipped."
+            return False, "No weapon equipped.", None
 
         # 2. Self-attack prevention
         if attacker is target:
-            return False, "You cannot attack yourself."
+            return False, "You cannot attack yourself.", None
 
         # Attacking your OWN buildings is allowed (e.g. to demolish one under
         # fire, or clear a misplaced structure). It grants no XP or benefit
@@ -186,8 +252,8 @@ class CombatEngine(BaseSystem):
         # it never reaches a sheltered *player* — the building absorbs it.
         if self._ranged_blocked(target, is_melee, breach=breach):
             if self._is_building(target):
-                return False, "That building is closed — only melee attacks reach it."
-            return False, "They're sheltered inside — only a melee attack reaches them."
+                return False, "That building is closed — only melee attacks reach it.", None
+            return False, "They're sheltered inside — only a melee attack reaches them.", None
 
         # 2c. Symmetric cover: a player sheltered inside a closed building can't
         # fire ranged OUT either (no incoming ranged, no outgoing ranged — they
@@ -199,14 +265,14 @@ class CombatEngine(BaseSystem):
         target_is_building = self._is_building(target)
         if (not is_melee and self._is_sheltered(attacker)
                 and not (breach and target_is_building)):
-            return False, "You can't fire ranged from inside — step out, or use melee."
+            return False, "You can't fire ranged from inside — step out, or use melee.", None
 
         # 2d. Melee room gate: a player inside a building can only be meleed from
         # the SAME tile (inside the same building), and can only melee same-tile
         # targets. An adjacent attacker cannot reach into (or out of) a building
         # with a melee swing — buildings are rooms for melee reach.
         if is_melee and self._melee_blocked(attacker, target):
-            return False, "They're inside — you must be in the same building to melee them."
+            return False, "They're inside — you must be in the same building to melee them.", None
 
         # 3. Range validation. A melee weapon's effective range is always 1,
         # ignoring any `range` stat on the item.
@@ -230,7 +296,7 @@ class CombatEngine(BaseSystem):
                 dist = "?"
             return False, (
                 f"Target is out of range ({dist} tiles, max {weapon_range})."
-            )
+            ), None
 
         # 4. Ammo validation and deduction.
         #
@@ -259,7 +325,7 @@ class CombatEngine(BaseSystem):
                     weapon_name = getattr(weapon_item, "key", str(weapon_item))
                     self.notify(attacker, "out_of_ammo",
                                 weapon_name=weapon_name, ammo_name=ammo_type)
-                    return False, ""
+                    return False, "", None
                 magazine_draw = True
 
             # 4b. Resource ammo_cost (energy weapons / legacy) — applied per
@@ -268,7 +334,7 @@ class CombatEngine(BaseSystem):
             if ammo_cost:
                 err = self._validate_ammo(attacker, ammo_cost)
                 if err:
-                    return False, err
+                    return False, err, None
                 attacker.deduct_resources(ammo_cost)
                 consumed_ammo_cost = ammo_cost
 
@@ -277,23 +343,20 @@ class CombatEngine(BaseSystem):
             if magazine_draw:
                 self._set_loaded(weapon_item, loaded - ammo_per_shot)
 
-        # Queue the action. Record the ammo consumed here so it can be REFUNDED
-        # if the shot is dropped at resolution (target took cover in the 1-tick
-        # gap) — a dropped shot fires nothing, so its rounds/resources are
-        # returned rather than silently lost.
+        # Build the validated action. Record the ammo consumed here so the tick
+        # path can REFUND it if a queued shot is dropped at resolution (target
+        # took cover in the 1-tick gap) — a dropped shot fires nothing, so its
+        # rounds/resources are returned rather than silently lost. (resolve_now
+        # never drops a validated shot, so it never refunds.)
         action = {
             "attacker": attacker,
             "target": target,
             "weapon_item": weapon_item,
-            "accuracy": accuracy,
             "breach": breach,
             "ammo_per_shot": ammo_per_shot if magazine_draw else 0,
             "ammo_cost": consumed_ammo_cost,
         }
-        self.pending_actions.append(action)
-
-        weapon_name = getattr(weapon_item, "key", str(weapon_item))
-        return True, f"Attack queued with {weapon_name}."
+        return True, "", action
 
     # ------------------------------------------------------------------ #
     #  Resolve tick
