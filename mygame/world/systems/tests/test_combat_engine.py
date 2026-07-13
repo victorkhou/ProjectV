@@ -1904,6 +1904,88 @@ class TestKillCounter(unittest.TestCase):
         self.assertEqual(getattr(owner.db, "kills", 0) or 0, 0)
 
 
+class TestMeleeRoomGate(unittest.TestCase):
+    """A player INSIDE a building is a room for melee: an attacker must share the
+    tile (be in the same building) to melee them, regardless of open/closed. An
+    adjacent attacker on a neighbouring tile cannot melee across the boundary.
+    This is the fix for a guard on the HQ tile hitting a raider one tile away
+    inside a turret.
+    """
+
+    @staticmethod
+    def _melee_weapon():
+        w = FakeWeapon(damage=25, weapon_range=1, key="combat_knife")
+        w.weapon_type = "melee"
+        return w
+
+    @staticmethod
+    def _inside_player(name, x, y, is_open=True):
+        """A player inside a building on their tile (open by default — the rule
+        is independent of open/closed)."""
+        open_state = is_open
+
+        class _Tile(FakeTile):
+            def get_buildings_at(self, bx, by):
+                b = FakeBuilding(building_type="TU")
+                b.attributes.add("open", open_state)
+                return [b]
+        p = FakePlayer(name=name, hp=100, location=_Tile(xyz=(x, y, "earth")))
+        p.db.inside_building = True
+        p.db.coord_x, p.db.coord_y = x, y
+        return p
+
+    def test_adjacent_attacker_cannot_melee_inside_player(self):
+        """The reported bug: attacker on (0,0) can't melee a player inside the
+        open turret on the adjacent tile (0,1)."""
+        engine, _ = _make_engine()
+        attacker = FakePlayer(name="Guard", weapon=self._melee_weapon(),
+                              location=FakeTile(xyz=(0, 0, "earth")))
+        attacker.db.coord_x, attacker.db.coord_y = 0, 0
+        target = self._inside_player("Raider", 0, 1, is_open=True)
+        ok, msg = engine.queue_attack(attacker, target)
+        self.assertFalse(ok)
+        self.assertIn("same building", msg.lower())
+
+    def test_same_tile_attacker_can_melee_inside_player(self):
+        """An attacker who has entered the same building (same tile) can melee."""
+        engine, _ = _make_engine()
+        attacker = FakePlayer(name="Guard", weapon=self._melee_weapon(),
+                              location=FakeTile(xyz=(0, 1, "earth")))
+        attacker.db.coord_x, attacker.db.coord_y = 0, 1
+        target = self._inside_player("Raider", 0, 1, is_open=True)
+        ok, _ = engine.queue_attack(attacker, target)
+        self.assertTrue(ok)
+
+    def test_rule_holds_for_open_building(self):
+        """The melee gate is independent of open/closed — an OPEN building still
+        blocks adjacent melee into it (open only affects ranged cover)."""
+        engine, _ = _make_engine()
+        attacker = FakePlayer(name="Guard", weapon=self._melee_weapon(),
+                              location=FakeTile(xyz=(1, 1, "earth")))
+        attacker.db.coord_x, attacker.db.coord_y = 1, 1
+        target = self._inside_player("Raider", 1, 2, is_open=True)
+        ok, _ = engine.queue_attack(attacker, target)
+        self.assertFalse(ok)
+
+    def test_resolve_tick_rechecks_melee_room_gate(self):
+        """A queued melee that becomes cross-boundary before resolution (target
+        stepped into a building) must not land — TOCTOU re-check."""
+        engine, _ = _make_engine()
+        attacker = FakePlayer(name="Guard", weapon=self._melee_weapon(),
+                              location=FakeTile(xyz=(0, 0, "earth")))
+        attacker.db.coord_x, attacker.db.coord_y = 0, 0
+        # Target inside a building on an adjacent tile — queue directly (as if it
+        # were valid at queue time, then the target moved inside).
+        target = self._inside_player("Raider", 0, 1, is_open=True)
+        target.db.hp = 100
+        engine.pending_actions.append({
+            "attacker": attacker, "target": target,
+            "weapon_item": self._melee_weapon(),
+        })
+        engine.resolve_tick()
+        self.assertEqual(target.db.hp, 100)  # blocked at resolution
+
+
 class TestClosedBuildingRangedImmunity(unittest.TestCase):
     """A CLOSED building (db.open False) is immune to ranged attacks — only
     melee (adjacent) player/agent attacks reach it. An OPEN building (default)
@@ -1999,14 +2081,27 @@ class TestClosedBuildingRangedImmunity(unittest.TestCase):
         self.assertFalse(ok)
         self.assertIn("inside", msg.lower())
 
-    def test_sheltered_player_can_still_melee_out(self):
-        """Melee from cover is allowed (adjacent-only, symmetric with taking
-        melee hits)."""
+    def test_inside_player_cannot_melee_adjacent_tile(self):
+        """Buildings are rooms for melee: a player inside a building can't melee
+        a target on a neighbouring tile — they must be on the same tile."""
         engine, _ = _make_engine()
         attacker = self._sheltered_player("Puncher", 5, 5)
         attacker.equipment.equip(self._melee_weapon())
         victim = FakePlayer(name="Adjacent", hp=100,
                             location=FakeTile(xyz=(6, 5, "earth")))
+        ok, msg = engine.queue_attack(attacker, victim)
+        self.assertFalse(ok)
+        self.assertIn("same building", msg.lower())
+
+    def test_inside_player_can_melee_same_tile_target(self):
+        """A melee attack lands when both are on the same tile (inside the same
+        building) — that's how you dig a raider out of an enemy structure."""
+        engine, _ = _make_engine()
+        attacker = self._sheltered_player("Puncher", 5, 5)
+        attacker.equipment.equip(self._melee_weapon())
+        # Victim on the SAME tile (also inside the building).
+        victim = self._sheltered_player("Cornered", 5, 5)
+        victim.db.hp = 100
         ok, _ = engine.queue_attack(attacker, victim)
         self.assertTrue(ok)
 

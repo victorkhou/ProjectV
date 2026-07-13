@@ -253,19 +253,33 @@ class TestGuardTargetAcquisition(unittest.TestCase):
         self.assertEqual(len(engine.pending_actions), 0,
                          "a ranged guard must not lock onto a sheltered player")
 
-    def test_melee_guard_still_acquires_sheltered_player(self):
-        """A melee guard is NOT restricted by shelter (adjacent melee reaches an
-        occupant), so it still acquires and attacks a sheltered adjacent player
-        — mirrors the melee-bypass rule for closed cover."""
+    def test_melee_guard_does_not_hit_inside_player_from_adjacent_tile(self):
+        """Buildings are rooms for melee: a melee guard adjacent to a player who
+        is INSIDE a building does NOT attack across the boundary — it must close
+        onto the same tile first (chases if it can). So no attack is queued from
+        an adjacent tile."""
         system, engine = _make_system(guard_aggro_radius=5)
         owner = _hq_owner()
-        sheltered = self._sheltered_player("Hider", x=1, y=0, oid=2)
-        tile = FakeTile(nearby_players=[sheltered])
+        inside = self._sheltered_player("Hider", x=1, y=0, oid=2)
+        tile = FakeTile(nearby_players=[inside])
+        guard = FakeGuard(role="guard", owner=owner, x=0, y=0, location=tile)
+
+        system.process_tick(1, [guard])
+        self.assertEqual(len(engine.pending_actions), 0)
+
+    def test_melee_guard_hits_inside_player_on_same_tile(self):
+        """When the melee guard shares the tile with the inside player (it has
+        chased onto the building tile), the melee room gate is satisfied and the
+        attack is queued."""
+        system, engine = _make_system(guard_aggro_radius=5)
+        owner = _hq_owner()
+        inside = self._sheltered_player("Hider", x=0, y=0, oid=2)
+        tile = FakeTile(nearby_players=[inside])
         guard = FakeGuard(role="guard", owner=owner, x=0, y=0, location=tile)
 
         system.process_tick(1, [guard])
         self.assertEqual(len(engine.pending_actions), 1)
-        self.assertEqual(engine.pending_actions[0]["target"], sheltered)
+        self.assertEqual(engine.pending_actions[0]["target"], inside)
 
 
 class TestGuardWeaponSelection(unittest.TestCase):

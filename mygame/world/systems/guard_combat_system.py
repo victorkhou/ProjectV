@@ -155,7 +155,8 @@ class GuardCombatSystem(BaseSystem):
             return
 
         weapon = self._guard_weapon(role)
-        weapon_range = 1 if role.lower() != "soldier" else \
+        is_melee = role.lower() != "soldier"
+        weapon_range = 1 if is_melee else \
             self.registry.balance.guard_ranged_range
 
         tcoords = self._get_coords(target)
@@ -164,14 +165,25 @@ class GuardCombatSystem(BaseSystem):
             tcoords = self._get_coords(t_loc)
         dist = (abs(gx - tcoords[0]) + abs(gy - tcoords[1])) if tcoords else None
 
-        if dist is not None and dist <= weapon_range:
+        # A melee guard can only reach a target who is INSIDE a building from the
+        # SAME tile (buildings are rooms for melee — see CombatEngine._melee_
+        # blocked). So a raider who ducked into a structure must be closed to
+        # exactly, not merely stood next to; the guard chases onto their tile.
+        effective_range = weapon_range
+        if is_melee:
+            from world.utils import target_inside_building
+            if target_inside_building(target):
+                effective_range = 0
+
+        if dist is not None and dist <= effective_range:
             # In weapon range — attack. queue_attack still runs the full
-            # validation pipeline (range/self/ammo) as a backstop.
+            # validation pipeline (range/self/ammo/room) as a backstop.
             self._combat_engine.queue_attack(npc, target, weapon=weapon)
         else:
             # In aggro range but out of weapon range: close the distance so a
-            # melee garrison isn't inert against a raider who kites the walls.
-            # Bounded to the base so guards stay defensive (see _chase).
+            # melee garrison isn't inert against a raider who kites the walls
+            # (or ducks into a building). Bounded to the base so guards stay
+            # defensive (see _chase).
             self._chase(npc, gx, gy, tcoords, aggro_radius)
 
     # ------------------------------------------------------------------ #

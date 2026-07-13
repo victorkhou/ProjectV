@@ -475,6 +475,17 @@ Three deactivation/elimination rules — all keyed on ownership, not on "is this
   sentinel‑owned HQ's `BUILDING_DESTROYED`, wipes the whole base, and publishes
   `BASE_ELIMINATED`. A *player* HQ destruction does **not** wipe — it deactivates.
 
+**Cover model (two independent gates in `CombatEngine`, both re‑checked at
+`resolve_tick` for TOCTOU).** A building is a *room*: a player inside one
+(`db.inside_building`, `world.utils.target_inside_building`) can be **meleed only
+from the same tile** — `_melee_blocked` refuses an adjacent melee across the
+boundary, symmetric in both directions, regardless of open/closed. A **closed**
+building additionally shelters its occupant from *ranged* fire (`_ranged_blocked`
++ `player_is_sheltered`); an **open** one (all NPC‑base buildings) gives no ranged
+cover. So a raider who ducks into an open enemy structure stops melee guards from
+reaching them (the guard must chase onto the tile) but is still shot by turrets
+and soldiers.
+
 ```mermaid
 sequenceDiagram
     autonumber

@@ -19,7 +19,9 @@ def format_building_interior(looker: Any, building: Any, registry: Any = None) -
     present, and the building's open/closed exits. ``registry`` is looked up
     from the global game systems when not supplied.
     """
-    from world.utils import get_building_info, get_building_attr, get_closed_exits
+    from world.utils import (
+        get_building_info, get_building_attr, get_closed_exits, get_obj_attr,
+    )
 
     info = get_building_info(building)
     owner = info["owner"]
@@ -152,38 +154,40 @@ def format_building_interior(looker: Any, building: Any, registry: Any = None) -
             lines.append(f"  |wItems: {', '.join(item_strs)}|n")
             lines.append(f"  Use |wget|n to pick them up.")
 
-    # Show other agents at the building's coordinates
+    # Show other NPCs at the building's coordinates: the looker's OWN agents by
+    # id/role, and any HOSTILE NPCs (enemy guards, other players' units) tagged
+    # so the looker can see who is attacking them from inside the same building.
+    # Without the hostile branch a raider inside an enemy base was hit by a guard
+    # on the tile with nothing shown in the interior view.
+    tile_objs = None
     if tile is not None and bx is not None and by is not None and hasattr(tile, "get_objects_at"):
-        tile_agents = []
-        for obj in tile.get_objects_at(int(bx), int(by)):
-            if obj is building:
-                continue
-            if obj is assigned:
-                continue  # already shown above
-            if hasattr(obj, "tags") and obj.tags.get(category="npc_type"):
-                npc_owner = getattr(getattr(obj, "db", None), "owner", None)
-                if npc_owner is looker:
-                    aid = getattr(obj.db, "agent_id", "?")
-                    role = getattr(obj.db, "role", "") or "idle"
-                    tile_agents.append(f"Agent #{aid} ({role})")
-        if tile_agents:
-            lines.append(f"  Agents here: {', '.join(tile_agents)}")
+        tile_objs = tile.get_objects_at(int(bx), int(by))
     elif tile is not None:
-        # Legacy fallback
-        tile_agents = []
-        for obj in getattr(tile, "contents", []):
-            if obj is building:
+        tile_objs = getattr(tile, "contents", [])
+    if tile_objs is not None:
+        own_agents = []
+        hostiles = []
+        for obj in tile_objs:
+            if obj is building or obj is assigned:
+                continue  # building itself / assigned agent already shown
+            if not (hasattr(obj, "tags") and obj.tags.get(category="npc_type")):
                 continue
-            if obj is assigned:
-                continue
-            if hasattr(obj, "tags") and obj.tags.get(category="npc_type"):
-                npc_owner = getattr(getattr(obj, "db", None), "owner", None)
-                if npc_owner is looker:
-                    aid = getattr(obj.db, "agent_id", "?")
-                    role = getattr(obj.db, "role", "") or "idle"
-                    tile_agents.append(f"Agent #{aid} ({role})")
-        if tile_agents:
-            lines.append(f"  Agents here: {', '.join(tile_agents)}")
+            npc_owner = getattr(getattr(obj, "db", None), "owner", None)
+            if npc_owner is looker:
+                aid = getattr(obj.db, "agent_id", "?")
+                role = getattr(obj.db, "role", "") or "idle"
+                own_agents.append(f"Agent #{aid} ({role})")
+            else:
+                # A hostile unit sharing the tile. Sentinel-owned units are enemy
+                # NPC-base guards; others are another player's agents.
+                role = getattr(getattr(obj, "db", None), "role", "") or "unit"
+                enemy = bool(get_obj_attr(npc_owner, "is_sentinel", False)) if npc_owner else False
+                tag = "|R[Enemy]|n " if enemy else ""
+                hostiles.append(f"{tag}{getattr(obj, 'key', 'unit')} ({role})")
+        if own_agents:
+            lines.append(f"  Agents here: {', '.join(own_agents)}")
+        if hostiles:
+            lines.append(f"  |rHostiles here:|n {', '.join(hostiles)}")
 
     # Show other players at the building's tile (excluding the looker), so
     # entering a building reveals who is inside — matching the overworld

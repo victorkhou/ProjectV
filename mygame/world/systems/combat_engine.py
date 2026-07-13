@@ -165,6 +165,13 @@ class CombatEngine(BaseSystem):
         if not is_melee and self._is_sheltered(attacker):
             return False, "You can't fire ranged from inside — step out, or use melee."
 
+        # 2d. Melee room gate: a player inside a building can only be meleed from
+        # the SAME tile (inside the same building), and can only melee same-tile
+        # targets. An adjacent attacker cannot reach into (or out of) a building
+        # with a melee swing — buildings are rooms for melee reach.
+        if is_melee and self._melee_blocked(attacker, target):
+            return False, "They're inside — you must be in the same building to melee them."
+
         # 3. Range validation. A melee weapon's effective range is always 1,
         # ignoring any `range` stat on the item.
         if is_melee:
@@ -279,6 +286,11 @@ class CombatEngine(BaseSystem):
             # ranged shot. Melee actions bypass (cover doesn't stop melee).
             is_melee = self._get_weapon_attr(weapon_item, "weapon_type", None) == "melee"
             if self._ranged_blocked(target, is_melee):
+                continue
+            # Re-check the melee room gate too: a target that stepped into a
+            # building (or an attacker that did) between queue and resolve must
+            # not be meleed across the boundary from an adjacent tile.
+            if is_melee and self._melee_blocked(attacker, target):
                 continue
 
             # Calculate damage
@@ -556,6 +568,32 @@ class CombatEngine(BaseSystem):
             from world.utils import building_is_open
             return not building_is_open(target)
         return self._is_sheltered(target)
+
+    @staticmethod
+    def _melee_blocked(attacker: Any, target: Any) -> bool:
+        """Return True if a MELEE attack must be refused against *target*.
+
+        A player inside a building is "in a room": a melee strike only reaches
+        them from the SAME tile (i.e. from inside the same building). An attacker
+        standing on an adjacent tile cannot swing into the building — and,
+        symmetrically, a player inside a building cannot melee a target on a
+        neighbouring tile. This closes the gap where a guard on the HQ tile could
+        hit a raider one tile away inside a turret. Independent of open/closed —
+        open governs *ranged* cover; this governs *melee reach into a room*.
+
+        Unlike the closed-cover rule this applies to OPEN enemy buildings too, so
+        it does not make raids safer against ranged fire — a raider inside an
+        open building is still shot by turrets/soldiers; they're just not
+        meleed through the wall from the next tile.
+        """
+        from world.utils import same_tile, target_inside_building
+
+        if target_inside_building(target) and not same_tile(attacker, target):
+            return True
+        # Symmetric: an attacker inside a building can only melee same-tile foes.
+        if target_inside_building(attacker) and not same_tile(attacker, target):
+            return True
+        return False
 
     def _building_has_cap(self, building: Any, capability: str) -> bool:
         """Return True if *building*'s def declares *capability*.

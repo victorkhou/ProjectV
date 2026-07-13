@@ -419,6 +419,45 @@ def player_is_sheltered(player: Any) -> bool:
     return not building_is_open(building)
 
 
+def target_inside_building(target: Any) -> bool:
+    """Return True if *target* is a player currently inside a building.
+
+    A player standing inside a building (``db.inside_building``) that actually
+    exists on their tile is "in a room" — a melee attacker must be on the SAME
+    tile (i.e. inside the same building) to reach them; an adjacent attacker on
+    a neighbouring tile cannot. Unlike :func:`player_is_sheltered` this does NOT
+    depend on the building being closed: even an OPEN enemy building is a room
+    for the purpose of melee reach (open only governs ranged cover).
+
+    Returns False for anything that isn't a player inside a real building
+    (NPCs, players in the open), so callers stay guard-free. Never raises.
+    """
+    db = getattr(target, "db", None)
+    if db is None:
+        return False
+    if not getattr(db, "inside_building", False):
+        return False
+    room = getattr(target, "location", None)
+    x = getattr(db, "coord_x", None)
+    y = getattr(db, "coord_y", None)
+    if room is None or x is None or y is None:
+        return False
+    return _building_on_tile(room, int(x), int(y)) is not None
+
+
+def same_tile(a: Any, b: Any) -> bool:
+    """Return True if entities *a* and *b* occupy the same (x, y) tile.
+
+    Compares ``db.coord_x/coord_y`` via :func:`get_coords`. Returns False when
+    either entity has no resolvable coordinates. Never raises.
+    """
+    ca = get_coords(a)
+    cb = get_coords(b)
+    if ca is None or cb is None:
+        return False
+    return ca == cb
+
+
 def building_has_capability(building: Any, capability: str, provider: Any = None) -> bool:
     """Return True if *building*'s definition declares *capability*.
 

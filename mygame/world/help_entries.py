@@ -368,9 +368,13 @@ HELP_ENTRY_DICTS = [
 
             Every armor piece you |wequip|n reduces incoming damage, and they stack across all slots. |cTurrets|n auto-attack intruders; |cWalls|n block movement. A |cVault|n protects your stored resources while you're offline. You and your agents heal over time, but |cbuildings do not|n — repair a damaged building with |wrepair|n (see |whelp buildings|n).
 
+            # Buildings as Cover
+
+            Being |cinside a building|n is like being in its own room. A |cmelee|n attacker can only hit you if they're on the |csame tile|n — inside the same building — so a guard standing next door can't reach you until it steps in (and you must step out, or into their tile, to melee them). |cRanged|n fire and |cturrets|n depend on the building: a |cclosed|n building fully shelters you from ranged attacks, while an |copen|n one (like the raidable buildings in enemy bases) does not — you can still be shot inside it. So ducking into an open enemy structure stops melee guards reaching you, but not their turrets or soldiers.
+
             # Guards
 
-            A |cGuard|n agent (or |cSoldier|n) automatically attacks any enemy that comes within range each tick — so assigning one actually defends your base. Melee guards strike an adjacent tile; ranged soldiers reach several tiles out. This cuts both ways: enemy |coutpost|n and |cfortress|n guards attack you the same way when you raid them (|whelp outposts|n).
+            A |cGuard|n agent (or |cSoldier|n) automatically attacks any enemy that comes within range each tick — so assigning one actually defends your base. Melee guards strike an adjacent tile (and will chase onto your tile to reach you if you duck inside a building — see Buildings as Cover); ranged soldiers reach several tiles out. This cuts both ways: enemy |coutpost|n and |cfortress|n guards attack you the same way when you raid them (|whelp outposts|n).
 
             # Destroying a Base
 

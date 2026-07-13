@@ -385,3 +385,66 @@ class TestPlayerIsSheltered:
     def test_non_player_object_never_sheltered(self):
         from mygame.world.utils import player_is_sheltered
         assert player_is_sheltered(object()) is False
+
+
+class TestTargetInsideBuilding:
+    """target_inside_building: True for a player inside ANY building on their
+    tile (open OR closed) — unlike player_is_sheltered, it ignores open/closed.
+    """
+
+    class _Room:
+        def __init__(self, building):
+            self._b = building
+
+        def get_buildings_at(self, x, y):
+            return [self._b] if self._b is not None else []
+
+    def _player(self, inside, building):
+        p = type("P", (), {})()
+        p.db = _Db(inside_building=inside, coord_x=1, coord_y=1)
+        p.location = self._Room(building)
+        return p
+
+    def test_inside_open_building_is_a_room(self):
+        from mygame.world.utils import target_inside_building
+        open_b = _Building("TU")
+        open_b.db.open = True
+        assert target_inside_building(self._player(True, open_b)) is True
+
+    def test_inside_closed_building_is_a_room(self):
+        from mygame.world.utils import target_inside_building
+        assert target_inside_building(self._player(True, _Building("MM"))) is True
+
+    def test_not_inside_flag_false(self):
+        from mygame.world.utils import target_inside_building
+        assert target_inside_building(self._player(False, _Building("MM"))) is False
+
+    def test_no_building_on_tile(self):
+        from mygame.world.utils import target_inside_building
+        assert target_inside_building(self._player(True, None)) is False
+
+    def test_non_player_object(self):
+        from mygame.world.utils import target_inside_building
+        assert target_inside_building(object()) is False
+
+
+class TestSameTile:
+    """same_tile: coordinate equality via get_coords."""
+
+    @staticmethod
+    def _at(x, y):
+        e = type("E", (), {})()
+        e.db = _Db(coord_x=x, coord_y=y)
+        return e
+
+    def test_same_coords_true(self):
+        from mygame.world.utils import same_tile
+        assert same_tile(self._at(3, 4), self._at(3, 4)) is True
+
+    def test_different_coords_false(self):
+        from mygame.world.utils import same_tile
+        assert same_tile(self._at(3, 4), self._at(3, 5)) is False
+
+    def test_missing_coords_false(self):
+        from mygame.world.utils import same_tile
+        assert same_tile(self._at(3, 4), object()) is False

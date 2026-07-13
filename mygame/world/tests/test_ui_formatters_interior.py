@@ -119,5 +119,69 @@ class TestInteriorListsItems(unittest.TestCase):
         self.assertNotIn("Items:", out)
 
 
+class _Tags:
+    """Minimal Evennia tag-handler stand-in: get(category=...) truthiness."""
+    def __init__(self, npc_type=None):
+        self._npc_type = npc_type
+
+    def get(self, category=None):
+        if category == "npc_type":
+            return self._npc_type
+        return None
+
+
+class _Sentinel:
+    """An NPC-base owner: is_sentinel True."""
+    def __init__(self):
+        self.key = "Sentinel"
+        self.db = _DB(is_sentinel=True)
+
+
+class _NPC:
+    """An NPC on a tile: npc_type tag + db.owner + role."""
+    def __init__(self, key, owner, role="guard"):
+        self.key = key
+        self.tags = _Tags(npc_type="enemy")
+        self.db = _DB(owner=owner, role=role, agent_id=7)
+
+
+class TestInteriorListsHostiles(unittest.TestCase):
+    """The interior view lists hostile NPCs on the tile so a raider can see the
+    guard attacking them from inside the same building (the reported bug: being
+    hit with an empty occupant list)."""
+
+    def test_enemy_guard_on_tile_is_listed_and_tagged(self):
+        looker = _Player("Raider")
+        guard = _NPC("Guard #1", owner=_Sentinel(), role="guard")
+        tile = _Tile(objects_by_tag={(5, 5, None): [guard]})
+        building = _Building(tile)
+
+        out = format_building_interior(looker, building, registry=None)
+
+        self.assertIn("Hostiles here:", out)
+        self.assertIn("Guard #1", out)
+        self.assertIn("[Enemy]", out)
+
+    def test_own_agent_not_listed_as_hostile(self):
+        looker = _Player("Owner")
+        mine = _NPC("Agent", owner=looker, role="guard")
+        tile = _Tile(objects_by_tag={(5, 5, None): [mine]})
+        building = _Building(tile)
+
+        out = format_building_interior(looker, building, registry=None)
+
+        self.assertNotIn("Hostiles here:", out)
+        self.assertIn("Agents here:", out)  # shown as the looker's own agent
+
+    def test_no_hostiles_section_when_tile_clear(self):
+        looker = _Player("Raider")
+        tile = _Tile(objects_by_tag={(5, 5, None): []})
+        building = _Building(tile)
+
+        out = format_building_interior(looker, building, registry=None)
+
+        self.assertNotIn("Hostiles here:", out)
+
+
 if __name__ == "__main__":
     unittest.main()

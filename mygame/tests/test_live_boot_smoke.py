@@ -642,6 +642,46 @@ class LiveBootSmokeTest(EvenniaTest):
         finally:
             _teardown_game(systems)
 
+    def test_melee_room_gate_on_real_objects(self):
+        """On real objects: a player inside a building can only be meleed from
+        the SAME tile. An adjacent melee attack is refused even for an OPEN
+        building (the reported guard-through-the-wall bug); a same-tile melee
+        lands. Independent of the closed-cover rule."""
+        from server.conf.game_init import initialize_game
+        from world.utils import target_inside_building
+        from world.systems.combat_engine import SyntheticWeapon
+
+        systems = initialize_game()
+        try:
+            engine = systems["combat_engine"]
+            room = self._make_planet_room("earth")
+
+            # Raider inside an OPEN building at (6,5) — like the turret in the
+            # report. inside_building True + a building registered on the tile.
+            raider = self._make_player(x=6, y=5, planet="earth", location=room)
+            raider.db.inside_building = True
+            turret = self._make_building("TU", x=6, y=5, planet="earth")
+            turret.location = room
+            turret.set_open(True)
+            room.coord_index.add(turret, 6, 5)
+            self.assertTrue(target_inside_building(raider))
+
+            melee = SyntheticWeapon(50, 1, name="Fist")
+            melee.weapon_type = "melee"
+
+            # Attacker on the ADJACENT tile (5,5) — e.g. a guard on the HQ tile.
+            guard = self._make_player(x=5, y=5, planet="earth", location=room)
+            ok, msg = engine.queue_attack(guard, raider, weapon=melee)
+            self.assertFalse(ok, "adjacent melee must not reach into a building")
+            self.assertIn("same building", msg.lower())
+
+            # Same tile (6,5) -> melee lands.
+            guard.db.coord_x, guard.db.coord_y = 6, 5
+            ok, _ = engine.queue_attack(guard, raider, weapon=melee)
+            self.assertTrue(ok, "same-tile melee should land")
+        finally:
+            _teardown_game(systems)
+
 
 def _teardown_game(systems):
     """Best-effort teardown: stop any scripts initialize_game created so they
