@@ -330,24 +330,34 @@ def _emitted_kind_literals(path):
 
 
 def _notify_owner_kind_literals(path):
-    """Set of string-literal ``kind`` values emitted via the ``_notify_owner``
-    helper (agent behavior scripts route owner notifications through it rather
-    than ``self.notify``, since a Script is not a BaseSystem). The kind is the
-    second positional arg: ``_notify_owner(npc, "kind", ...)``.
+    """Set of string-literal ``kind`` values emitted via a ``_notify_owner``
+    helper, in EITHER of its two shapes:
+
+    * the free-function form in ``agent_scripts`` — ``_notify_owner(npc, "kind",
+      ...)`` (an ``ast.Name`` call, kind at args[1]); and
+    * the method form in ``agent_progression`` — ``self._notify_owner(agent,
+      notify, "kind", ...)`` (an ``ast.Attribute`` call, kind at args[2]).
+
+    Both route through ``self.notify(owner, kind, ...)`` with a VARIABLE kind, so
+    the plain ``_emitted_kind_literals`` scan can't see the literal — without
+    this, a kind emitted only via ``_notify_owner`` would silently drop (no
+    formatter) while the contract test stayed green. To be shape-agnostic we
+    accept the literal at ANY positional index of a ``_notify_owner`` call.
     """
     with open(path, "r", encoding="utf-8") as fh:
         tree = ast.parse(fh.read(), filename=path)
     kinds = set()
     for node in ast.walk(tree):
-        if (
-            isinstance(node, ast.Call)
-            and isinstance(node.func, ast.Name)
-            and node.func.id == "_notify_owner"
-            and len(node.args) >= 2
-            and isinstance(node.args[1], ast.Constant)
-            and isinstance(node.args[1].value, str)
-        ):
-            kinds.add(node.args[1].value)
+        if not isinstance(node, ast.Call):
+            continue
+        func = node.func
+        name = (func.id if isinstance(func, ast.Name)
+                else func.attr if isinstance(func, ast.Attribute) else None)
+        if name != "_notify_owner":
+            continue
+        for arg in node.args:
+            if isinstance(arg, ast.Constant) and isinstance(arg.value, str):
+                kinds.add(arg.value)
     return kinds
 
 
@@ -402,13 +412,20 @@ class TestPresenterOwnershipStructural:
         for path in paths:
             emitted |= _emitted_kind_literals(path)
 
-        # Agent behavior scripts (a Script isn't a BaseSystem) route owner
-        # notifications through the ``_notify_owner`` helper, not ``self.notify``
-        # — scan those kinds too so a script-emitted kind can't silently drop.
+        # Some emitters route owner notifications through a ``_notify_owner``
+        # helper with a VARIABLE kind, so the plain self.notify scan misses the
+        # literal. Scan those explicitly so such a kind can't silently drop:
+        #  * typeclasses/agent_scripts.py — free-function _notify_owner(npc, "k")
+        #  * world/systems/agent_progression.py — method self._notify_owner(
+        #    agent, notify, "k") (already in paths for the self.notify scan, but
+        #    that scan can't see the indirected literal).
         mygame_dir = os.path.dirname(world_dir)
         scripts_path = os.path.join(mygame_dir, "typeclasses", "agent_scripts.py")
         if os.path.exists(scripts_path):
             emitted |= _notify_owner_kind_literals(scripts_path)
+        progression_path = os.path.join(_systems_dir(), "agent_progression.py")
+        if os.path.exists(progression_path):
+            emitted |= _notify_owner_kind_literals(progression_path)
 
         formatter_keys = set(NotificationPresenter._FORMATTERS.keys())
         missing = emitted - formatter_keys

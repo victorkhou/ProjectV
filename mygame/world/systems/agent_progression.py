@@ -652,11 +652,17 @@ class AgentProgressionMixin:
         if excess <= 0:
             return
 
+        from world.utils import resting_activity_status
         for agent in agents:
             if excess <= 0:
                 break
             if not getattr(agent.db, "reserve", False):
                 agent.db.reserve = True
+                # Re-derive the resting status so a benched agent's Activity line
+                # reads "Reserve" instead of freezing on its pre-demotion string
+                # (a reserved agent's per-tick scripts are skipped, so nothing
+                # else refreshes it).
+                agent.db.activity_status = resting_activity_status(agent)
                 excess -= 1
 
     def handle_promotion(self, player: Any, new_agent_cap: int) -> None:
@@ -672,8 +678,12 @@ class AgentProgressionMixin:
         active = len(agents) - len(reserved)
         slots_available = max_agents - active
 
+        from world.utils import resting_activity_status
         for agent in reserved:
             if slots_available <= 0:
                 break
             agent.db.reserve = False
+            # Re-derive now that it's un-benched (a role-at-building agent reads
+            # "Working" again; its per-tick script refines transient statuses).
+            agent.db.activity_status = resting_activity_status(agent)
             slots_available -= 1

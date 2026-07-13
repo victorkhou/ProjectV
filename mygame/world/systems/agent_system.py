@@ -332,6 +332,12 @@ class AgentSystem(AgentProgressionMixin, AgentBehaviorMixin, BaseSystem):
                 # Legacy fallback: building doesn't have coordinates yet
                 loc = getattr(target_building, "location", target_building)
                 agent.move_to(loc, quiet=True)
+        else:
+            # Army role (soldier/medic) — no target building, so the movement
+            # block above (which derives the arrival status) never runs. Derive
+            # the resting status here so the agent reads "Ready" on assignment
+            # instead of a stale "Working"/"Idle" left from a prior role.
+            agent.db.activity_status = resting_activity_status(agent)
 
         return True, f"Agent #{agent_id} assigned as {role}."
 

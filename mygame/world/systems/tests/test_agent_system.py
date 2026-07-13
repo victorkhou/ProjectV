@@ -424,12 +424,26 @@ class TestAssignAgent(AgentSystemTestBase):
         self.assertTrue(ok)
         self.assertEqual(npc.db.role, "soldier")
         self.assertIsNone(npc.db.role_target)
+        # Army role with no building derives "Ready" on assignment (not a
+        # stale/Idle status from the no-target-building code path).
+        self.assertEqual(npc.db.activity_status, "Ready")
+
+    def test_army_assign_clears_stale_working_status(self):
+        """Reassigning a building agent (status 'Working') to an army role must
+        refresh the derived status to 'Ready', not leave the stale 'Working'."""
+        player = FakePlayer(combat_xp=600, next_agent_id=1)
+        npc = self._train_and_complete(player)
+        npc.db.activity_status = "Working"  # simulate prior building assignment
+        ok, _ = self.system.assign_agent(player, npc.db.agent_id, "soldier")
+        self.assertTrue(ok)
+        self.assertEqual(npc.db.activity_status, "Ready")
 
     def test_assign_medic_army_no_building(self):
         player = FakePlayer(combat_xp=600, next_agent_id=1)
         npc = self._train_and_complete(player)
         ok, _ = self.system.assign_agent(player, npc.db.agent_id, "medic")
         self.assertTrue(ok)
+        self.assertEqual(npc.db.activity_status, "Ready")
 
     def test_assign_wrong_role_for_building(self):
         """Assigning harvester to a Turret should fail."""
@@ -644,6 +658,34 @@ class TestDemotionPromotion(AgentSystemTestBase):
         self.assertTrue(agent2.db.reserve)
         # Role is preserved
         self.assertEqual(agent2.db.role, "soldier")
+
+    def test_demotion_derives_reserve_status(self):
+        """Benching an agent refreshes its Activity line to 'Reserve' (its
+        per-tick scripts are skipped, so nothing else would update it)."""
+        player = FakePlayer(combat_xp=1500, next_agent_id=1)
+        self._create_agents(player, 3)  # IDs 1, 2, 3
+        # Give the highest-ID agent a stale live status to be overwritten.
+        agent3 = self.system.get_agent_by_id(player, 3)
+        agent3.db.activity_status = "Harvesting Wood"
+
+        self.system.handle_demotion(player, new_agent_cap=2)  # reserves 2, 3
+
+        self.assertTrue(agent3.db.reserve)
+        self.assertEqual(agent3.db.activity_status, "Reserve")
+
+    def test_promotion_derives_status_on_restore(self):
+        """Un-benching an agent refreshes its status off the stale 'Reserve'."""
+        player = FakePlayer(combat_xp=1500, next_agent_id=1)
+        self._create_agents(player, 3)
+        self.system.handle_demotion(player, new_agent_cap=2)  # reserves 2, 3
+        agent2 = self.system.get_agent_by_id(player, 2)
+        self.assertEqual(agent2.db.activity_status, "Reserve")
+
+        self.system.handle_promotion(player, new_agent_cap=3)  # restores id 2
+
+        self.assertFalse(agent2.db.reserve)
+        # No role assigned -> derives Idle (not the stale 'Reserve').
+        self.assertEqual(agent2.db.activity_status, "Idle")
 
 
 # -------------------------------------------------------------- #

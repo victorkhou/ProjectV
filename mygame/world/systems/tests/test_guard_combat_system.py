@@ -224,6 +224,49 @@ class TestGuardTargetAcquisition(unittest.TestCase):
         system.process_tick(1, [guard])
         self.assertEqual(len(engine.pending_actions), 0)
 
+    @staticmethod
+    def _sheltered_player(name, x, y, oid):
+        """A player standing INSIDE a closed building on their own tile."""
+        class _ShelterTile:
+            planet_name = "earth"
+            def get_buildings_at(self, bx, by):
+                b = type("_B", (), {})()
+                b.attributes = FakeAttributes({"building_type": "MM",
+                                               "open": False})
+                b.db = FakeDB(building_type="MM", open=False)
+                return [b]
+        p = FakePlayer(name=name, x=x, y=y, oid=oid, location=_ShelterTile())
+        p.db.inside_building = True
+        return p
+
+    def test_ranged_guard_does_not_acquire_sheltered_player(self):
+        """A ranged guard (soldier) skips a player sheltered in a closed
+        building — its shot can't reach an occupant under cover, so it falls
+        through to the next-nearest real target (here: none)."""
+        system, engine = _make_system(guard_aggro_radius=5)
+        owner = _hq_owner()
+        sheltered = self._sheltered_player("Hider", x=1, y=0, oid=2)
+        tile = FakeTile(nearby_players=[sheltered])
+        soldier = FakeGuard(role="soldier", owner=owner, x=0, y=0, location=tile)
+
+        system.process_tick(1, [soldier])
+        self.assertEqual(len(engine.pending_actions), 0,
+                         "a ranged guard must not lock onto a sheltered player")
+
+    def test_melee_guard_still_acquires_sheltered_player(self):
+        """A melee guard is NOT restricted by shelter (adjacent melee reaches an
+        occupant), so it still acquires and attacks a sheltered adjacent player
+        — mirrors the melee-bypass rule for closed cover."""
+        system, engine = _make_system(guard_aggro_radius=5)
+        owner = _hq_owner()
+        sheltered = self._sheltered_player("Hider", x=1, y=0, oid=2)
+        tile = FakeTile(nearby_players=[sheltered])
+        guard = FakeGuard(role="guard", owner=owner, x=0, y=0, location=tile)
+
+        system.process_tick(1, [guard])
+        self.assertEqual(len(engine.pending_actions), 1)
+        self.assertEqual(engine.pending_actions[0]["target"], sheltered)
+
 
 class TestGuardWeaponSelection(unittest.TestCase):
 

@@ -492,6 +492,30 @@ class TestResolveTick(unittest.TestCase):
         self.assertEqual(events[0]["attacker"], attacker)
         self.assertEqual(events[0]["damage"], 25)
 
+    def test_combat_action_publishes_attacker_owner_and_locks_owner(self):
+        """Engine boundary: a turret hit must PUBLISH attacker_owner on
+        COMBAT_ACTION and set the OWNER's combat lockout — the wiring that pulls
+        Player A into combat when A's turret fires. (The timer subscriber tests
+        hand-feed these kwargs, so only an engine-level test catches the engine
+        failing to populate them.)"""
+        events = []
+        event_bus = EventBus()
+        event_bus.subscribe("combat_action", lambda **kw: events.append(kw))
+        engine, _ = _make_engine(event_bus=event_bus, current_tick=10)
+        owner = _hq_owner(oid=7)
+        turret = FakeBuilding(building_type="TU", owner=owner,
+                              location=FakeTile(xyz=(0, 0, "earth")))
+        target = FakePlayer(name="Raider", hp=100, oid=9,
+                            location=FakeTile(xyz=(1, 0, "earth")))
+        engine.apply_direct_hit(turret, target,
+                                FakeWeapon(damage=15, weapon_range=20),
+                                current_tick=10)
+        self.assertEqual(len(events), 1)
+        self.assertIs(events[0]["attacker_owner"], owner,
+                      "COMBAT_ACTION must carry the attacker's owning player")
+        # The owner (not just the turret) enters combat lockout.
+        self.assertEqual(owner.db.combat_lockout_tick, 15)
+
     def test_target_notified_of_attack(self):
         weapon = FakeWeapon(damage=25, weapon_range=5)
         engine, _ = _make_engine()
@@ -613,6 +637,27 @@ class TestPlayerDefeat(unittest.TestCase):
         self.assertEqual(len(events), 1)
         self.assertEqual(events[0]["attacker"], attacker)
         self.assertEqual(events[0]["victim"], target)
+
+    def test_turret_kill_publishes_owner_attribution(self):
+        """Engine boundary for the marquee feature: a turret kill must publish
+        attacker_owner + attacker_kind on PLAYER_ELIMINATED so the broadcast can
+        read 'Player A's Turret has eliminated B'. (The broadcast test hand-feeds
+        these; only an engine test catches the engine failing to populate them.)"""
+        events = []
+        event_bus = EventBus()
+        event_bus.subscribe("player_eliminated", lambda **kw: events.append(kw))
+        engine, _ = _make_engine(event_bus=event_bus)
+        owner = _hq_owner(oid=7)
+        turret = FakeBuilding(building_type="TU", owner=owner,
+                              location=FakeTile(xyz=(0, 0, "earth")))
+        victim = FakePlayer(name="Bob", hp=1, combat_xp=500, oid=9,
+                            location=FakeTile(xyz=(1, 0, "earth")))
+        engine.apply_direct_hit(turret, victim,
+                                FakeWeapon(damage=999, weapon_range=20),
+                                current_tick=0)
+        self.assertEqual(len(events), 1)
+        self.assertIs(events[0]["attacker_owner"], owner)
+        self.assertEqual(events[0]["attacker_kind"], "turret")
 
 # -------------------------------------------------------------- #
 #  Building Destruction Tests
@@ -821,7 +866,7 @@ class TestProcessTurrets(unittest.TestCase):
 
     def test_turret_no_targets_in_range(self):
         engine, _ = _make_engine()
-        owner = FakePlayer(name="Owner")
+        owner = _hq_owner()  # active HQ, so the test exercises RANGE, not the HQ gate
         far_player = FakePlayer(name="Far",
                                 location=FakeTile(xyz=(50, 50, "earth")))
         turret_tile = FakeTile(xyz=(0, 0, "earth"),
@@ -834,7 +879,7 @@ class TestProcessTurrets(unittest.TestCase):
 
     def test_turret_skips_offline(self):
         engine, _ = _make_engine()
-        owner = FakePlayer(name="Owner")
+        owner = _hq_owner()  # active HQ, so the test exercises OFFLINE, not the HQ gate
         hostile = FakePlayer(name="Hostile",
                              location=FakeTile(xyz=(1, 0, "earth")))
         turret_tile = FakeTile(xyz=(0, 0, "earth"),
@@ -848,7 +893,7 @@ class TestProcessTurrets(unittest.TestCase):
 
     def test_turret_skips_non_turret_buildings(self):
         engine, _ = _make_engine()
-        owner = FakePlayer(name="Owner")
+        owner = _hq_owner()  # active HQ, so the test exercises the CAPABILITY gate
         hostile = FakePlayer(name="Hostile",
                              location=FakeTile(xyz=(1, 0, "earth")))
         tile = FakeTile(xyz=(0, 0, "earth"), nearby_players=[hostile])
@@ -1311,6 +1356,10 @@ class TestEnemyNPCDeath(unittest.TestCase):
         self.assertEqual(len(events), 1)
         self.assertEqual(events[0]["attacker"], attacker)
         self.assertEqual(events[0]["victim"], enemy)
+        # Attribution payload present: a direct player kill -> owner is the
+        # player itself, no unit-kind possessive.
+        self.assertIs(events[0]["attacker_owner"], attacker)
+        self.assertEqual(events[0]["attacker_kind"], "")
 
     def test_npc_eliminated_published_before_delete(self):
         """Subscribers can still read the victim (not-yet-deleted) at publish."""

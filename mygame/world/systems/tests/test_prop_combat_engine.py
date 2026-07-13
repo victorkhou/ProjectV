@@ -512,7 +512,9 @@ class TestProperty13TurretTargeting(unittest.TestCase):
         balance = BalanceConfig(turret_radius=10, turret_damage=15)
         engine, _ = _make_engine(registry=_make_registry(balance))
 
-        owner = FakePlayer(name="Owner")
+        # Active-HQ owner so the turret is NOT skipped by the HQ gate — this
+        # test must exercise the RANGE check, not be short-circuited earlier.
+        owner = _hq_owner()
         far_player = FakePlayer(
             name="Far",
             location=FakeTile(xyz=(player_dist, 0, "earth")),
