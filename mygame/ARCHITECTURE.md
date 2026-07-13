@@ -892,9 +892,11 @@ armor as `get_stat_total("damage_reduction")`, so the multi‑slot model needed
 `damage_bonus` aggregation and melee/magazine gating. Utility stats aggregate the
 same way: `move_speed` (for players, reduces in‑combat movement lag via
 `compute_effective_delay`; out of combat movement is instant), `sight_range` (fog‑of‑war
-vision radius), and `carry_capacity` (raises the weight limit). `max_hp` and
-`accuracy` are validated numeric stat keys but **reserved** — no HP/combat effect
-is wired in this feature.
+vision radius), `carry_capacity` (raises the weight limit), and `max_hp` (raises the
+wearer's `hp_max` ceiling — `CombatEntity.refresh_equipment_hp_max` re‑folds the gear
+total on every equip/unequip; equipping adds headroom without healing, unequipping
+lowers the ceiling and clamps current HP down). `accuracy` remains a validated numeric
+stat key but **reserved** — no combat effect is wired.
 
 **Weapons & the magazine/reload model.** A `weapon`‑category item is `melee`
 (effective range 1, never consumes ammo) or `ranged`. A ranged weapon fires from a

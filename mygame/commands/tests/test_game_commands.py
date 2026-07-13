@@ -1871,6 +1871,26 @@ class TestCmdEquipment(unittest.TestCase):
         self.assertIn("Move speed: +1", out)
         self.assertIn("Sight range: +1", out)
 
+    def test_max_hp_total_shown_when_gear_grants_it(self):
+        caller = FakeCaller()
+        caller._equipment_slots = {
+            "torso": self._FakeItem("vitality vest", {"max_hp": 50}),
+        }
+        cmd = _make_cmd(CmdEquipment, caller, "")
+        cmd.func()
+        out = "\n".join(caller._messages)
+        self.assertIn("Max HP: +50", out)
+
+    def test_max_hp_total_hidden_when_no_gear_grants_it(self):
+        caller = FakeCaller()
+        caller._equipment_slots = {
+            "head": self._FakeItem("helm", {"damage_reduction": 3}),
+        }
+        cmd = _make_cmd(CmdEquipment, caller, "")
+        cmd.func()
+        out = "\n".join(caller._messages)
+        self.assertNotIn("Max HP", out)
+
 class TestCmdResearch(unittest.TestCase):
     def setUp(self):
         # research is gated on the caller having an active HQ; register an HQ
@@ -1957,7 +1977,7 @@ class TestCmdScore(unittest.TestCase):
         caller.equipment.equip(
             _FakeEquipItem(
                 "kevlar_vest", "torso",
-                {"damage_reduction": 5, "move_speed": 2},
+                {"damage_reduction": 5, "move_speed": 2, "max_hp": 40},
             )
         )
         cmd = _make_cmd(CmdScore, caller)
@@ -1966,6 +1986,7 @@ class TestCmdScore(unittest.TestCase):
         self.assertIn("Equipment totals:", output)
         self.assertIn("Armor: +5", output)
         self.assertIn("Move speed: +2", output)
+        self.assertIn("Max HP: +40", output)
 
     def test_hides_totals_when_no_equipment(self):
         caller = FakeCaller()

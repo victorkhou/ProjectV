@@ -2181,6 +2181,7 @@ class CmdScore(GameCommand):
                  + handler.get_stat_total("damage")),
                 ("Move speed", handler.get_stat_total("move_speed")),
                 ("Sight range", handler.get_stat_total("sight_range")),
+                ("Max HP", handler.get_stat_total("max_hp")),
             ]
             total_parts = [f"{label}: +{value:.0f}"
                            for label, value in totals if value]
@@ -2215,9 +2216,9 @@ class CmdEquipment(GameCommand):
     Notes:
       Aliases: eq, gear. Lists all eleven slots (empties included), each
       item's stat bonuses, your ranged weapon's loaded/magazine count, and
-      combined totals for armor, damage, move speed, and sight range. To put
-      gear on use 'equip <item>'; to take it off use 'unequip <item>'. See
-      'help equipment'.
+      combined totals for armor, damage, move speed, and sight range (plus
+      max HP when gear grants it). To put gear on use 'equip <item>'; to
+      take it off use 'unequip <item>'. See 'help equipment'.
     """
 
     key = "equipment"
@@ -2266,10 +2267,14 @@ class CmdEquipment(GameCommand):
         armor = handler.get_stat_total("damage_reduction")
         move = handler.get_stat_total("move_speed")
         sight = handler.get_stat_total("sight_range")
+        max_hp = handler.get_stat_total("max_hp")
         lines.append(f"  Armor (damage_reduction): +{armor:.0f}")
         lines.append(f"  Damage: +{damage:.0f}")
         lines.append(f"  Move speed: +{move:.0f}")
         lines.append(f"  Sight range: +{sight:.0f}")
+        # Max HP shows only when gear grants it (the common case is none).
+        if max_hp:
+            lines.append(f"  Max HP: +{max_hp:.0f}")
 
         caller.msg("\n".join(lines))
 

@@ -175,9 +175,9 @@ class SchemaValidator:
             if isinstance(key, str):
                 item_keys.add(key)
 
-            # stat_modifiers values must be numeric. `max_hp` and `accuracy` are
-            # accepted here as ordinary numeric stat keys with no wired effect
-            # (D6) — no key allowlist is applied.
+            # stat_modifiers values must be numeric; no key allowlist is applied.
+            # `max_hp` is now a wired effect (raises hp_max — task 6.4); `accuracy`
+            # remains an accepted numeric key with no wired effect (D6).
             sm = entry.get("stat_modifiers")
             if sm is not None:
                 if not isinstance(sm, dict):

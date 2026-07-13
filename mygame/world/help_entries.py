@@ -306,6 +306,10 @@ HELP_ENTRY_DICTS = [
 
             |chead eyes face torso arms hands legs feet back|n — armor and utility. |cweapon|n — your active weapon. |caccessory|n — a utility item (scope, hauler pack). One item per slot; equipping a new one swaps out the old.
 
+            # Stat Bonuses
+
+            Beyond |carmor|n (less incoming damage) and |cdamage|n, gear can grant utility: |cmove speed|n, |csight range|n, |ccarry capacity|n, and |cmax HP|n. Stats from every worn piece stack, and |wequipment|n shows your combined totals. Max-HP gear raises your health ceiling — equipping it adds headroom (it doesn't heal you on the spot), and taking it off lowers the ceiling, trimming any HP above the new max.
+
             # Wearing Gear
 
             |wequip <item>|n — wear an item from your inventory (a partial name works, e.g. |wequip assault|n). Alias: |wwear|n.
