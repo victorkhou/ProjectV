@@ -2154,6 +2154,64 @@ class TestClosedBuildingRangedImmunity(unittest.TestCase):
         # Target sheltered at resolution -> no damage applied.
         self.assertEqual(target.db.hp, 100)
 
+    def test_breach_shot_damages_closed_building(self):
+        """A breaching directional shot (breach=True) may damage a CLOSED
+        building — that's how a wall/structure is shot down from range."""
+        engine, _ = _make_engine()
+        attacker = FakePlayer(name="Breacher",
+                              weapon=FakeWeapon(damage=25, weapon_range=8),
+                              location=FakeTile(xyz=(0, 0, "earth")))
+        building = FakeBuilding(building_type="WL", owner=FakePlayer(name="B"),
+                                hp=200, hp_max=200,
+                                location=FakeTile(xyz=(3, 0, "earth")))
+        building.attributes.add("open", False)  # closed
+        ok, _ = engine.queue_attack(attacker, building, breach=True)
+        self.assertTrue(ok)
+        engine.resolve_tick()
+        self.assertEqual(building.attributes.get("hp"), 175)
+
+    def test_breach_shot_still_cannot_hit_sheltered_player(self):
+        """breach relaxes the closed-BUILDING gate only — a player sheltered in
+        a closed building is still immune to a breaching directional shot."""
+        engine, _ = _make_engine()
+        attacker = FakePlayer(name="Breacher",
+                              weapon=FakeWeapon(damage=25, weapon_range=8),
+                              location=FakeTile(xyz=(0, 0, "earth")))
+        target = self._sheltered_player("Hider", 3, 0)
+        target.db.hp = 100
+        ok, msg = engine.queue_attack(attacker, target, breach=True)
+        self.assertFalse(ok)
+        self.assertIn("sheltered", msg.lower())
+
+    def test_breach_shot_from_inside_at_own_building_allowed(self):
+        """A player inside a building may fire a breaching directional shot at
+        that same enclosing structure (shoot your way out) — the symmetric
+        no-fire-from-cover gate is relaxed for a breach-vs-building shot."""
+        engine, _ = _make_engine()
+        attacker = self._sheltered_player("Trapped", 5, 5)
+        attacker.equipment.equip(FakeWeapon(damage=25, weapon_range=8))
+        # The enclosing building on the caller's own tile.
+        enclosing = FakeBuilding(building_type="WL", owner=FakePlayer(name="B"),
+                                 hp=200, hp_max=200,
+                                 location=FakeTile(xyz=(5, 5, "earth")))
+        enclosing.attributes.add("open", False)
+        ok, _ = engine.queue_attack(attacker, enclosing, breach=True)
+        self.assertTrue(ok)
+
+    def test_non_breach_shot_from_inside_still_blocked(self):
+        """Without breach, a sheltered player still can't fire ranged out (the
+        turtle-prevention gate is unchanged for normal/ locked shots)."""
+        engine, _ = _make_engine()
+        attacker = self._sheltered_player("Turtle", 5, 5)
+        attacker.equipment.equip(FakeWeapon(damage=25, weapon_range=8))
+        building = FakeBuilding(building_type="MM", owner=FakePlayer(name="B"),
+                                hp=200, hp_max=200,
+                                location=FakeTile(xyz=(5, 5, "earth")))
+        building.attributes.add("open", True)
+        ok, msg = engine.queue_attack(attacker, building)  # breach defaults False
+        self.assertFalse(ok)
+        self.assertIn("inside", msg.lower())
+
 
 class _FixedRng:
     """A deterministic rng whose random() always returns *value*."""

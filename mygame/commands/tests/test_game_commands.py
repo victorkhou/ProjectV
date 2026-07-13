@@ -1024,6 +1024,16 @@ class _FakeAttackable:
         )
 
 
+class _FakeBuilding:
+    """An in-view building (has building_type so is_building matches, and no
+    combat_xp so is_player does not)."""
+    def __init__(self, key, x, y, building_type="WL"):
+        self.key = key
+        self.db = types.SimpleNamespace(
+            coord_x=x, coord_y=y, building_type=building_type,
+        )
+
+
 class _FakeRangedWeapon:
     """A weapon Game_Item exposing slot + a range stat for reach tests."""
     def __init__(self, key, weapon_range):
@@ -1078,9 +1088,12 @@ class _FakeTargeting:
 class _RecordingEngine:
     def __init__(self):
         self.calls = []
+        self.breach_calls = []
 
-    def queue_attack(self, attacker, target, weapon=None, accuracy=None):
+    def queue_attack(self, attacker, target, weapon=None, accuracy=None,
+                     breach=False):
         self.calls.append((target, accuracy))
+        self.breach_calls.append(breach)
         return True, ""
 
 
@@ -1200,6 +1213,75 @@ class TestCmdShoot(unittest.TestCase):
         cmd = _make_cmd(CmdShoot, caller, " up")
         cmd.func()
         self.assertEqual(engine.calls, [])
+
+    def test_shoot_directional_hits_building_in_line_with_breach(self):
+        """A directional shot hits a building in the line of fire and passes
+        breach=True so the engine lets it damage a closed structure (a wall)."""
+        tg = _FakeTargeting(ranged=True)
+        engine = _RecordingEngine()
+        caller = FakeCaller(systems={"targeting_system": tg,
+                                     "combat_engine": engine})
+        # A wall two tiles north of the caller at (5,5) -> (5,7).
+        wall = _FakeBuilding("Wall", 5, 7)
+        caller.location._objects_by_coord[(5, 7)] = [wall]
+        cmd = _make_cmd(CmdShoot, caller, " north")
+        cmd.func()
+        self.assertEqual(engine.calls, [(wall, 0.5)])
+        self.assertEqual(engine.breach_calls, [True])
+
+    def test_shoot_directional_prefers_building_over_sheltered_player(self):
+        """When a tile holds both a building and a player, a directional shot
+        hits the building (breach) — the sheltered occupant is not the target."""
+        tg = _FakeTargeting(ranged=True)
+        engine = _RecordingEngine()
+        caller = FakeCaller(systems={"targeting_system": tg,
+                                     "combat_engine": engine})
+        wall = _FakeBuilding("Wall", 5, 7)
+        occupant = _FakeAttackable("Hider", 5, 7)
+        caller.location._objects_by_coord[(5, 7)] = [occupant, wall]
+        cmd = _make_cmd(CmdShoot, caller, " north")
+        cmd.func()
+        self.assertEqual(engine.calls, [(wall, 0.5)])
+
+    def test_shoot_directional_from_inside_hits_enclosing_building(self):
+        """Shooting any direction while inside a building fires at the enclosing
+        structure (shoot your way out), regardless of the compass arg."""
+        tg = _FakeTargeting(ranged=True)
+        engine = _RecordingEngine()
+        caller = FakeCaller(systems={"targeting_system": tg,
+                                     "combat_engine": engine})
+        caller.db.inside_building = True
+        wall = _FakeBuilding("Bunker", 5, 5)  # on the caller's own tile
+        caller.location._buildings_by_coord[(5, 5)] = [wall]
+        cmd = _make_cmd(CmdShoot, caller, " east")
+        cmd.func()
+        self.assertEqual(engine.calls, [(wall, 0.5)])
+        self.assertEqual(engine.breach_calls, [True])
+
+    def test_shoot_directional_from_inside_no_building_nothing_in_line(self):
+        """Inside flag set but no building on the tile (edge/stale state): the
+        directional shot finds nothing rather than raising."""
+        tg = _FakeTargeting(ranged=True)
+        engine = _RecordingEngine()
+        caller = FakeCaller(systems={"targeting_system": tg,
+                                     "combat_engine": engine})
+        caller.db.inside_building = True
+        cmd = _make_cmd(CmdShoot, caller, " east")
+        cmd.func()
+        self.assertEqual(engine.calls, [])
+        self.assertTrue(any("line of fire" in m for m in caller._messages))
+
+    def test_shoot_locked_does_not_breach(self):
+        """A locked shot at an enemy is NOT a breach — it keeps the standard
+        cover gate (breach=False)."""
+        target = _FakeAttackable("Guard", 3, 0)
+        tg = _FakeTargeting(ranged=True, locked=True, target=target)
+        engine = _RecordingEngine()
+        caller = FakeCaller(systems={"targeting_system": tg,
+                                     "combat_engine": engine})
+        cmd = _make_cmd(CmdShoot, caller, "")
+        cmd.func()
+        self.assertEqual(engine.breach_calls, [False])
 
 
 class TestCmdEquip(unittest.TestCase):

@@ -111,7 +111,7 @@ class CombatEngine(BaseSystem):
 
     def queue_attack(
         self, attacker: Any, target: Any, weapon: Any = None,
-        accuracy: float | None = None,
+        accuracy: float | None = None, breach: bool = False,
     ) -> tuple[bool, str]:
         """Queue an attack action for resolution on the next tick.
 
@@ -143,6 +143,14 @@ class CombatEngine(BaseSystem):
                 was still fired — ammo is consumed here at queue time). ``None``
                 (the default for melee/guard/turret/throw) means the attack
                 always lands, preserving all existing combat.
+            breach: When True this is a directional 'shoot' round that BREACHES
+                cover — it may damage a closed building (a wall/structure the
+                shot is meant to break down), and a shooter inside a building may
+                fire at that same enclosing structure. It does NOT let a shot
+                reach a *player* sheltered inside a closed building (the building
+                still absorbs the round); the closed-cover gate only relaxes for
+                a building target. Default False (locked shots, melee, turrets,
+                throws all keep the standard closed-cover gate).
 
         Returns:
             (success, message) tuple.
@@ -173,8 +181,10 @@ class CombatEngine(BaseSystem):
         # 2b. Closed-cover gate. A ranged attack cannot hit a closed building
         # or a player sheltered inside one — only an adjacent melee attack can.
         # Runs before range/ammo so a blocked shot never consumes ammo or
-        # reports a range error.
-        if self._ranged_blocked(target, is_melee):
+        # reports a range error. A breaching directional 'shoot' round bypasses
+        # this for a BUILDING target (it's meant to break the structure down);
+        # it never reaches a sheltered *player* — the building absorbs it.
+        if self._ranged_blocked(target, is_melee, breach=breach):
             if self._is_building(target):
                 return False, "That building is closed — only melee attacks reach it."
             return False, "They're sheltered inside — only a melee attack reaches them."
@@ -183,7 +193,12 @@ class CombatEngine(BaseSystem):
         # fire ranged OUT either (no incoming ranged, no outgoing ranged — they
         # must leave or use melee). Prevents a one-way "turtle" that snipes from
         # total ranged immunity. Melee attacks from cover are still allowed.
-        if not is_melee and self._is_sheltered(attacker):
+        # Exception: a breaching directional 'shoot' at a BUILDING — a player
+        # firing at the very structure enclosing them, to shoot their way out —
+        # is allowed (it can't reach an external target, only the building).
+        target_is_building = self._is_building(target)
+        if (not is_melee and self._is_sheltered(attacker)
+                and not (breach and target_is_building)):
             return False, "You can't fire ranged from inside — step out, or use melee."
 
         # 2d. Melee room gate: a player inside a building can only be meleed from
@@ -266,6 +281,7 @@ class CombatEngine(BaseSystem):
             "target": target,
             "weapon_item": weapon_item,
             "accuracy": accuracy,
+            "breach": breach,
         }
         self.pending_actions.append(action)
 
@@ -307,7 +323,7 @@ class CombatEngine(BaseSystem):
             # between lock-on and resolution must not be hit by the queued
             # ranged shot. Melee actions bypass (cover doesn't stop melee).
             is_melee = self._get_weapon_attr(weapon_item, "weapon_type", None) == "melee"
-            if self._ranged_blocked(target, is_melee):
+            if self._ranged_blocked(target, is_melee, breach=action.get("breach", False)):
                 continue
             # Re-check the melee room gate too: a target that stepped into a
             # building (or an attacker that did) between queue and resolve must
@@ -633,7 +649,8 @@ class CombatEngine(BaseSystem):
         from world.utils import player_is_sheltered
         return player_is_sheltered(target)
 
-    def _ranged_blocked(self, target: Any, is_melee: bool) -> bool:
+    def _ranged_blocked(self, target: Any, is_melee: bool,
+                        breach: bool = False) -> bool:
         """Return True if a ranged attack must be refused against *target*.
 
         Two cases, both bypassed by a melee (adjacent) attack:
@@ -644,10 +661,17 @@ class CombatEngine(BaseSystem):
         Open buildings and players in the open are never blocked. The single
         gate shared by every ``queue_attack`` caller (players, agents, guards,
         and any future turret-vs-building path).
+
+        *breach* (a directional 'shoot' round) relaxes ONLY the closed-building
+        case — a breaching shot may break down a closed structure. It does not
+        relax the sheltered-*player* case: a player under cover is still safe,
+        the building takes the round.
         """
         if is_melee:
             return False
         if self._is_building(target):
+            if breach:
+                return False
             from world.utils import building_is_open
             return not building_is_open(target)
         return self._is_sheltered(target)

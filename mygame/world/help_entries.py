@@ -358,7 +358,7 @@ HELP_ENTRY_DICTS = [
 
             With a |cranged weapon|n you can fight at a distance in two ways:
             |wtarget <enemy>|n (|wlock|n) — lock onto an enemy in your weapon's range. It takes a few ticks to lock (faster with better gear); you're told when it completes. A lock is a |cheld aim|n — |rhold still while it locks, because moving in any direction breaks it|n. Once locked, your shot is far more accurate (|c80%|n baseline) and keeps hitting the enemy even as |cthey|n move — until they leave your range (or you move).
-            |wshoot|n (|wfire|n) — fire your ranged weapon. With a |clocked|n target, plain |wshoot|n fires at them. Otherwise |wshoot <n/s/e/w>|n fires in a direction and hits the first thing in the line of fire, at lower accuracy (|c50%|n baseline). You can only hit a specific player by locking onto them first. Every shot spends ammo whether it hits or misses.
+            |wshoot|n (|wfire|n) — fire your ranged weapon. With a |clocked|n target, plain |wshoot|n fires at them. Otherwise |wshoot <n/s/e/w>|n fires in a direction and hits the first thing in the line of fire, at lower accuracy (|c50%|n baseline). You can only hit a specific player by locking onto them first. A directional shot |cbreaches cover|n — it damages a |cbuilding|n (open or closed) in the line of fire, so it's how you shoot down a |cWall|n; and if you're |cinside|n a building, any direction fires at the structure around you, letting you shoot your way out. Every shot spends ammo whether it hits or misses.
 
             # The Combat State
 
@@ -378,7 +378,7 @@ HELP_ENTRY_DICTS = [
 
             # Buildings as Cover
 
-            Being |cinside a building|n is like being in its own room. A |cmelee|n attacker can only hit you if they're on the |csame tile|n — inside the same building — so a guard standing next door can't reach you until it steps in (and you must step out, or into their tile, to melee them). |cRanged|n fire and |cturrets|n depend on the building: a |cclosed|n building fully shelters you from ranged attacks, while an |copen|n one (like the raidable buildings in enemy bases) does not — you can still be shot inside it. So ducking into an open enemy structure stops melee guards reaching you, but not their turrets or soldiers.
+            Being |cinside a building|n is like being in its own room. A |cmelee|n attacker can only hit you if they're on the |csame tile|n — inside the same building — so a guard standing next door can't reach you until it steps in (and you must step out, or into their tile, to melee them). |cRanged|n fire and |cturrets|n depend on the building: a |cclosed|n building fully shelters the |coccupant|n from ranged attacks, while an |copen|n one (like the raidable buildings in enemy bases) does not — you can still be shot inside it. So ducking into an open enemy structure stops melee guards reaching you, but not their turrets or soldiers. A |cclosed|n building still protects the |cperson|n inside — but the |cbuilding itself|n can be shot down: a directional |wshoot|n breaches the structure (the round hits the wall, not the occupant), which is how you knock down a |cWall|n or a sealed structure from range.
 
             # Guards
 

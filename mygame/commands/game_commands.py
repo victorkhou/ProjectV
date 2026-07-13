@@ -1093,10 +1093,13 @@ _SHOOT_DIRECTIONS = {
 def _first_target_along_ray(caller, dx, dy, weapon_range):
     """Return the first attackable entity along a ray from the caller, or None.
 
-    Walks tiles outward in the (dx, dy) direction up to *weapon_range*, and
-    returns the first player/agent/enemy/building found (the shot stops at the
-    first thing it hits — a building absorbs it). Uses the room's coordinate
-    index (``get_objects_at``); returns None if nothing is in the line of fire.
+    Walks tiles outward in the (dx, dy) direction up to *weapon_range* and
+    returns the first player/agent/enemy/building found — the shot stops at the
+    first thing it hits. Within a single tile a BUILDING is preferred over a
+    player: a directional 'shoot' breaches cover, so it hits the structure (and
+    a player sheltered inside it stays protected — the building absorbs the
+    round) rather than being blocked by a sheltered occupant. Uses the room's
+    coordinate index (``get_objects_at``); returns None if the line is clear.
     """
     from world.utils import is_player, is_building
 
@@ -1108,12 +1111,30 @@ def _first_target_along_ray(caller, dx, dy, weapon_range):
     cx, cy = int(cx), int(cy)
     for step in range(1, weapon_range + 1):
         tx, ty = cx + dx * step, cy + dy * step
-        for obj in loc.get_objects_at(tx, ty):
-            if obj is caller:
-                continue
-            if is_building(obj) or is_player(obj):
-                return obj
+        objs = [o for o in loc.get_objects_at(tx, ty) if o is not caller]
+        building = next((o for o in objs if is_building(o)), None)
+        if building is not None:
+            return building
+        player = next((o for o in objs if is_player(o)), None)
+        if player is not None:
+            return player
     return None
+
+
+def _enclosing_building(caller):
+    """Return the building the caller currently stands inside, or None.
+
+    Used by directional 'shoot' from inside a structure: every direction fires
+    at the building enclosing the shooter (they shoot their way out). Resolves
+    the building on the caller's own tile via the room's building index.
+    """
+    loc = getattr(caller, "location", None)
+    cx = getattr(caller.db, "coord_x", None)
+    cy = getattr(caller.db, "coord_y", None)
+    if loc is None or cx is None or cy is None or not hasattr(loc, "get_buildings_at"):
+        return None
+    buildings = loc.get_buildings_at(int(cx), int(cy))
+    return buildings[0] if buildings else None
 
 
 class CmdTarget(GameCommand):
@@ -1182,7 +1203,11 @@ class CmdShoot(GameCommand):
       enemy you've 'target'-locked (higher accuracy). Otherwise you fire in a
       compass direction and hit the first thing in the line of fire at lower
       accuracy — you can only hit a specific player by locking onto them first.
-      A shot consumes ammo whether it hits or misses. See 'help combat'.
+      A directional shot BREACHES cover: it damages a building (open or closed)
+      standing in the line of fire — that's how you shoot down a wall. If you're
+      inside a building, any direction fires at the structure enclosing you, so
+      you can shoot your way out. A shot consumes ammo whether it hits or
+      misses. See 'help combat'.
     """
 
     key = "shoot"
@@ -1237,19 +1262,34 @@ class CmdShoot(GameCommand):
             caller.msg(msg)
 
     def _shoot_directional(self, caller, combat_engine, targeting, weapon, arg):
-        """Fire in a compass direction at the first thing in the line of fire."""
+        """Fire in a compass direction at the first thing in the line of fire.
+
+        A directional shot BREACHES cover — it can damage a building (open or
+        closed) that stands in the line of fire, since walls/structures are
+        meant to be shot down. If the shooter is *inside* a building, every
+        direction fires at that enclosing structure (you shoot your way out),
+        so the ray is not walked at all.
+        """
         step = _SHOOT_DIRECTIONS.get(arg)
         if step is None:
             caller.msg("Shoot which way? Use n/s/e/w, or 'shoot' at a locked target.")
             return
-        weapon_range = targeting.weapon_range(weapon)
-        target = _first_target_along_ray(caller, step[0], step[1], weapon_range)
-        if target is None:
-            caller.msg("Nothing in the line of fire.")
-            return
+
+        # Inside a building: any direction hits the structure enclosing you.
+        if getattr(caller.db, "inside_building", False):
+            target = _enclosing_building(caller)
+            if target is None:
+                caller.msg("Nothing in the line of fire.")
+                return
+        else:
+            weapon_range = targeting.weapon_range(weapon)
+            target = _first_target_along_ray(caller, step[0], step[1], weapon_range)
+            if target is None:
+                caller.msg("Nothing in the line of fire.")
+                return
         accuracy = targeting.directional_accuracy(weapon)
         _ok, msg = combat_engine.queue_attack(
-            caller, target, weapon=weapon, accuracy=accuracy
+            caller, target, weapon=weapon, accuracy=accuracy, breach=True
         )
         if msg:
             caller.msg(msg)

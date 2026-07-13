@@ -581,6 +581,37 @@ class LiveBootSmokeTest(EvenniaTest):
         finally:
             _teardown_game(systems)
 
+    def test_breach_shot_damages_closed_building_on_real_objects(self):
+        """On real objects: a breaching directional shot (breach=True) damages a
+        CLOSED building — the 'shoot a closed structure down' mechanic — while a
+        non-breach ranged shot at the same building is still rejected."""
+        from server.conf.game_init import initialize_game
+        from world.systems.combat_engine import _TurretWeapon
+
+        systems = initialize_game()
+        try:
+            engine = systems["combat_engine"]
+            attacker = self._make_player(x=0, y=0, planet="earth")
+            attacker.db.combat_xp = 100000
+
+            closed = self._make_building("MM", x=3, y=0, planet="earth", hp=200)
+            closed.set_open(False)
+            ranged = _TurretWeapon(50, 10)  # no weapon_type -> ranged
+
+            # Non-breach ranged shot: rejected by the closed-cover gate.
+            ok, msg = engine.queue_attack(attacker, closed, weapon=ranged)
+            self.assertFalse(ok)
+            self.assertIn("closed", msg.lower())
+
+            # Breaching shot: allowed, and it damages the closed building.
+            ok, _ = engine.queue_attack(attacker, closed, weapon=ranged, breach=True)
+            self.assertTrue(ok, "a breaching shot must reach a closed building")
+            hp_before = closed.db.hp
+            engine.resolve_tick()
+            self.assertLess(closed.db.hp, hp_before)
+        finally:
+            _teardown_game(systems)
+
     def test_wall_takes_ranged_fire_on_real_objects(self):
         """A Wall (combat_barrier) is intrinsically OPEN on real objects: ranged
         fire breaches it even with its 'open' attribute explicitly False —
