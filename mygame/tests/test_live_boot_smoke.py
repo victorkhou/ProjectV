@@ -581,6 +581,35 @@ class LiveBootSmokeTest(EvenniaTest):
         finally:
             _teardown_game(systems)
 
+    def test_melee_reaches_diagonal_on_real_objects(self):
+        """On real objects: Chebyshev melee range — a range-1 melee weapon hits a
+        target one tile diagonally away (the reported '1 north + 1 west' case),
+        but not a target two tiles off on an axis."""
+        from server.conf.game_init import initialize_game
+        from world.systems.combat_engine import SyntheticWeapon
+
+        systems = initialize_game()
+        try:
+            engine = systems["combat_engine"]
+            room = self._make_planet_room("earth")
+            attacker = self._make_player(x=5, y=5, planet="earth", location=room)
+
+            melee = SyntheticWeapon(30, 1, name="Fist")
+            melee.weapon_type = "melee"
+
+            # Diagonal neighbour (6,6): Chebyshev distance 1 -> in reach.
+            diag = self._make_player(x=6, y=6, planet="earth", location=room)
+            ok, _ = engine.queue_attack(attacker, diag, weapon=melee)
+            self.assertTrue(ok, "diagonal neighbour should be in melee reach")
+
+            # Two tiles away on an axis (7,5): Chebyshev distance 2 -> out.
+            far = self._make_player(x=7, y=5, planet="earth", location=room)
+            ok, msg = engine.queue_attack(attacker, far, weapon=melee)
+            self.assertFalse(ok)
+            self.assertIn("out of range", msg.lower())
+        finally:
+            _teardown_game(systems)
+
     def test_player_is_sheltered_on_real_objects(self):
         """On real objects (where an unset db attr is None, not a raise):
         player_is_sheltered is True only for a player inside a CLOSED building,

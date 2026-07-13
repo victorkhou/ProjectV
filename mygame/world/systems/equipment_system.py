@@ -766,11 +766,11 @@ class EquipmentSystem(CarryWeightMixin, StorageMixin, BaseSystem):
            not ``throwable`` — Req 9.6.
         2. Enforce the rank gate: if the item declares a ``required_rank`` the
            player does not meet, reject — Req 7.3 (reuses the equip gate).
-        3. Enforce the throw range: the Manhattan distance from the player to
+        3. Enforce the throw range: the Chebyshev distance from the player to
            ``(tx, ty)`` must be within the throwable's ``effect.range`` (or
            :data:`~world.constants.DEFAULT_THROW_RANGE` when the effect declares
            none) — Req 9.3.
-        4. Resolve every valid target within the effect's ``radius`` (Manhattan)
+        4. Resolve every valid target within the effect's ``radius`` (Chebyshev)
            of ``(tx, ty)`` on the player's current planet via the coordinate
            index, and — when the effect type is ``aoe_damage`` — apply the
            effect's ``amount`` to each through the injected area-damage applier,
@@ -831,7 +831,8 @@ class EquipmentSystem(CarryWeightMixin, StorageMixin, BaseSystem):
                 player, "throw_failed", item_name=item_name, reason="no_position"
             )
             return False
-        distance = abs(p_coords[0] - int(tx)) + abs(p_coords[1] - int(ty))
+        from world.utils import chebyshev_distance
+        distance = chebyshev_distance(p_coords[0], p_coords[1], int(tx), int(ty))
         if distance > throw_range:
             self.notify(
                 player,
@@ -1369,11 +1370,11 @@ class EquipmentSystem(CarryWeightMixin, StorageMixin, BaseSystem):
     def _resolve_throw_targets(
         self, player: Any, tx: int, ty: int, radius: int
     ) -> list:
-        """Return valid AoE targets within *radius* (Manhattan) of ``(tx, ty)``.
+        """Return valid AoE targets within *radius* (Chebyshev) of ``(tx, ty)``.
 
         Queries the player's current planet (its coordinate index) for objects
         inside the bounding box around the target tile, then keeps only
-        damageable entities (players/agents and buildings) whose Manhattan
+        damageable entities (players/agents and buildings) whose Chebyshev
         distance to the target is within *radius*.
 
         Friendly fire is intentional: the blast is indiscriminate and damages
@@ -1421,7 +1422,8 @@ class EquipmentSystem(CarryWeightMixin, StorageMixin, BaseSystem):
             coords = get_coords(obj)
             if coords is None:
                 continue
-            if abs(coords[0] - tx) + abs(coords[1] - ty) <= radius:
+            from world.utils import chebyshev_distance
+            if chebyshev_distance(coords[0], coords[1], tx, ty) <= radius:
                 targets.append(obj)
         return targets
 

@@ -43,12 +43,17 @@ class EvenniaNpcBaseFactory(NpcBaseFactory):
         y: int,
         role: str,
         hp: int,
+        index: int = 1,
     ) -> Any:
         import evennia
 
+        # A per-base, 1-based *index* makes each guard individually named
+        # ("Outpost #2 Guard-1", "Outpost #2 Guard-2", ...) so players can tell
+        # co-located guards apart and target a specific one.
+        base_label = owner.key if hasattr(owner, "key") else role.title()
         npc = evennia.create_object(
             "typeclasses.npcs.NPC",
-            key=f"{role.title()} ({owner.key})" if hasattr(owner, "key") else role.title(),
+            key=f"{base_label} {role.title()}-{index}",
             location=tile,
         )
         npc.db.owner = owner

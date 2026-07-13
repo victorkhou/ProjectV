@@ -112,5 +112,10 @@ class NpcBaseFactory(ABC):
         y: int,
         role: str,
         hp: int,
+        index: int = 1,
     ) -> Any:
-        """Create, place, and index an enemy-guard NPC owned by *owner*."""
+        """Create, place, and index an enemy-guard NPC owned by *owner*.
+
+        *index* is a per-base 1-based ordinal used to name the guard uniquely
+        (so co-located guards are distinguishable/targetable).
+        """

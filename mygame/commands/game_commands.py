@@ -929,6 +929,78 @@ class CmdRepair(GameCommand):
         caller.msg(msg)
 
 
+def _attackables_in_view(caller):
+    """Return (dist, obj) for every attackable entity within the caller's view.
+
+    "In view" = within the caller's vision radius (Chebyshev), the same scope
+    'scan' shows. Attackable = a player/agent/enemy NPC or a building (anything
+    the combat engine can target), excluding the caller. Nearest first. Used by
+    'attack' so its target list matches what the player can actually see — not
+    every object on the planet (the room is one PlanetRoom per planet).
+    """
+    from world.utils import is_player, is_building
+
+    loc = getattr(caller, "location", None)
+    cx = getattr(caller.db, "coord_x", None)
+    cy = getattr(caller.db, "coord_y", None)
+    if loc is None or cx is None or cy is None:
+        return []
+    cx, cy = int(cx), int(cy)
+    radius = CmdScan._vision_radius(caller)
+
+    candidates = []
+    getter = getattr(loc, "get_objects_in_area", None)
+    if callable(getter):
+        candidates = list(getter(cx - radius, cy - radius, cx + radius, cy + radius))
+    elif hasattr(loc, "get_objects_at"):
+        candidates = list(loc.get_objects_at(cx, cy))
+
+    out = []
+    for obj in candidates:
+        if obj is caller:
+            continue
+        ox = getattr(getattr(obj, "db", None), "coord_x", None)
+        oy = getattr(getattr(obj, "db", None), "coord_y", None)
+        if ox is None or oy is None:
+            continue
+        dist = max(abs(int(ox) - cx), abs(int(oy) - cy))  # Chebyshev, matches view
+        if dist > radius:
+            continue
+        if is_building(obj) or is_player(obj):
+            out.append((dist, obj))
+    out.sort(key=lambda t: t[0])
+    return out
+
+
+def _resolve_attack_target(caller, target_name):
+    """Resolve *target_name* to an in-view attackable, or return (None, message).
+
+    Matches the name against attackables within the caller's view (see
+    :func:`_attackables_in_view`), case-insensitively by prefix/substring,
+    nearest first. Returns ``(obj, None)`` on a unique/nearest match, or
+    ``(None, error_message)`` when nothing in view matches — so 'attack goblin'
+    can never target something on the far side of the planet.
+    """
+    name = target_name.strip().lower()
+    in_view = _attackables_in_view(caller)
+    if not in_view:
+        return None, "There's nothing in view to attack."
+
+    # Exact key match first, then prefix, then substring — nearest wins within
+    # each tier because the list is already sorted by distance.
+    def _key(obj):
+        return str(getattr(obj, "key", "")).lower()
+
+    for match in (lambda k: k == name,
+                  lambda k: k.startswith(name),
+                  lambda k: name in k):
+        for _dist, obj in in_view:
+            if match(_key(obj)):
+                return obj, None
+
+    return None, f"You don't see '{target_name}' nearby to attack."
+
+
 class CmdAttack(GameCommand):
     """Attack a player, building, or agent.
 
@@ -943,13 +1015,15 @@ class CmdAttack(GameCommand):
       attack turret
 
     Notes:
-      Aliases: at, a. Damage is your equipped weapon's power plus bonuses,
-      minus the target's armor. Melee weapons only reach the adjacent tile;
-      ranged weapons reach further and fire from a loaded magazine (see
-      'reload'). Equip a weapon first with 'equip'. Friendly fire is allowed —
-      you can attack your own buildings and agents, but it grants no XP and
-      still puts you in combat. Any attack puts you 'in combat' briefly (see
-      'score'). See 'help combat'.
+      Aliases: at, a. You can only attack a target within your view (what
+      'scan' shows) — the name matches the nearest such foe. Damage is your
+      equipped weapon's power plus bonuses, minus the target's armor. Melee
+      weapons reach any of the 8 adjacent tiles (including diagonals); ranged
+      weapons reach further and fire from a loaded magazine (see 'reload').
+      Equip a weapon first with 'equip'. Friendly fire is allowed — you can
+      attack your own buildings and agents, but it grants no XP and still puts
+      you in combat. Any attack puts you 'in combat' briefly (see 'score').
+      See 'help combat'.
     """
 
     key = "attack"
@@ -968,14 +1042,12 @@ class CmdAttack(GameCommand):
         if combat_engine is None:
             return
 
-        # Search for target in the caller's location
-        target = self.caller.search(target_name) if hasattr(self.caller, "search") else None
+        # Resolve the target among what the player can actually SEE (within
+        # vision radius), not every object on the planet. Prevents 'attack
+        # guard' from matching a guard on the far side of the map.
+        target, err = _resolve_attack_target(self.caller, target_name)
         if target is None:
-            self.caller.msg(f"Could not find target '{target_name}'.")
-            return
-
-        if target is self.caller:
-            self.caller.msg("You cannot attack yourself.")
+            self.caller.msg(err)
             return
 
         success, msg = combat_engine.queue_attack(self.caller, target)

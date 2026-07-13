@@ -132,14 +132,14 @@ class PlanetRoom(DefaultRoom):
         ]
 
     def get_nearby_players(self, x: int, y: int, radius: int) -> list:
-        """Return player characters within Manhattan distance *radius* of (x, y).
+        """Return player characters within Chebyshev distance *radius* of (x, y).
 
-        Used by turret auto-fire (and, later, guard AI) for target acquisition.
-        Visits only the (2*radius+1)² candidate tiles via the coordinate index's
-        O(1) ``get_at`` — cost is O(radius²), independent of total map
-        population — rather than scanning every occupied bucket. Filters to the
-        Manhattan-distance disc so the result matches the combat engine's range
-        model (which also uses Manhattan distance).
+        Used by turret auto-fire and guard AI for target acquisition. Visits the
+        (2*radius+1)² candidate tiles via the coordinate index's O(1) ``get_at``
+        — cost is O(radius²), independent of total map population. The whole box
+        IS the Chebyshev disc (``max(|dx|, |dy|) <= radius``), so every tile
+        visited is in range — matching the combat engine's Chebyshev range model
+        and the fog-of-war vision metric (a diagonal counts as distance 1).
 
         Skips index entries whose DB row was deleted (``pk is None``) — a delete
         path that bypasses ``at_object_leave`` can leave a stale ref in the
@@ -150,8 +150,6 @@ class PlanetRoom(DefaultRoom):
         players = []
         for cx in range(x - radius, x + radius + 1):
             for cy in range(y - radius, y + radius + 1):
-                if abs(cx - x) + abs(cy - y) > radius:
-                    continue  # outside the Manhattan disc (box corner)
                 for o in self.coord_index.get_at(cx, cy):
                     if getattr(o, "pk", True) is None:
                         continue  # stale ref to a deleted object

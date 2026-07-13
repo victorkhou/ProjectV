@@ -22,9 +22,15 @@ from world.event_bus import (
 from world.systems.base_system import BaseSystem
 
 
-def _manhattan_distance(x1: int, y1: int, x2: int, y2: int) -> int:
-    """Return the Manhattan distance between two coordinate pairs."""
-    return abs(x1 - x2) + abs(y1 - y2)
+def _tile_distance(x1: int, y1: int, x2: int, y2: int) -> int:
+    """Return the tile-reach distance between two coords (Chebyshev).
+
+    Delegates to :func:`world.utils.chebyshev_distance` — the single metric for
+    combat range/adjacency, so a diagonal tile is distance 1 (reachable by a
+    range-1 melee weapon), matching the vision model.
+    """
+    from world.utils import chebyshev_distance
+    return chebyshev_distance(x1, y1, x2, y2)
 
 
 class CombatEngine(BaseSystem):
@@ -104,8 +110,9 @@ class CombatEngine(BaseSystem):
         Validation:
             1. Attacker has a weapon (equipped, or supplied via *weapon*)
             2. Target is not self
-            3. Target is in range (Manhattan distance <= weapon range;
-               a melee weapon's effective range is always 1)
+            3. Target is in range (Chebyshev distance <= weapon range;
+               a melee weapon's effective range is always 1, so any of the 8
+               adjacent tiles — including diagonals — is in melee reach)
             4. Ammo (melee weapons never consume ammo):
                - A ranged weapon that declares an ammo_type must have
                  ``db.loaded >= ammo_per_shot`` (else the attack is rejected
@@ -188,8 +195,8 @@ class CombatEngine(BaseSystem):
                 target_loc = self._get_target_location(target)
                 t_coords = self._get_coords(target_loc)
             if a_coords and t_coords:
-                dist = _manhattan_distance(a_coords[0], a_coords[1],
-                                           t_coords[0], t_coords[1])
+                dist = _tile_distance(a_coords[0], a_coords[1],
+                                      t_coords[0], t_coords[1])
             else:
                 dist = "?"
             return False, (
@@ -515,7 +522,7 @@ class CombatEngine(BaseSystem):
                 if p_coords is None:
                     continue
 
-                dist = _manhattan_distance(
+                dist = _tile_distance(
                     b_coords[0], b_coords[1],
                     p_coords[0], p_coords[1],
                 )
@@ -954,7 +961,7 @@ class CombatEngine(BaseSystem):
     def _validate_range(
         self, attacker: Any, target: Any, weapon_range: int
     ) -> bool:
-        """Check if target is within weapon range (Manhattan distance)."""
+        """Check if target is within weapon range (Chebyshev distance)."""
         # Read coords from the entity directly (handles PlanetRoom players)
         a_coords = self._get_coords(attacker)
         t_coords = self._get_coords(target)
@@ -971,7 +978,7 @@ class CombatEngine(BaseSystem):
             # Can't validate without coordinates — allow by default
             return True
 
-        dist = _manhattan_distance(
+        dist = _tile_distance(
             a_coords[0], a_coords[1],
             t_coords[0], t_coords[1],
         )
@@ -1475,7 +1482,11 @@ class _GuardWeapon(SyntheticWeapon):
     def __init__(
         self, damage: int, weapon_range: int, weapon_type: str = "melee"
     ) -> None:
-        super().__init__(damage, weapon_range, name="Guard")
+        # Name the weapon by how it attacks so the combat notice reads
+        # naturally ("...with a melee strike" / "...with a rifle") instead of
+        # the nonsensical "...with Guard".
+        name = "a rifle" if weapon_type == "ranged" else "a melee strike"
+        super().__init__(damage, weapon_range, name=name)
         self.weapon_type = weapon_type
         self.ammo_type = None
         self.ammo_per_shot = 0

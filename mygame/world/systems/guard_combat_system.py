@@ -163,7 +163,9 @@ class GuardCombatSystem(BaseSystem):
         if tcoords is None:
             t_loc = getattr(target, "location", target)
             tcoords = self._get_coords(t_loc)
-        dist = (abs(gx - tcoords[0]) + abs(gy - tcoords[1])) if tcoords else None
+        from world.utils import chebyshev_distance
+        dist = (chebyshev_distance(gx, gy, tcoords[0], tcoords[1])
+                if tcoords else None)
 
         # A melee guard can only reach a target who is INSIDE a building from the
         # SAME tile (buildings are rooms for melee — see CombatEngine._melee_
@@ -206,7 +208,7 @@ class GuardCombatSystem(BaseSystem):
         a closed building is not acquired — ranged fire can't reach an occupant
         under cover.
         """
-        from world.utils import is_owner, player_is_sheltered
+        from world.utils import chebyshev_distance, is_owner, player_is_sheltered
 
         players = self._nearby_players(location, gx, gy, aggro_radius)
         nearest = None
@@ -224,7 +226,7 @@ class GuardCombatSystem(BaseSystem):
                 p_coords = self._get_coords(p_loc)
             if p_coords is None:
                 continue
-            dist = abs(gx - p_coords[0]) + abs(gy - p_coords[1])
+            dist = chebyshev_distance(gx, gy, p_coords[0], p_coords[1])
             if dist > aggro_radius or dist >= nearest_dist:
                 continue
             # A Wall between the guard and the target blocks a ranged shot; skip
@@ -256,7 +258,7 @@ class GuardCombatSystem(BaseSystem):
           doubles usually don't, so this is a no-op there) and has no step
           already queued.
         - Leashed to home: it will not step to a tile farther than
-          ``aggro_radius`` (Manhattan) from its post, so guards defend their
+          ``aggro_radius`` (Chebyshev) from its post, so guards defend their
           base rather than being lured across the map.
         - One tile per call along the axis of greatest distance. Passability is
           enforced downstream by ``NPC.advance_movement`` (it halts on an
@@ -276,8 +278,9 @@ class GuardCombatSystem(BaseSystem):
         nx, ny = self._greedy_step(gx, gy, tcoords[0], tcoords[1])
         if (nx, ny) == (gx, gy):
             return
-        # Leash: never step beyond aggro_radius from home.
-        if abs(nx - home[0]) + abs(ny - home[1]) > aggro_radius:
+        # Leash: never step beyond aggro_radius (Chebyshev) from home.
+        from world.utils import chebyshev_distance
+        if chebyshev_distance(nx, ny, home[0], home[1]) > aggro_radius:
             return
         self._queue_step(npc, nx, ny)
 

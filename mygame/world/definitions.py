@@ -331,10 +331,10 @@ class BalanceConfig:
     guard_melee_damage: int = 10
     #: Base damage for ranged guards (fortress soldiers, role "soldier").
     guard_ranged_damage: int = 15
-    #: Weapon range (Manhattan tiles) for ranged guards. Melee guards are
-    #: always range 1.
+    #: Weapon range (Chebyshev tiles) for ranged guards. Melee guards are
+    #: always range 1 (any of the 8 adjacent tiles, incl. diagonals).
     guard_ranged_range: int = 4
-    #: Detection distance (Manhattan tiles) within which a guard acquires and
+    #: Detection distance (Chebyshev tiles) within which a guard acquires and
     #: attacks the nearest non-owner player each tick.
     guard_aggro_radius: int = 5
 

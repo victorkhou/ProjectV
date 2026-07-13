@@ -103,7 +103,7 @@ BASE_CARRY_WEIGHT = 1000
 #: Per-unit weight for a resource absent from ``BalanceConfig.resource_weights``.
 DEFAULT_RESOURCE_WEIGHT = 1.0
 
-#: Default throw range (Manhattan) for a throwable whose effect declares none.
+#: Default throw range (Chebyshev) for a throwable whose effect declares none.
 DEFAULT_THROW_RANGE = 4
 
 # ------------------------------------------------------------------ #

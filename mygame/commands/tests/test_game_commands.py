@@ -939,11 +939,69 @@ class TestCmdAttack(unittest.TestCase):
         cmd.func()
         self.assertTrue(any("Usage" in m for m in caller._messages))
 
-    def test_target_not_found(self):
+    def test_nothing_in_view_to_attack(self):
+        """With no attackables in view, the command says so (it no longer
+        searches the whole planet)."""
         caller = FakeCaller(systems={"combat_engine": object()})
         cmd = _make_cmd(CmdAttack, caller, " ghost")
         cmd.func()
-        self.assertTrue(any("Could not find" in m for m in caller._messages))
+        self.assertTrue(any("nothing in view" in m for m in caller._messages))
+
+    def test_named_target_not_in_view(self):
+        """A named target that isn't among the in-view attackables is rejected
+        with a 'don't see it nearby' message — never targets across the map."""
+        caller = FakeCaller(systems={"combat_engine": object()})
+        # Put an unrelated attackable in view so the list is non-empty.
+        caller.location.contents = [_FakeAttackable("Wolf", 5, 6)]
+        cmd = _make_cmd(CmdAttack, caller, " ghost")
+        cmd.func()
+        self.assertTrue(any("don't see" in m for m in caller._messages))
+
+    def test_attacks_in_view_target_by_name(self):
+        """A named target within view is resolved and queued for attack."""
+        queued = []
+
+        class _Engine:
+            def queue_attack(self, attacker, target):
+                queued.append((attacker, target))
+                return True, "Attack queued."
+
+        caller = FakeCaller(systems={"combat_engine": _Engine()})
+        guard = _FakeAttackable("Outpost #2 Guard-1", 5, 6)
+        caller.location.contents = [guard]
+        cmd = _make_cmd(CmdAttack, caller, " guard")
+        cmd.func()
+        self.assertEqual(len(queued), 1)
+        self.assertIs(queued[0][1], guard)
+
+    def test_attack_only_sees_in_view_not_whole_map(self):
+        """A guard far outside vision radius is NOT targetable even by name —
+        the target list is scoped to the player's view, not the whole planet."""
+        queued = []
+
+        class _Engine:
+            def queue_attack(self, attacker, target):
+                queued.append((attacker, target))
+                return True, "Attack queued."
+
+        caller = FakeCaller(systems={"combat_engine": _Engine()})
+        faraway = _FakeAttackable("Outpost #9 Guard-1", 90, 90)
+        caller.location.contents = [faraway]
+        cmd = _make_cmd(CmdAttack, caller, " guard")
+        cmd.func()
+        self.assertEqual(queued, [])
+        self.assertTrue(any("nothing in view" in m or "don't see" in m
+                            for m in caller._messages))
+
+
+class _FakeAttackable:
+    """An in-view attackable NPC (carries combat_xp so is_player matches)."""
+    def __init__(self, key, x, y):
+        self.key = key
+        self.db = types.SimpleNamespace(
+            coord_x=x, coord_y=y, combat_xp=0, npc_type="enemy",
+        )
+
 
 class TestCmdEquip(unittest.TestCase):
     def test_no_args(self):

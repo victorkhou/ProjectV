@@ -448,3 +448,24 @@ class TestSameTile:
     def test_missing_coords_false(self):
         from mygame.world.utils import same_tile
         assert same_tile(self._at(3, 4), object()) is False
+
+
+class TestChebyshevDistance:
+    """chebyshev_distance: max(|dx|,|dy|) — a diagonal counts as 1."""
+
+    def test_same_tile_is_zero(self):
+        from mygame.world.utils import chebyshev_distance
+        assert chebyshev_distance(3, 3, 3, 3) == 0
+
+    def test_orthogonal_step_is_one(self):
+        from mygame.world.utils import chebyshev_distance
+        assert chebyshev_distance(0, 0, 0, 1) == 1
+
+    def test_diagonal_step_is_one(self):
+        from mygame.world.utils import chebyshev_distance
+        assert chebyshev_distance(0, 0, 1, 1) == 1  # the reported diagonal
+
+    def test_takes_max_axis(self):
+        from mygame.world.utils import chebyshev_distance
+        assert chebyshev_distance(0, 0, 3, 1) == 3
+        assert chebyshev_distance(0, 0, 1, 4) == 4

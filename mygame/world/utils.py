@@ -115,6 +115,18 @@ def get_coords(obj: Any) -> tuple[int, int] | None:
     return None
 
 
+def chebyshev_distance(x1: int, y1: int, x2: int, y2: int) -> int:
+    """Return the Chebyshev (chessboard) distance between two coordinate pairs.
+
+    ``max(|dx|, |dy|)`` — a diagonal step counts as distance 1, so all eight
+    surrounding tiles are "1 away". This is the SINGLE distance metric for the
+    game's spatial reach: combat range/adjacency, guard/turret target
+    acquisition, and throw AoE all use it, matching the Chebyshev vision circles
+    used by fog-of-war. So "1 north and 1 west" (a diagonal) is in melee reach.
+    """
+    return max(abs(x1 - x2), abs(y1 - y2))
+
+
 def nearby_players(location: Any, x: int, y: int, radius: int) -> list:
     """Return players near ``(x, y)`` within *radius* via *location*.
 

@@ -188,13 +188,16 @@ class OutpostSpawnerSystem(BaseSystem):
                     set_obj_attr(building, "hp", b.hp)
                     set_obj_attr(building, "hp_max", b.hp)
 
-        # 3. Guards at the HQ tile.
+        # 3. Guards at the HQ tile. A running 1-based index across all guard
+        # groups makes each guard uniquely named (Guard-1, Guard-2, Soldier-3…).
         guard_hp = self._guard_hp(tier)
+        guard_index = 0
         for g in template.guards:
             hp = g.hp if g.hp is not None else guard_hp
             for _ in range(max(0, g.count)):
+                guard_index += 1
                 self._npc_factory.create_enemy_guard(
-                    sentinel, room, hx, hy, g.role, hp
+                    sentinel, room, hx, hy, g.role, hp, index=guard_index
                 )
 
         record = {

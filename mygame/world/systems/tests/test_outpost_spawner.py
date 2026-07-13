@@ -166,8 +166,9 @@ class FakeNpcFactory:
         self.sentinels.append(s)
         return s
 
-    def create_enemy_guard(self, owner, tile, x, y, role, hp):
+    def create_enemy_guard(self, owner, tile, x, y, role, hp, index=1):
         g = FakeGuard(owner, tile, x, y, role, hp)
+        g.index = index
         self.guards.append(g)
         return g
 
@@ -312,6 +313,14 @@ class TestSpawnBase(unittest.TestCase):
         spawner, npc, bf, room, _ = _make_spawner()
         spawner.spawn_base("earth", "outpost", coords=(10, 10))
         self.assertTrue(all(g.db.hp == 80 for g in npc.guards))  # outpost_guard_hp
+
+    def test_guards_get_distinct_incrementing_indices(self):
+        """Each guard is created with a unique 1-based index so it can be named
+        distinctly (the factory turns the index into a unique key)."""
+        spawner, npc, bf, room, _ = _make_spawner()
+        spawner.spawn_base("earth", "outpost", coords=(10, 10))
+        indices = sorted(g.index for g in npc.guards)
+        self.assertEqual(indices, [1, 2])  # two outpost guards → 1, 2
         npc.guards.clear()
         spawner.spawn_base("earth", "fortress", coords=(30, 30))
         self.assertTrue(all(g.db.hp == 150 for g in npc.guards))  # fortress_guard_hp

@@ -350,7 +350,7 @@ HELP_ENTRY_DICTS = [
 
             # Attacking
 
-            |wattack <target>|n (|wa|n) — attack a player, building, or agent in range. Your equipped |cweapon|n decides your damage and reach: melee weapons hit only the tile next to you; ranged weapons reach further. Equip a weapon first (|whelp equipment|n).
+            |wattack <target>|n (|wa|n) — attack a player, building, or agent in range. You can only target something within your |cview|n (what 'scan' lists), so 'attack guard' picks the nearest matching foe you can actually see. Your equipped |cweapon|n decides your damage and reach: melee weapons hit any of the eight tiles touching you — including diagonals — while ranged weapons reach further. Equip a weapon first (|whelp equipment|n).
 
             # The Combat State
 

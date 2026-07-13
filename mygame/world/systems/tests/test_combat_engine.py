@@ -408,6 +408,35 @@ class TestQueueAttackValidation(unittest.TestCase):
         self.assertTrue(ok)
         self.assertEqual(len(engine.pending_actions), 1)
 
+    @staticmethod
+    def _melee_weapon():
+        w = FakeWeapon(damage=25, weapon_range=1, key="knife")
+        w.weapon_type = "melee"
+        return w
+
+    def test_melee_reaches_diagonal_neighbour(self):
+        """Chebyshev range: a melee attacker hits a foe one tile diagonally
+        away (1 north + 1 west) — the reported case, now in reach."""
+        engine, _ = _make_engine()
+        attacker = FakePlayer(name="Attacker", weapon=self._melee_weapon(),
+                              location=FakeTile(xyz=(0, 0, "earth")))
+        target = FakePlayer(name="Target",
+                            location=FakeTile(xyz=(1, 1, "earth")))  # diagonal
+        ok, _ = engine.queue_attack(attacker, target)
+        self.assertTrue(ok)
+
+    def test_melee_rejects_two_tiles_away(self):
+        """A foe two tiles away on an axis (Chebyshev 2) is still out of melee
+        range 1."""
+        engine, _ = _make_engine()
+        attacker = FakePlayer(name="Attacker", weapon=self._melee_weapon(),
+                              location=FakeTile(xyz=(0, 0, "earth")))
+        target = FakePlayer(name="Target",
+                            location=FakeTile(xyz=(2, 0, "earth")))
+        ok, msg = engine.queue_attack(attacker, target)
+        self.assertFalse(ok)
+        self.assertIn("out of range", msg)
+
     def test_insufficient_ammo_rejected(self):
         weapon = FakeWeapon(damage=25, weapon_range=5, ammo_cost={"Iron": 1})
         engine, _ = _make_engine()

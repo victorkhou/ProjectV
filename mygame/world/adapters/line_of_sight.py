@@ -1,7 +1,7 @@
 """
 Line-of-sight for combat targeting.
 
-Turrets and NPC guards acquire targets by Manhattan distance. Without a
+Turrets and NPC guards acquire targets by Chebyshev distance. Without a
 line-of-sight test they fire *through* their own Walls, which trivializes the
 "breach the walls to reach the core" raid design. This adapter builds a cheap
 LOS predicate: a shot is blocked when a ``combat_barrier`` building (a Wall)

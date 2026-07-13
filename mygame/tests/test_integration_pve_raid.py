@@ -245,8 +245,9 @@ class FakeNpcFactory:
         self.sentinels.append(s)
         return s
 
-    def create_enemy_guard(self, owner, tile, x, y, role, hp):
+    def create_enemy_guard(self, owner, tile, x, y, role, hp, index=1):
         g = FakeGuard(owner, tile, x, y, role, hp)
+        g.index = index
         self.guards.append(g)
         return g
 

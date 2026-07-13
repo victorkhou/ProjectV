@@ -483,13 +483,13 @@ class TestProperty13TurretTargeting(unittest.TestCase):
 
         engine.process_turrets([turret])
 
-        # Find expected nearest within radius
+        # Find expected nearest within radius (Chebyshev — the engine's metric).
         in_range = []
         for p in players:
             if p is owner:
                 continue
             px, py = p.location.x, p.location.y
-            dist = abs(turret_x - px) + abs(turret_y - py)
+            dist = max(abs(turret_x - px), abs(turret_y - py))
             if dist <= turret_radius:
                 in_range.append((dist, p))
 
@@ -497,11 +497,14 @@ class TestProperty13TurretTargeting(unittest.TestCase):
             self.assertEqual(len(engine.pending_actions), 0)
         else:
             self.assertEqual(len(engine.pending_actions), 1)
-            in_range.sort(key=lambda x: x[0])
-            expected_target = in_range[0][1]
-            self.assertIs(
-                engine.pending_actions[0]["target"], expected_target,
-            )
+            # Ties (several at the same min distance) are broken by iteration
+            # order, which may differ from ours — so assert the chosen target is
+            # AT the minimum Chebyshev distance, not a specific identity.
+            min_dist = min(d for d, _ in in_range)
+            chosen = engine.pending_actions[0]["target"]
+            cx2, cy2 = chosen.location.x, chosen.location.y
+            chosen_dist = max(abs(turret_x - cx2), abs(turret_y - cy2))
+            self.assertEqual(chosen_dist, min_dist)
 
     @given(
         player_dist=st.integers(min_value=11, max_value=100),
@@ -889,8 +892,9 @@ class TestProperty6MeleeRange(unittest.TestCase):
 
         ok, _ = engine.queue_attack(attacker, target)
 
-        # Success iff within an effective range of 1, ignoring range_stat.
-        self.assertEqual(ok, (dx + dy) <= 1)
+        # Success iff within an effective range of 1 (Chebyshev — any of the 8
+        # adjacent tiles incl. diagonals), ignoring range_stat.
+        self.assertEqual(ok, max(dx, dy) <= 1)
         # Melee never touches the magazine, whether it hit or missed.
         self.assertEqual(weapon.db.loaded, loaded)
 

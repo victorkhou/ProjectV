@@ -486,6 +486,16 @@ cover. So a raider who ducks into an open enemy structure stops melee guards fro
 reaching them (the guard must chase onto the tile) but is still shot by turrets
 and soldiers.
 
+**Distance metric — Chebyshev everywhere in combat.** All combat range/adjacency,
+guard/turret target acquisition, and throw AoE use `world.utils.chebyshev_distance`
+(`max(|dx|,|dy|)`) — the same metric as the fog‑of‑war vision circles. A diagonal
+tile is therefore distance 1, so a range‑1 melee weapon reaches all eight
+neighbours. (Base‑placement separation, the A* path heuristic, and harvester
+delivery keep their own Manhattan sums — they are not combat reach.) Player
+`attack` resolves its target only among entities within the player's *view*
+(`_attackables_in_view`, vision‑radius Chebyshev), so it can't target across the
+planet.
+
 ```mermaid
 sequenceDiagram
     autonumber

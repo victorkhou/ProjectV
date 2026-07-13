@@ -157,25 +157,34 @@ class TestGetNearbyPlayers(unittest.TestCase):
     def _room(self):
         return _RoomWithIndex(CoordinateIndex())
 
-    def test_returns_players_within_manhattan_radius(self):
+    def test_returns_players_within_chebyshev_radius(self):
         room = self._room()
         at_center = _Player("Center", 5, 5)
-        edge = _Player("Edge", 7, 5)       # dist 2
-        corner = _Player("Corner", 6, 6)   # dist 2 (Manhattan), inside a r=2 disc
+        edge = _Player("Edge", 7, 5)       # Chebyshev dist 2
+        corner = _Player("Corner", 7, 7)   # Chebyshev dist 2 (diagonal corner)
         room.coord_index.add(at_center, 5, 5)
         room.coord_index.add(edge, 7, 5)
-        room.coord_index.add(corner, 6, 6)
+        room.coord_index.add(corner, 7, 7)
 
         found = room.get_nearby_players(5, 5, 2)
         self.assertCountEqual(found, [at_center, edge, corner])
 
-    def test_excludes_outside_manhattan_radius_even_if_in_bbox(self):
-        """A player inside the bounding box but outside the Manhattan disc is
-        excluded — (6,6) is in the r=2 bbox of (5,5) but Manhattan dist is... 2,
-        so use (6,6) with r=1: bbox includes it, Manhattan dist 2 > 1."""
+    def test_includes_diagonal_at_radius_one(self):
+        """A diagonal neighbour (6,6) is Chebyshev distance 1 from (5,5), so it
+        IS within radius 1 — matching the combat/vision Chebyshev metric (a
+        diagonal counts as one tile away)."""
         room = self._room()
-        diagonal = _Player("Diagonal", 6, 6)  # in bbox of r=1, Manhattan dist 2
+        diagonal = _Player("Diagonal", 6, 6)
         room.coord_index.add(diagonal, 6, 6)
+        found = room.get_nearby_players(5, 5, 1)
+        self.assertEqual(found, [diagonal])
+
+    def test_excludes_outside_chebyshev_radius(self):
+        """A player two tiles away on both axes (7,7 → Chebyshev 2) is outside
+        radius 1."""
+        room = self._room()
+        far = _Player("Far", 7, 7)
+        room.coord_index.add(far, 7, 7)
         found = room.get_nearby_players(5, 5, 1)
         self.assertEqual(found, [])
 

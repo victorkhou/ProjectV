@@ -609,5 +609,20 @@ class TestGuardRobustness(unittest.TestCase):
         self.assertEqual(engine.pending_actions[0]["target"], hostile)
 
 
+class TestGuardWeaponName(unittest.TestCase):
+    """A guard's synthetic weapon reports a sensible name so the combat notice
+    reads '...with a melee strike' / '...with a rifle', not '...with Guard'."""
+
+    def test_melee_guard_weapon_named_melee_strike(self):
+        from world.systems.combat_engine import _GuardWeapon
+        w = _GuardWeapon(10, 1, weapon_type="melee")
+        self.assertEqual(w.key, "a melee strike")
+
+    def test_ranged_guard_weapon_named_rifle(self):
+        from world.systems.combat_engine import _GuardWeapon
+        w = _GuardWeapon(15, 4, weapon_type="ranged")
+        self.assertEqual(w.key, "a rifle")
+
+
 if __name__ == "__main__":
     unittest.main()
