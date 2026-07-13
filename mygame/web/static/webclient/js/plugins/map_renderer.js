@@ -260,6 +260,14 @@ let map_renderer_plugin = (function () {
                 var tx=bounds.min_x+col, ty=bounds.max_y-row;
                 var tile=lookup[tx+","+ty], sx=col*TILE_SIZE, sy=row*TILE_SIZE;
                 if(!tile){ctx.fillStyle="#050505";ctx.fillRect(sx,sy,TILE_SIZE,TILE_SIZE);continue;}
+                // Out-of-bounds tiles (beyond the planet edge) are fog of war and
+                // not real land — draw a flat grey off-map fill, not dimmed
+                // terrain, so the map edge reads as "outside the world".
+                if(tile.out_of_bounds){
+                    ctx.fillStyle="#1a1a1a";ctx.fillRect(sx,sy,TILE_SIZE,TILE_SIZE);
+                    ctx.strokeStyle="rgba(0,0,0,0.25)";ctx.lineWidth=0.5;ctx.strokeRect(sx,sy,TILE_SIZE,TILE_SIZE);
+                    continue;
+                }
                 var bc=getColor(tile.terrain);
                 if(tile.state==="visible"){ctx.fillStyle=bc;}
                 else if(tile.state==="fog"){ctx.fillStyle=dimColor(bc,0.35);}

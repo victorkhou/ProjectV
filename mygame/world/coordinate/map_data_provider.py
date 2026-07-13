@@ -90,7 +90,14 @@ class MapDataProvider:
                 coord = (x, y)
                 terrain = gen.get_terrain(x, y) if gen else "unknown"
 
-                if coord in visible_tiles:
+                # Out-of-bounds tiles (beyond the planet edge) are not part of
+                # the world — always fog, checked FIRST so an edge tile inside
+                # the (unclamped) vision circle still fogs. The out_of_bounds
+                # flag lets the Canvas draw the map edge distinctly.
+                if not self._fog_system.is_in_bounds(planet, x, y):
+                    tile_data = {"x": x, "y": y, "terrain": terrain,
+                                 "state": "fog", "out_of_bounds": True}
+                elif coord in visible_tiles:
                     tile_data = self._visible_tile_from_objects(
                         x, y, terrain, player, objects_by_coord.get(coord)
                     )

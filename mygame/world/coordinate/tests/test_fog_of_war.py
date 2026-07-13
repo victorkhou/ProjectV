@@ -463,3 +463,53 @@ class TestDiscoveryMemoryInit:
         result = fow.get_tile_visibility(player, 0, 0, set())
         # Should not crash, returns unexplored
         assert result == "unexplored"
+
+
+# -------------------------------------------------------------- #
+#  Tests: is_in_bounds (out-of-bounds = fog of war)
+# -------------------------------------------------------------- #
+
+class TestIsInBounds:
+    """A tile beyond a planet's 0,0..max coords is out of bounds and rendered
+    as fog. Bounds come from an injected check (planet_registry's
+    is_valid_coordinate); unwired falls open so tests/edge cases never fog real
+    tiles."""
+
+    @staticmethod
+    def _bounds_10x8(x, y, planet):
+        # A 10x8 'earth' map: 0 <= x < 10, 0 <= y < 8 (like is_valid_coordinate).
+        if planet != "earth":
+            raise KeyError(planet)
+        return 0 <= x < 10 and 0 <= y < 8
+
+    def test_falls_open_when_unwired(self):
+        fow = FogOfWarSystem(_FakeBalance())
+        # No bounds func injected -> every tile is in-bounds.
+        assert fow.is_in_bounds("earth", -50, -50) is True
+        assert fow.is_in_bounds("earth", 9999, 9999) is True
+
+    def test_in_bounds_true_inside_map(self):
+        fow = FogOfWarSystem(_FakeBalance())
+        fow.set_in_bounds_func(self._bounds_10x8)
+        assert fow.is_in_bounds("earth", 0, 0) is True
+        assert fow.is_in_bounds("earth", 9, 7) is True
+        assert fow.is_in_bounds("earth", 5, 4) is True
+
+    def test_out_of_bounds_beyond_origin(self):
+        fow = FogOfWarSystem(_FakeBalance())
+        fow.set_in_bounds_func(self._bounds_10x8)
+        assert fow.is_in_bounds("earth", -1, 0) is False
+        assert fow.is_in_bounds("earth", 0, -1) is False
+
+    def test_out_of_bounds_beyond_max(self):
+        fow = FogOfWarSystem(_FakeBalance())
+        fow.set_in_bounds_func(self._bounds_10x8)
+        assert fow.is_in_bounds("earth", 10, 0) is False  # x == width
+        assert fow.is_in_bounds("earth", 0, 8) is False    # y == height
+
+    def test_unknown_planet_falls_open(self):
+        """An unknown planet key (bounds func raises KeyError) must not fog a
+        tile — falls open."""
+        fow = FogOfWarSystem(_FakeBalance())
+        fow.set_in_bounds_func(self._bounds_10x8)
+        assert fow.is_in_bounds("nonexistent", 3, 3) is True

@@ -730,3 +730,32 @@ class TestGetTileSymbol:
         sym = renderer._get_tile_symbol(1, 1, "earth", "fog", player, set())
         assert sym == "X?"
         assert len(sym) == 2
+
+
+# -------------------------------------------------------------- #
+#  Tests: out-of-bounds tiles render as fog of war
+# -------------------------------------------------------------- #
+
+class TestOutOfBounds:
+    """Tiles beyond a planet's 0,0..max coords render as the grey off-map fill,
+    even when inside the player's (unclamped) vision circle."""
+
+    def test_out_of_bounds_tiles_render_off_map_fill(self):
+        from mygame.world.coordinate.procedural_map_renderer import _OUT_OF_BOUNDS
+        renderer, fog = _make_renderer(pvr=2)
+        # A 6x6 map; player at the origin so the viewport includes negative
+        # (off-map) tiles that are inside the vision radius.
+        fog.set_in_bounds_func(lambda x, y, planet: 0 <= x < 6 and 0 <= y < 6)
+        player = _FakePlayer(x=0, y=0)
+        result = renderer.render(player, [])
+        # The off-map fill appears (negative-coord tiles in view are off-map).
+        assert _OUT_OF_BOUNDS in result
+        # The player @@ still renders (an in-bounds tile is unaffected).
+        assert "@@" in result
+
+    def test_no_off_map_fill_without_bounds_func(self):
+        from mygame.world.coordinate.procedural_map_renderer import _OUT_OF_BOUNDS
+        renderer, _ = _make_renderer(pvr=2)  # no bounds func -> falls open
+        player = _FakePlayer(x=0, y=0)
+        result = renderer.render(player, [])
+        assert _OUT_OF_BOUNDS not in result

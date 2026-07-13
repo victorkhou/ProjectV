@@ -183,3 +183,37 @@ class TestMapDataProvider:
         fog_coords = {(t["x"], t["y"]) for t in data2["tiles"] if t["state"] == "fog"}
         # (5,5) was visible before, now should be fog
         assert (5, 5) in fog_coords
+
+    def test_out_of_bounds_tiles_are_fog(self):
+        """Tiles beyond the planet's 0,0..max coords render as fog with an
+        out_of_bounds flag — even when they fall inside the vision circle."""
+        provider, _ = self._make_provider(pvr=2)  # viewport = player ± (2 + border)
+        # A small 3x3 'earth' map (0..2); player at the origin so the viewport
+        # spans negative (off-map) coords AND the past-max edge (x==3).
+        provider._fog_system.set_in_bounds_func(
+            lambda x, y, planet: 0 <= x < 3 and 0 <= y < 3
+        )
+        player = _FakePlayer(x=0, y=0)
+        data = provider.get_map_data(player, [])
+
+        by_coord = {(t["x"], t["y"]): t for t in data["tiles"]}
+        # A negative tile is inside the vision radius (Chebyshev 1) but off-map:
+        # it must be fog + flagged, NOT visible.
+        oob = by_coord[(-1, -1)]
+        assert oob["state"] == "fog"
+        assert oob.get("out_of_bounds") is True
+        # An in-bounds tile at the player is still visible (not flagged).
+        here = by_coord[(0, 0)]
+        assert here["state"] == "visible"
+        assert "out_of_bounds" not in here
+        # A tile past the max edge (x == width) is also fogged.
+        assert by_coord[(3, 0)]["state"] == "fog"
+        assert by_coord[(3, 0)].get("out_of_bounds") is True
+
+    def test_in_bounds_unaffected_when_no_bounds_func(self):
+        """Without an injected bounds func, no tile is flagged out_of_bounds
+        (backward-compatible)."""
+        provider, _ = self._make_provider(pvr=2)
+        player = _FakePlayer(x=0, y=0)
+        data = provider.get_map_data(player, [])
+        assert not any(t.get("out_of_bounds") for t in data["tiles"])

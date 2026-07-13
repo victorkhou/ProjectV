@@ -46,10 +46,39 @@ class FogOfWarSystem:
         self.player_vision_radius: int = balance.player_vision_radius
         self.building_vision_radius: int = balance.building_vision_radius
         self._map_border: int = getattr(balance, "map_border_tiles", 5)
+        #: Injected ``(x, y, planet_key) -> bool`` map-bounds check (the
+        #: PlanetRegistry's ``is_valid_coordinate``), wired at the composition
+        #: root. When unset, every tile is treated as in-bounds (tests /
+        #: unwired), so the bounds overlay only ever ADDS edge fog, never hides
+        #: a real tile.
+        self._in_bounds_func = None
 
     # ------------------------------------------------------------------ #
     #  Public API
     # ------------------------------------------------------------------ #
+
+    def set_in_bounds_func(self, fn) -> None:
+        """Inject the map-bounds check (``planet_registry.is_valid_coordinate``).
+
+        Late-bound at the composition root because the PlanetRegistry is built
+        after the FogOfWarSystem.
+        """
+        self._in_bounds_func = fn
+
+    def is_in_bounds(self, planet: str, x: int, y: int) -> bool:
+        """Return True if tile ``(x, y)`` is inside *planet*'s map bounds.
+
+        A tile beyond ``0,0`` or the planet's max coords is OUT of bounds — it
+        is not part of the world and the renderers show it as fog of war. Falls
+        open (True) when no bounds func is wired or the planet is unknown, so an
+        unwired/test context never turns real tiles into edge fog. Never raises.
+        """
+        if self._in_bounds_func is None:
+            return True
+        try:
+            return bool(self._in_bounds_func(int(x), int(y), planet))
+        except Exception:  # noqa: BLE001 - unknown planet / bad coords: fall open
+            return True
 
     def get_visible_tiles(
         self, player: Any, player_buildings: list[Any]

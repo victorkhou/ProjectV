@@ -1127,6 +1127,33 @@ class LiveBootSmokeTest(EvenniaTest):
         finally:
             _teardown_game(systems)
 
+    def test_out_of_bounds_renders_as_fog_on_real_objects(self):
+        """On real objects: the FogOfWarSystem gets planet_registry.is_valid_
+        coordinate wired at boot, so a tile beyond a real planet's bounds is
+        out-of-bounds (fog), while a tile inside it is not. Exercises the real
+        composition-root wiring, not a stub."""
+        from server.conf.game_init import initialize_game
+
+        systems = initialize_game()
+        try:
+            fog = systems["fog_system"]
+            planet_registry = systems["planet_registry"]
+            planet_rooms = systems.get("planet_rooms") or {}
+            self.assertTrue(planet_rooms, "no planet rooms at boot")
+            planet_key = next(iter(planet_rooms.keys()))
+            space = planet_registry.get_space(planet_key)
+
+            # Origin is in-bounds; one tile below/left of origin is off-map.
+            self.assertTrue(fog.is_in_bounds(planet_key, 0, 0))
+            self.assertFalse(fog.is_in_bounds(planet_key, -1, 0))
+            self.assertFalse(fog.is_in_bounds(planet_key, 0, -1))
+            # One tile past the max edge is off-map; the last valid tile is in.
+            self.assertTrue(fog.is_in_bounds(planet_key, space.width - 1, space.height - 1))
+            self.assertFalse(fog.is_in_bounds(planet_key, space.width, 0))
+            self.assertFalse(fog.is_in_bounds(planet_key, 0, space.height))
+        finally:
+            _teardown_game(systems)
+
 
 def _teardown_game(systems):
     """Best-effort teardown: stop any scripts initialize_game created so they

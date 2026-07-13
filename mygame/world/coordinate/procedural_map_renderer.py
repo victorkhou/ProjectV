@@ -90,6 +90,7 @@ _TERRAIN_COLORS: dict[str, str] = {
 
 _FOG_COLOR = "|x"  # grey for fog-of-war tiles
 _UNEXPLORED = "|X..|n"  # near-black dots for never-seen tiles
+_OUT_OF_BOUNDS = "|x##|n"  # grey fill for tiles beyond the map edge (fog of war)
 
 
 class ProceduralMapRenderer:
@@ -187,7 +188,14 @@ class ProceduralMapRenderer:
             row: list[str] = []
             for x in range(min_x, max_x + 1):
                 coord = (x, y)
-                if coord in visible_tiles:
+                # Out-of-bounds tiles (beyond the planet edge) are not part of
+                # the world — always fog, checked FIRST so an edge tile that
+                # falls inside the player's vision circle still fogs (the vision
+                # circle is not clamped to the map). Rendered as a grey off-map
+                # fill (not dimmed terrain, which there is none of off-map).
+                if not self._fog_system.is_in_bounds(planet, x, y):
+                    sym = _OUT_OF_BOUNDS
+                elif coord in visible_tiles:
                     # Check if the player is on this tile
                     if coord == player_coord:
                         sym = "|Y@@|n"

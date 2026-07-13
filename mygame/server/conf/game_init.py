@@ -337,6 +337,9 @@ def initialize_game() -> dict:
         else:
             from world.definitions import BalanceConfig
             fog_system = FogOfWarSystem(BalanceConfig())
+        # Out-of-bounds tiles (beyond a planet's 0,0..max coords) render as fog
+        # of war — inject the same bounds authority movement/bombs use.
+        fog_system.set_in_bounds_func(planet_registry.is_valid_coordinate)
         logger.info("FogOfWarSystem initialized.")
 
         # 5. ProceduralMapRenderer
