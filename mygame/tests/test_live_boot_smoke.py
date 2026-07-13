@@ -617,6 +617,20 @@ class LiveBootSmokeTest(EvenniaTest):
             self.assertFalse(ok)
             self.assertIn("sheltered", msg.lower())
 
+            # Symmetric cover: while sheltered (closed), the player also can't
+            # fire ranged OUT. Give them a ranged weapon and confirm rejection.
+            from world.definitions import ItemDef
+            rifle_def = ItemDef(key="rifle", name="Rifle", slot="weapon",
+                                category="weapon", stat_modifiers={"damage": 20},
+                                weapon_type="ranged")
+            from typeclasses.objects import spawn_gear_drop
+            rifle = spawn_gear_drop(room, rifle_def, x=6, y=5)
+            systems["equipment_system"].equip(player, rifle)
+            bystander = self._make_player(x=7, y=5, planet="earth", location=room)
+            ok, msg = engine.queue_attack(player, bystander)
+            self.assertFalse(ok, "sheltered player must not fire ranged out")
+            self.assertIn("inside", msg.lower())
+
             # Open the building -> no cover -> exposed again, ranged allowed.
             shelter.set_open(True)
             self.assertFalse(player_is_sheltered(player))

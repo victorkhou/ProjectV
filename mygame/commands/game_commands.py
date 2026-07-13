@@ -357,8 +357,10 @@ class CmdMove(GameCommand):
         caller = self.caller
         planet_room = caller.location  # Always a PlanetRoom
 
-        # Exit building if inside one
-        if not self._try_leave_building(caller, direction):
+        # Validate that we may leave the building (if inside one). The actual
+        # inside_building clear is deferred to just before the move, so an
+        # aborted move below never strips shelter while the player stays put.
+        if not self._can_leave_building(caller, direction):
             return
 
         x, y, planet = self._resolve_coords(caller)
@@ -417,6 +419,11 @@ class CmdMove(GameCommand):
         # Reset active-presence state on movement
         self._interrupt_activity(caller, moved=True)
 
+        # Now that the move is committed, actually leave the building (clears
+        # inside_building + announces). Deferred to here so an aborted move
+        # above never un-shelters a player who never left the tile.
+        self._commit_leave_building(caller)
+
         # Atomic coordinate update via move_entity
         planet_room.move_entity(caller, tx, ty)
 
@@ -469,8 +476,15 @@ class CmdMove(GameCommand):
             return None
         return direction
 
-    def _try_leave_building(self, caller, direction):
-        """Handle leaving a building. Returns False if blocked."""
+    def _can_leave_building(self, caller, direction):
+        """Return True if the caller may leave their building in *direction*.
+
+        Validation ONLY — no side effects. The actual ``inside_building`` clear
+        happens in :meth:`_commit_leave_building`, called right before the move
+        is applied, so an early-return that aborts the move does NOT strip the
+        player's shelter while they are still standing on the building tile
+        (a TOCTOU that briefly un-sheltered a stationary player).
+        """
         if not getattr(caller.db, "inside_building", False):
             return True
         if not is_admin(caller):
@@ -483,9 +497,18 @@ class CmdMove(GameCommand):
                     if is_exit_closed(bld, direction):
                         caller.msg(f"The {direction} exit is closed.")
                         return False
-        caller.db.inside_building = False
-        caller.msg("You step outside.")
         return True
+
+    def _commit_leave_building(self, caller):
+        """Clear the inside-building state and announce it — only if inside.
+
+        Called immediately before the coordinate move so shelter is dropped
+        exactly when the player actually leaves the tile, never on an aborted
+        move (see :meth:`_can_leave_building`).
+        """
+        if getattr(caller.db, "inside_building", False):
+            caller.db.inside_building = False
+            caller.msg("You step outside.")
 
     def _resolve_coords(self, caller):
         """Resolve caller's current coordinates, syncing from room if needed."""

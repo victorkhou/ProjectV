@@ -762,6 +762,50 @@ class TestCmdMoveCombatMoveSpeed(unittest.TestCase):
             any("repositioning" in m.lower() for m in caller._messages)
         )
 
+    def test_aborted_move_does_not_clear_inside_building(self):
+        """TOCTOU regression: a move that is BLOCKED (combat lag) must not strip
+        shelter — inside_building stays True since the player never left."""
+        caller = self._make_caller(move_speed_modifier=0)
+        caller.db.combat_timer_expires = 999  # in combat
+        caller.db.inside_building = True       # sheltered in a building
+
+        with patch("world.combat_timer._get_current_tick", return_value=100):
+            # Lag not elapsed -> this move is blocked before move_entity.
+            caller.db.next_move_tick = 200
+            _make_cmd(CmdMove, caller, " north").func()
+
+        # Move was blocked (coords unchanged) AND shelter preserved.
+        self.assertEqual(caller.db.coord_y, 5)
+        self.assertTrue(
+            caller.db.inside_building,
+            "an aborted move must not clear inside_building",
+        )
+
+    def test_edge_of_map_move_does_not_clear_inside_building(self):
+        """A move blocked by the map edge also preserves shelter."""
+        caller = self._make_caller()
+        caller.db.combat_timer_expires = 0  # not in combat
+        caller.db.inside_building = True
+        caller.db.coord_x, caller.db.coord_y = 0, 0  # at the SW corner
+
+        with patch("world.combat_timer._get_current_tick", return_value=100):
+            _make_cmd(CmdMove, caller, " south").func()  # off the map
+
+        self.assertEqual((caller.db.coord_x, caller.db.coord_y), (0, 0))
+        self.assertTrue(caller.db.inside_building)
+
+    def test_successful_move_clears_inside_building(self):
+        """A move that actually happens DOES leave the building (shelter drops)."""
+        caller = self._make_caller()
+        caller.db.combat_timer_expires = 0
+        caller.db.inside_building = True
+
+        with patch("world.combat_timer._get_current_tick", return_value=100):
+            _make_cmd(CmdMove, caller, " north").func()
+
+        self.assertEqual(caller.db.coord_y, 6)
+        self.assertFalse(caller.db.inside_building)
+
     def test_large_move_speed_never_drops_lag_below_one(self):
         """A huge move_speed clamps the lag to a minimum of 1 tick."""
         caller = self._make_caller(move_speed_modifier=99)

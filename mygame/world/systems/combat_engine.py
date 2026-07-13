@@ -158,6 +158,13 @@ class CombatEngine(BaseSystem):
                 return False, "That building is closed — only melee attacks reach it."
             return False, "They're sheltered inside — only a melee attack reaches them."
 
+        # 2c. Symmetric cover: a player sheltered inside a closed building can't
+        # fire ranged OUT either (no incoming ranged, no outgoing ranged — they
+        # must leave or use melee). Prevents a one-way "turtle" that snipes from
+        # total ranged immunity. Melee attacks from cover are still allowed.
+        if not is_melee and self._is_sheltered(attacker):
+            return False, "You can't fire ranged from inside — step out, or use melee."
+
         # 3. Range validation. A melee weapon's effective range is always 1,
         # ignoring any `range` stat on the item.
         if is_melee:
@@ -264,6 +271,15 @@ class CombatEngine(BaseSystem):
             attacker = action["attacker"]
             target = action["target"]
             weapon_item = action["weapon_item"]
+
+            # Re-check the closed-cover gate at RESOLUTION, not just at
+            # acquisition/queue. Turret actions queue one tick and resolve the
+            # next, so a target that took cover (entered a closed building)
+            # between lock-on and resolution must not be hit by the queued
+            # ranged shot. Melee actions bypass (cover doesn't stop melee).
+            is_melee = self._get_weapon_attr(weapon_item, "weapon_type", None) == "melee"
+            if self._ranged_blocked(target, is_melee):
+                continue
 
             # Calculate damage
             damage = self._calculate_damage(attacker, target, weapon_item)

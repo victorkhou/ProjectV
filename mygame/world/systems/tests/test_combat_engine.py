@@ -1925,6 +1925,61 @@ class TestClosedBuildingRangedImmunity(unittest.TestCase):
         self.assertFalse(ok)
         self.assertIn("closed", msg.lower())
 
+    @staticmethod
+    def _sheltered_player(name, x, y):
+        """A player standing INSIDE a closed building on their tile."""
+        class _ShelterTile(FakeTile):
+            def get_buildings_at(self, bx, by):
+                b = FakeBuilding(building_type="MM")
+                b.attributes.add("open", False)  # closed -> shelter
+                return [b]
+        p = FakePlayer(name=name, location=_ShelterTile(xyz=(x, y, "earth")))
+        p.db.inside_building = True
+        p.db.coord_x, p.db.coord_y = x, y
+        return p
+
+    def test_sheltered_player_cannot_fire_ranged_out(self):
+        """Symmetric cover: a player sheltered in a closed building can't make a
+        ranged attack (no incoming ranged, no outgoing ranged)."""
+        engine, _ = _make_engine()
+        attacker = self._sheltered_player("Turtle", 5, 5)
+        attacker.equipment.equip(FakeWeapon(damage=25, weapon_range=8))
+        victim = FakePlayer(name="Exposed", hp=100,
+                            location=FakeTile(xyz=(6, 5, "earth")))
+        ok, msg = engine.queue_attack(attacker, victim)
+        self.assertFalse(ok)
+        self.assertIn("inside", msg.lower())
+
+    def test_sheltered_player_can_still_melee_out(self):
+        """Melee from cover is allowed (adjacent-only, symmetric with taking
+        melee hits)."""
+        engine, _ = _make_engine()
+        attacker = self._sheltered_player("Puncher", 5, 5)
+        attacker.equipment.equip(self._melee_weapon())
+        victim = FakePlayer(name="Adjacent", hp=100,
+                            location=FakeTile(xyz=(6, 5, "earth")))
+        ok, _ = engine.queue_attack(attacker, victim)
+        self.assertTrue(ok)
+
+    def test_resolve_tick_rechecks_shelter_for_queued_ranged(self):
+        """A queued ranged (turret) action must NOT hit a target that became
+        sheltered between queue and resolution (TOCTOU re-check)."""
+        engine, _ = _make_engine()
+        # A turret-style queued action (synthetic weapon, no weapon_type=ranged).
+        target = self._sheltered_player("LateEntrant", 3, 0)
+        target.db.hp = 100
+        turret = FakeBuilding(building_type="TU", owner=_hq_owner(),
+                              location=FakeTile(xyz=(0, 0, "earth")))
+        # Manually queue as process_turrets would (bypassing acquisition). A
+        # FakeWeapon has no weapon_type -> treated as ranged (like a turret).
+        engine.pending_actions.append({
+            "attacker": turret, "target": target,
+            "weapon_item": FakeWeapon(damage=50, weapon_range=10),
+        })
+        engine.resolve_tick()
+        # Target sheltered at resolution -> no damage applied.
+        self.assertEqual(target.db.hp, 100)
+
 
 if __name__ == "__main__":
     unittest.main()
