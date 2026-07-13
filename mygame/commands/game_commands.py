@@ -929,14 +929,37 @@ class CmdRepair(GameCommand):
         caller.msg(msg)
 
 
-def _attackables_in_view(caller):
-    """Return (dist, obj) for every attackable entity within the caller's view.
+def _attack_reach(caller):
+    """The radius (Chebyshev) within which 'attack' may resolve a target.
 
-    "In view" = within the caller's vision radius (Chebyshev), the same scope
-    'scan' shows. Attackable = a player/agent/enemy NPC or a building (anything
-    the combat engine can target), excluding the caller. Nearest first. Used by
-    'attack' so its target list matches what the player can actually see — not
-    every object on the planet (the room is one PlanetRoom per planet).
+    The larger of the caller's vision radius (what 'scan' shows) and their
+    equipped weapon's range — so a long-range weapon (e.g. a sniper rifle whose
+    range exceeds base vision) can still target a foe it can legitimately hit,
+    while a short-ranged loadout is still capped to what the player can see
+    rather than the whole planet. queue_attack remains the authority on whether
+    the shot is actually in weapon range; this only bounds the target search.
+    """
+    radius = CmdScan._vision_radius(caller)
+    equipment = getattr(caller, "equipment", None)
+    if equipment is not None and hasattr(equipment, "get_equipped"):
+        try:
+            weapon = equipment.get_equipped("weapon")
+            if weapon is not None and hasattr(weapon, "get_stat"):
+                radius = max(radius, int(weapon.get_stat("range", 0)))
+        except Exception:  # pragma: no cover - defensive
+            pass
+    return max(1, radius)
+
+
+def _attackables_in_view(caller):
+    """Return (dist, obj) for every attackable entity within the caller's reach.
+
+    "In reach" = within :func:`_attack_reach` (the larger of vision radius and
+    equipped weapon range, Chebyshev). Attackable = a player/agent/enemy NPC or
+    a building (anything the combat engine can target), excluding the caller.
+    Nearest first. Used by 'attack' so its target list matches what the player
+    can actually see or shoot — not every object on the planet (the room is one
+    PlanetRoom per planet).
     """
     from world.utils import is_player, is_building
 
@@ -946,7 +969,7 @@ def _attackables_in_view(caller):
     if loc is None or cx is None or cy is None:
         return []
     cx, cy = int(cx), int(cy)
-    radius = CmdScan._vision_radius(caller)
+    radius = _attack_reach(caller)
 
     candidates = []
     getter = getattr(loc, "get_objects_in_area", None)
@@ -963,7 +986,7 @@ def _attackables_in_view(caller):
         oy = getattr(getattr(obj, "db", None), "coord_y", None)
         if ox is None or oy is None:
             continue
-        dist = max(abs(int(ox) - cx), abs(int(oy) - cy))  # Chebyshev, matches view
+        dist = max(abs(int(ox) - cx), abs(int(oy) - cy))  # Chebyshev reach
         if dist > radius:
             continue
         if is_building(obj) or is_player(obj):

@@ -993,6 +993,26 @@ class TestCmdAttack(unittest.TestCase):
         self.assertTrue(any("nothing in view" in m or "don't see" in m
                             for m in caller._messages))
 
+    def test_long_range_weapon_extends_attack_reach_beyond_vision(self):
+        """A weapon whose range exceeds base vision (e.g. a sniper rifle,
+        range 12 > vision 10) can still target a foe within weapon range — the
+        target search radius is max(vision, weapon range), not vision alone."""
+        queued = []
+
+        class _Engine:
+            def queue_attack(self, attacker, target):
+                queued.append(target)
+                return True, "queued"
+
+        caller = FakeCaller(systems={"combat_engine": _Engine()})
+        # Equip a range-12 weapon (no registry → vision defaults to 10).
+        caller.equipment.equip(_FakeRangedWeapon("sniper_rifle", weapon_range=12))
+        # Foe at Chebyshev distance 12 — beyond vision (10) but within reach.
+        caller.location.contents = [_FakeAttackable("Outpost #1 Soldier-1", 17, 5)]
+        cmd = _make_cmd(CmdAttack, caller, " soldier")
+        cmd.func()
+        self.assertEqual(len(queued), 1)
+
 
 class _FakeAttackable:
     """An in-view attackable NPC (carries combat_xp so is_player matches)."""
@@ -1001,6 +1021,17 @@ class _FakeAttackable:
         self.db = types.SimpleNamespace(
             coord_x=x, coord_y=y, combat_xp=0, npc_type="enemy",
         )
+
+
+class _FakeRangedWeapon:
+    """A weapon Game_Item exposing slot + a range stat for reach tests."""
+    def __init__(self, key, weapon_range):
+        self.key = key
+        self.slot = "weapon"
+        self.stat_modifiers = {"range": weapon_range}
+
+    def get_stat(self, stat_name, default=0):
+        return float(self.stat_modifiers.get(stat_name, default))
 
 
 class TestCmdEquip(unittest.TestCase):
