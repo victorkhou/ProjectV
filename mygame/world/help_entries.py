@@ -357,7 +357,7 @@ HELP_ENTRY_DICTS = [
             # Ranged: Target & Shoot
 
             With a |cranged weapon|n you can fight at a distance in two ways:
-            |wtarget <enemy>|n (|wlock|n) — lock onto an enemy in your weapon's range. It takes a few ticks to lock (faster with better gear); you're told when it completes. A |clocked|n shot is far more accurate (|c80%|n baseline) and keeps hitting the enemy even as they move — until they leave your range or you change areas, which breaks the lock.
+            |wtarget <enemy>|n (|wlock|n) — lock onto an enemy in your weapon's range. It takes a few ticks to lock (faster with better gear); you're told when it completes. A lock is a |cheld aim|n — |rhold still while it locks, because moving in any direction breaks it|n. Once locked, your shot is far more accurate (|c80%|n baseline) and keeps hitting the enemy even as |cthey|n move — until they leave your range (or you move).
             |wshoot|n (|wfire|n) — fire your ranged weapon. With a |clocked|n target, plain |wshoot|n fires at them. Otherwise |wshoot <n/s/e/w>|n fires in a direction and hits the first thing in the line of fire, at lower accuracy (|c50%|n baseline). You can only hit a specific player by locking onto them first. Every shot spends ammo whether it hits or misses.
 
             # The Combat State

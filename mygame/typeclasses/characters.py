@@ -461,6 +461,25 @@ class CombatCharacter(CombatEntity, DefaultCharacter):
                 self.key, x, y, planet,
             )
 
+    def at_coord_change(self, old_x, old_y, new_x, new_y):
+        """React to this character's overworld position changing.
+
+        Fired by ``PlanetRoom.move_entity`` on every coordinate change (a
+        step, a teleport). Any ranged lock-on is broken the instant the shooter
+        moves: a lock is a held aim, so you must line up, hold still to lock,
+        and fire — moving (in any direction) drops it. Done here rather than in
+        the per-tick upkeep so there is no window to move-then-shoot at the
+        higher locked accuracy before the next tick.
+        """
+        try:
+            from world.utils import get_system
+            targeting = get_system(self, "targeting_system")
+            if targeting is not None and targeting.get_target(self) is not None:
+                targeting.clear_lock(self, reason="moved")
+        except Exception:
+            # A lock-clear must never break movement.
+            pass
+
     def at_pre_unpuppet(self, **kwargs):
         """Called just before the Account un-puppets this character.
 

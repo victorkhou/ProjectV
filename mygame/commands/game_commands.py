@@ -1128,10 +1128,11 @@ class CmdTarget(GameCommand):
 
     Notes:
       Requires a ranged weapon equipped. Locking takes a few ticks (faster with
-      better gear); you'll be told when the lock completes. Once locked, 'shoot'
-      (no direction) fires at the target at higher accuracy and keeps hitting it
-      as it moves — until it leaves your weapon's range or you change areas,
-      which breaks the lock. See 'help combat'.
+      better gear) and is a HELD AIM — hold still while it locks, because
+      moving in any direction breaks the lock. Once locked, 'shoot' (no
+      direction) fires at the target at higher accuracy and keeps hitting it as
+      IT moves — until it leaves your weapon's range (or you move). See
+      'help combat'.
     """
 
     key = "target"

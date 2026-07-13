@@ -3,9 +3,11 @@ Targeting system — ranged lock-on for the 'target'/'shoot' commands.
 
 A player with a ranged weapon can ``target`` an enemy to lock on over a few
 ticks; once locked, ``shoot`` hits at the higher targeted accuracy and tracks
-the enemy as long as it stays in weapon range and the shooter stays in the same
-room (planet). The lock is stored on the shooter's ``db`` and driven by a
-per-tick upkeep step:
+the enemy as long as it stays in weapon range. A lock is a *held aim*: it breaks
+the instant the SHOOTER moves (handled in ``CombatCharacter.at_coord_change``),
+and the per-tick upkeep additionally drops it if the tracked enemy leaves weapon
+range, the shooter changes planet, or the weapon is unequipped. The lock is
+stored on the shooter's ``db`` and driven by a per-tick upkeep step:
 
 - ``db.lock_target``   — the enemy being locked/tracked (object ref), or None.
 - ``db.lock_progress`` — ticks of lock accumulated so far.

@@ -735,6 +735,78 @@ class LiveBootSmokeTest(EvenniaTest):
         finally:
             _teardown_game(systems)
 
+    def test_targeting_lock_and_shoot_on_real_objects(self):
+        """On real objects: TargetingSystem is wired at the composition root; a
+        ranged lock completes over the balance-configured ticks and then a
+        locked shot queues an accuracy-bearing attack through the engine."""
+        from server.conf.game_init import initialize_game
+        from world.definitions import ItemDef
+        from typeclasses.objects import spawn_gear_drop
+
+        systems = initialize_game()
+        try:
+            targeting = systems["targeting_system"]
+            engine = systems["combat_engine"]
+            self.assertIsNotNone(targeting, "targeting_system must be wired")
+            room = self._make_planet_room("earth")
+
+            shooter = self._make_player(x=0, y=0, planet="earth", location=room)
+            shooter.db.combat_xp = 100000  # high rank so no equip gate blocks
+
+            # A real ranged weapon, equipped via the real equipment system.
+            rifle_def = ItemDef(key="rifle", name="Rifle", slot="weapon",
+                                category="weapon",
+                                stat_modifiers={"damage": 20, "range": 8},
+                                weapon_type="ranged")
+            rifle = spawn_gear_drop(room, rifle_def, x=0, y=0)
+            systems["equipment_system"].equip(shooter, rifle)
+
+            # An enemy in range.
+            enemy = self._make_player(x=3, y=0, planet="earth", location=room)
+
+            ok, _ = targeting.acquire(shooter, enemy)
+            self.assertTrue(ok, "should start a lock with a ranged weapon in range")
+            self.assertFalse(targeting.is_locked(shooter))
+
+            # Advance ticks until the lock completes (bounded).
+            for tick in range(1, 20):
+                targeting.process_tick(tick, [shooter])
+                if targeting.is_locked(shooter):
+                    break
+            self.assertTrue(targeting.is_locked(shooter), "lock should complete")
+
+            # A locked shot queues an attack carrying the targeted accuracy.
+            engine.pending_actions.clear()
+            acc = targeting.targeted_accuracy(rifle)
+            ok, _ = engine.queue_attack(shooter, enemy, weapon=rifle, accuracy=acc)
+            self.assertTrue(ok)
+            self.assertEqual(len(engine.pending_actions), 1)
+            self.assertEqual(engine.pending_actions[0]["accuracy"], acc)
+
+            # The SHOOTER moving breaks the lock immediately (at_coord_change),
+            # not on the next tick — a real move_entity fires the hook.
+            self.assertTrue(targeting.is_locked(shooter))
+            room.move_entity(shooter, 0, 1)  # step north
+            self.assertIsNone(targeting.get_target(shooter),
+                              "moving must break the shooter's lock")
+            self.assertFalse(targeting.is_locked(shooter))
+
+            # And the enemy leaving weapon range also breaks a (re-acquired) lock
+            # via the per-tick upkeep.
+            shooter.db.coord_x, shooter.db.coord_y = 0, 0
+            targeting.acquire(shooter, enemy)
+            for tick in range(1, 20):
+                targeting.process_tick(tick, [shooter])
+                if targeting.is_locked(shooter):
+                    break
+            self.assertTrue(targeting.is_locked(shooter))
+            enemy.db.coord_x = 50  # out of range
+            targeting.process_tick(99, [shooter])
+            self.assertFalse(targeting.is_locked(shooter))
+            self.assertIsNone(targeting.get_target(shooter))
+        finally:
+            _teardown_game(systems)
+
 
 def _teardown_game(systems):
     """Best-effort teardown: stop any scripts initialize_game created so they

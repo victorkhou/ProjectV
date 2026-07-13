@@ -339,5 +339,44 @@ class TestEnsureOverworldPosition(unittest.TestCase):
         # No exception raised — that's the test
 
 
+class _FakeTargeting:
+    """Records clear_lock calls for the move-breaks-lock test."""
+    def __init__(self, target=None):
+        self._target = target
+        self.cleared = []
+
+    def get_target(self, player):
+        return self._target
+
+    def clear_lock(self, player, reason=None):
+        self._target = None
+        self.cleared.append(reason)
+
+
+class TestAtCoordChangeBreaksLock(unittest.TestCase):
+    """Moving (in any direction) breaks the mover's ranged lock immediately."""
+
+    def test_move_clears_active_lock(self):
+        char = _make_char()
+        tg = _FakeTargeting(target=object())
+        with patch("server.conf.game_init.game_systems",
+                   {"targeting_system": tg}):
+            char.at_coord_change(1, 1, 1, 2)
+        self.assertEqual(tg.cleared, ["moved"])
+
+    def test_move_without_lock_is_noop(self):
+        char = _make_char()
+        tg = _FakeTargeting(target=None)  # no active lock
+        with patch("server.conf.game_init.game_systems",
+                   {"targeting_system": tg}):
+            char.at_coord_change(1, 1, 2, 1)
+        self.assertEqual(tg.cleared, [])
+
+    def test_move_never_raises_without_targeting_system(self):
+        char = _make_char()
+        with patch("server.conf.game_init.game_systems", {}):
+            char.at_coord_change(1, 1, 2, 2)  # must not raise
+
+
 if __name__ == "__main__":
     unittest.main()

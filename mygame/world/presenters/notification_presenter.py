@@ -127,6 +127,7 @@ def _fmt_shot_dodged(d: dict) -> str:
 _LOCK_LOST_REASONS = {
     "out_of_range": "your target moved out of range",
     "left_area": "you left the area",
+    "moved": "you moved",
     "no_weapon": "you no longer have a ranged weapon",
     "target_gone": "your target is gone",
 }
