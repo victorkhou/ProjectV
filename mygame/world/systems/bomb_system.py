@@ -69,6 +69,9 @@ class BombSystem(BaseSystem):
       shared post-damage pipeline (lockout, event, notify, defeat).
     * ``current_tick_func() -> int`` — the game tick (unused for the pure
       relative countdown, accepted for parity with other systems).
+    * ``in_bounds_func(x, y, planet_key) -> bool`` — whether a tile is on the
+      map, so a thrown grenade stops at the map edge instead of landing off-map.
+      When absent (test/unwired) all tiles are treated as in-bounds.
     """
 
     def __init__(
@@ -78,11 +81,13 @@ class BombSystem(BaseSystem):
         spawn_bomb_func: Callable | None = None,
         area_damage_applier: Callable[[], Any] | None = None,
         current_tick_func: Callable[[], int] | None = None,
+        in_bounds_func: Callable[[int, int, str], bool] | None = None,
     ) -> None:
         super().__init__(registry, event_bus)
         self._spawn_bomb_func = spawn_bomb_func
         self._area_damage_applier = area_damage_applier
         self._current_tick_func = current_tick_func or (lambda: 0)
+        self._in_bounds_func = in_bounds_func
         #: Live bombs currently counting down. An in-memory list so the per-tick
         #: countdown does not DB-scan every second; rebuilt from the world on
         #: restart via :meth:`rebuild_from_world` (fuse state persists on the
@@ -99,6 +104,25 @@ class BombSystem(BaseSystem):
     def set_area_damage_applier(self, provider: Callable[[], Any]) -> None:
         self._area_damage_applier = provider
 
+    def set_in_bounds_func(self, fn: Callable[[int, int, str], bool]) -> None:
+        self._in_bounds_func = fn
+
+    def _tile_in_bounds(self, x: int, y: int, planet_key) -> bool:
+        """Return True if ``(x, y)`` is a valid on-map tile for *planet_key*.
+
+        Delegates to the injected bounds check (``planet_registry.
+        is_valid_coordinate`` at the composition root). Falls open (True) when no
+        bounds func is wired or the planet is unknown, so a bomb never fails to
+        place in a lightweight/test context — the check only ever REMOVES an
+        off-map landing, never blocks a valid one.
+        """
+        if self._in_bounds_func is None or not planet_key:
+            return True
+        try:
+            return bool(self._in_bounds_func(int(x), int(y), planet_key))
+        except Exception:  # noqa: BLE001 - unknown planet / bad coords: fall open
+            return True
+
     # ------------------------------------------------------------------ #
     #  Fuse configuration ('set <bomb> <sec>' / 'set all <sec>')
     # ------------------------------------------------------------------ #
@@ -111,6 +135,41 @@ class BombSystem(BaseSystem):
         if getattr(idef, "category", None) not in BOMB_CATEGORIES:
             return None
         return idef
+
+    def _rank_allows(self, player: Any, item_def, item_name: str) -> bool:
+        """Return True if *player*'s rank meets the bomb's ``required_rank``.
+
+        Mirrors ``EquipmentSystem._rank_allows`` so a rank-gated bomb (e.g.
+        plasma_grenade → Sergeant, proximity_mine → Staff_Sergeant) can't be
+        deployed by a player below its rank — passive production/craft doesn't
+        rank-gate, so the gate must live on the deploy path too. Emits
+        ``equip_denied`` (the shared rank-gate notification) and returns False
+        when the rank is insufficient. An unknown rank name falls open, matching
+        the equip/use gate. Never raises.
+        """
+        required_rank = getattr(item_def, "required_rank", None)
+        if not required_rank:
+            return True
+        from world.utils import get_player_level
+
+        player_level = get_player_level(player)
+        try:
+            req_rank_def = self.registry.get_rank_by_name(required_rank)
+            from world.systems.rank_system import rank_from_level
+
+            if rank_from_level(player_level) < req_rank_def.level:
+                current = f"Rank {rank_from_level(player_level)}"
+                for rank in self.registry.ranks:
+                    if rank.level == rank_from_level(player_level):
+                        current = rank.name
+                        break
+                self.notify(player, "equip_denied", item_name=item_name,
+                            required_rank=required_rank, current_rank=current)
+                return False
+        except (KeyError, ImportError, AttributeError):
+            # Unknown rank name / missing rank data: fall open rather than block.
+            pass
+        return True
 
     @staticmethod
     def _fuse_bounds(item_def) -> tuple[int, int, int]:
@@ -232,6 +291,11 @@ class BombSystem(BaseSystem):
                         reason="not_held")
             return False
 
+        # Rank gate — a rank-gated grenade can't be thrown below its rank
+        # (production/pickup don't rank-gate, so the deploy path must).
+        if not self._rank_allows(player, item_def, item_name):
+            return False
+
         step = _DIRECTIONS.get(direction)
         if step is None:
             self.notify(player, "throw_failed", item_name=item_name,
@@ -258,8 +322,9 @@ class BombSystem(BaseSystem):
         except (TypeError, ValueError):
             throw_range = DEFAULT_THROW_RANGE
 
+        planet_key = getattr(player.db, "coord_planet", None)
         lx, ly = self._grenade_landing(location, p_coords[0], p_coords[1],
-                                       step[0], step[1], throw_range)
+                                       step[0], step[1], throw_range, planet_key)
         amount, radius = self._blast_stats(effect)
 
         # Place the live bomb FIRST; only consume the grenade + its set fuse on a
@@ -295,6 +360,9 @@ class BombSystem(BaseSystem):
         handler = getattr(player, "equipment", None)
         if handler is None or handler.get_supply(item_key) <= 0:
             self.notify(player, "bomb_not_held", item_name=item_name)
+            return False
+        # Rank gate — a rank-gated mine can't be armed below its rank.
+        if not self._rank_allows(player, item_def, item_name):
             return False
         fuse = self._pending_fuse(player, item_key)
         if fuse is None:
@@ -342,15 +410,18 @@ class BombSystem(BaseSystem):
             radius = 0
         return amount, radius
 
-    @staticmethod
-    def _grenade_landing(location, cx, cy, dx, dy, throw_range) -> tuple[int, int]:
+    def _grenade_landing(self, location, cx, cy, dx, dy, throw_range,
+                         planet_key=None) -> tuple[int, int]:
         """Return the tile a thrown grenade lands on (direction to first obstacle).
 
         Walks outward from ``(cx, cy)`` in the ``(dx, dy)`` direction up to
         *throw_range* tiles. Lands on the first tile holding a building or a
-        unit (the shot is stopped by it), else on the furthest (max-range) tile
-        when the line is clear. Reuses the room's coordinate index the same way
-        directional 'shoot' resolves its ray.
+        unit (the shot is stopped by it), else on the furthest in-bounds tile.
+        The ray STOPS at the map edge: a step off-map is never taken, so a
+        grenade thrown toward an edge lands ON the edge tile rather than at an
+        off-map coordinate (where its blast could reach nothing and the LiveBomb
+        would sit on an unreachable tile). Reuses the room's coordinate index the
+        same way directional 'shoot' resolves its ray.
         """
         from world.utils import is_building, is_player
         cx, cy = int(cx), int(cy)
@@ -358,12 +429,14 @@ class BombSystem(BaseSystem):
         get_at = getattr(location, "get_objects_at", None)
         for step in range(1, int(throw_range) + 1):
             tx, ty = cx + dx * step, cy + dy * step
+            if not self._tile_in_bounds(tx, ty, planet_key):
+                break  # off-map — land on the last in-bounds tile
             last = (tx, ty)
             if callable(get_at):
                 for obj in get_at(tx, ty):
                     if is_building(obj) or is_player(obj):
                         return (tx, ty)  # stopped by the first obstacle
-        return last  # clear line — lands at max range
+        return last  # clear line — lands at the furthest in-bounds tile
 
     def _place_bomb(self, location, item_def, x, y, owner, bomb_type,
                     fuse, amount, radius):

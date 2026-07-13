@@ -8,7 +8,7 @@ import types
 import unittest
 
 from world.data_registry import DataRegistry
-from world.definitions import BalanceConfig, ItemDef
+from world.definitions import BalanceConfig, ItemDef, RankDef
 from world.event_bus import EventBus, PLAYER_NOTIFICATION
 from world.systems.bomb_system import BombSystem
 
@@ -38,11 +38,11 @@ class _Handler:
 
 class _Player:
     def __init__(self, x=5, y=5, planet="earth", supplies=None, location=None,
-                 oid=None):
+                 oid=None, level=60):
         self.key = "Player"
         self.db = types.SimpleNamespace(
             coord_x=x, coord_y=y, coord_planet=planet,
-            bomb_fuses=None, combat_xp=0, hp=100, hp_max=100,
+            bomb_fuses=None, combat_xp=0, hp=100, hp_max=100, level=level,
         )
         self.equipment = _Handler(supplies)
         self.location = location
@@ -163,15 +163,18 @@ def _mine_def(key="land_mine", amount=60, radius=1, fmin=1, fmax=30, fdef=5):
     )
 
 
-def _make(items=None, engine=None, placed=None):
+def _make(items=None, engine=None, placed=None, ranks=None, in_bounds=None):
     """Build a BombSystem with a registry stub + notification sink.
 
     *placed* collects (location, item_def, x, y, owner, bomb_type, fuse, amount,
     radius) for each spawned bomb; the spawner returns a _Bomb tracking those.
+    *ranks* is a list of RankDef for the rank gate; *in_bounds* is an optional
+    (x,y,planet)->bool bounds check for the throw-ray clamp.
     """
     registry = DataRegistry()
     registry.balance = BalanceConfig()
     registry.items = {i.key: i for i in (items or [])}
+    registry.ranks = list(ranks or [])
     # resolve_item: exact key or name (space/underscore-insensitive).
     def _resolve(token):
         if not token:
@@ -183,6 +186,13 @@ def _make(items=None, engine=None, placed=None):
                 return idef
         return None
     registry.resolve_item = _resolve
+
+    def _rank_by_name(name):
+        for r in registry.ranks:
+            if r.name == name:
+                return r
+        raise KeyError(name)
+    registry.get_rank_by_name = _rank_by_name
 
     bus = EventBus()
     sink = _Sink()
@@ -203,6 +213,7 @@ def _make(items=None, engine=None, placed=None):
         registry, bus,
         spawn_bomb_func=_spawn,
         area_damage_applier=(lambda: engine) if engine else None,
+        in_bounds_func=in_bounds,
     )
     return system, sink, placed
 
@@ -325,13 +336,16 @@ class TestArmMine(unittest.TestCase):
     def test_arm_places_bomb_on_own_tile(self):
         sys, sink, placed = _make(items=[_mine_def()])
         room = _Room()
-        p = _Player(x=4, y=7, supplies={"land_mine": 1}, location=room)
+        p = _Player(x=4, y=7, supplies={"land_mine": 2}, location=room)
         sys.set_fuse(p, "land_mine", 5)
         self.assertTrue(sys.arm_mine(p, "land_mine"))
         _, _, ax, ay, owner, btype, fuse, *_ = placed[0]
         self.assertEqual((ax, ay), (4, 7))
         self.assertEqual(btype, "mine")
         self.assertIn("mine_armed", sink.kinds_for(p))
+        # The mine + its set fuse are CONSUMED on a successful arm.
+        self.assertEqual(p.equipment.get_supply("land_mine"), 1)
+        self.assertNotIn("land_mine", (p.db.bomb_fuses or {}))
 
     def test_arm_needs_fuse(self):
         sys, sink, placed = _make(items=[_mine_def()])
@@ -358,6 +372,89 @@ class TestArmMine(unittest.TestCase):
         self.assertIn("bomb_armed", sink.kinds_for(bystander))
         # The placer gets the distinct 'mine_armed', not the bystander 'bomb_armed'.
         self.assertNotIn("bomb_armed", sink.kinds_for(p))
+
+
+# -------------------------------------------------------------- #
+#  Rank gate on deploy (review fix)
+# -------------------------------------------------------------- #
+
+class TestBombRankGate(unittest.TestCase):
+    """A rank-gated bomb can't be thrown/armed below its required rank — the
+    deploy path enforces it (production/pickup don't)."""
+
+    _RANKS = [RankDef(name="Private", level=1, xp_threshold=0),
+              RankDef(name="Sergeant", level=3, xp_threshold=100)]
+
+    def _sgt_grenade(self):
+        d = _grenade_def()
+        d.required_rank = "Sergeant"
+        return d
+
+    def _sgt_mine(self):
+        d = _mine_def()
+        d.required_rank = "Sergeant"
+        return d
+
+    def test_underranked_cannot_throw(self):
+        sys, sink, placed = _make(items=[self._sgt_grenade()], ranks=self._RANKS)
+        room = _Room()
+        # level 1 -> rank 1 (Private) < Sergeant (rank 3): denied.
+        p = _Player(x=0, y=0, supplies={"frag_grenade": 1}, location=room, level=1)
+        sys.set_fuse(p, "frag_grenade", 3)
+        self.assertFalse(sys.throw_grenade(p, "frag_grenade", "n"))
+        self.assertIn("equip_denied", sink.kinds_for(p))
+        self.assertEqual(placed, [])
+        self.assertEqual(p.equipment.get_supply("frag_grenade"), 1)  # not consumed
+
+    def test_ranked_can_throw(self):
+        sys, sink, placed = _make(items=[self._sgt_grenade()], ranks=self._RANKS)
+        room = _Room()
+        p = _Player(x=0, y=0, supplies={"frag_grenade": 1}, location=room, level=15)
+        sys.set_fuse(p, "frag_grenade", 3)
+        self.assertTrue(sys.throw_grenade(p, "frag_grenade", "n"))
+        self.assertEqual(len(placed), 1)
+
+    def test_underranked_cannot_arm(self):
+        sys, sink, placed = _make(items=[self._sgt_mine()], ranks=self._RANKS)
+        room = _Room()
+        p = _Player(x=0, y=0, supplies={"land_mine": 1}, location=room, level=1)
+        sys.set_fuse(p, "land_mine", 5)
+        self.assertFalse(sys.arm_mine(p, "land_mine"))
+        self.assertIn("equip_denied", sink.kinds_for(p))
+        self.assertEqual(placed, [])
+
+
+# -------------------------------------------------------------- #
+#  Off-map throw clamp (review fix)
+# -------------------------------------------------------------- #
+
+class TestThrowBounds(unittest.TestCase):
+    """A thrown grenade stops at the map edge instead of landing off-map."""
+
+    @staticmethod
+    def _bounds_0_to_9(x, y, planet):
+        return 0 <= x <= 9 and 0 <= y <= 9
+
+    def test_throw_clamps_at_map_edge(self):
+        sys, sink, placed = _make(items=[_grenade_def(rng=5)],
+                                  in_bounds=self._bounds_0_to_9)
+        room = _Room()
+        # At (1,0) throwing west (range 5) would reach (-4,0); must stop at (0,0).
+        p = _Player(x=1, y=0, supplies={"frag_grenade": 1}, location=room)
+        sys.set_fuse(p, "frag_grenade", 3)
+        sys.throw_grenade(p, "frag_grenade", "w")
+        _, _, lx, ly, *_ = placed[0]
+        self.assertEqual((lx, ly), (0, 0), "grenade must land on the edge tile, not off-map")
+
+    def test_throw_unbounded_when_no_bounds_func(self):
+        # No in_bounds injected -> falls open (unchanged max-range behavior).
+        sys, sink, placed = _make(items=[_grenade_def(rng=5)])
+        room = _Room()
+        p = _Player(x=1, y=0, supplies={"frag_grenade": 1}, location=room)
+        sys.set_fuse(p, "frag_grenade", 3)
+        sys.throw_grenade(p, "frag_grenade", "w")
+        _, _, lx, ly, *_ = placed[0]
+        self.assertEqual((lx, ly), (-4, 0))  # unclamped max range
 
 
 # -------------------------------------------------------------- #

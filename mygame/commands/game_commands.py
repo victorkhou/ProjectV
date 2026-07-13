@@ -1059,27 +1059,28 @@ def _instant_attack_gate(caller, combat_engine):
     """Return (ok, wait_seconds): is the caller off cooldown for an instant attack?
 
     Tracks the earliest wall-clock time the caller may attack again on
-    ``caller.db.next_attack_time`` (a ``time.monotonic()`` stamp). On success
+    ``caller.ndb.next_attack_time`` (a ``time.monotonic()`` stamp). On success
     (ok=True) it STAMPS the next-allowed time and returns wait=0.0; on cooldown
-    (ok=False) it returns the remaining seconds and stamps nothing. Wall-clock
-    (not tick) so instant attacks between ticks are throttled precisely; a
-    reload resets monotonic() so any stale stamp simply expires harmlessly.
+    (ok=False) it returns the remaining seconds and stamps nothing.
+
+    The stamp lives on ``ndb`` (memory-only), NOT ``db`` (persistent): a
+    ``time.monotonic()`` value is meaningless across a process/OS restart (the
+    monotonic clock resets), so persisting it could strand a future stamp that
+    blocks all attacks until it "expired". ``ndb`` is cleared on every reload, so
+    a fresh, correct baseline is guaranteed — and a sub-second cooldown never
+    needs to survive a restart anyway.
     """
     import time
     now = time.monotonic()
-    ready_at = getattr(caller.db, "next_attack_time", 0.0) or 0.0
+    ready_at = getattr(caller.ndb, "next_attack_time", 0.0) or 0.0
     try:
         ready_at = float(ready_at)
     except (TypeError, ValueError):
         ready_at = 0.0
-    # A stamp far in the future (e.g. after a server restart reset monotonic to
-    # a small value) can never block forever: treat an unreachable stamp as due.
-    if ready_at > now + 3600:
-        ready_at = 0.0
     if now < ready_at:
         return False, ready_at - now
     cooldown = _attack_cooldown_seconds(caller, combat_engine)
-    caller.db.next_attack_time = now + cooldown
+    caller.ndb.next_attack_time = now + cooldown
     return True, 0.0
 
 
@@ -1149,7 +1150,7 @@ class CmdAttack(GameCommand):
         # presenter and return an empty string — don't msg a blank line. On a
         # rejection nothing fired, so refund the cooldown stamp we just set.
         if not success:
-            self.caller.db.next_attack_time = 0.0
+            self.caller.ndb.next_attack_time = 0.0
         if msg:
             self.caller.msg(msg)
 
@@ -1379,7 +1380,7 @@ class CmdShoot(GameCommand):
             caller, target, weapon=weapon, accuracy=accuracy, breach=True
         )
         if not ok:
-            caller.db.next_attack_time = 0.0  # nothing fired — refund cooldown
+            caller.ndb.next_attack_time = 0.0  # nothing fired — refund cooldown
         if msg:
             caller.msg(msg)
 

@@ -1058,6 +1058,75 @@ class LiveBootSmokeTest(EvenniaTest):
         finally:
             _teardown_game(systems)
 
+    def test_armed_bomb_cannot_be_picked_up_on_real_objects(self):
+        """On real objects: a co-located player CANNOT 'get' an armed mine — the
+        game's CmdGet gates pickup through at_pre_get, and LiveBomb.at_pre_get
+        refuses. (Regression: the get:false() lock alone was never enforced by
+        CmdGet, so the bomb was pocketable — the HIGH review finding.)"""
+        from server.conf.game_init import initialize_game
+        from commands.game_commands import CmdGet
+
+        systems = initialize_game()
+        try:
+            bomb_system = systems["bomb_system"]
+            room = self._make_planet_room("earth")
+            placer = self._make_player(x=6, y=6, planet="earth", location=room)
+            placer.db.combat_xp = 100000
+            placer.equipment.add_supply("land_mine", 1)
+            bomb_system.set_fuse(placer, "land_mine", 30)
+            bomb_system.arm_mine(placer, "land_mine")
+            bombs = room.get_objects_at(6, 6, type_tag="bomb")
+            self.assertEqual(len(bombs), 1)
+            mine = bombs[0]
+
+            # A player on the mine's tile tries to grab it.
+            grabber = self._make_player(x=6, y=6, planet="earth", location=room)
+            grabber.key = "Grabber"
+            room.coord_index.add(grabber, 6, 6)
+            get = CmdGet()
+            get.caller = grabber
+            get.args = "Land Mine"
+            get.func()
+
+            # The bomb is NOT in the grabber's inventory and stays on its tile.
+            self.assertIsNot(mine.location, grabber,
+                             "an armed bomb must not be pickupable")
+            self.assertIn(mine, room.get_objects_at(6, 6, type_tag="bomb"),
+                          "the bomb must remain on its tile")
+            # at_pre_get refuses directly (independent of the get command path).
+            self.assertFalse(mine.at_pre_get(grabber),
+                             "LiveBomb.at_pre_get must refuse pickup")
+        finally:
+            _teardown_game(systems)
+
+    def test_grenade_throw_clamps_to_map_edge_on_real_objects(self):
+        """On real objects: BombSystem gets planet_registry.is_valid_coordinate
+        wired at boot, so a grenade thrown toward a map edge lands ON the edge
+        tile, never off-map. Uses a REAL planet room/key so the bounds check
+        actually resolves (a bogus planet would fall open and hide the clamp)."""
+        from server.conf.game_init import initialize_game
+
+        systems = initialize_game()
+        try:
+            bomb_system = systems["bomb_system"]
+            planet_rooms = systems.get("planet_rooms") or {}
+            self.assertTrue(planet_rooms, "no planet rooms at boot")
+            planet_key, room = next(iter(planet_rooms.items()))
+
+            # Stand near the west edge; throw west with a long range.
+            thrower = self._make_player(x=1, y=4, planet=planet_key, location=room)
+            thrower.db.combat_xp = 100000
+            thrower.equipment.add_supply("frag_grenade", 1)
+            bomb_system.set_fuse(thrower, "frag_grenade", 30)
+            bomb_system.throw_grenade(thrower, "frag_grenade", "w")
+
+            bombs = room.get_objects_at(0, 4, type_tag="bomb")
+            self.assertEqual(len(bombs), 1, "grenade must land on the edge tile (0,4)")
+            # And nothing landed off-map at a negative x.
+            self.assertGreaterEqual(bombs[0].db.coord_x, 0)
+        finally:
+            _teardown_game(systems)
+
 
 def _teardown_game(systems):
     """Best-effort teardown: stop any scripts initialize_game created so they

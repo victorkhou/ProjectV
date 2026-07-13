@@ -1052,7 +1052,30 @@ class TestCmdAttack(unittest.TestCase):
         caller.location.contents = [guard]
         _make_cmd(CmdAttack, caller, " guard").func()
         # A rejected attack must not leave the player on cooldown.
-        self.assertEqual(getattr(caller.db, "next_attack_time", 0.0), 0.0)
+        self.assertEqual(getattr(caller.ndb, "next_attack_time", 0.0) or 0.0, 0.0)
+
+    def test_cooldown_stamp_lives_on_ndb_not_db(self):
+        """The monotonic cooldown stamp must be stored on ndb (memory-only), NOT
+        db (persistent): a persisted monotonic value would strand a future stamp
+        that blocks all attacks after an OS reboot resets the monotonic clock."""
+        resolved = []
+
+        class _Engine:
+            registry = types.SimpleNamespace(
+                balance=types.SimpleNamespace(attack_cooldown_seconds=10.0))
+
+            def resolve_now(self, attacker, target):
+                resolved.append(target)
+                return True, ""
+
+        caller = FakeCaller(systems={"combat_engine": _Engine()})
+        guard = _FakeAttackable("Outpost #2 Guard-1", 5, 6)
+        caller.location.contents = [guard]
+        _make_cmd(CmdAttack, caller, " guard").func()
+        self.assertEqual(len(resolved), 1)
+        # The stamp is set on ndb, and db is never touched (no persistence).
+        self.assertGreater(getattr(caller.ndb, "next_attack_time", 0.0) or 0.0, 0.0)
+        self.assertIsNone(getattr(caller.db, "next_attack_time", None))
 
 
 class _FakeAttackable:

@@ -827,10 +827,13 @@ class LiveBomb(GameEntity):
     each tick; at zero it detonates as an AoE blast and is deleted. Everyone on
     the bomb's tile sees it arm and tick.
 
-    A LiveBomb is NOT pickupable (``get:false()``): you can't pocket an armed
-    mine. It is its own ``object_type`` tag (``"bomb"``) so it neither counts
-    against the ground-item tile capacity nor merges with loose gear/supply
-    drops (see ``world.utils._GROUND_ITEM_TAGS``).
+    A LiveBomb is NOT pickupable: :meth:`at_pre_get` always refuses, so you can't
+    pocket (and thereby defuse/steal) an armed mine or a live grenade. The custom
+    ``CmdGet`` gates pickup through ``at_pre_get`` rather than the ``get`` lock,
+    so the override — not the lock — is what actually enforces this. It is its own
+    ``object_type`` tag (``"bomb"``) so it neither counts against the ground-item
+    tile capacity nor merges with loose gear/supply drops (see
+    ``world.utils._GROUND_ITEM_TAGS``).
 
     Attributes (all on ``db``, so they survive a reload and the fuse keeps
     running after the coordinate index is rebuilt):
@@ -855,8 +858,22 @@ class LiveBomb(GameEntity):
         self.db.amount = 0
         self.db.radius = 1
         self.db.fuse_remaining = 0
-        # An armed bomb can't be picked up (no pocketing a live mine).
+        # An armed bomb can't be picked up (no pocketing a live mine). The lock
+        # is belt-and-suspenders for Evennia's default get; the real enforcement
+        # is at_pre_get below, since the game's CmdGet checks that, not the lock.
         self.locks.add("get:false()")
+
+    def at_pre_get(self, getter, **kwargs):
+        """Refuse pickup — an armed bomb can never be pocketed.
+
+        Overrides ``GameEntity.at_pre_get`` (which would allow a co-located
+        getter). The game's ``CmdGet`` calls this hook to decide pickup, so this
+        is what actually stops a player from ``get``-ing a live mine/grenade off
+        its tile (defusing or stealing it). Always returns False.
+        """
+        if getter is not None and hasattr(getter, "msg"):
+            getter.msg("You can't pick up an armed bomb.")
+        return False
 
     def get_display_name(self, looker=None, **kwargs):
         """Show the bomb's item name (e.g. 'Land Mine') rather than its key."""

@@ -462,6 +462,37 @@ class TestPresenterOwnershipBehavioral:
         missing = [k for k in _ELEVEN_NEW_KINDS if k not in table]
         assert not missing, f"Missing formatters for new kinds: {missing}"
 
+    def test_bomb_broadcast_kinds_have_formatters(self):
+        """BombSystem emits these tile-broadcast kinds through a helper with a
+        VARIABLE kind arg (self.notify(p, kind, ...)), so the AST contract scan
+        (test_every_emitted_kind_has_a_formatter, string-literals only) can't see
+        them. Assert their formatters exist explicitly so a rename can't silently
+        drop them — everyone on a bomb's tile would otherwise see nothing."""
+        table = NotificationPresenter._FORMATTERS
+        broadcast_kinds = [
+            "bomb_landed", "bomb_armed", "bomb_tick", "bomb_exploded",
+        ]
+        missing = [k for k in broadcast_kinds if k not in table]
+        assert not missing, (
+            f"Bomb broadcast kinds missing a formatter (would be silently "
+            f"dropped): {missing}"
+        )
+        # And each renders a non-empty line from representative data.
+        samples = {
+            "bomb_landed": {"item_name": "Frag Grenade", "seconds": 3},
+            "bomb_armed": {"item_name": "Land Mine", "seconds": 5},
+            "bomb_tick": {"item_name": "Frag Grenade", "seconds": 2},
+            "bomb_exploded": {"item_name": "Frag Grenade", "count": 2},
+        }
+        for kind, data in samples.items():
+            bus = EventBus()
+            player = _MsgPlayer()
+            NotificationPresenter(bus, player_notifier=EvenniaPlayerNotifier())
+            bus.publish(PLAYER_NOTIFICATION, player=player, kind=kind, data=data)
+            assert len(player.messages) == 1 and player.messages[0].strip(), (
+                f"bomb kind {kind!r} did not render a message"
+            )
+
     def test_new_kinds_render_expected_content(self):
         """Spot-check that key data surfaces in the rendered line."""
         checks = {

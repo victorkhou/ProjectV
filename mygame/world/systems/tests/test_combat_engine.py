@@ -617,6 +617,23 @@ class TestPlayerDefeat(unittest.TestCase):
         # xp_kill = 100
         self.assertEqual(attacker.db.combat_xp, 150)
 
+    def test_self_kill_awards_no_kill_xp(self):
+        """A player killed by their OWN bomb (attacker is target) earns no kill
+        XP — a bare player has no db.owner, so the friendly-fire guard must catch
+        attacker-is-victim directly (else it's a self-kill XP farm). The death
+        loss still applies; only the kill reward is suppressed."""
+        weapon = FakeWeapon(damage=200, weapon_range=5)
+        engine, _ = _make_engine()
+        # Stand on your own blast: apply_direct_hit(attacker=self, target=self),
+        # exactly as BombSystem._apply_blast does when the placer is in radius.
+        player = FakePlayer(name="Self", hp=100, combat_xp=200,
+                            location=FakeTile(xyz=(0, 0, "earth")))
+        engine.apply_direct_hit(player, player, weapon,
+                                include_attacker_bonus=False)
+        # combat_xp only dropped by the death loss (50); NO +100 kill reward.
+        self.assertEqual(player.db.combat_xp, 150,
+                         "a self-kill must not award kill XP")
+
     def test_defeat_deducts_xp_from_victim(self):
         weapon = FakeWeapon(damage=200, weapon_range=5)
         engine, _ = _make_engine()

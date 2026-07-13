@@ -304,6 +304,10 @@ def initialize_game() -> dict:
         planet_registry.load_from_yaml(planets_path)
         logger.info("PlanetRegistry loaded.")
 
+        # Now that the PlanetRegistry exists, give BombSystem its bounds check so
+        # a thrown grenade stops at the map edge instead of landing off-map.
+        bomb_system.set_in_bounds_func(planet_registry.is_valid_coordinate)
+
         # 2. TerrainGenerator per planet
         terrain_generators: dict[str, TerrainGenerator] = {}
         for planet_key in planet_registry.list_planets():

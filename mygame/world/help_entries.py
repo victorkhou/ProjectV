@@ -324,12 +324,12 @@ HELP_ENTRY_DICTS = [
 
             Powerful gear may require a |crank|n — |wequip|n tells you if you're not high enough.
 
-            # Consumables & Throwables
+            # Consumables & Bombs
 
             These live in your |csupply bag|n (counted, not slotted):
             |wuse medkit|n — restore health
             |wuse combat_stim|n — a temporary combat buff
-            |wthrow frag_grenade <x> <y>|n — area damage at a location
+            |wset <bomb> <sec>|n then |wthrow <grenade> <dir>|n / |warm <mine>|n — fused area explosives (|whelp bombs|n)
 
             # Carry Weight
 

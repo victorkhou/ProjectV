@@ -930,13 +930,29 @@ class CombatEngine(BaseSystem):
         # attacker are distinct instances of the same PK after an idmapper flush.
         from world.utils import is_owner
         victim_owner = getattr(getattr(victim, "db", None), "owner", None)
-        own_victim = is_owner(attacker, victim_owner)
+        attacker_owner = self._owning_player(attacker)
+        # "Friendly fire" (no reward) covers every way the kill is on your own
+        # side, so it can't be farmed:
+        #   - the attacker IS the victim (you bombed yourself standing in the
+        #     blast — a bare player has no db.owner, so the is_owner check below
+        #     alone would miss this and wrongly credit a self-kill);
+        #   - the victim is a unit the attacker owns (is_owner(attacker, owner));
+        #   - the attacker acts on behalf of the victim (your own bomb/turret/
+        #     agent downed you), or on behalf of the victim's owner (your unit
+        #     killed another of your units) — compared via the owning players.
+        own_victim = (
+            attacker is victim
+            or is_owner(attacker, victim_owner)
+            or (attacker_owner is not None and (
+                attacker_owner is victim
+                or is_owner(attacker_owner, victim_owner)
+            ))
+        )
 
         # Award XP to the attacker's OWNING PLAYER — a kill by A's turret or A's
         # agent is credited to A (single-owner model), not banked on the unit.
         # A bare player is its own owner. Friendly fire and ownerless/enemy
         # attackers earn nothing.
-        attacker_owner = self._owning_player(attacker)
         if own_victim:
             pass  # no reward for friendly fire on your own unit
         elif attacker_owner is not None:
