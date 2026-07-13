@@ -387,17 +387,26 @@ def is_building(entity: Any) -> bool:
     return get_building_type(entity) is not None
 
 
-def building_is_open(building: Any) -> bool:
+def building_is_open(building: Any, provider: Any = None) -> bool:
     """Return True if *building* is *open* to ranged fire (CLOSED when unset).
 
     Open buildings can be targeted/hit by ranged weapons and turrets and give
     their occupants no cover; closed ones can only be hit by adjacent melee
     attacks and shelter a player inside them. The single reader shared by the
     combat engine (direct/queued attacks + turret targeting) and the throw-AoE
-    targeting, so the open/closed rule lives in one place. Reads the ``open``
-    attribute via ``get_obj_attr``; an unset value reads as CLOSED, so
-    pre-existing buildings are treated as cover.
+    targeting, so the open/closed rule lives in one place.
+
+    A **Wall** (any ``combat_barrier`` building) is intrinsically OPEN regardless
+    of its ``open`` attribute: a wall is a barrier meant to be shot/broken down,
+    never cover, so ranged weapons and turrets can breach it (the "breach the
+    walls" raid mechanic). For every other building the per-instance ``open``
+    attribute governs, read via ``get_obj_attr``; an unset value reads as CLOSED
+    so pre-existing buildings are treated as cover.
     """
+    from world.constants import COMBAT_BARRIER
+
+    if building_has_capability(building, COMBAT_BARRIER, provider=provider):
+        return True
     return bool(get_obj_attr(building, "open", False))
 
 

@@ -403,11 +403,16 @@ class Building(GameEntity):
 
         Open buildings can be hit by ranged weapons and turrets and give their
         occupants no cover; closed ones can only be hit by adjacent (melee)
-        attacks and shelter a player inside them from ranged fire. An unset
-        attribute reads as CLOSED (default False), so pre-existing buildings are
-        treated as cover.
+        attacks and shelter a player inside them from ranged fire.
+
+        Walls (any ``combat_barrier`` building) are intrinsically open — a
+        barrier is meant to be shot/broken down, never cover. For every other
+        building an unset attribute reads as CLOSED (default False), so
+        pre-existing buildings are treated as cover. Delegates to
+        ``world.utils.building_is_open`` so the wall rule lives in one place.
         """
-        return bool(self.attributes.get("open", default=False))
+        from world.utils import building_is_open
+        return building_is_open(self)
 
     @property
     def building_level(self) -> int:

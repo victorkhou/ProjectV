@@ -581,6 +581,30 @@ class LiveBootSmokeTest(EvenniaTest):
         finally:
             _teardown_game(systems)
 
+    def test_wall_takes_ranged_fire_on_real_objects(self):
+        """A Wall (combat_barrier) is intrinsically OPEN on real objects: ranged
+        fire breaches it even with its 'open' attribute explicitly False —
+        resolved via the live registry's WL capability."""
+        from server.conf.game_init import initialize_game
+        from world.systems.combat_engine import _TurretWeapon
+        from world.utils import building_is_open
+
+        systems = initialize_game()
+        try:
+            engine = systems["combat_engine"]
+            attacker = self._make_player(x=0, y=0, planet="earth")
+            attacker.db.combat_xp = 100000
+
+            wall = self._make_building("WL", x=3, y=0, planet="earth", hp=600)
+            wall.set_open(False)  # explicitly closed — the wall rule overrides
+            self.assertTrue(building_is_open(wall), "wall must read as open")
+
+            ranged = _TurretWeapon(50, 10)  # no weapon_type -> ranged
+            ok, _ = engine.queue_attack(attacker, wall, weapon=ranged)
+            self.assertTrue(ok, "ranged fire must breach a wall")
+        finally:
+            _teardown_game(systems)
+
     def test_melee_reaches_diagonal_on_real_objects(self):
         """On real objects: Chebyshev melee range — a range-1 melee weapon hits a
         target one tile diagonally away (the reported '1 north + 1 west' case),

@@ -345,6 +345,30 @@ class TestBuildingIsOpen:
         from mygame.world.utils import building_is_open
         assert building_is_open(self._building()) is False
 
+    def test_wall_is_open_regardless_of_attribute(self):
+        """A Wall (combat_barrier) is intrinsically OPEN — ranged fire/turrets
+        breach it — even if its 'open' attribute is unset or explicitly False."""
+        from mygame.world.utils import building_is_open
+        from mygame.world.constants import COMBAT_BARRIER
+        provider = FakeProvider(buildings={"WL": _Cap({COMBAT_BARRIER})})
+
+        wall = _Building("WL")               # no 'open' attr set
+        assert building_is_open(wall, provider=provider) is True
+
+        wall_closed = _Building("WL")
+        wall_closed.db.open = False          # explicitly closed — still open
+        assert building_is_open(wall_closed, provider=provider) is True
+
+    def test_non_barrier_building_still_governed_by_attribute(self):
+        """A non-wall building with the same provider still honours 'open'."""
+        from mygame.world.utils import building_is_open
+        from mygame.world.constants import COMBAT_BARRIER
+        provider = FakeProvider(buildings={
+            "WL": _Cap({COMBAT_BARRIER}), "MM": _Cap(set()),
+        })
+        assert building_is_open(self._building(open=False), provider=provider) is False
+        assert building_is_open(self._building(open=True), provider=provider) is True
+
 
 class TestPlayerIsSheltered:
     """player_is_sheltered: True only for a player INSIDE a CLOSED building."""
