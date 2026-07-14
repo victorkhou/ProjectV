@@ -3269,5 +3269,49 @@ class TestSellJunkResolution(unittest.TestCase):
         self.assertTrue(any("aren't carrying" in m for m in caller._messages))
 
 
+class TestCmdWhoFirstPlayable(unittest.TestCase):
+    """CmdWho._first_playable resolves the OOC character to display state for.
+
+    A logged-in but un-puppeted player (spawning/lobby states) has no
+    session.get_puppet(), so who reads the account's first playable character
+    to show its rank/level/lifecycle state. Covers the characters-handler path,
+    the legacy _playable_characters fallback, and empty/odd shapes.
+    """
+
+    from mygame.commands.game_commands import CmdWho as _CmdWho
+
+    def test_uses_characters_handler(self):
+        char = object()
+
+        class _Chars:
+            def all(self):
+                return [char]
+
+        acct = types.SimpleNamespace(characters=_Chars(),
+                                     db=types.SimpleNamespace())
+        self.assertIs(self._CmdWho._first_playable(acct), char)
+
+    def test_falls_back_to_legacy_list(self):
+        char = object()
+        acct = types.SimpleNamespace(
+            characters=None,
+            db=types.SimpleNamespace(_playable_characters=[char]),
+        )
+        self.assertIs(self._CmdWho._first_playable(acct), char)
+
+    def test_none_account_returns_none(self):
+        self.assertIsNone(self._CmdWho._first_playable(None))
+
+    def test_empty_characters_returns_none(self):
+        class _Chars:
+            def all(self):
+                return []
+        acct = types.SimpleNamespace(
+            characters=_Chars(),
+            db=types.SimpleNamespace(_playable_characters=[]),
+        )
+        self.assertIsNone(self._CmdWho._first_playable(acct))
+
+
 if __name__ == "__main__":
     unittest.main()

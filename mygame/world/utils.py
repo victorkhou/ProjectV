@@ -332,6 +332,45 @@ def is_player(entity: Any) -> bool:
     return getattr(entity.db, "combat_xp", None) is not None
 
 
+def player_is_present(entity: Any) -> bool:
+    """Return True if *entity* is a player present in the world as a combat target.
+
+    The single "can this player be hit / seen by turret & guard targeting"
+    predicate, used by ``get_players_at`` / ``get_nearby_players``. "Present"
+    means:
+
+    * puppeted AND actually in the game — ``player_state`` is ``PLAYING`` or
+      ``None`` (the lobby flow disabled, or a legacy character: unchanged
+      behavior); OR
+    * ``LINKDEAD`` — a dropped player's character lingers in the world as a live
+      combat target during its grace window (the anti-combat-log rule), even
+      though it holds no session (``has_account`` False).
+
+    A player who is OOC in the spawning/lobby flow (``SPAWNING`` / ``LOBBY``) is
+    NOT present: they are staging, not deployed, so they can't be targeted — this
+    closes the spawn-camp / login-window window where a just-respawned or
+    just-logged-in character sat at full HP on a tile and could be re-downed
+    every tick. A stowed/logged-out character (not linkdead) is also not present.
+    Never raises.
+    """
+    if entity is None or not hasattr(entity, "has_account"):
+        return False
+    from world.constants import (
+        PLAYER_STATE_LINKDEAD, PLAYER_STATE_PLAYING,
+    )
+    state = getattr(getattr(entity, "db", None), "player_state", None)
+    if state == PLAYER_STATE_LINKDEAD:
+        return True
+    try:
+        if not entity.has_account:
+            return False
+    except Exception:  # noqa: BLE001
+        return False
+    # Puppeted: present only if actually in the game (PLAYING) or the flow is
+    # off / legacy (state None). SPAWNING/LOBBY are OOC and not targetable.
+    return state in (None, PLAYER_STATE_PLAYING)
+
+
 # ------------------------------------------------------------------ #
 #  Level reading  (single source of truth)
 # ------------------------------------------------------------------ #

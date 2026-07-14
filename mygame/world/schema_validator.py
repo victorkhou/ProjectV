@@ -671,6 +671,8 @@ class SchemaValidator:
             "accuracy_targeted", "accuracy_directional",
             # Wall-clock cooldown (seconds) between a player's instant attacks.
             "attack_cooldown_seconds",
+            # Wall-clock linkdead grace window (seconds).
+            "linkdead_grace_seconds",
         ]
         bool_fields = ["metrics_enabled"]
         # Resource->int maps: keys are resource names, values positive ints
@@ -706,7 +708,7 @@ class SchemaValidator:
         # False), so a malformed float can't slip through the type check.
         non_negative_fields = [
             "hp_regen_percent", "hp_regen_interval_ticks", "repair_cost_fraction",
-            "attack_cooldown_seconds",
+            "attack_cooldown_seconds", "linkdead_grace_seconds",
         ]
         for field in non_negative_fields:
             val = data.get(field)

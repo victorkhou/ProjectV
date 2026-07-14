@@ -1383,11 +1383,14 @@ class EquipmentSystem(CarryWeightMixin, StorageMixin, BaseSystem):
         a player never directly bombs their own character. (Direct weapon
         attacks reject own-building targets; a thrown explosive deliberately
         does not, so positioning matters.)
+
+        A blast BREACHES cover (matching :meth:`BombSystem._blast_targets`): it
+        reaches buildings whether open or CLOSED, and players even when sheltered
+        inside a closed building — an explosion is an anti-structure weapon, not
+        a ranged shot that cover stops. The only filter is Chebyshev range and
+        being a damageable combat entity.
         """
-        from world.utils import (
-            get_coords, is_building, is_player, building_is_open,
-            player_is_sheltered,
-        )
+        from world.utils import get_coords, is_building, is_player
 
         location = getattr(player, "location", None)
         if location is None:
@@ -1409,15 +1412,7 @@ class EquipmentSystem(CarryWeightMixin, StorageMixin, BaseSystem):
         for obj in candidates:
             if obj is player:
                 continue
-            obj_is_building = is_building(obj)
-            if not (is_player(obj) or obj_is_building):
-                continue
-            # A thrown explosive is ranged: a closed building is immune, and so
-            # is a player sheltered inside a closed building. Only adjacent melee
-            # reaches either.
-            if obj_is_building and not building_is_open(obj):
-                continue
-            if not obj_is_building and player_is_sheltered(obj):
+            if not (is_player(obj) or is_building(obj)):
                 continue
             coords = get_coords(obj)
             if coords is None:

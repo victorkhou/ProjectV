@@ -256,6 +256,68 @@ ACTIVITY_RESERVE = "Reserve"    # benched by an owner demotion
 ACTIVITY_INCAPACITATED = "Incapacitated"  # downed; awaiting recovery
 
 # ------------------------------------------------------------------ #
+#  Player lifecycle state machine
+# ------------------------------------------------------------------ #
+
+#: The persisted lifecycle states a PLAYER character moves through (stored on
+#: ``db.player_state``). Unlike the agent ``ACTIVITY_*`` strings — which are
+#: DERIVED from role/assignment by ``world.utils.resting_activity_status`` — a
+#: player's lifecycle state is a true persisted FSM: transitions are discrete
+#: events (login route, enter, death, disconnect), not computable from other
+#: fields. The single WRITER is ``world.player_lifecycle.transition``; no other
+#: code path assigns ``db.player_state`` directly.
+#:
+#: Three transient session/account phases (connecting, authenticated) are NOT
+#: persisted here — they live in Evennia's built-in session FSM. Only the states
+#: a character can DWELL in between commands are persisted:
+PLAYER_STATE_SPAWNING = "spawning"    # picking class + spawn location (OOC)
+PLAYER_STATE_LOBBY = "lobby"          # waiting to enter game; enter/quit (OOC)
+PLAYER_STATE_PLAYING = "playing"      # puppeted, in the game world
+PLAYER_STATE_LINKDEAD = "linkdead"    # connection dropped w/o quit; grace timer
+
+#: Every valid persisted player state (used to validate a stored value).
+PLAYER_STATES = frozenset({
+    PLAYER_STATE_SPAWNING,
+    PLAYER_STATE_LOBBY,
+    PLAYER_STATE_PLAYING,
+    PLAYER_STATE_LINKDEAD,
+})
+
+#: Human-readable label per state, for the admin ``who`` State column. Kept
+#: alongside the state values (the ``ACTIVITY_*`` precedent) rather than in the
+#: NotificationPresenter — those formatters own event-driven notification lines
+#: only, not command/table output.
+PLAYER_STATE_LABELS = {
+    PLAYER_STATE_SPAWNING: "Spawning",
+    PLAYER_STATE_LOBBY: "Lobby",
+    PLAYER_STATE_PLAYING: "Playing",
+    PLAYER_STATE_LINKDEAD: "Linkdead",
+}
+
+#: Allowed transitions: state -> set of states reachable from it. Encodes the
+#: spec's transition table (the game-side dwell states only; the socket/auth
+#: phases are Evennia's session FSM and route INTO these). ``None`` (a brand-new
+#: character with no state yet) may enter any initial state via the login
+#: router, so it is handled specially by the lifecycle module, not listed here.
+PLAYER_STATE_TRANSITIONS = {
+    # In spawning you pick class + location, then advance to the lobby; a
+    # disconnect keeps you spawning (re-login resumes selection).
+    PLAYER_STATE_SPAWNING: {PLAYER_STATE_LOBBY, PLAYER_STATE_SPAWNING},
+    # From the lobby you Enter (→ playing) or Quit (stay lobby); linger on
+    # disconnect.
+    PLAYER_STATE_LOBBY: {PLAYER_STATE_PLAYING, PLAYER_STATE_LOBBY},
+    # In game: quit → lobby, death → spawning, unclean drop → linkdead.
+    PLAYER_STATE_PLAYING: {
+        PLAYER_STATE_LOBBY, PLAYER_STATE_SPAWNING, PLAYER_STATE_LINKDEAD,
+    },
+    # Linkdead: reconnect resumes play, killed-during-grace → spawning,
+    # grace-expiry (alive) → lobby.
+    PLAYER_STATE_LINKDEAD: {
+        PLAYER_STATE_PLAYING, PLAYER_STATE_SPAWNING, PLAYER_STATE_LOBBY,
+    },
+}
+
+# ------------------------------------------------------------------ #
 #  Building capabilities
 # ------------------------------------------------------------------ #
 

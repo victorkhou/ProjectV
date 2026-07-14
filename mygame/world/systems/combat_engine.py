@@ -75,6 +75,25 @@ class CombatEngine(BaseSystem):
         # kills would grant XP that never levels the player up. Injected via
         # set_player_xp_awarder; falls back to the game_systems-global lookup.
         self._player_xp_awarder_provider = player_xp_awarder_provider
+        # Optional player-respawn handler ``(victim) -> bool``: when the lobby
+        # lifecycle flow is enabled it records the place of death and routes the
+        # player into SPAWNING (they re-pick class + spawn location on next
+        # login/deploy) instead of the default instant in-place HP reset.
+        # Returns True if it handled the respawn (the engine then skips the
+        # in-place reset). None / returns-False → default instant in-place
+        # respawn (agents always use the default; the flow only affects players).
+        self._player_respawn_func: Callable[[Any], bool] | None = None
+
+    def set_player_respawn_func(self, func: Callable[[Any], bool] | None) -> None:
+        """Inject the player-respawn handler (lobby lifecycle flow).
+
+        *func* is ``(victim) -> bool``: it should record the death and relocate/
+        re-route the player, returning True when it fully handled respawn (the
+        engine then skips its default in-place HP reset). Only invoked for real
+        player victims (never agents). When unset — or when it returns False —
+        the engine keeps the existing instant in-place respawn.
+        """
+        self._player_respawn_func = func
 
     def set_sight_blocked_func(self, func: Callable[..., bool] | None) -> None:
         """Inject the line-of-sight predicate used to gate turret fire.
@@ -979,6 +998,20 @@ class CombatEngine(BaseSystem):
         # Respawn victim (reset HP)
         hp_max = self._get_hp_max(victim)
         self._set_hp(victim, hp_max)
+
+        # Player respawn routing (lobby lifecycle flow). For a real PLAYER victim
+        # (never an agent), hand off to the injected respawn handler, which
+        # records the place of death and routes the player into SPAWNING (they
+        # re-pick class + spawn location before re-entering). HP is already reset
+        # above, so the player returns at full health when they redeploy. When no
+        # handler is wired (flow disabled / tests), this is skipped and the
+        # existing instant in-place respawn stands.
+        if not self._is_agent(victim) and self._player_respawn_func is not None:
+            try:
+                self._player_respawn_func(victim)
+            except Exception:  # noqa: BLE001 - respawn routing must not break combat
+                from world.systems.agent_constants import logger as _log
+                _log.exception("Player respawn routing failed")
 
         # Publish event with owner attribution so the announcement reads
         # "Player A[ 's Turret/Agent] has eliminated Player B" — the kill is

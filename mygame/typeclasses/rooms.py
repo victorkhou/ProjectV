@@ -125,11 +125,15 @@ class PlanetRoom(DefaultRoom):
         return self.get_objects_at(x, y, type_tag="building")
 
     def get_players_at(self, x: int, y: int) -> list:
-        """Return player characters at (x, y)."""
-        return [
-            o for o in self.coord_index.get_at(x, y)
-            if hasattr(o, "has_account") and o.has_account
-        ]
+        """Return player characters present at (x, y).
+
+        "Present" includes a LINKDEAD character (dropped connection, still in its
+        grace window) — it lingers in the world as a live combat target, so it
+        must be visible to turret/guard targeting exactly as it is to bombs and
+        melee. See ``world.utils.player_is_present``.
+        """
+        from world.utils import player_is_present
+        return [o for o in self.coord_index.get_at(x, y) if player_is_present(o)]
 
     def get_nearby_players(self, x: int, y: int, radius: int) -> list:
         """Return player characters within Chebyshev distance *radius* of (x, y).
@@ -147,13 +151,16 @@ class PlanetRoom(DefaultRoom):
         matches the guard in :meth:`get_objects_at`, and matters more here
         because turret fire hits this path every tick.
         """
+        from world.utils import player_is_present
         players = []
         for cx in range(x - radius, x + radius + 1):
             for cy in range(y - radius, y + radius + 1):
                 for o in self.coord_index.get_at(cx, cy):
                     if getattr(o, "pk", True) is None:
                         continue  # stale ref to a deleted object
-                    if hasattr(o, "has_account") and o.has_account:
+                    # "Present" includes linkdead chars in their grace window,
+                    # so turrets/guards fire at a dropped player just as bombs do.
+                    if player_is_present(o):
                         players.append(o)
         return players
 

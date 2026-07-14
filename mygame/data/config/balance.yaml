@@ -125,6 +125,13 @@ accuracy_directional: 0.7        # hit chance for a directional shot (baseline)
 # stat modifier. Turrets/guards/locked-tracking shots stay tick-queued.
 attack_cooldown_seconds: 1.0     # seconds between a player's instant attacks
 
+# --- Player lifecycle: linkdead grace ---
+# When a PLAYING player drops their connection without 'quit', their character
+# stays a live combat target for this many wall-clock seconds before being
+# removed to the lobby (anti-combat-log). Keep >= combat lockout. Only used when
+# the lobby lifecycle flow is enabled.
+linkdead_grace_seconds: 30.0
+
 # --- NPC base spawner + elimination (PvE NPC bases, Phase 5) ---
 # NPC outposts/fortresses placed on the map at init; destroying a base's HQ
 # wipes the whole base and awards xp_hq_destroy + loot, then respawns it

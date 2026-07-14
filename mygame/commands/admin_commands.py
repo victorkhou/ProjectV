@@ -106,6 +106,37 @@ def _get_registry(caller):
         return None
 
 
+def _parse_index_token(token):
+    """Parse a 1-based index token (``#3`` or ``3``), or ``None`` if not one.
+
+    Admin ``spawn`` commands accept an index shown by their matching ``list``
+    (e.g. '@item list' numbers each item). A leading ``#`` is optional so both
+    ``@item spawn 3`` and ``@item spawn #3`` work. Returns the integer index, or
+    ``None`` when *token* isn't a bare/hash-prefixed positive integer (so the
+    caller falls through to name/key/prefix resolution).
+    """
+    if not token:
+        return None
+    body = token[1:] if token[0] == "#" else token
+    if body.isdigit():
+        n = int(body)
+        return n if n >= 1 else None
+    return None
+
+
+def _resolve_by_index(token, ordered):
+    """Return the def at 1-based *token* index within *ordered*, else ``None``.
+
+    *ordered* is the SAME stable, sorted sequence the matching ``list``
+    subcommand numbers, so an index typed by the operator maps to exactly the
+    row they saw. Out-of-range or non-index tokens return ``None``.
+    """
+    n = _parse_index_token(token)
+    if n is None or n > len(ordered):
+        return None
+    return ordered[n - 1]
+
+
 class CmdAdminBuilding(AdminSubcommandRouter):
     """Manage buildings on the overworld.
 
@@ -122,10 +153,26 @@ class CmdAdminBuilding(AdminSubcommandRouter):
     Subcommands:
       spawn   — Spawn a building at your current tile (Builder+)
       destroy — Destroy the building at your current tile (Builder+)
+      open    — Open/close the building at your tile to ranged fire (Builder+)
+      list    — List building types with index numbers (Builder+)
 
     """
 
     key = "@building"
+
+    @staticmethod
+    def _building_index(registry):
+        """Return the stable, sorted list of BuildingDefs '@building list' numbers.
+
+        Shared by ``sub_list`` (prints the 1-based index) and ``sub_spawn``
+        (resolves an index the operator typed), so ``@building spawn N`` maps to
+        the row shown as ``[N]``. Sorted by abbreviation — deterministic across
+        reloads.
+        """
+        buildings = getattr(registry, "buildings", None) if registry else None
+        if not buildings:
+            return []
+        return [buildings[abbr] for abbr in sorted(buildings.keys())]
 
     def sub_spawn(self, args):
         """Spawn a building at the caller's current tile.
@@ -163,15 +210,17 @@ class CmdAdminBuilding(AdminSubcommandRouter):
                     caller.msg("Level must be a number 1-5.")
                     return
 
-        # Validate building type exists. Accept an abbreviation (EX) or a full
-        # name (extractor) — same as the player 'build' command — via the
-        # registry's typo-tolerant resolver, falling back to abbreviation.
+        # Validate building type exists. Accept an index (``#3`` or ``3`` from
+        # '@building list'), an abbreviation (EX), a full name (extractor), or an
+        # unambiguous prefix — same typo-tolerant resolver the player 'build'
+        # command uses, plus the index shortcut.
         registry = _get_registry(caller)
         if registry:
-            bdef = None
-            resolver = getattr(registry, "resolve_building", None)
-            if callable(resolver):
-                bdef = resolver(parts[0])
+            bdef = _resolve_by_index(parts[0], self._building_index(registry))
+            if bdef is None:
+                resolver = getattr(registry, "resolve_building", None)
+                if callable(resolver):
+                    bdef = resolver(parts[0])
             if bdef is None:
                 try:
                     bdef = registry.get_building(btype)
@@ -183,7 +232,8 @@ class CmdAdminBuilding(AdminSubcommandRouter):
                 valid = ", ".join(sorted(getattr(registry, "buildings", {}) or {}))
                 caller.msg(
                     f"Unknown building type '{parts[0]}'. "
-                    f"Valid: {valid or 'none loaded'}"
+                    f"Valid: {valid or 'none loaded'}. "
+                    f"Or use '@building list' for names + index numbers."
                 )
                 return
             btype = bdef.abbreviation
@@ -323,10 +373,35 @@ class CmdAdminBuilding(AdminSubcommandRouter):
             f"({'ranged + melee' if want_open else 'melee only'})."
         )
 
+    def sub_list(self, args):
+        """List building types with a stable 1-based index.
+
+        ``@building spawn <N>`` (or ``#N``) spawns the type shown as ``[N]``, so
+        an operator can reference a building by index instead of its abbreviation
+        or full name.
+
+        Args:
+            args: unused (accepted for router-signature consistency).
+        """
+        caller = self.caller
+        registry = _get_registry(caller)
+        ordered = self._building_index(registry)
+        if not ordered:
+            caller.msg("No building definitions loaded.")
+            return
+
+        lines = ["|w=== Building types (spawn by name or [index]) ===|n"]
+        for idx, b in enumerate(ordered, start=1):
+            cat = f" ({b.category})" if getattr(b, "category", "") else ""
+            lines.append(f"  |w[{idx}]|n {b.abbreviation:<4s} {b.name}{cat}")
+        self._log_admin("list", "building types")
+        caller.msg("\n".join(lines))
+
     subcommands = {
         "spawn": (sub_spawn, "Spawn a building at your tile", "Builder"),
         "destroy": (sub_destroy, "Destroy building at your tile", "Builder"),
         "open": (sub_open, "Open/close building to ranged fire", "Builder"),
+        "list": (sub_list, "List building types with index numbers", "Builder"),
     }
 
 
@@ -818,15 +893,18 @@ class CmdAdminItem(AdminSubcommandRouter):
         if rest:
             player_name = rest[0]
 
-        # Resolve the item definition (key or full name, typo-tolerant).
+        # Resolve the item definition. Accept an index (``#3`` or ``3``, as shown
+        # by '@item list'), a key, a full name, or an unambiguous prefix — all
+        # typo-tolerant via the shared registry resolver.
         registry = _get_registry(caller)
         if registry is None:
             caller.msg("Data Registry unavailable.")
             return
-        item_def = None
-        resolver = getattr(registry, "resolve_item", None)
-        if callable(resolver):
-            item_def = resolver(token)
+        item_def = _resolve_by_index(token, self._item_index(registry))
+        if item_def is None:
+            resolver = getattr(registry, "resolve_item", None)
+            if callable(resolver):
+                item_def = resolver(token)
         if item_def is None and hasattr(registry, "get_item"):
             try:
                 item_def = registry.get_item(token)
@@ -834,7 +912,8 @@ class CmdAdminItem(AdminSubcommandRouter):
                 item_def = None
         if item_def is None:
             caller.msg(
-                f"Unknown item '{token}'. Use '@item list' to see valid keys."
+                f"Unknown item '{token}'. Use '@item list' to see valid keys "
+                f"and index numbers."
             )
             return
 
@@ -903,33 +982,50 @@ class CmdAdminItem(AdminSubcommandRouter):
             equipment.add_supply(item_def.key, count, max_stack=item_def.max_stack)
         )
 
+    @staticmethod
+    def _item_index(registry):
+        """Return the stable, sorted list of ItemDefs '@item list' numbers.
+
+        The single ordering shared by ``sub_list`` (which prints the 1-based
+        index alongside each item) and ``sub_spawn`` (which resolves an index the
+        operator typed), so ``@item spawn N`` always maps to the row shown as
+        ``[N]``. Sorted by (category, key) — deterministic across reloads.
+        """
+        items = getattr(registry, "items", None) if registry else None
+        if not items:
+            return []
+        return sorted(items.values(), key=lambda d: (d.category, d.key))
+
     def sub_list(self, args):
         """List item definitions available to spawn, grouped by category.
+
+        Each item is numbered with a stable 1-based index; ``@item spawn <N>``
+        (or ``#N``) spawns that item, so an operator can reference an item by
+        index instead of typing its full key.
 
         Args:
             args: "[filter]" — optional category or slot to restrict the list.
         """
         caller = self.caller
         registry = _get_registry(caller)
-        items = getattr(registry, "items", None) if registry else None
-        if not items:
+        ordered = self._item_index(registry)
+        if not ordered:
             caller.msg("No item definitions loaded.")
             return
 
         filt = args.strip().lower() if args else ""
-        ordered = sorted(items.values(), key=lambda d: (d.category, d.key))
 
-        lines = ["|w=== Item definitions ===|n"]
+        lines = ["|w=== Item definitions (spawn by name or [index]) ===|n"]
         shown = 0
         current_cat = None
-        for d in ordered:
+        for idx, d in enumerate(ordered, start=1):
             if filt and filt not in (d.category.lower(), (d.slot or "").lower()):
                 continue
             if d.category != current_cat:
                 current_cat = d.category
                 lines.append(f"|c{current_cat}|n")
             slot = f" slot={d.slot}" if d.slot else ""
-            lines.append(f"  {d.key:<18s} {d.name}{slot} wt={d.weight:g}")
+            lines.append(f"  |w[{idx}]|n {d.key:<18s} {d.name}{slot} wt={d.weight:g}")
             shown += 1
 
         if shown == 0:
@@ -1393,18 +1489,57 @@ class CmdAdminOutpost(AdminSubcommandRouter):
     Usage:
         @outpost spawn <tier> [x y]
         @outpost list
+        @outpost tiers
 
     Options:
-        <tier>   template tier ("outpost" or "fortress")
+        <tier>   template tier ("outpost" or "fortress"), an unambiguous prefix
+                 ("fort"), or an index (#2) from '@outpost tiers'
         [x y]    HQ tile coordinates; defaults to your current tile
 
     Subcommands:
         spawn — Spawn an NPC base at a tile (Builder+)
         list  — List active NPC bases (Builder+)
+        tiers — List spawnable base tiers with index numbers (Builder+)
 
     """
 
     key = "@outpost"
+
+    @staticmethod
+    def _tier_index(registry):
+        """Return the stable, sorted list of base-template tier names.
+
+        Shared by ``sub_tiers`` (prints the 1-based index) and ``sub_spawn``
+        (resolves an index/prefix the operator typed), so ``@outpost spawn N``
+        maps to the tier shown as ``[N]``. Sorted alphabetically — deterministic.
+        """
+        templates = getattr(registry, "base_templates", None) if registry else None
+        if not templates:
+            return []
+        return sorted(templates.keys())
+
+    def _resolve_tier(self, registry, token):
+        """Resolve *token* to a base-template tier name, or ``None``.
+
+        Accepts an index (``#2`` / ``2`` from '@outpost tiers'), an exact tier
+        name, or an unambiguous prefix — mirroring the item/building resolvers so
+        the operator needn't type the full tier. Case-insensitive.
+        """
+        tiers = self._tier_index(registry)
+        if not tiers:
+            # No template metadata available (e.g. minimal test spawner): fall
+            # back to the raw lowercased token; the spawner validates it.
+            return token.lower()
+        by_index = _resolve_by_index(token, tiers)
+        if by_index is not None:
+            return by_index
+        norm = token.strip().lower()
+        if norm in tiers:
+            return norm
+        prefixed = [t for t in tiers if t.startswith(norm)]
+        if len(prefixed) == 1:
+            return prefixed[0]
+        return None
 
     def sub_spawn(self, args):
         """Spawn an NPC base of a tier at the caller's tile (or given x y)."""
@@ -1417,7 +1552,15 @@ class CmdAdminOutpost(AdminSubcommandRouter):
         if not parts:
             caller.msg("Usage: @outpost spawn <tier> [x y]")
             return
-        tier = parts[0].lower()
+        registry = _get_registry(caller)
+        tier = self._resolve_tier(registry, parts[0])
+        if tier is None:
+            valid = ", ".join(self._tier_index(registry)) or "none loaded"
+            caller.msg(
+                f"Unknown or ambiguous tier '{parts[0]}'. Valid: {valid}. "
+                f"Use '@outpost tiers' for index numbers."
+            )
+            return
 
         planet = getattr(caller.db, "coord_planet", None)
         if not planet:
@@ -1466,7 +1609,29 @@ class CmdAdminOutpost(AdminSubcommandRouter):
             )
         caller.msg("\n".join(lines))
 
+    def sub_tiers(self, args):
+        """List spawnable base tiers with a stable 1-based index.
+
+        ``@outpost spawn <N>`` (or ``#N``) spawns the tier shown as ``[N]``.
+        """
+        caller = self.caller
+        registry = _get_registry(caller)
+        tiers = self._tier_index(registry)
+        if not tiers:
+            caller.msg("No base tiers loaded.")
+            return
+        lines = ["|w=== Base tiers (spawn by name or [index]) ===|n"]
+        templates = getattr(registry, "base_templates", {}) or {}
+        for idx, tier in enumerate(tiers, start=1):
+            tmpl = templates.get(tier)
+            display = getattr(tmpl, "display_name", "") if tmpl else ""
+            suffix = f" — {display}" if display and display.lower() != tier else ""
+            lines.append(f"  |w[{idx}]|n {tier}{suffix}")
+        self._log_admin("tiers", "base tiers")
+        caller.msg("\n".join(lines))
+
     subcommands = {
         "spawn": (sub_spawn, "Spawn an NPC base at a tile", "Builder"),
         "list": (sub_list, "List active NPC bases", "Builder"),
+        "tiers": (sub_tiers, "List spawnable base tiers with index numbers", "Builder"),
     }

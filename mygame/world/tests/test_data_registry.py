@@ -377,6 +377,24 @@ class TestGetters:
     def test_resolve_building_empty_returns_none(self):
         assert self.reg.resolve_building("") is None
 
+    def test_resolve_building_by_unambiguous_name_prefix(self):
+        # "head" is a unique prefix of "Headquarters" among HQ/Mill/Armory.
+        assert self.reg.resolve_building("head").abbreviation == "HQ"
+
+    def test_resolve_building_by_unambiguous_prefix_arm(self):
+        assert self.reg.resolve_building("arm").abbreviation == "AA"
+
+    def test_resolve_item_by_unambiguous_key_prefix(self):
+        # "combat_kn" uniquely prefixes combat_knife (kevlar_vest differs).
+        assert self.reg.resolve_item("combat_kn").key == "combat_knife"
+
+    def test_resolve_item_by_unambiguous_name_prefix(self):
+        assert self.reg.resolve_item("kev").key == "kevlar_vest"
+
+    def test_resolve_item_exact_key_beats_prefix(self):
+        # An exact key still wins outright (order: exact key, exact name, prefix).
+        assert self.reg.resolve_item("combat_knife").key == "combat_knife"
+
     def test_get_item(self):
         i = self.reg.get_item("combat_knife")
         assert i.name == "Combat Knife"
@@ -864,3 +882,71 @@ class TestBaseTemplates:
         ok, errors = reg.reload_all()
         assert ok, errors
         assert "outpost" in reg.base_templates
+
+
+# ------------------------------------------------------------------ #
+#  Tests: player classes (state 3.2, optional classes.yaml)
+# ------------------------------------------------------------------ #
+
+_VALID_CLASSES = {
+    "classes": [
+        {"key": "vanguard", "name": "Vanguard", "description": "Front line."},
+        {"key": "engineer", "name": "Engineer", "description": "Builder."},
+    ],
+}
+
+
+class TestPlayerClasses:
+    def test_absent_classes_yields_empty(self, data_dir):
+        """No classes.yaml → empty class set (default fallback), no error."""
+        reg = DataRegistry()
+        reg.load_all(data_dir)
+        assert reg.classes == {}
+        assert reg.get_class("vanguard") is None
+
+    def test_classes_loaded_and_parsed(self, data_dir):
+        _write_yaml(
+            os.path.join(data_dir, "definitions", "classes.yaml"),
+            _VALID_CLASSES,
+        )
+        reg = DataRegistry()
+        reg.load_all(data_dir)
+        cdef = reg.get_class("vanguard")
+        assert cdef is not None
+        assert cdef.name == "Vanguard"
+        assert cdef.description == "Front line."
+        assert set(reg.classes.keys()) == {"vanguard", "engineer"}
+
+    def test_resolve_class_by_name_and_prefix(self, data_dir):
+        _write_yaml(
+            os.path.join(data_dir, "definitions", "classes.yaml"),
+            _VALID_CLASSES,
+        )
+        reg = DataRegistry()
+        reg.load_all(data_dir)
+        assert reg.resolve_class("Engineer").key == "engineer"
+        assert reg.resolve_class("van").key == "vanguard"  # unambiguous prefix
+        assert reg.resolve_class("zzz") is None
+
+    def test_malformed_class_skipped(self, data_dir):
+        _write_yaml(
+            os.path.join(data_dir, "definitions", "classes.yaml"),
+            {"classes": [{"key": "vanguard", "name": "Vanguard"},
+                         {"name": "no-key-entry"}]},
+        )
+        reg = DataRegistry()
+        reg.load_all(data_dir)
+        assert "vanguard" in reg.classes
+        assert len(reg.classes) == 1  # the keyless entry was skipped
+
+    def test_classes_swapped_on_reload(self, data_dir):
+        reg = DataRegistry()
+        reg.load_all(data_dir)
+        assert reg.classes == {}
+        _write_yaml(
+            os.path.join(data_dir, "definitions", "classes.yaml"),
+            _VALID_CLASSES,
+        )
+        ok, errors = reg.reload_all()
+        assert ok, errors
+        assert "vanguard" in reg.classes

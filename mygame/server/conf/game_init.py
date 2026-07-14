@@ -36,6 +36,76 @@ def _holder_room_and_coords(holder: Any) -> tuple[Any, int | None, int | None]:
     return room, coords[0], coords[1]
 
 
+def _wire_spawn_resolver(spawn_resolver: Any, planet_registry: Any) -> None:
+    """Wire the SpawnResolver's Evennia-backed lookups (composition root).
+
+    Supplies the planet fixed-spawn point, bounds check, planet size, and the
+    player's live-HQ tile locator, all from the PlanetRegistry / player buildings
+    — keeping ``world.spawn_resolver`` framework-free.
+    """
+    def _planet_spawn(planet_key):
+        try:
+            space = planet_registry.get_space(planet_key)
+            return (space.spawn_x, space.spawn_y)
+        except Exception:  # noqa: BLE001
+            return None
+
+    def _planet_size(planet_key):
+        try:
+            space = planet_registry.get_space(planet_key)
+            return (space.width, space.height)
+        except Exception:  # noqa: BLE001
+            return None
+
+    def _hq_tile(player, planet_key):
+        # First live (completed) HQ on this planet → its (x, y). None otherwise
+        # (no HQ / inert base), so the resolver falls back to the planet spawn.
+        from world.utils import _owner_hq_buildings, get_coords, get_obj_attr
+        for hq in _owner_hq_buildings(player, planet=planet_key):
+            if get_obj_attr(hq, "under_construction", False):
+                continue
+            coords = get_coords(hq)
+            if coords is not None:
+                return coords
+        return None
+
+    spawn_resolver.set_planet_spawn_func(_planet_spawn)
+    spawn_resolver.set_planet_size_func(_planet_size)
+    spawn_resolver.set_in_bounds_func(planet_registry.is_valid_coordinate)
+    spawn_resolver.set_hq_locator_func(_hq_tile)
+
+
+def _route_player_death(victim: Any) -> bool:
+    """Death → SPAWNING routing for a slain player (lobby lifecycle flow).
+
+    Injected into the CombatEngine. When the lobby flow is enabled, records the
+    victim's place of death and transitions them PLAYING/LINKDEAD → SPAWNING so
+    they re-pick class + spawn location before redeploying, and returns True. A
+    no-op returning False when the flow is disabled (engine keeps its default
+    instant in-place respawn). Never raises.
+    """
+    try:
+        from world.lobby_flow import lobby_flow_enabled
+        if not lobby_flow_enabled():
+            return False
+        from world import player_lifecycle as pl
+        db = getattr(victim, "db", None)
+        x = getattr(db, "coord_x", None) if db else None
+        y = getattr(db, "coord_y", None) if db else None
+        planet = getattr(db, "coord_planet", None) if db else None
+        pl.record_death(victim, x, y, planet)
+        # Pull the slain player OUT of the world while they re-choose class +
+        # spawn (SPAWNING is OOC): otherwise they sit at full HP on the death
+        # tile, targetable, and could be re-downed every tick (spawn-camp XP
+        # drain). ``deploy`` relocates them back onto a tile.
+        if hasattr(victim, "stow_from_world"):
+            victim.stow_from_world()
+        return True
+    except Exception:  # noqa: BLE001 - death routing must never break combat
+        logger.exception("Player death routing failed")
+        return False
+
+
 def initialize_game() -> dict:
     """Initialize all game systems and wire them together.
 
@@ -166,6 +236,13 @@ def initialize_game() -> dict:
     # neither). Late-bound: RankSystem exists by now, but keep the callable form
     # consistent with the agent awarder.
     combat_engine.set_player_xp_awarder(lambda: rank_system)
+    # Player death → respawn routing (lobby lifecycle flow). When enabled, a
+    # slain player records their place of death and is routed into SPAWNING
+    # (re-pick class + spawn location on next deploy) instead of the default
+    # instant in-place respawn. No-op (returns False) when the flow is off, so
+    # the engine keeps the existing behavior. Agents never take this path (the
+    # engine only calls it for real players).
+    combat_engine.set_player_respawn_func(_route_player_death)
     # Guard combat AI: guard/soldier NPCs acquire nearby non-owner players and
     # queue attacks through the CombatEngine each tick (before combat_resolution
     # so they land same-tick). Ownership-generic — defends player bases and NPC
@@ -182,6 +259,11 @@ def initialize_game() -> dict:
     guard_combat_system.set_sight_blocked_func(_sight_blocked)
     # Ranged lock-on ('target'/'shoot'): per-tick lock upkeep + accuracy model.
     targeting_system = TargetingSystem(registry, event_bus)
+    # Spawn-location resolver (state 3.1): HQ / place-of-death / random tile,
+    # with fallbacks. Collaborators (planet spawn/bounds/size, HQ locator) are
+    # wired once the PlanetRegistry exists (see _wire_spawn_resolver below).
+    from world.spawn_resolver import SpawnResolver
+    spawn_resolver = SpawnResolver()
     # Bombs (grenades + mines): fuse config, throw/arm, per-tick fuse countdown,
     # and AoE detonation. The spawn_bomb factory places a LiveBomb on a tile;
     # the area-damage applier resolves the blast through the CombatEngine.
@@ -307,6 +389,11 @@ def initialize_game() -> dict:
         # Now that the PlanetRegistry exists, give BombSystem its bounds check so
         # a thrown grenade stops at the map edge instead of landing off-map.
         bomb_system.set_in_bounds_func(planet_registry.is_valid_coordinate)
+
+        # Wire the spawn-location resolver (state 3.1) now the PlanetRegistry
+        # exists: planet spawn point + bounds + size come from it, the HQ tile
+        # from the player's live HQ buildings.
+        _wire_spawn_resolver(spawn_resolver, planet_registry)
 
         # 2. TerrainGenerator per planet
         terrain_generators: dict[str, TerrainGenerator] = {}
@@ -516,6 +603,7 @@ def initialize_game() -> dict:
         "agent_system": agent_system,
         "guard_combat_system": guard_combat_system,
         "targeting_system": targeting_system,
+        "spawn_resolver": spawn_resolver,
         "bomb_system": bomb_system,
         "outpost_spawner": outpost_spawner,
         "base_elimination": base_elimination,

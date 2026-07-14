@@ -201,6 +201,234 @@ class LiveBootSmokeTest(EvenniaTest):
         self.assertTrue(is_player(c), "a real CombatCharacter is a player")
 
     # -------------------------------------------------------------- #
+    #  Player lifecycle state machine — real DB seeding + routing
+    # -------------------------------------------------------------- #
+
+    def test_lifecycle_fields_seed_and_router_promotes_on_real_char(self):
+        """On a real CombatCharacter: the new PLAYER_DEFAULTS lifecycle fields
+        seed via at_object_creation (player_state None, player_class None,
+        death_* None, linkdead_until 0.0), and the login router promotes a
+        fresh (None) character to SPAWNING through the single-writer transition
+        — the persisted-field behavior the stubbed suite can't prove."""
+        from world import player_lifecycle as pl
+        from world.constants import (
+            PLAYER_STATE_SPAWNING, PLAYER_STATE_LOBBY, PLAYER_STATE_PLAYING,
+        )
+
+        c = self._make_player()
+        # Seeded defaults present on a real Evennia object.
+        self.assertIsNone(c.db.player_state)
+        self.assertIsNone(c.db.player_class)
+        self.assertIsNone(c.db.death_x)
+        self.assertEqual(c.db.linkdead_until, 0.0)
+
+        # Router promotes the fresh character to SPAWNING and it persists.
+        self.assertEqual(pl.route_on_login(c), PLAYER_STATE_SPAWNING)
+        self.assertEqual(c.db.player_state, PLAYER_STATE_SPAWNING)
+
+        # Illegal edge (spawning -> playing) is rejected; the field is unchanged.
+        self.assertFalse(pl.transition(c, PLAYER_STATE_PLAYING))
+        self.assertEqual(c.db.player_state, PLAYER_STATE_SPAWNING)
+
+        # Pick a class, advance through the lobby into play, then die back to
+        # spawning — the full walk against a real persisted db.
+        c.db.player_class = "Vanguard"
+        self.assertTrue(pl.finish_spawning(c))
+        self.assertEqual(c.db.player_state, PLAYER_STATE_LOBBY)
+        self.assertTrue(pl.enter_game(c))
+        self.assertEqual(c.db.player_state, PLAYER_STATE_PLAYING)
+        pl.record_death(c, c.db.coord_x, c.db.coord_y, c.db.coord_planet)
+        self.assertEqual(c.db.player_state, PLAYER_STATE_SPAWNING)
+        self.assertEqual(c.db.death_x, c.db.coord_x)
+
+    def test_ensure_attributes_backfills_lifecycle_fields(self):
+        """A legacy character missing the lifecycle fields gets them back-filled
+        by ensure_attributes (the login migration path) without clobbering a
+        real value — player_state stays None (router decides) and a set class is
+        preserved."""
+        c = self._make_player()
+        # Simulate a legacy character: strip the fields as if created pre-feature.
+        c.attributes.remove("player_state")
+        c.attributes.remove("player_class")
+        c.attributes.remove("linkdead_until")
+
+        c.ensure_attributes()
+
+        # Back-filled to defaults (None / 0.0), never crashing.
+        self.assertIsNone(c.db.player_state)
+        self.assertIsNone(c.db.player_class)
+        self.assertEqual(c.db.linkdead_until, 0.0)
+
+        # A pre-existing value is not overwritten by a second migration pass.
+        c.db.player_class = "Vanguard"
+        c.ensure_attributes()
+        self.assertEqual(c.db.player_class, "Vanguard")
+
+    def test_full_lobby_flow_enabled_end_to_end(self):
+        """With LOBBY_FLOW_ENABLED, exercise the whole flow on real objects:
+        fresh char routes to SPAWNING → pick class + spawn → LOBBY → deploy →
+        PLAYING (relocated to the resolved spawn) → death routes back to
+        SPAWNING recording the death tile. Also proves the in-game command gate
+        refuses a world action while spawning."""
+        from django.test import override_settings
+        from server.conf.game_init import initialize_game
+        from world import player_lifecycle as pl
+        from world.constants import (
+            PLAYER_STATE_SPAWNING, PLAYER_STATE_LOBBY, PLAYER_STATE_PLAYING,
+        )
+        from commands.lifecycle_commands import (
+            CmdClass, CmdSpawn, deploy_from_lobby,
+        )
+
+        systems = initialize_game()
+        try:
+            with override_settings(LOBBY_FLOW_ENABLED=True):
+                room = self._make_planet_room("terra")
+                systems["planet_rooms"]["terra"] = room
+                player = self._make_player(x=1, y=1, planet="terra", location=room)
+                player.ndb.systems = systems  # so require_system finds the registry
+
+                # Fresh login routing → SPAWNING with the prompt.
+                player._route_lifecycle_on_login()
+                self.assertEqual(pl.get_state(player), PLAYER_STATE_SPAWNING)
+
+                # A world-action command is refused while spawning.
+                from commands.game_commands import CmdHarvest
+                cmd = CmdHarvest()
+                cmd.caller = player
+                cmd.args = ""
+                cmd.session = None
+                self.assertTrue(cmd.at_pre_cmd(), "world action must abort while spawning")
+
+                # Pick a class (real classes.yaml is loaded) + a spawn point.
+                def _run(cmd_cls, args):
+                    c = cmd_cls(); c.caller = player; c.args = args; c.func()
+                _run(CmdClass, "vanguard")
+                self.assertEqual(player.db.player_class, "vanguard")
+                _run(CmdSpawn, "random")
+                # Both chosen → advanced to the lobby.
+                self.assertEqual(pl.get_state(player), PLAYER_STATE_LOBBY)
+
+                # Deploy → PLAYING, relocated to a valid in-bounds tile.
+                self.assertTrue(deploy_from_lobby(player))
+                self.assertEqual(pl.get_state(player), PLAYER_STATE_PLAYING)
+                self.assertEqual(player.db.coord_planet, "terra")
+                pr = systems["planet_registry"]
+                self.assertTrue(
+                    pr.is_valid_coordinate(player.db.coord_x, player.db.coord_y, "terra"),
+                    "deployed to an in-bounds tile",
+                )
+
+                # Death routes PLAYING → SPAWNING, records the death tile, AND
+                # stows the player out of the world (OOC while re-choosing) so
+                # they can't be spawn-camped at full HP on the death tile.
+                dx, dy = player.db.coord_x, player.db.coord_y
+                from server.conf.game_init import _route_player_death
+                self.assertTrue(_route_player_death(player))
+                self.assertEqual(pl.get_state(player), PLAYER_STATE_SPAWNING)
+                self.assertEqual((player.db.death_x, player.db.death_y), (dx, dy))
+                self.assertIsNone(player.location,
+                                  "a spawning (dead) player is stowed out of the world")
+                from world.utils import player_is_present
+                self.assertFalse(player_is_present(player),
+                                 "a spawning player is not a combat target")
+        finally:
+            _teardown_game(systems)
+
+    def test_linkdead_expiry_finds_and_removes_on_real_db(self):
+        """H1 regression: the linkdead-expiry tick step enumerates linkdead
+        characters via search_object_attribute (a plain db.player_state is
+        pickled in db_value, so a db_strvalue ORM filter matched NOTHING and the
+        grace timer was effectively infinite). Prove a real linkdead char past
+        its deadline is found, routed to LOBBY, and stowed."""
+        from django.test import override_settings
+        from server.conf.game_init import initialize_game
+        from world import player_lifecycle as pl
+        from world.constants import PLAYER_STATE_PLAYING, PLAYER_STATE_LOBBY
+        import time as _t
+
+        systems = initialize_game()
+        try:
+            with override_settings(LOBBY_FLOW_ENABLED=True):
+                room = self._make_planet_room("terra")
+                char = self._make_player(x=6, y=6, planet="terra", location=room)
+                char.db.player_state = PLAYER_STATE_PLAYING
+                room.coord_index.add(char, 6, 6)
+                # Enter linkdead with a deadline ALREADY in the past.
+                pl.begin_linkdead(char, now=_t.monotonic() - 100.0, grace_seconds=1.0)
+
+                # Run the expiry step directly (a fresh script instance — the
+                # step is a plain method that queries the DB, no tick_data).
+                from typeclasses.scripts import GameTickScript
+                GameTickScript()._process_linkdead_expiry()
+
+                self.assertEqual(pl.get_state(char), PLAYER_STATE_LOBBY,
+                                 "expired linkdead char must be routed to the lobby")
+                self.assertIsNone(char.location,
+                                  "expired linkdead char must be stowed from the world")
+                self.assertEqual(room.get_players_at(6, 6), [],
+                                 "expired linkdead char must be de-indexed")
+        finally:
+            _teardown_game(systems)
+
+    def test_disconnect_clean_quit_vs_drop_on_real_char(self):
+        """at_post_unpuppet distinguishes a clean quit (marker set → LOBBY) from
+        a dropped connection (no marker → LINKDEAD with a grace deadline), which
+        is the corrected signal since Evennia forwards no reason to the hook."""
+        from django.test import override_settings
+        from server.conf.game_init import initialize_game
+        from world import player_lifecycle as pl
+        from world.constants import (
+            PLAYER_STATE_PLAYING, PLAYER_STATE_LOBBY, PLAYER_STATE_LINKDEAD,
+        )
+
+        systems = initialize_game()
+        try:
+            with override_settings(LOBBY_FLOW_ENABLED=True):
+                room = self._make_planet_room("terra")
+
+                # Clean quit: marker set → LOBBY, stowed away (location None).
+                quitter = self._make_player(x=2, y=2, planet="terra", location=room)
+                quitter.db.player_state = PLAYER_STATE_PLAYING
+                quitter.ndb._clean_quit = True
+                quitter.at_post_unpuppet(account=None, session=None)
+                self.assertEqual(pl.get_state(quitter), PLAYER_STATE_LOBBY)
+
+                # Dropped connection: no marker → LINKDEAD, still in the world.
+                dropper = self._make_player(x=4, y=4, planet="terra", location=room)
+                dropper.db.player_state = PLAYER_STATE_PLAYING
+                room.coord_index.add(dropper, 4, 4)
+                dropper.at_post_unpuppet(account=None, session=None)
+                self.assertEqual(pl.get_state(dropper), PLAYER_STATE_LINKDEAD)
+                self.assertGreater(dropper.db.linkdead_until, 0.0)
+                # Lingers in the world (NOT stowed away) so it stays attackable.
+                self.assertIsNotNone(dropper.location,
+                                     "a linkdead char must linger in the world")
+                self.assertIn(dropper, room.get_players_at(4, 4))
+        finally:
+            _teardown_game(systems)
+
+    def test_linkdead_present_to_turret_targeting_on_real_room(self):
+        """A LINKDEAD character (no session) is still 'present' to turret/guard
+        target acquisition — get_players_at/get_nearby_players include it — so it
+        is attackable during grace exactly as bombs already hit it."""
+        from world.utils import player_is_present
+        from world.constants import PLAYER_STATE_LINKDEAD
+
+        room = self._make_planet_room("terra")
+        player = self._make_player(x=3, y=3, planet="terra", location=room)
+        room.coord_index.add(player, 3, 3)
+
+        # Puppeted (has_account) — present, and found by targeting.
+        # (No session in this harness, so has_account is False; simulate the
+        # linkdead marker and assert presence + targeting inclusion.)
+        player.db.player_state = PLAYER_STATE_LINKDEAD
+        self.assertTrue(player_is_present(player),
+                        "a linkdead character is present (attackable during grace)")
+        self.assertIn(player, room.get_players_at(3, 3))
+        self.assertIn(player, room.get_nearby_players(3, 3, 5))
+
+    # -------------------------------------------------------------- #
     #  Fix #2 — game_init injects a live tick clock into the 3 systems
     # -------------------------------------------------------------- #
 
@@ -1033,6 +1261,52 @@ class LiveBootSmokeTest(EvenniaTest):
                               "detonated mine must be deleted")
             self.assertEqual(room.get_objects_at(4, 4, type_tag="bomb"), [],
                              "detonated mine must be de-indexed")
+        finally:
+            _teardown_game(systems)
+
+    def test_blast_breaches_cover_hits_sheltered_player_and_building(self):
+        """On real objects: a bomb blast BREACHES cover. The reported bug was that
+        a placer standing inside their own (closed) building took no damage and
+        the building itself was unharmed. A blast is an anti-structure weapon —
+        it must damage BOTH a player sheltered inside a closed building AND the
+        closed building on the tile."""
+        from server.conf.game_init import initialize_game
+        from world.utils import player_is_sheltered
+
+        systems = initialize_game()
+        try:
+            bomb_system = systems["bomb_system"]
+            room = self._make_planet_room("earth")
+
+            # A closed building on (4,4), with the placer sheltered inside it.
+            # HQ (not a combat_barrier) can actually be CLOSED — a Wall is
+            # intrinsically open and would not shelter its occupant.
+            building = self._make_building(btype="HQ", x=4, y=4, planet="earth",
+                                           hp=500)
+            building.set_open(False)
+            room.coord_index.add(building, 4, 4)
+            b_hp0 = building.db.hp
+
+            placer = self._make_player(x=4, y=4, planet="earth", location=room)
+            placer.db.combat_xp = 100000
+            placer.db.inside_building = True
+            room.coord_index.add(placer, 4, 4)
+            p_hp0 = placer.db.hp
+            # Precondition: the placer is genuinely sheltered (closed building).
+            self.assertTrue(player_is_sheltered(placer),
+                            "placer must be sheltered for the breach to be meaningful")
+
+            placer.equipment.add_supply("land_mine", 1)
+            self.assertTrue(bomb_system.set_fuse(placer, "land_mine", 1))
+            self.assertTrue(bomb_system.arm_mine(placer, "land_mine"))
+
+            # Fuse 1 -> 0 -> detonate.
+            bomb_system.process_tick(1)
+
+            self.assertLess(placer.db.hp, p_hp0,
+                            "a blast must reach a sheltered player (breach cover)")
+            self.assertLess(building.db.hp, b_hp0,
+                            "a blast must damage a closed building (anti-structure)")
         finally:
             _teardown_game(systems)
 

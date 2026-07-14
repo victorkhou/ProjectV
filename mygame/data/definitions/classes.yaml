@@ -1,0 +1,33 @@
+# Player class definitions (state 3.2 — class selection).
+#
+# Selection + stored label ONLY in this iteration: a class is a cosmetic
+# identity a player picks during spawning. It has no mechanical effect yet
+# (no starting loadout, no stat bonuses) — combat/equipment/progression stay
+# class-agnostic. The `key` is what persists on the character
+# (db.player_class); `name` + `description` drive the selection menu and the
+# score/who display. Add mechanics later by extending ClassDef + this file,
+# without changing the selection flow.
+#
+# Optional file: if absent/empty, class selection falls back to a single
+# default so the spawning flow never dead-ends.
+
+classes:
+  - key: vanguard
+    name: Vanguard
+    description: >-
+      Front-line assault specialist. Leads the breach and holds the line.
+
+  - key: engineer
+    name: Engineer
+    description: >-
+      Builder and fortifier. Keeps the base running and the walls standing.
+
+  - key: ranger
+    name: Ranger
+    description: >-
+      Scout and marksman. Ranges ahead, spots targets, strikes from distance.
+
+  - key: commander
+    name: Commander
+    description: >-
+      Tactician who leads agents and coordinates the war effort.

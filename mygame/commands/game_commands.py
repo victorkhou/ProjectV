@@ -136,7 +136,40 @@ class GameCommand(BaseCommand):
     'sco' → score, 'inv' → inventory, 'eq' → equipment, etc.
 
     Exact aliases (n, s, e, w, i, m, a) are still matched first.
+
+    Lifecycle gate: when the lobby/spawning flow is enabled
+    (``LOBBY_FLOW_ENABLED``), a player who is not yet PLAYING (still in the
+    SPAWNING or LOBBY state) may not issue world-action commands. Each command
+    opts OUT of the gate via ``available_out_of_game = True`` — the
+    informational/social commands (look/say/who/score/map/inventory/message)
+    set it so they work in every state. The gate is a no-op when the flow is
+    disabled or the character has no lifecycle state (nothing changes for
+    players until the flow is switched on).
     """
+
+    #: Whether this command may run while the player is still in the
+    #: spawning/lobby flow (not yet PLAYING). Default False = world action,
+    #: gated; set True on informational/social commands.
+    available_out_of_game = False
+
+    def at_pre_cmd(self):
+        """Refuse world-action commands while the player isn't in-game.
+
+        Returning True aborts the command (Evennia contract). Guarded so a
+        lookup failure never blocks a command — it falls open to "allowed".
+        """
+        if self.available_out_of_game:
+            return super().at_pre_cmd()
+        try:
+            from world.lobby_flow import lobby_flow_enabled
+            if not lobby_flow_enabled():
+                return super().at_pre_cmd()
+            from commands.lifecycle_commands import require_in_game
+            if not require_in_game(self.caller):
+                return True  # abort: require_in_game already messaged the caller
+        except Exception:  # noqa: BLE001 - gate must never hard-block a command
+            pass
+        return super().at_pre_cmd()
 
     def match(self, cmdname, include_prefixes=True):
         """Override to add prefix matching: if the command key starts
@@ -1990,12 +2023,13 @@ class CmdThrow(GameCommand):
 
     Notes:
       Alias: th. Set a fuse first with 'set <grenade> <seconds>'. The grenade
-      flies in the chosen direction until it hits the first obstacle (a building
-      or a unit) or reaches its max range, then LANDS and ticks down before
-      exploding. Anyone on the tile it lands on sees it. The blast hits
-      everything in radius — enemies, your own units, and YOU if you're too
-      close — so mind the fuse and your distance. Mines are armed in place
-      ('arm'), not thrown. See 'help bombs'.
+      flies in the chosen direction until it hits the first obstacle or reaches
+      its max range, then LANDS and ticks down before exploding. It lands just
+      in front of a building (the blast then breaches the wall from outside), on
+      a unit's tile if it hits someone, or at max range on a clear line. The
+      blast hits everything in radius — enemies, buildings (open OR closed),
+      your own units, and YOU if you're too close — so mind the fuse and your
+      distance. Mines are armed in place ('arm'), not thrown. See 'help bombs'.
     """
 
     key = "throw"
@@ -2548,6 +2582,7 @@ class CmdScore(GameCommand):
     key = "score"
     aliases = ["status", "st", "sc"]
     help_category = "Game"
+    available_out_of_game = True  # check your sheet while spawning/in the lobby
 
     def func(self):
         caller = self.caller
@@ -3004,6 +3039,7 @@ class CmdInventory(GameCommand):
     key = "inventory"
     aliases = ["inv", "i"]
     help_category = "Game"
+    available_out_of_game = True
 
     def func(self):
         caller = self.caller
@@ -3055,6 +3091,7 @@ class CmdChat(GameCommand):
 
     key = "chat"
     help_category = "Game"
+    available_out_of_game = True  # chat works from the lobby/spawning (social)
 
     def func(self):
         message = self.args.strip()
@@ -3097,6 +3134,7 @@ class CmdMessage(GameCommand):
     key = "message"
     aliases = ["msg", "dm", "page", "tell", "whisper"]
     help_category = "Game"
+    available_out_of_game = True  # DMs work from the lobby (coordinate a squad)
 
     def func(self):
         args = self.args.strip()
@@ -3170,6 +3208,7 @@ class CmdLook(GameCommand):
     locks = "cmd:all()"
     arg_regex = r"\s|$"
     help_category = "General"
+    available_out_of_game = True  # look works while spawning/in the lobby
 
     def func(self):
         caller = self.caller
@@ -3220,6 +3259,7 @@ class CmdMap(GameCommand):
     key = "map"
     aliases = ["m"]
     help_category = "Game"
+    available_out_of_game = True
 
     def func(self):
         _render_and_send_map(self.caller)
@@ -3657,9 +3697,29 @@ class CmdEnter(GameCommand):
     key = "enter"
     aliases = ["in", "enter building"]
     help_category = "Game"
+    # Opt out of the in-game gate: 'enter' doubles as the lobby 'deploy' verb,
+    # so it must run while the player is still in the lobby (see func).
+    available_out_of_game = True
 
     def func(self):
         caller = self.caller
+
+        # In the lobby, 'enter' deploys into the game (transition 4.1) rather
+        # than entering a building. Only when the lobby flow is enabled AND the
+        # player is actually in the lobby — otherwise this is the normal
+        # building-entry command.
+        try:
+            from world.lobby_flow import lobby_flow_enabled
+            from world.constants import PLAYER_STATE_LOBBY, PLAYER_STATE_SPAWNING
+            from world import player_lifecycle as pl
+            if lobby_flow_enabled():
+                state = pl.get_state(caller)
+                if state in (PLAYER_STATE_LOBBY, PLAYER_STATE_SPAWNING):
+                    from commands.lifecycle_commands import deploy_from_lobby
+                    deploy_from_lobby(caller)
+                    return
+        except Exception:  # noqa: BLE001 - never break building-entry on a gate hiccup
+            pass
 
         if getattr(caller.db, "inside_building", False):
             caller.msg("You are already inside a building.")
@@ -4000,6 +4060,7 @@ class CmdWho(GameCommand):
     aliases = ["doing"]
     locks = "cmd:all()"
     account_caller = True
+    available_out_of_game = True
 
     def func(self):
         import time
@@ -4031,14 +4092,20 @@ class CmdWho(GameCommand):
                 rank_map[r.level] = r.name
 
         if show_admin:
+            # Admins see the lifecycle State (and Puppeting) columns; regular
+            # players get the plain roster. State is read from the account's
+            # playable character — NOT session.get_puppet(), which is None while
+            # the character sits OOC in the spawning/lobby states.
             table = self.styled_table(
                 "|wName", "|wRank", "|wLvl",
-                "|wOn for", "|wIdle", "|wPuppeting",
+                "|wOn for", "|wIdle", "|wPuppeting", "|wState",
             )
         else:
             table = self.styled_table(
                 "|wName", "|wRank", "|wLvl", "|wOn for", "|wIdle",
             )
+
+        from world.player_lifecycle import get_state, state_label
 
         for session in session_list:
             if not session.logged_in:
@@ -4052,13 +4119,18 @@ class CmdWho(GameCommand):
                 session_account.get_display_name(account), width=25
             )
 
-            # Extract rank and level from the puppet
+            # The character whose rank/level/state we display: the live puppet
+            # if in-game, else the account's first playable character (so an OOC
+            # spawning/lobby player still shows their rank + lifecycle state).
+            char = puppet or self._first_playable(session_account)
+
+            # Extract rank and level from the character
             player_level = 1
             rank_name = "Recruit"
-            if puppet and hasattr(puppet, "db"):
-                player_level = getattr(puppet.db, "level", None)
+            if char and hasattr(char, "db"):
+                player_level = getattr(char.db, "level", None)
                 if player_level is None:
-                    player_level = getattr(puppet.db, "rank_level", 1) or 1
+                    player_level = getattr(char.db, "rank_level", 1) or 1
                 from world.systems.rank_system import rank_from_level
                 rank_num = rank_from_level(player_level)
                 rank_name = rank_map.get(rank_num, f"Rank {rank_num}")
@@ -4075,6 +4147,7 @@ class CmdWho(GameCommand):
                     utils.time_format(delta_conn, 0),
                     utils.time_format(delta_cmd, 1),
                     puppet_name,
+                    state_label(get_state(char)) if char else "—",
                 )
             else:
                 table.add_row(
@@ -4085,8 +4158,92 @@ class CmdWho(GameCommand):
                     utils.time_format(delta_cmd, 1),
                 )
 
+        # Linkdead characters have no live session, so the session loop above
+        # skips them — but they persist in the world during their grace timer.
+        # Show them to admins as an extra sessionless row so a dropped player is
+        # visible (and can be attacked/found) rather than silently absent.
+        linkdead_rows = 0
+        if show_admin:
+            linkdead_rows = self._append_linkdead_rows(
+                table, session_list, rank_map, get_state, state_label,
+            )
+
+        naccounts += linkdead_rows
         is_one = naccounts == 1
         self.msg(
             "|wOnline:|n\n%s\n%s player%s online."
             % (table, "One" if is_one else naccounts, "" if is_one else "s")
         )
+
+    @staticmethod
+    def _first_playable(session_account):
+        """Return an account's first playable character, or None.
+
+        Used to read rank/level/lifecycle-state for a player who is logged in
+        but NOT puppeted (OOC in the spawning/lobby states, where
+        ``session.get_puppet()`` is None). Reads Evennia's ``account.characters``
+        handler, falling back to the legacy ``db._playable_characters`` list.
+        Guarded so ``who`` never breaks on an odd account shape.
+        """
+        if session_account is None:
+            return None
+        try:
+            chars = getattr(session_account, "characters", None)
+            if chars is not None:
+                as_list = list(chars.all()) if hasattr(chars, "all") else list(chars)
+                if as_list:
+                    return as_list[0]
+        except Exception:  # noqa: BLE001
+            pass
+        try:
+            legacy = getattr(session_account.db, "_playable_characters", None) or []
+            legacy = [c for c in legacy if c]
+            return legacy[0] if legacy else None
+        except Exception:  # noqa: BLE001
+            return None
+
+    @staticmethod
+    def _append_linkdead_rows(table, session_list, rank_map, get_state, state_label):
+        """Add an admin-only row per LINKDEAD character with no live session.
+
+        A linkdead character lingers in the world (still attackable) during its
+        grace window but owns no session, so the session-based roster misses it.
+        Enumerate characters whose ``db.player_state == 'linkdead'`` that aren't
+        already represented by a live session, and append a sessionless row.
+        Returns the number of rows added. Best-effort — never raises into who.
+        """
+        from world.constants import PLAYER_STATE_LINKDEAD
+
+        try:
+            from evennia.utils.search import search_object_attribute
+            from world.systems.rank_system import rank_from_level
+            from evennia import utils as _u
+
+            live_accounts = {
+                s.get_account() for s in session_list if s.logged_in
+            }
+            # player_state is stored pickled in db_value (db_strvalue is None for
+            # a plain attribute assignment), so match on the actual value via
+            # search_object_attribute — a db_strvalue filter would find nothing.
+            candidates = search_object_attribute(
+                key="player_state", value=PLAYER_STATE_LINKDEAD
+            )
+            added = 0
+            for char in candidates:
+                if getattr(char, "account", None) in live_accounts:
+                    continue  # already shown via a live session
+                lvl = getattr(char.db, "level", None) or \
+                    getattr(char.db, "rank_level", 1) or 1
+                rank_num = rank_from_level(lvl)
+                rank_name = rank_map.get(rank_num, f"Rank {rank_num}")
+                table.add_row(
+                    _u.crop(char.get_display_name(char), width=25),
+                    rank_name,
+                    str(lvl),
+                    "-", "-", "None",
+                    state_label(get_state(char)),
+                )
+                added += 1
+            return added
+        except Exception:  # noqa: BLE001 - who must render even if this query fails
+            return 0

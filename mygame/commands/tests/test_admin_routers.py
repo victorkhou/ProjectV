@@ -290,6 +290,79 @@ class TestBuildingSpawnDelegation(unittest.TestCase):
         self.assertFalse(any("Permission denied" in m for m in caller._messages))
 
 
+class FakeBuildingDef:
+    """Minimal BuildingDef stand-in for @building list/index tests."""
+
+    def __init__(self, abbreviation, name, category="", max_health=500):
+        self.abbreviation = abbreviation
+        self.name = name
+        self.category = category
+        self.max_health = max_health
+
+
+class FakeBuildingRegistry:
+    """Registry exposing buildings + resolve_building for @building tests."""
+
+    def __init__(self, defs):
+        self.buildings = {d.abbreviation: d for d in defs}
+
+    def get_building(self, abbr):
+        return self.buildings[abbr]
+
+    def resolve_building(self, token):
+        t = token.strip().lower().replace("_", " ")
+        # exact abbreviation / name, then unambiguous prefix (mirrors registry).
+        for d in self.buildings.values():
+            if d.abbreviation.lower() == t or d.name.lower().replace("_", " ") == t:
+                return d
+        matches = [d for d in self.buildings.values()
+                   if d.abbreviation.lower().startswith(t)
+                   or d.name.lower().replace("_", " ").startswith(t)]
+        return matches[0] if len(matches) == 1 else None
+
+
+_HQ_DEF = FakeBuildingDef("HQ", "Headquarters", category="headquarters")
+_EX_DEF = FakeBuildingDef("EX", "Extractor", category="resource")
+
+
+class TestBuildingList(unittest.TestCase):
+    """@building list numbers building types for index spawning."""
+
+    def _caller(self):
+        reg = FakeBuildingRegistry([_HQ_DEF, _EX_DEF])
+        return FakeCaller(perm_level="Builder", systems={"registry": reg})
+
+    def test_list_shows_types_and_indexes(self):
+        caller = self._caller()
+        cmd = _make_cmd(CmdAdminBuilding, caller, " list")
+        cmd.func()
+        output = "\n".join(caller._messages)
+        self.assertIn("[1]", output)
+        self.assertIn("Headquarters", output)
+        self.assertIn("Extractor", output)
+
+    def test_spawn_by_index_resolves_type(self):
+        # Sorted by abbreviation: EX(1), HQ(2). Spawn #2 -> Headquarters.
+        caller = self._caller()
+        caller.location = FakeLocation()
+        caller.db.coord_x = 1
+        caller.db.coord_y = 1
+        cmd = _make_cmd(CmdAdminBuilding, caller, " spawn 2")
+        cmd.func()
+        # No real create_object under stubs, but resolution must not report the
+        # type as unknown (index -> Headquarters resolved).
+        self.assertFalse(any("Unknown building type" in m for m in caller._messages))
+
+    def test_spawn_unknown_index_reports(self):
+        caller = self._caller()
+        caller.location = FakeLocation()
+        caller.db.coord_x = 1
+        caller.db.coord_y = 1
+        cmd = _make_cmd(CmdAdminBuilding, caller, " spawn 99")
+        cmd.func()
+        self.assertTrue(any("Unknown building type" in m for m in caller._messages))
+
+
 class TestBuildingDestroy(unittest.TestCase):
     """Req 1.2: @building destroy removes building at caller's tile."""
 
@@ -686,11 +759,15 @@ class FakeItemRegistry:
         self.items = {d.key: d for d in defs}
 
     def resolve_item(self, token):
-        t = token.lower()
+        # Mirror DataRegistry._resolve: exact key / name, then unambiguous prefix.
+        t = token.strip().lower().replace("_", " ")
         for d in self.items.values():
-            if d.key.lower() == t or d.name.lower() == t:
+            if d.key.lower().replace("_", " ") == t or d.name.lower() == t:
                 return d
-        return None
+        matches = [d for d in self.items.values()
+                   if d.key.lower().replace("_", " ").startswith(t)
+                   or d.name.lower().replace("_", " ").startswith(t)]
+        return matches[0] if len(matches) == 1 else None
 
     def get_item(self, key):
         return self.items[key]
@@ -813,6 +890,58 @@ class TestItemSpawnErrors(unittest.TestCase):
         self.assertTrue(any("Could not find player" in m for m in caller._messages))
 
 
+class TestItemSpawnByIndexAndPrefix(unittest.TestCase):
+    """@item spawn accepts an index (#N / N from '@item list') or a prefix."""
+
+    def _ordered_keys(self):
+        # Same order sub_list / _item_index use: sorted by (category, key).
+        return [d.key for d in sorted(
+            FakeItemRegistry([_RIFLE, _GRENADE]).items.values(),
+            key=lambda d: (d.category, d.key),
+        )]
+
+    def test_spawn_by_index(self):
+        target = FakeTarget(name="Bob")
+        target.equipment = FakeEquipment()
+        caller = _item_caller()
+        caller._search_results["Bob"] = target
+        # frag_grenade is a throwable (category 'throwable'); assault_rifle is
+        # 'weapon'. Sorted by (category, key): throwable < weapon, so [1] is the
+        # grenade. Spawn it by index.
+        keys = self._ordered_keys()
+        idx = keys.index("frag_grenade") + 1
+        cmd = _make_cmd(CmdAdminItem, caller, f" spawn {idx} 2 Bob")
+        cmd.func()
+        self.assertEqual(target.equipment.supplies.get("frag_grenade"), 2)
+
+    def test_spawn_by_hash_index(self):
+        target = FakeTarget(name="Bob")
+        target.equipment = FakeEquipment()
+        caller = _item_caller()
+        caller._search_results["Bob"] = target
+        keys = self._ordered_keys()
+        idx = keys.index("frag_grenade") + 1
+        cmd = _make_cmd(CmdAdminItem, caller, f" spawn #{idx} 1 Bob")
+        cmd.func()
+        self.assertEqual(target.equipment.supplies.get("frag_grenade"), 1)
+
+    def test_spawn_by_prefix(self):
+        target = FakeTarget(name="Bob")
+        target.equipment = FakeEquipment()
+        caller = _item_caller()
+        caller._search_results["Bob"] = target
+        # "frag" uniquely prefixes frag_grenade.
+        cmd = _make_cmd(CmdAdminItem, caller, " spawn frag 3 Bob")
+        cmd.func()
+        self.assertEqual(target.equipment.supplies.get("frag_grenade"), 3)
+
+    def test_spawn_index_out_of_range_is_unknown(self):
+        caller = _item_caller()
+        cmd = _make_cmd(CmdAdminItem, caller, " spawn 99")
+        cmd.func()
+        self.assertTrue(any("Unknown item" in m for m in caller._messages))
+
+
 class TestItemList(unittest.TestCase):
     """@item list enumerates definitions, optionally filtered."""
 
@@ -823,6 +952,14 @@ class TestItemList(unittest.TestCase):
         output = "\n".join(caller._messages)
         self.assertIn("assault_rifle", output)
         self.assertIn("frag_grenade", output)
+
+    def test_list_shows_index_numbers(self):
+        caller = _item_caller()
+        cmd = _make_cmd(CmdAdminItem, caller, " list")
+        cmd.func()
+        output = "\n".join(caller._messages)
+        self.assertIn("[1]", output)
+        self.assertIn("[2]", output)
 
     def test_list_filter_by_category(self):
         caller = _item_caller()
@@ -1014,6 +1151,56 @@ class TestCmdAdminOutpost(unittest.TestCase):
         output = "\n".join(caller._messages)
         self.assertIn("outpost", output)
         self.assertIn("5", output)
+
+    # -- tier index / prefix resolution (uses a registry with base_templates) --
+
+    class _FakeTemplate:
+        def __init__(self, tier, display_name):
+            self.tier = tier
+            self.display_name = display_name
+
+    class _FakeTierRegistry:
+        def __init__(self, tiers):
+            self.base_templates = {
+                t: TestCmdAdminOutpost._FakeTemplate(t, t.title()) for t in tiers
+            }
+
+    def _caller_with_tiers(self, spawner, tiers=("fortress", "outpost")):
+        caller = self._caller(spawner)
+        caller.ndb.systems["registry"] = self._FakeTierRegistry(tiers)
+        return caller
+
+    def test_spawn_by_tier_index(self):
+        spawner = FakeSpawner()
+        caller = self._caller_with_tiers(spawner)  # sorted: fortress(1), outpost(2)
+        cmd = _make_cmd(CmdAdminOutpost, caller, "spawn 2")
+        cmd.func()
+        self.assertEqual(spawner.calls, [("earth", "outpost", (3, 4))])
+
+    def test_spawn_by_tier_prefix(self):
+        spawner = FakeSpawner()
+        caller = self._caller_with_tiers(spawner)
+        cmd = _make_cmd(CmdAdminOutpost, caller, "spawn fort")
+        cmd.func()
+        self.assertEqual(spawner.calls, [("earth", "fortress", (3, 4))])
+
+    def test_spawn_unknown_tier_reports(self):
+        spawner = FakeSpawner()
+        caller = self._caller_with_tiers(spawner)
+        cmd = _make_cmd(CmdAdminOutpost, caller, "spawn bogus")
+        cmd.func()
+        self.assertTrue(any("Unknown or ambiguous tier" in m for m in caller._messages))
+        self.assertEqual(spawner.calls, [])
+
+    def test_tiers_lists_with_index(self):
+        spawner = FakeSpawner()
+        caller = self._caller_with_tiers(spawner)
+        cmd = _make_cmd(CmdAdminOutpost, caller, "tiers")
+        cmd.func()
+        output = "\n".join(caller._messages)
+        self.assertIn("[1]", output)
+        self.assertIn("fortress", output)
+        self.assertIn("outpost", output)
 
 
 if __name__ == "__main__":

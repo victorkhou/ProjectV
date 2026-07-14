@@ -606,9 +606,10 @@ class TestThrow(unittest.TestCase):
         self.assertEqual(data.get("count"), 2)
         self.assertEqual(player.equipment.get_supply("frag_grenade"), 0)
 
-    def test_throw_skips_closed_buildings_hits_open_ones(self):
-        """A thrown explosive is ranged: it damages an OPEN building in radius
-        but not a CLOSED one (only melee reaches a closed building)."""
+    def test_throw_breaches_closed_and_open_buildings(self):
+        """A thrown explosive BREACHES cover: it damages a building in radius
+        whether OPEN or CLOSED (an explosion is an anti-structure weapon that
+        levels a closed wall/building too — matching BombSystem._blast_targets)."""
         class _BuildingTarget:
             def __init__(self, key, x, y, is_open):
                 # building_type -> is_building True; no combat_xp -> not a player.
@@ -626,7 +627,7 @@ class TestThrow(unittest.TestCase):
 
         hit = {t for t, _ in engine.applied}
         self.assertIn(open_b, hit, "open building must take blast damage")
-        self.assertNotIn(closed_b, hit, "closed building must be immune to blast")
+        self.assertIn(closed_b, hit, "a blast breaches a closed building too")
 
     def test_throw_finalizes_each_hit_for_defeat_and_notification(self):
         # Regression: the throw path must call _finalize_hit per target so a

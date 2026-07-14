@@ -47,6 +47,13 @@ BASE_CHARACTER_TYPECLASS = "typeclasses.characters.CombatCharacter"
 # client handles scrolling.
 HELP_MORE_ENABLED = False
 
+# Player lobby / spawning lifecycle flow (states 3-4 of the player state
+# machine). OFF by default: all the machinery ships built and tested, but the
+# behavioral switch — gating world commands behind a PLAYING state, routing
+# every login through spawning/lobby, and rerouting death/disconnect — is
+# enabled deliberately after manual UX testing. Flip to True to turn it on.
+LOBBY_FLOW_ENABLED = False
+
 # Add 'chat' as a server-level alias for the Public channel
 DEFAULT_CHANNELS = [
     {

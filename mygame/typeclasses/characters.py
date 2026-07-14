@@ -178,6 +178,28 @@ PLAYER_DEFAULTS: dict[str, object] = {
     "activity_state": "idle",
     "activity_target": None,
     "activity_progress": 0,
+    # Player lifecycle state machine (world.player_lifecycle). None = never
+    # routed: a brand-new character has no lifecycle state yet, so the login
+    # router sends it through SPAWNING (pick class + location). The single
+    # WRITER of this field is world.player_lifecycle.transition — never assign
+    # db.player_state directly. Existing characters are back-filled on login by
+    # ensure_attributes; the router (world.player_lifecycle.route_on_login)
+    # promotes a None/legacy character into a concrete state.
+    "player_state": None,
+    # Selected player class label (state 3.2). None = not yet chosen; the
+    # spawning gate requires it before advancing to the lobby. Selection +
+    # stored label only — no mechanical effect yet.
+    "player_class": None,
+    # Place of death (state 3.1 respawn option). None until the player has died
+    # at least once; recorded by the death path so "respawn at place of death"
+    # has a target.
+    "death_x": None,
+    "death_y": None,
+    "death_planet": None,
+    # Linkdead grace deadline (monotonic wall-clock seconds). 0 = not linkdead.
+    # Set when an unclean disconnect enters LINKDEAD; the character stays a full
+    # combat target until this passes, then is removed to the lobby.
+    "linkdead_until": 0.0,
 }
 
 
@@ -329,6 +351,14 @@ class CombatCharacter(CombatEntity, DefaultCharacter):
         # Ensure character is on the overworld with valid coordinates
         self._ensure_overworld_position()
 
+        # Player lifecycle routing (states 3-6). When the lobby flow is enabled,
+        # route this login to the correct resume state from the single persisted
+        # player_state (new -> spawning; mid-spawn -> spawning; lobby -> lobby;
+        # playing/linkdead -> playing) and show the matching prompt. A no-op when
+        # the flow is disabled, so existing auto-into-the-game behavior is
+        # unchanged until it is switched on.
+        self._route_lifecycle_on_login()
+
         # Auto-subscribe the account to game channels
         try:
             from world.utils import get_system
@@ -359,6 +389,43 @@ class CombatCharacter(CombatEntity, DefaultCharacter):
             event_bus.publish(PLAYER_LOGIN, player=self)
         except Exception:
             pass
+
+    def _route_lifecycle_on_login(self):
+        """Route this login through the player lifecycle state machine.
+
+        No-op unless the lobby flow is enabled. Otherwise resolves the resume
+        state from the persisted ``player_state`` and prompts the player:
+        SPAWNING → tell them to pick class/spawn then deploy; LOBBY → tell them
+        to deploy; PLAYING → nothing (they resume in the world, e.g. a reconnect
+        or crash-resume). Guarded so a routing hiccup never blocks login.
+        """
+        try:
+            from world.lobby_flow import lobby_flow_enabled
+            if not lobby_flow_enabled():
+                return
+            from world import player_lifecycle as pl
+            from world.constants import (
+                PLAYER_STATE_SPAWNING, PLAYER_STATE_LOBBY,
+            )
+            state = pl.route_on_login(self)
+            if state == PLAYER_STATE_SPAWNING:
+                # SPAWNING is OOC — pull the character out of the world so it
+                # can't be attacked while the player picks class + spawn.
+                # (_ensure_overworld_position, which ran just before this, may
+                # have placed it on the overworld; undo that for spawning.)
+                self.stow_from_world()
+                self.msg(
+                    "\n|wPrepare to deploy.|n Choose a |wclass|n (type "
+                    "|wclass|n to list) and a |wspawn|n point (type |wspawn|n). "
+                    "Then |wenter|n the game. See |whelp spawning|n."
+                )
+            elif state == PLAYER_STATE_LOBBY:
+                self.msg(
+                    "\n|wStaging area.|n Type |wenter|n to deploy, or |wquit|n "
+                    "to disconnect."
+                )
+        except Exception:  # noqa: BLE001 - routing must never block login
+            logger.debug("Lifecycle login routing failed", exc_info=True)
 
     def _ensure_overworld_position(self):
         """Ensure the character is on the overworld with valid coordinates.
@@ -534,3 +601,103 @@ class CombatCharacter(CombatEntity, DefaultCharacter):
             event_bus.publish(PLAYER_LOGOUT, player=self)
         except Exception:
             pass
+
+    def at_post_unpuppet(self, account=None, session=None, **kwargs):
+        """Route lifecycle state on disconnect, then run the default stow-away.
+
+        Distinguishes a CLEAN quit from a dropped connection (lobby flow only):
+
+        * a player who was PLAYING and dropped WITHOUT quitting → LINKDEAD with a
+          grace timer (they stay a live combat target until it expires — the
+          anti-combat-log rule); the character is NOT stowed away, so it lingers
+          in the world during grace.
+        * a clean quit (``reason`` starts with "quit") from PLAYING → LOBBY
+          (next login lands in the lobby), then the default stow-away removes the
+          character from the grid.
+        * SPAWNING/LOBBY states are left as-is (a mid-selection disconnect
+          resumes there on next login).
+
+        A CLEAN quit is detected via the transient ``ndb._clean_quit`` marker set
+        by :class:`~commands.lifecycle_commands.CmdQuit` just before it
+        disconnects. Evennia's ``unpuppet_object`` does NOT forward the disconnect
+        ``reason`` to this hook, so a marker (not the reason) is the reliable
+        signal: marker present → clean quit → LOBBY; absent → dropped connection
+        → LINKDEAD. A no-op beyond the default when the flow is disabled, so
+        current behavior is unchanged.
+        """
+        linkdead = False
+        try:
+            from world.lobby_flow import lobby_flow_enabled
+            if lobby_flow_enabled():
+                from world import player_lifecycle as pl
+                from world.constants import PLAYER_STATE_PLAYING
+                is_clean_quit = bool(getattr(self.ndb, "_clean_quit", False))
+                # Consume the marker immediately so it can't linger on the cached
+                # object and mis-classify a LATER unclean drop as a clean quit
+                # (which would defeat the anti-combat-log rule for the rest of
+                # the server run). Belt-and-suspenders with the clear on deploy.
+                try:
+                    self.ndb._clean_quit = False
+                except Exception:  # noqa: BLE001
+                    pass
+                if pl.get_state(self) == PLAYER_STATE_PLAYING:
+                    if is_clean_quit:
+                        pl.to_lobby(self, reason="quit")
+                    else:
+                        import time as _t
+                        grace = self._linkdead_grace_seconds()
+                        pl.begin_linkdead(self, _t.monotonic(), grace)
+                        linkdead = True
+        except Exception:  # noqa: BLE001 - disconnect routing must never raise
+            logger.debug("Lifecycle disconnect routing failed", exc_info=True)
+
+        if linkdead:
+            # Do NOT run the default stow-away: a linkdead character must linger
+            # in the world (on its tile, in the coordinate index) so it stays a
+            # combat target during the grace window. The tick loop removes it
+            # when the grace expires (expire_linkdead + world removal).
+            return
+        super().at_post_unpuppet(account=account, session=session, **kwargs)
+
+    def stow_from_world(self):
+        """Remove this character from the map grid (de-index + stow away).
+
+        Used to pull a player OUT of the world while they are OOC in the
+        SPAWNING state — after death, or on a login that resumes spawning — so
+        they can't be attacked (by anything: turrets, guards, bombs, melee)
+        while choosing their class + spawn point. ``deploy`` relocates them back
+        onto a tile. Mirrors the linkdead-expiry stow-away: de-index from the
+        room's coordinate index FIRST (setting ``location=None`` does not fire
+        ``at_object_leave``, which is the only path that de-indexes), then null
+        the location. Best-effort — never raises.
+        """
+        try:
+            room = self.location
+            if room is None:
+                return
+            cx = getattr(self.db, "coord_x", None)
+            cy = getattr(self.db, "coord_y", None)
+            idx = getattr(getattr(room, "ndb", None), "_coord_index", None)
+            if idx is not None and cx is not None and cy is not None:
+                idx.remove(self, int(cx), int(cy))
+            self.db.prelogout_location = room
+            self.location = None
+        except Exception:  # noqa: BLE001 - stow must never raise into a hook
+            logger.debug("stow_from_world failed", exc_info=True)
+
+    @staticmethod
+    def _linkdead_grace_seconds() -> float:
+        """Linkdead grace window (seconds) from balance config, default 30.
+
+        Falls back to a safe default when the registry/balance is unavailable
+        (early boot / tests). Tuned to be >= the combat lockout so pulling the
+        plug can't dodge an active fight.
+        """
+        try:
+            from world.data_registry import DataRegistry
+            reg = DataRegistry.get_instance()
+            if reg is not None:
+                return float(getattr(reg.balance, "linkdead_grace_seconds", 30.0))
+        except Exception:  # noqa: BLE001
+            pass
+        return 30.0

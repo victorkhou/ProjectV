@@ -34,6 +34,11 @@ from commands.agent_commands import (
     CmdAssign,
     CmdUnassign,
 )
+from commands.lifecycle_commands import (
+    CmdClass,
+    CmdSpawn,
+    CmdDeploy,
+)
 from commands.admin_commands import (
     CmdReboot, CmdPurgeRooms, CmdTeleport, CmdClearFog, CmdMigrate,
     CmdAdminBuilding, CmdAdminAgent, CmdAdminResource, CmdAdminItem,
@@ -172,6 +177,12 @@ class CharacterCmdSet(default_cmds.CharacterCmdSet):
         self.add(CmdAdminOutpost())
         # Override Evennia's default who with rank/level display
         self.add(CmdWho())
+        # Player lifecycle (spawning/lobby) commands. Harmless when the lobby
+        # flow is disabled: 'class'/'spawn'/'deploy' just report you can only
+        # use them while preparing to deploy (state != SPAWNING/LOBBY).
+        self.add(CmdClass())
+        self.add(CmdSpawn())
+        self.add(CmdDeploy())
 
 
 class AccountCmdSet(default_cmds.AccountCmdSet):
@@ -192,6 +203,15 @@ class AccountCmdSet(default_cmds.AccountCmdSet):
         # Remove Evennia's built-in page/tell — replaced by CmdMessage
         from evennia.commands.default.comms import CmdPage
         self.remove(CmdPage)
+        # Override quit so a CLEAN quit marks the puppet (clean-vs-linkdead
+        # signal for the lobby lifecycle flow). Harmless when the flow is off:
+        # it just sets a transient marker and delegates to the stock quit.
+        try:
+            from commands.lifecycle_commands import CmdQuit as _CmdQuit
+            if _CmdQuit is not None:
+                self.add(_CmdQuit())
+        except Exception:
+            pass
 
 
 class UnloggedinCmdSet(default_cmds.UnloggedinCmdSet):

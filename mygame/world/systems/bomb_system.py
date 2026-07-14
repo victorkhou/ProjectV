@@ -270,9 +270,10 @@ class BombSystem(BaseSystem):
         """Throw a grenade in a compass direction; it lands and starts its fuse.
 
         The grenade flies from the player's tile in *direction* until it hits
-        the first obstacle (a building or another unit) or reaches the item's
-        max throw ``range`` (Chebyshev), and LANDS on that tile — landing on the
-        obstacle's own tile, or on the max-range tile if the line is clear. A
+        the first obstacle or reaches the item's max throw ``range`` (Chebyshev):
+        it lands just BEFORE a building (bouncing off the structure, so the blast
+        breaches from outside), ON a unit's tile (lob it at them), or on the
+        max-range tile when the line is clear (see :meth:`_grenade_landing`). A
         :class:`LiveBomb` is placed there with the player's set fuse; everyone on
         the landing tile is told a grenade landed and is ticking. Requires a set
         fuse (``set <bomb> <sec>``) — rejects otherwise.
@@ -415,8 +416,17 @@ class BombSystem(BaseSystem):
         """Return the tile a thrown grenade lands on (direction to first obstacle).
 
         Walks outward from ``(cx, cy)`` in the ``(dx, dy)`` direction up to
-        *throw_range* tiles. Lands on the first tile holding a building or a
-        unit (the shot is stopped by it), else on the furthest in-bounds tile.
+        *throw_range* tiles. The landing tile depends on what stops the throw:
+
+        * a **building** stops the grenade OUTSIDE it — the grenade lands on the
+          last clear tile *before* the building (it bounces off the wall/structure
+          rather than passing inside), so its blast then breaches from the tile in
+          front. A building on the very first step lands the grenade at the
+          thrower's own feet.
+        * a **unit** (player/agent/enemy) lands the grenade at their feet (on
+          their tile) — you can lob a grenade directly at someone.
+        * a clear line lands on the furthest in-bounds tile.
+
         The ray STOPS at the map edge: a step off-map is never taken, so a
         grenade thrown toward an edge lands ON the edge tile rather than at an
         off-map coordinate (where its blast could reach nothing and the LiveBomb
@@ -431,11 +441,19 @@ class BombSystem(BaseSystem):
             tx, ty = cx + dx * step, cy + dy * step
             if not self._tile_in_bounds(tx, ty, planet_key):
                 break  # off-map — land on the last in-bounds tile
-            last = (tx, ty)
             if callable(get_at):
+                blocked_by_building = False
+                blocked_by_unit = False
                 for obj in get_at(tx, ty):
-                    if is_building(obj) or is_player(obj):
-                        return (tx, ty)  # stopped by the first obstacle
+                    if is_building(obj):
+                        blocked_by_building = True
+                    elif is_player(obj):
+                        blocked_by_unit = True
+                if blocked_by_building:
+                    return last  # land on the clear tile just before the building
+                if blocked_by_unit:
+                    return (tx, ty)  # land at the unit's feet
+            last = (tx, ty)
         return last  # clear line — lands at the furthest in-bounds tile
 
     def _place_bomb(self, location, item_def, x, y, owner, bomb_type,
@@ -507,12 +525,13 @@ class BombSystem(BaseSystem):
     def _detonate(self, bomb: Any) -> None:
         """Resolve a bomb's AoE blast, then delete the bomb.
 
-        The blast is indiscriminate (like a thrown grenade today): every player,
-        agent, and building within the Chebyshev *radius* takes flat
-        ``amount − armor`` — including the placer's own units AND the placer if
-        they are in the radius. A player sheltered inside a CLOSED building and a
-        closed building itself are immune (a blast can't reach inside cover),
-        matching the existing throw-AoE rule. Kills credit the placing player.
+        The blast is indiscriminate AND breaches cover: every player, agent, and
+        building within the Chebyshev *radius* takes flat ``amount − armor`` —
+        including the placer's own units AND the placer if they are in the radius,
+        buildings whether open or closed, and players inside them. An explosion is
+        an anti-structure weapon: it reaches through walls and levels closed
+        buildings, so nothing in radius is spared (see :meth:`_blast_targets`).
+        Kills credit the placing player.
         """
         db = getattr(bomb, "db", None)
         location = getattr(bomb, "location", None)
@@ -545,14 +564,23 @@ class BombSystem(BaseSystem):
     def _blast_targets(location, bx, by, radius) -> list:
         """Return players/agents/buildings in Chebyshev *radius* of the blast.
 
-        Indiscriminate: includes the placer and their own units (friendly fire
-        is intentional). Excludes a closed building and a player sheltered inside
-        a closed building (a blast can't reach inside cover) — the same rule the
-        existing throw-AoE uses.
+        A bomb blast BREACHES cover — unlike ranged fire, an explosion reaches
+        buildings and the people inside them:
+
+        * every building in radius is hit, OPEN OR CLOSED (a grenade/mine is an
+          anti-structure weapon — it damages and can level a closed wall/building
+          just as it does an open one); and
+        * every player in radius is hit, sheltered or not (standing inside a
+          building is no protection from a blast on or beside your tile — this is
+          why the placer standing on their own mine, or in a nearby structure,
+          is caught in it).
+
+        Indiscriminate: also includes the placer and their own units (friendly
+        fire is intentional). The only filter is Chebyshev range and being a
+        damageable combat entity (player/agent/building).
         """
         from world.utils import (
-            get_coords, is_building, is_player, building_is_open,
-            player_is_sheltered, chebyshev_distance,
+            get_coords, is_building, is_player, chebyshev_distance,
         )
         x1, y1, x2, y2 = bx - radius, by - radius, bx + radius, by + radius
         candidates: list = []
@@ -565,12 +593,7 @@ class BombSystem(BaseSystem):
                 candidates = list(idx.get_in_area(x1, y1, x2, y2))
         targets = []
         for obj in candidates:
-            obj_is_building = is_building(obj)
-            if not (is_player(obj) or obj_is_building):
-                continue
-            if obj_is_building and not building_is_open(obj):
-                continue
-            if not obj_is_building and player_is_sheltered(obj):
+            if not (is_player(obj) or is_building(obj)):
                 continue
             coords = get_coords(obj)
             if coords is None:

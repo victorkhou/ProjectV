@@ -19,6 +19,7 @@ from world.definitions import (
     BalanceConfig,
     BaseTemplateDef,
     BuildingDef,
+    ClassDef,
     ItemDef,
     PlanetDef,
     PowerupDef,
@@ -49,6 +50,10 @@ _OPTIONAL_FILES = {
     # NPC base templates (PvE NPC bases feature). Optional so the game loads
     # fine without it — an absent/empty file just means no NPC bases spawn.
     "outposts": "definitions/outposts.yaml",
+    # Player class definitions (state 3.2 selection). Optional so the game
+    # loads fine without it — an absent/empty file just means the spawning
+    # flow offers a single default class.
+    "classes": "definitions/classes.yaml",
 }
 
 
@@ -102,6 +107,10 @@ class DataRegistry:
         #: NPC-base templates keyed by tier ("outpost", "fortress", ...); loaded
         #: from the optional data/definitions/outposts.yaml. Empty when absent.
         self.base_templates: dict[str, BaseTemplateDef] = {}
+        #: Selectable player classes keyed by class key ("vanguard", ...); loaded
+        #: from the optional data/definitions/classes.yaml. Empty when absent
+        #: (the spawning flow then offers a single default class).
+        self.classes: dict[str, ClassDef] = {}
         self.balance: BalanceConfig = BalanceConfig()
         self._base_path: str = "data"
         self._validator = SchemaValidator()
@@ -184,6 +193,9 @@ class DataRegistry:
         # --- Load optional NPC-base templates ---
         self._load_base_templates(base_path)
 
+        # --- Load optional player classes ---
+        self._load_classes(base_path)
+
         logger.info("Data Registry loaded successfully from '%s'", base_path)
 
     def reload_all(self) -> tuple[bool, list[str]]:
@@ -216,6 +228,7 @@ class DataRegistry:
         self.ability_gates = temp.ability_gates
         self.planets = temp.planets
         self.base_templates = temp.base_templates
+        self.classes = temp.classes
         self.balance = temp.balance
 
         # Rebuild the shared level<->XP threshold curve from the newly-swapped
@@ -509,6 +522,48 @@ class DataRegistry:
         """Return the NPC-base template for *tier*, or ``None`` if undefined."""
         return self.base_templates.get(tier)
 
+    def _load_classes(self, base_path: str) -> None:
+        """Load optional player classes from classes.yaml.
+
+        Absent, empty, or malformed → an empty class set (the spawning flow
+        offers a single default), so a class-content problem never blocks server
+        start. Each entry has a ``key`` (persisted on the character), a display
+        ``name``, and an optional ``description``.
+        """
+        self.classes = {}
+        path = os.path.join(base_path, _OPTIONAL_FILES["classes"])
+        if not os.path.isfile(path):
+            logger.info("No player classes at '%s' — using a default.", path)
+            return
+        try:
+            with open(path, "r") as f:
+                raw = yaml.safe_load(f)
+        except Exception:
+            logger.exception("Failed to read player classes at '%s'.", path)
+            return
+        if not isinstance(raw, dict):
+            return
+        for entry in raw.get("classes", []) or []:
+            try:
+                key = entry["key"]
+            except (KeyError, TypeError):
+                logger.warning("Skipping malformed player class entry %r.", entry)
+                continue
+            self.classes[key] = ClassDef(
+                key=key,
+                name=entry.get("name", key.title()),
+                description=(entry.get("description") or "").strip(),
+            )
+        logger.info("Loaded %d player class(es).", len(self.classes))
+
+    def get_class(self, key: str) -> "ClassDef | None":
+        """Return the player class for *key*, or ``None`` if undefined."""
+        return self.classes.get(key)
+
+    def resolve_class(self, token: str) -> "ClassDef | None":
+        """Resolve a player class by key OR name, typo-/prefix-tolerantly."""
+        return self._resolve(token, self.classes, key_upper=False)
+
     # ------------------------------------------------------------------ #
     #  Getter methods
     # ------------------------------------------------------------------ #
@@ -527,11 +582,20 @@ class DataRegistry:
         """Resolve a definition by registry key OR full name, typo-tolerantly.
 
         Shared implementation behind the ``resolve_*`` family. Players type
-        either the short key (``EX``, an item key) or the human name
-        (``extractor``); this accepts both. Matching is case-insensitive and
-        tolerates spaces vs. underscores in names (``power armor`` ==
-        ``Power_Armor``). Returns ``None`` if nothing matches, so callers can
-        surface a clean "unknown" message rather than raising.
+        either the short key (``EX``, an item key), the human name
+        (``extractor``), or an unambiguous PREFIX of either (``plasma_gr`` →
+        ``plasma_grenade``, ``head`` → ``Headquarters``); this accepts all three.
+        Matching is case-insensitive and tolerates spaces vs. underscores in
+        names and keys (``power armor`` == ``Power_Armor``). Returns ``None`` if
+        nothing matches, so callers surface a clean "unknown" message rather than
+        raising.
+
+        Resolution order (first hit wins), so an exact match always beats a
+        prefix and a prefix never shadows a full name someone typed exactly:
+          1. exact registry key,
+          2. exact full name,
+          3. unambiguous prefix of a key or name (exactly ONE def matches;
+             an ambiguous prefix returns ``None`` so the caller can prompt).
 
         Args:
             token: The user-supplied string.
@@ -556,6 +620,22 @@ class DataRegistry:
             dname = getattr(d, name_attr, "") or ""
             if dname.lower().replace("_", " ").strip() == norm:
                 return d
+
+        # 3) Unambiguous prefix of a key OR display name. Collect every def whose
+        # normalised key or name STARTS WITH the token; resolve only when exactly
+        # one distinct def matches (an ambiguous prefix is treated as no match).
+        if not norm:
+            return None
+        matches = []
+        for d in by_key.values():
+            dkey = str(getattr(d, "key", "") or getattr(d, "abbreviation", "") or "")
+            dkey_norm = dkey.lower().replace("_", " ").strip()
+            dname_norm = (getattr(d, name_attr, "") or "").lower().replace("_", " ").strip()
+            if dkey_norm.startswith(norm) or dname_norm.startswith(norm):
+                if d not in matches:
+                    matches.append(d)
+        if len(matches) == 1:
+            return matches[0]
         return None
 
     def resolve_building(self, token: str) -> BuildingDef | None:

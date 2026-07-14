@@ -289,7 +289,9 @@ class TestThrowGrenade(unittest.TestCase):
         self.assertEqual(fuse, 3)
         self.assertIs(owner, p)
 
-    def test_stops_at_first_obstacle(self):
+    def test_lands_before_building(self):
+        """A grenade thrown at a building lands on the clear tile BEFORE it (it
+        bounces off the structure), so its blast breaches from outside."""
         sys, sink, placed = _make(items=[_grenade_def(rng=8)])
         room = _Room()
         room.place_obj(_Building(0, 3), 0, 3)  # wall 3 north
@@ -297,7 +299,31 @@ class TestThrowGrenade(unittest.TestCase):
         sys.set_fuse(p, "frag_grenade", 3)
         sys.throw_grenade(p, "frag_grenade", "n")
         _, _, lx, ly, *_ = placed[0]
-        self.assertEqual((lx, ly), (0, 3))  # stopped at the wall's tile
+        self.assertEqual((lx, ly), (0, 2))  # tile just before the wall
+
+    def test_lands_at_unit_feet(self):
+        """A grenade thrown at a unit lands ON their tile (lob it right at them)."""
+        sys, sink, placed = _make(items=[_grenade_def(rng=8)])
+        room = _Room()
+        enemy = _Player(x=0, y=3, oid=42)
+        room.place_obj(enemy, 0, 3)  # on the ray (get_objects_at scans objects)
+        p = _Player(x=0, y=0, supplies={"frag_grenade": 1}, location=room)
+        sys.set_fuse(p, "frag_grenade", 3)
+        sys.throw_grenade(p, "frag_grenade", "n")
+        _, _, lx, ly, *_ = placed[0]
+        self.assertEqual((lx, ly), (0, 3))  # at the enemy's feet
+
+    def test_building_on_first_step_lands_at_feet(self):
+        """A building directly in front lands the grenade at the thrower's feet
+        (the last clear tile is their own)."""
+        sys, sink, placed = _make(items=[_grenade_def(rng=5)])
+        room = _Room()
+        room.place_obj(_Building(0, 1), 0, 1)  # wall immediately north
+        p = _Player(x=0, y=0, supplies={"frag_grenade": 1}, location=room)
+        sys.set_fuse(p, "frag_grenade", 3)
+        sys.throw_grenade(p, "frag_grenade", "n")
+        _, _, lx, ly, *_ = placed[0]
+        self.assertEqual((lx, ly), (0, 0))  # thrower's own tile
 
     def test_consumes_grenade_and_fuse(self):
         sys, sink, placed = _make(items=[_grenade_def()])
@@ -510,12 +536,12 @@ class TestFuseCountdown(unittest.TestCase):
         self.assertIn(owner, hit_targets, "the placer is caught in their own blast")
         self.assertIn(own_agent, hit_targets, "friendly units are hit too")
 
-    def test_sheltered_player_excluded_from_blast(self):
-        """A player sheltered in a closed building is immune to the blast (a
-        blast can't reach inside cover), even though they'd see the tick."""
+    def test_sheltered_player_still_hit_by_blast(self):
+        """A blast BREACHES cover: a player sheltered inside a closed building on
+        the blast tile is still caught (an explosion reaches through walls). This
+        is why the placer standing inside their own structure takes the hit."""
         engine = _RecordingEngine()
         sys, sink, _ = _make(items=[_grenade_def()], engine=engine)
-        # Build a room whose blast query returns a sheltered player.
         room = _Room()
         # Sheltered player: inside a closed building on their tile.
         sheltered = _Player(x=1, y=1, oid=7)
@@ -532,7 +558,22 @@ class TestFuseCountdown(unittest.TestCase):
         sys._live_bombs = [bomb]
         sys.process_tick(1)
         hit_targets = [t for _, t in engine.hits]
-        self.assertNotIn(sheltered, hit_targets)
+        self.assertIn(sheltered, hit_targets)
+
+    def test_closed_building_hit_by_blast(self):
+        """A blast damages a building whether OPEN or CLOSED — an explosion is an
+        anti-structure weapon that levels closed walls/buildings too."""
+        engine = _RecordingEngine()
+        sys, sink, _ = _make(items=[_mine_def()], engine=engine)
+        room = _Room()
+        closed_bldg = _Building(1, 0, open_=False)
+        room.place_obj(closed_bldg, 1, 0)
+        bomb = _Bomb(room, 0, 0, amount=60, radius=2, fuse=1)
+        room.place_obj(bomb, 0, 0)
+        sys._live_bombs = [bomb]
+        sys.process_tick(1)
+        hit_targets = [t for _, t in engine.hits]
+        self.assertIn(closed_bldg, hit_targets, "a blast breaches a closed building")
 
     def test_deleted_bomb_pruned_without_error(self):
         sys, sink, _ = _make(items=[_grenade_def()])

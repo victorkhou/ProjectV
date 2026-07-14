@@ -18,6 +18,9 @@ PLAYER_LOGIN = "player_login"
 PLAYER_LOGOUT = "player_logout"
 PLAYER_MOVED = "player_moved"
 PLAYER_ELIMINATED = "player_eliminated"
+# A player's lifecycle state changed (world.player_lifecycle.transition).
+# Payload: player, old_state, new_state, reason
+PLAYER_STATE_CHANGED = "player_state_changed"
 # An enemy NPC (npc_type="enemy") was killed and permanently deleted.
 # Payload: attacker, victim, tile
 NPC_ELIMINATED = "npc_eliminated"
@@ -60,6 +63,7 @@ ALL_EVENTS = (
     PLAYER_LOGOUT,
     PLAYER_MOVED,
     PLAYER_ELIMINATED,
+    PLAYER_STATE_CHANGED,
     NPC_ELIMINATED,
     BASE_ELIMINATED,
     BUILDING_CONSTRUCTED,

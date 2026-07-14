@@ -66,6 +66,7 @@ TICK_STEP_ORDER = (
     ("tech_research", "Decrement research timers."),
     ("resource_respawns", "Decrement depleted-node respawn counters."),
     ("outpost_respawn", "Respawn cleared NPC bases whose cooldown elapsed."),
+    ("linkdead_expiry", "Remove linkdead characters whose disconnect grace elapsed."),
     ("tick_completed", "Last: announce the tick is fully processed."),
 )
 
@@ -174,6 +175,57 @@ class GameTickScript(DefaultScript):
             return players
         except Exception:
             return []
+
+    def _process_linkdead_expiry(self):
+        """Expire linkdead characters whose disconnect grace window has elapsed.
+
+        A player who dropped their connection (without ``quit``) lingers in the
+        world as a live combat target during a grace window; once it passes they
+        are routed to the lobby and removed from the grid. No-op unless the lobby
+        lifecycle flow is enabled. Enumerates linkdead characters by attribute
+        (they hold no session, so the online-players roster misses them). Best
+        effort — never raises into the tick loop.
+        """
+        try:
+            from world.lobby_flow import lobby_flow_enabled
+            if not lobby_flow_enabled():
+                return
+            import time as _t
+            from world import player_lifecycle as pl
+            from world.constants import PLAYER_STATE_LINKDEAD
+            from evennia.utils.search import search_object_attribute
+
+            now = _t.monotonic()
+            # A plain ``db.player_state = "..."`` stores the value PICKLED in
+            # db_value (db_strvalue stays None), so a db_strvalue ORM filter
+            # matches nothing on a real DB. search_object_attribute matches on
+            # the actual stored value — the correct enumeration.
+            candidates = search_object_attribute(
+                key="player_state", value=PLAYER_STATE_LINKDEAD
+            )
+            for char in candidates:
+                if not pl.is_linkdead_expired(char, now):
+                    continue
+                # Grace elapsed while still alive → route to lobby + stow away.
+                pl.expire_linkdead(char)
+                try:
+                    room = getattr(char, "location", None)
+                    if room is not None:
+                        # De-index from the coordinate grid FIRST (setting
+                        # location=None does not fire at_object_leave, so the
+                        # index would otherwise keep the char as a phantom combat
+                        # target), then stow the character away.
+                        cx = getattr(char.db, "coord_x", None)
+                        cy = getattr(char.db, "coord_y", None)
+                        idx = getattr(getattr(room, "ndb", None), "_coord_index", None)
+                        if idx is not None and cx is not None and cy is not None:
+                            idx.remove(char, int(cx), int(cy))
+                        char.db.prelogout_location = room
+                        char.location = None
+                except Exception:  # noqa: BLE001
+                    pass
+        except Exception:  # noqa: BLE001 - tick step must never raise
+            pass
 
     def _get_all_buildings(self):
         """Return all Building objects in the game world.
@@ -558,6 +610,11 @@ class GameTickScript(DefaultScript):
             registered["outpost_respawn"] = (
                 lambda: outpost_spawner.process_respawns(tick_number)
             )
+
+        # Linkdead grace expiry: remove characters whose disconnect grace window
+        # has elapsed (they were kept in the world as live combat targets during
+        # grace). Only runs when the lobby lifecycle flow is enabled.
+        registered["linkdead_expiry"] = self._process_linkdead_expiry
 
         if event_bus:
             registered["tick_completed"] = (

@@ -90,6 +90,25 @@ class RankDef:
 
 
 @dataclass
+class ClassDef:
+    """Definition for a selectable player class (state 3.2).
+
+    Selection + stored label only in this iteration — a class carries a
+    display ``name``, a stable ``key`` (persisted on ``db.player_class``), and a
+    short ``description`` shown in the selection menu. It has NO mechanical
+    effect yet (no starting-loadout / stat fields), so the combat, equipment,
+    and progression systems remain class-agnostic. Modeled on ``RankDef`` so the
+    YAML + dataclass + DataRegistry pattern is ready to gain mechanics later
+    (e.g. a ``starting_items`` or ``stat_modifiers`` field) without reshaping
+    the selection flow.
+    """
+
+    key: str
+    name: str
+    description: str = ""
+
+
+@dataclass
 class TechnologyDef:
     """Definition for a researchable technology."""
 
@@ -355,6 +374,12 @@ class BalanceConfig:
     #: A weapon may override it with an ``attack_cooldown`` stat modifier. Does
     #: NOT apply to turrets/guards/locked-tracking shots (those stay tick-queued).
     attack_cooldown_seconds: float = 1.0
+    #: Linkdead grace window (WALL-CLOCK seconds): when a PLAYING player drops
+    #: their connection without ``quit``, their character stays a live combat
+    #: target for this long before it is removed to the lobby (the anti-combat-
+    #: log rule). Tuned >= the combat lockout so pulling the plug can't dodge an
+    #: active fight. Only used when the lobby lifecycle flow is enabled.
+    linkdead_grace_seconds: float = 30.0
 
     # --- NPC base spawner + elimination (PvE NPC bases, Phase 5) ------ #
     #: XP awarded for destroying an NPC base's HQ (the whole base is wiped) —
