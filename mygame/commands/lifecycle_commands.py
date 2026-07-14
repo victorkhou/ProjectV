@@ -326,7 +326,7 @@ class CmdSelect(BaseCommand):
         raw = (self.args or "").strip() or (self.cmdstring or "").strip()
 
         if state == PLAYER_STATE_LOBBY:
-            self._select_lobby(caller, raw)
+            self._select_lobby(caller, raw, session=self.session)
             return
         if state != PLAYER_STATE_SPAWNING:
             caller.msg("There's nothing to select right now.")
@@ -347,13 +347,15 @@ class CmdSelect(BaseCommand):
             _advance_spawning(caller)
 
     @staticmethod
-    def _select_lobby(caller, raw):
+    def _select_lobby(caller, raw, session=None):
         """Handle the lobby deployment menu: 1 = enter game, 0 = quit."""
         if raw == "1":
             deploy_from_lobby(caller)
         elif raw == "0":
+            # Forward the invoking session so the quit disconnects THIS session
+            # (CmdQuit is account_caller and crashes on a None session).
             if hasattr(caller, "execute_cmd"):
-                caller.execute_cmd("quit")
+                caller.execute_cmd("quit", session=session)
         else:
             announce_lobby(caller)
 
@@ -563,12 +565,21 @@ if _BaseQuit is not None:
             # to at_post_unpuppet, so this transient ndb marker is how the
             # character's disconnect hook tells a clean quit from a dropped
             # connection. Guarded so a marking hiccup never blocks quitting.
+            account = self.account
             try:
-                account = self.account
                 if account is not None:
                     for puppet in account.get_all_puppets():
                         if puppet is not None:
                             puppet.ndb._clean_quit = True
             except Exception:  # noqa: BLE001
                 pass
+
+            # The stock CmdQuit (account_caller) disconnects self.session, and
+            # crashes on a None session. When invoked without a bound session
+            # (e.g. routed via a character's execute_cmd), fall back to the
+            # account's own session(s) so quit still works from the lobby.
+            if self.session is None and account is not None:
+                sessions = account.sessions.all()
+                if sessions:
+                    self.session = sessions[-1]
             super().func()

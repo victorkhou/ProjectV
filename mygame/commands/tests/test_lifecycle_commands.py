@@ -87,8 +87,10 @@ class _Caller:
         if text is not None:
             self._messages.append(text)
 
-    def execute_cmd(self, cmd):
+    def execute_cmd(self, cmd, session=None, **kw):
         self._executed.append(cmd)
+        self._executed_sessions = getattr(self, "_executed_sessions", [])
+        self._executed_sessions.append(session)
 
     # last message helper
     def last(self):
@@ -101,10 +103,11 @@ _CLASSES = [
 ]
 
 
-def _run(cmd_cls, caller, args="", cmdstring=None):
+def _run(cmd_cls, caller, args="", cmdstring=None, session=None):
     cmd = cmd_cls()
     cmd.caller = caller
     cmd.args = args
+    cmd.session = session
     cmd.cmdstring = cmdstring if cmdstring is not None else getattr(cmd_cls, "key", "")
     cmd.func()
     return caller
@@ -288,6 +291,15 @@ class TestCmdSelect(unittest.TestCase):
         _run(CmdSelect, c, args="", cmdstring="0")
         self.assertIn("quit", c._executed)  # routed to the quit command
         self.assertEqual(c.db.player_state, PLAYER_STATE_LOBBY)  # still lobby
+
+    def test_lobby_select_0_forwards_session_to_quit(self):
+        # The quit must carry the invoking session, or CmdQuit (account_caller)
+        # crashes on a None session (the reported lobby-quit traceback).
+        c = _Caller(state=PLAYER_STATE_LOBBY)
+        sentinel_session = object()
+        _run(CmdSelect, c, args="", cmdstring="0", session=sentinel_session)
+        self.assertEqual(c._executed, ["quit"])
+        self.assertEqual(c._executed_sessions, [sentinel_session])
 
     def test_lobby_select_other_reprompts_menu(self):
         c = _Caller(state=PLAYER_STATE_LOBBY)
