@@ -276,6 +276,25 @@ class TestCmdSelect(unittest.TestCase):
         self.assertIn("class", c.last().lower())
         self.assertIsNone(c.db.player_class)
 
+    def test_lobby_select_1_enters_game(self):
+        c = _Caller(state=PLAYER_STATE_LOBBY)
+        c.db.player_class = "vanguard"
+        c.db.pending_spawn_choice = "hq"
+        _run(CmdSelect, c, args="", cmdstring="1")
+        self.assertEqual(c.db.player_state, PLAYER_STATE_PLAYING)
+
+    def test_lobby_select_0_quits(self):
+        c = _Caller(state=PLAYER_STATE_LOBBY)
+        _run(CmdSelect, c, args="", cmdstring="0")
+        self.assertIn("quit", c._executed)  # routed to the quit command
+        self.assertEqual(c.db.player_state, PLAYER_STATE_LOBBY)  # still lobby
+
+    def test_lobby_select_other_reprompts_menu(self):
+        c = _Caller(state=PLAYER_STATE_LOBBY)
+        _run(CmdSelect, c, args="", cmdstring="7")
+        self.assertIn("enter the game", c.last().lower())
+        self.assertEqual(c.db.player_state, PLAYER_STATE_LOBBY)
+
 
 # -------------------------------------------------------------- #
 #  deploy (4.1)
@@ -290,6 +309,17 @@ class TestCmdDeploy(unittest.TestCase):
         self.assertEqual(c.db.player_state, PLAYER_STATE_PLAYING)
         self.assertIn("look", c._executed)  # world shown on deploy
         self.assertIsNone(c.db.pending_spawn_choice)  # choice consumed
+
+    def test_deploy_clears_lingering_combat_state(self):
+        # A player who died/quit mid-fight must re-enter NOT in combat.
+        c = _Caller(state=PLAYER_STATE_LOBBY)
+        c.db.player_class = "vanguard"
+        c.db.pending_spawn_choice = "hq"
+        c.db.combat_timer_expires = 9999
+        c.db.combat_lockout_tick = 9999
+        _run(CmdDeploy, c, "")
+        self.assertEqual(c.db.combat_timer_expires, 0)
+        self.assertEqual(c.db.combat_lockout_tick, 0)
 
     def test_deploy_blocked_while_spawning(self):
         c = _Caller(state=PLAYER_STATE_SPAWNING)

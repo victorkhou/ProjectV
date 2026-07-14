@@ -212,6 +212,11 @@ def record_death(player: Any, x: Any, y: Any, planet: Any, *,
         except (TypeError, ValueError):
             db.death_x = db.death_y = None
             db.death_planet = planet
+        # Death re-runs the FULL stage 3: clear the prior class + spawn choice so
+        # the spawning wizard restarts at step 1 (class), not straight to the
+        # spawn step. (Per spec: death → re-pick class + spawn location.)
+        db.player_class = None
+        db.pending_spawn_choice = None
     transition(player, PLAYER_STATE_SPAWNING, reason="death",
                event_bus=event_bus)
 

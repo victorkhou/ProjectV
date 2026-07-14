@@ -134,7 +134,7 @@ def present_spawning_step(caller, *, prefix=""):
     elif not caller.db.pending_spawn_choice:
         _present_spawn_menu(caller, prefix=prefix)
     elif pl.finish_spawning(caller):
-        _announce_lobby(caller)
+        announce_lobby(caller)
 
 
 def _advance_spawning(caller):
@@ -144,7 +144,7 @@ def _advance_spawning(caller):
     elif not caller.db.pending_spawn_choice:
         _present_spawn_menu(caller)
     elif pl.finish_spawning(caller):
-        _announce_lobby(caller)
+        announce_lobby(caller)
 
 
 def _apply_class(caller, cdef):
@@ -299,31 +299,39 @@ class CmdSpawn(BaseCommand):
 # ------------------------------------------------------------------ #
 
 class CmdSelect(BaseCommand):
-    """Select a numbered option from the current spawning menu.
+    """Select a numbered option from the current staging menu.
 
     Usage:
       <number>         (e.g. just type '1')
       select <number>
 
-    While preparing to deploy, the class and spawn-point menus are numbered;
-    type the number of your choice to pick it. Bound to the digit keys, so a
-    bare '1' works. Outside spawning this does nothing.
+    Drives the numbered wizard by typing a number:
+      * SPAWNING — the class then spawn-point menus (1-n).
+      * LOBBY — |w1|n to enter the game, |w0|n to quit.
+    Bound to the digit keys, so a bare '1' works. Outside staging it does
+    nothing.
     """
 
     key = "select"
-    aliases = [str(i) for i in range(1, 10)]  # bare 1-9 select from the menu
+    aliases = [str(i) for i in range(0, 10)]  # bare 0-9 select from the menu
     locks = "cmd:all()"
     help_category = "Lifecycle"
 
     def func(self):
         caller = self.caller
-        if pl.get_state(caller) != PLAYER_STATE_SPAWNING:
-            caller.msg("There's nothing to select right now.")
-            return
+        state = pl.get_state(caller)
 
         # The number is either the command word itself (bare '1') or its arg
         # ('select 1'). cmdstring is the alias the player typed.
         raw = (self.args or "").strip() or (self.cmdstring or "").strip()
+
+        if state == PLAYER_STATE_LOBBY:
+            self._select_lobby(caller, raw)
+            return
+        if state != PLAYER_STATE_SPAWNING:
+            caller.msg("There's nothing to select right now.")
+            return
+
         if not raw.isdigit():
             present_spawning_step(caller)
             return
@@ -337,6 +345,17 @@ class CmdSelect(BaseCommand):
         else:
             # Both already chosen (shouldn't linger in SPAWNING) — advance.
             _advance_spawning(caller)
+
+    @staticmethod
+    def _select_lobby(caller, raw):
+        """Handle the lobby deployment menu: 1 = enter game, 0 = quit."""
+        if raw == "1":
+            deploy_from_lobby(caller)
+        elif raw == "0":
+            if hasattr(caller, "execute_cmd"):
+                caller.execute_cmd("quit")
+        else:
+            announce_lobby(caller)
 
 
 # ------------------------------------------------------------------ #
@@ -388,6 +407,14 @@ def deploy_from_lobby(caller) -> bool:
 
     # Apply the chosen spawn location, then transition to PLAYING.
     apply_spawn_choice(caller)
+    # Deploy fresh: clear any lingering combat state so a player who died (or
+    # quit) mid-fight doesn't re-enter still "in combat" (which would block Wall
+    # passage, gate builds, and show a bogus combat timer). Reset both the
+    # combat timer and the build-gate lockout tick.
+    db = getattr(caller, "db", None)
+    if db is not None:
+        db.combat_timer_expires = 0
+        db.combat_lockout_tick = 0
     if pl.enter_game(caller):
         caller.msg("|gYou deploy into the field.|n")
         if hasattr(caller, "execute_cmd"):
@@ -438,28 +465,42 @@ def _relocate(caller, planet, x, y) -> None:
     correct. Best-effort — never raises into the caller.
     """
     try:
-        from world.utils import get_game_systems
-        planet_rooms = get_game_systems().get("planet_rooms", {})
+        from world.utils import get_game_systems, nearest_free_tile
+        systems = get_game_systems()
+        planet_rooms = systems.get("planet_rooms", {})
         room = planet_rooms.get(planet)
         if room is None:
             return
+        # Never drop the player onto a tile a building occupies (e.g. the fixed
+        # planet spawn, or an enemy structure sitting there) — nudge to the
+        # nearest building-free tile, kept in-bounds via the planet registry.
+        registry = systems.get("planet_registry")
+        in_bounds = None
+        if registry is not None and hasattr(registry, "is_valid_coordinate"):
+            in_bounds = lambda cx, cy: registry.is_valid_coordinate(cx, cy, planet)  # noqa: E731
+        fx, fy = nearest_free_tile(room, int(x), int(y), in_bounds=in_bounds)
         caller.db.coord_planet = planet
         if caller.location is not room:
             caller.move_to(room, quiet=True, move_hooks=False)
         if hasattr(room, "move_entity"):
-            room.move_entity(caller, int(x), int(y), notify=False)
+            room.move_entity(caller, fx, fy, notify=False)
         else:
-            caller.db.coord_x = int(x)
-            caller.db.coord_y = int(y)
+            caller.db.coord_x = fx
+            caller.db.coord_y = fy
     except Exception:  # noqa: BLE001
         logger.debug("Spawn relocation failed", exc_info=True)
 
 
-def _announce_lobby(caller) -> None:
-    """Tell the player they're staged and ready to enter (SPAWNING → LOBBY)."""
+def announce_lobby(caller) -> None:
+    """Present the numbered lobby (deployment) menu (SPAWNING → LOBBY / on login).
+
+    The final wizard step: type |w1|n to enter the game or |w0|n to quit.
+    """
     caller.msg(
-        "\n|wReady to deploy.|n Type |wenter|n to join the game, "
-        "or |wquit|n to disconnect."
+        "\n|wReady to deploy.|n\n"
+        "  |w1|n. |cEnter the game|n\n"
+        "  |w0|n. |cQuit|n\n"
+        "(type the number, or |wenter|n / |wquit|n)"
     )
 
 

@@ -28,6 +28,7 @@ class _Player:
         self.key = "Player"
         self.db = types.SimpleNamespace(
             player_state=state, player_class=player_class,
+            pending_spawn_choice=None,
             death_x=None, death_y=None, death_planet=None,
             linkdead_until=0.0,
         )
@@ -149,6 +150,15 @@ class TestRecordDeath(unittest.TestCase):
         self.assertIsNone(p.db.death_x)
         self.assertEqual(p.db.death_planet, "forge")
 
+    def test_death_clears_class_and_spawn_choice(self):
+        # Death re-runs the FULL stage 3 — the prior class + spawn choice are
+        # cleared so the spawning wizard restarts at the class step.
+        p = _Player(state=PLAYER_STATE_PLAYING, player_class="vanguard")
+        p.db.pending_spawn_choice = "hq"
+        pl.record_death(p, 5, 5, "terra")
+        self.assertIsNone(p.db.player_class)
+        self.assertIsNone(p.db.pending_spawn_choice)
+
 
 # -------------------------------------------------------------- #
 #  Linkdead grace
@@ -240,6 +250,8 @@ class TestReads(unittest.TestCase):
         self.assertTrue(pl.enter_game(p))               # -> playing
         pl.record_death(p, 5, 5, "terra")               # -> spawning
         self.assertEqual(p.db.player_state, PLAYER_STATE_SPAWNING)
+        self.assertIsNone(p.db.player_class)            # death re-runs stage 3
+        p.db.player_class = "Vanguard"                  # re-pick class
         self.assertTrue(pl.finish_spawning(p))          # -> lobby
         self.assertTrue(pl.enter_game(p))               # -> playing
         self.assertTrue(pl.to_lobby(p))                 # -> lobby (quit)

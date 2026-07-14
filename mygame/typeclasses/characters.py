@@ -417,10 +417,8 @@ class CombatCharacter(CombatEntity, DefaultCharacter):
                 from commands.lifecycle_commands import announce_spawning
                 announce_spawning(self)
             elif state == PLAYER_STATE_LOBBY:
-                self.msg(
-                    "\n|wStaging area.|n Type |wenter|n to deploy, or |wquit|n "
-                    "to disconnect."
-                )
+                from commands.lifecycle_commands import announce_lobby
+                announce_lobby(self)
         except Exception:  # noqa: BLE001 - routing must never block login
             logger.debug("Lifecycle login routing failed", exc_info=True)
 

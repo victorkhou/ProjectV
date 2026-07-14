@@ -238,6 +238,52 @@ def _building_on_tile(room: Any, x: int, y: int) -> Any | None:
     return None
 
 
+def nearest_free_tile(room: Any, x: int, y: int, *, in_bounds=None,
+                      max_radius: int = 12) -> tuple[int, int]:
+    """Return the nearest tile to ``(x, y)`` with no building on it.
+
+    Spawn points (a fixed planet spawn, an HQ tile that's since gone) can land
+    on a tile a building occupies — dropping the player *inside* someone else's
+    structure. This scans outward in growing rings (Chebyshev) and returns the
+    first building-free tile, so the player lands *beside* an obstruction rather
+    than on it. ``(x, y)`` itself is returned when already free, and as the
+    last-resort fallback if nothing free is found within *max_radius*.
+
+    Args:
+        room: The PlanetRoom (needs ``get_buildings_at``); a None/other room
+            means we can't check occupancy, so ``(x, y)`` is returned as-is.
+        x, y: The desired tile.
+        in_bounds: Optional ``(x, y) -> bool`` predicate; candidate tiles that
+            fail it are skipped (so we never suggest an off-map tile).
+        max_radius: How far out to search before giving up.
+    """
+    if room is None or not hasattr(room, "get_buildings_at"):
+        return (x, y)
+
+    def _ok(cx, cy):
+        if in_bounds is not None:
+            try:
+                if not in_bounds(cx, cy):
+                    return False
+            except Exception:  # noqa: BLE001
+                return False
+        return _building_on_tile(room, cx, cy) is None
+
+    if _ok(x, y):
+        return (x, y)
+    for r in range(1, max_radius + 1):
+        # Walk the perimeter of the r-ring around (x, y).
+        for cx in range(x - r, x + r + 1):
+            for cy in (y - r, y + r):
+                if _ok(cx, cy):
+                    return (cx, cy)
+        for cy in range(y - r + 1, y + r):
+            for cx in (x - r, x + r):
+                if _ok(cx, cy):
+                    return (cx, cy)
+    return (x, y)  # nothing free within range — caller lands on the original
+
+
 def ensure_coords(caller: Any) -> tuple[Any, Any, str | None]:
     """Ensure caller has valid coordinates.
 

@@ -493,3 +493,40 @@ class TestChebyshevDistance:
         from mygame.world.utils import chebyshev_distance
         assert chebyshev_distance(0, 0, 3, 1) == 3
         assert chebyshev_distance(0, 0, 1, 4) == 4
+
+
+class TestNearestFreeTile:
+    """nearest_free_tile: return (x,y) if free, else the nearest building-free
+    tile — so a spawn never drops the player onto a building."""
+
+    class _Room:
+        def __init__(self, occupied):
+            # occupied: set of (x, y) tiles that have a building.
+            self._occupied = set(occupied)
+
+        def get_buildings_at(self, x, y):
+            return ["b"] if (x, y) in self._occupied else []
+
+    def test_returns_same_tile_when_free(self):
+        from mygame.world.utils import nearest_free_tile
+        room = self._Room(occupied=set())
+        assert nearest_free_tile(room, 5, 5) == (5, 5)
+
+    def test_nudges_off_an_occupied_tile(self):
+        from mygame.world.utils import nearest_free_tile
+        # (5,5) taken; a neighbor must be chosen at distance 1.
+        room = self._Room(occupied={(5, 5)})
+        fx, fy = nearest_free_tile(room, 5, 5)
+        assert (fx, fy) != (5, 5)
+        assert max(abs(fx - 5), abs(fy - 5)) == 1  # nearest ring
+
+    def test_respects_in_bounds_predicate(self):
+        from mygame.world.utils import nearest_free_tile
+        room = self._Room(occupied={(0, 0)})
+        # Only (1, 1) is in-bounds among the neighbors of (0,0).
+        in_bounds = lambda x, y: (x, y) == (1, 1)  # noqa: E731
+        assert nearest_free_tile(room, 0, 0, in_bounds=in_bounds) == (1, 1)
+
+    def test_returns_original_when_room_not_queryable(self):
+        from mygame.world.utils import nearest_free_tile
+        assert nearest_free_tile(None, 3, 4) == (3, 4)
