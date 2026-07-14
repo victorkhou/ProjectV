@@ -4,14 +4,14 @@ Feature flag for the player lobby / spawning lifecycle flow.
 The lobby/spawning flow (states 3-4 of the player state machine) is a large
 behavioral change — it gates world-action commands behind a PLAYING state,
 routes every login through spawning/lobby, and reroutes death and disconnect.
-All the machinery ships built and tested, but the behavioral switch is gated
-here so it can be enabled deliberately (after manual UX testing) rather than
-flipping on for every player the moment the code lands.
+The switch stays a single feature flag so the whole flow can be reverted in one
+line if needed.
 
-The flag reads the Evennia setting ``LOBBY_FLOW_ENABLED`` (default False). It is
-resolved lazily and defensively so the (Django-free) unit-test suite — where
-``django.conf.settings`` may be unconfigured — always sees it as disabled and
-existing behavior is unchanged.
+The flag reads the Evennia setting ``LOBBY_FLOW_ENABLED`` (shipped True in
+``settings.py``). It is resolved lazily and defensively: when the setting is
+absent or ``django.conf.settings`` can't be read (the Django-free unit-test
+suite), it falls back to False so those tests see existing behavior unless they
+opt in via ``override_settings``.
 """
 
 from __future__ import annotations

@@ -48,11 +48,11 @@ BASE_CHARACTER_TYPECLASS = "typeclasses.characters.CombatCharacter"
 HELP_MORE_ENABLED = False
 
 # Player lobby / spawning lifecycle flow (states 3-4 of the player state
-# machine). OFF by default: all the machinery ships built and tested, but the
-# behavioral switch — gating world commands behind a PLAYING state, routing
-# every login through spawning/lobby, and rerouting death/disconnect — is
-# enabled deliberately after manual UX testing. Flip to True to turn it on.
-LOBBY_FLOW_ENABLED = False
+# machine). ON: world commands are gated behind a PLAYING state, every login
+# routes through spawning/lobby, and death/disconnect reroute through the
+# staging flow (re-pick class + spawn, then 'enter'). Set to False to revert to
+# the legacy behavior (instant game entry on login, instant in-place respawn).
+LOBBY_FLOW_ENABLED = True
 
 # Add 'chat' as a server-level alias for the Public channel
 DEFAULT_CHANNELS = [
