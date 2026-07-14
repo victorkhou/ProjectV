@@ -108,6 +108,54 @@ class TestRandomSpawn(unittest.TestCase):
         self.assertEqual(r.resolve(_Player(), SPAWN_RANDOM, "terra"), ("terra", 250, 250))
 
 
+class TestRandomSpawnBuildingDistance(unittest.TestCase):
+    """A random spawn keeps >= min_building_distance (Chebyshev) from buildings."""
+
+    def test_rejects_tiles_near_a_building(self):
+        # A building at (100,100); first sample (105,105) is only 5 away -> reject;
+        # second (150,150) is 50 away -> accepted (min distance 20).
+        r = _resolver(
+            rng=_SeqRandom([(105, 105), (150, 150)]),
+            buildings_locator_func=lambda p: [(100, 100)],
+            min_building_distance=20,
+        )
+        self.assertEqual(r.resolve(_Player(), SPAWN_RANDOM, "terra"),
+                         ("terra", 150, 150))
+
+    def test_accepts_tile_exactly_at_min_distance(self):
+        # Distance == min is allowed (>= min). Building at (100,100); (120,100)
+        # is exactly 20 away.
+        r = _resolver(
+            rng=_SeqRandom([(120, 100)]),
+            buildings_locator_func=lambda p: [(100, 100)],
+            min_building_distance=20,
+        )
+        self.assertEqual(r.resolve(_Player(), SPAWN_RANDOM, "terra"),
+                         ("terra", 120, 100))
+
+    def test_relaxes_constraint_when_no_far_tile_found(self):
+        # Every sampled tile is next to a building; pass 1 (distance) exhausts,
+        # pass 2 (bounds-only) accepts a tile so it never dead-ends. A constant
+        # rng always returns 101 -> (101,101), 1 away from the building at
+        # (100,100), so no sample ever satisfies the distance constraint.
+        class _ConstRandom:
+            def randint(self, lo, hi):
+                return 101
+        r = _resolver(
+            rng=_ConstRandom(),
+            buildings_locator_func=lambda p: [(100, 100)],
+            min_building_distance=20,
+        )
+        self.assertEqual(r.resolve(_Player(), SPAWN_RANDOM, "terra"),
+                         ("terra", 101, 101))
+
+    def test_no_locator_means_no_distance_constraint(self):
+        # Without a buildings locator, random only checks bounds (back-compat).
+        r = _resolver(rng=_SeqRandom([(101, 101)]))
+        self.assertEqual(r.resolve(_Player(), SPAWN_RANDOM, "terra"),
+                         ("terra", 101, 101))
+
+
 class TestFallbackAndDegradation(unittest.TestCase):
     def test_unknown_choice_uses_planet_spawn(self):
         r = _resolver()

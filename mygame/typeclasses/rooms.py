@@ -124,6 +124,22 @@ class PlanetRoom(DefaultRoom):
         """Return Building objects at (x, y)."""
         return self.get_objects_at(x, y, type_tag="building")
 
+    def get_all_buildings(self) -> list:
+        """Return every Building on this planet (whole-index scan).
+
+        Iterates the full coordinate index and filters to the ``building``
+        object-type tag. Not a hot path — used by the random-respawn resolver to
+        keep a spawn clear of bases — so the O(index) scan is acceptable.
+        """
+        out = []
+        for bucket in self.coord_index._data.values():
+            for o in bucket:
+                if getattr(o, "pk", True) is None:
+                    continue
+                if hasattr(o, "tags") and o.tags.get("building", category="object_type"):
+                    out.append(o)
+        return out
+
     def get_players_at(self, x: int, y: int) -> list:
         """Return player characters present at (x, y).
 

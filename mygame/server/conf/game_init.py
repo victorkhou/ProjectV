@@ -69,10 +69,27 @@ def _wire_spawn_resolver(spawn_resolver: Any, planet_registry: Any) -> None:
                 return coords
         return None
 
+    def _building_tiles(planet_key):
+        # Every building tile on this planet, so a RANDOM spawn stays clear of
+        # bases. Resolved LAZILY through game_systems: planet_rooms is populated
+        # after this wiring runs, and buildings come and go at runtime, so we
+        # look up the live room each call rather than capturing it here.
+        room = game_systems.get("planet_rooms", {}).get(planet_key)
+        if room is None or not hasattr(room, "get_all_buildings"):
+            return []
+        from world.utils import get_coords
+        tiles = []
+        for b in room.get_all_buildings():
+            coords = get_coords(b)
+            if coords is not None:
+                tiles.append(coords)
+        return tiles
+
     spawn_resolver.set_planet_spawn_func(_planet_spawn)
     spawn_resolver.set_planet_size_func(_planet_size)
     spawn_resolver.set_in_bounds_func(planet_registry.is_valid_coordinate)
     spawn_resolver.set_hq_locator_func(_hq_tile)
+    spawn_resolver.set_buildings_locator_func(_building_tiles)
 
 
 def _route_player_death(victim: Any) -> bool:

@@ -65,6 +65,12 @@ class SpawnResolver:
       death tile and to reject out-of-bounds random samples.
     * ``planet_size_func(planet_key) -> (width, height) | None`` — the planet's
       dimensions, for uniform random sampling.
+    * ``buildings_locator_func(planet_key) -> iterable[(x, y)]`` — the tiles of
+      every building on *planet_key*, so a RANDOM spawn can stay clear of them
+      (Chebyshev >= ``min_building_distance``). Optional: without it, random
+      sampling only checks bounds (no building-distance constraint).
+    * ``min_building_distance`` — the minimum Chebyshev distance a random spawn
+      must keep from any building (default from the game constant).
     * ``rng`` — a ``random.Random`` for deterministic tests (defaults to a real
       one).
     """
@@ -75,12 +81,19 @@ class SpawnResolver:
         hq_locator_func: Callable[[Any, str], tuple[int, int] | None] | None = None,
         in_bounds_func: Callable[[int, int, str], bool] | None = None,
         planet_size_func: Callable[[str], tuple[int, int] | None] | None = None,
+        buildings_locator_func: Callable[[str], Any] | None = None,
+        min_building_distance: int | None = None,
         rng: Any = None,
     ) -> None:
         self._planet_spawn_func = planet_spawn_func
         self._hq_locator_func = hq_locator_func
         self._in_bounds_func = in_bounds_func
         self._planet_size_func = planet_size_func
+        self._buildings_locator_func = buildings_locator_func
+        if min_building_distance is None:
+            from world.constants import RANDOM_SPAWN_MIN_BUILDING_DISTANCE
+            min_building_distance = RANDOM_SPAWN_MIN_BUILDING_DISTANCE
+        self._min_building_distance = int(min_building_distance)
         if rng is None:
             import random
             rng = random.Random()
@@ -101,6 +114,9 @@ class SpawnResolver:
 
     def set_planet_size_func(self, fn) -> None:
         self._planet_size_func = fn
+
+    def set_buildings_locator_func(self, fn) -> None:
+        self._buildings_locator_func = fn
 
     # ------------------------------------------------------------------ #
     #  Resolution
@@ -174,7 +190,15 @@ class SpawnResolver:
         return (dplanet, dx, dy)
 
     def _random_tile(self, planet_key) -> tuple[int, int] | None:
-        """Return a random in-bounds tile via rejection sampling, or None."""
+        """Return a random in-bounds tile via rejection sampling, or None.
+
+        Prefers a tile at least ``min_building_distance`` (Chebyshev) from every
+        building, so a "random location" spawn lands in open ground rather than
+        next to a base. This is best-effort: if the attempt budget is exhausted
+        without a far-enough tile (e.g. a cramped, building-dense map), it makes
+        a second pass that only checks bounds — the constraint is relaxed rather
+        than dead-ending the spawn.
+        """
         if self._planet_size_func is None:
             return None
         try:
@@ -186,12 +210,47 @@ class SpawnResolver:
         width, height = int(size[0]), int(size[1])
         if width <= 0 or height <= 0:
             return None
-        for _ in range(_RANDOM_MAX_ATTEMPTS):
-            x = self._rng.randint(0, width - 1)
-            y = self._rng.randint(0, height - 1)
-            if self._is_in_bounds(x, y, planet_key):
+
+        building_tiles = self._building_tiles(planet_key)
+
+        # Pass 1: honor the min-building-distance constraint (if we have both a
+        # distance and building data). Pass 2: bounds-only fallback so a dense
+        # map never leaves the player without a random tile.
+        enforce_distance = bool(building_tiles) and self._min_building_distance > 0
+        for enforce in (True, False) if enforce_distance else (False,):
+            for _ in range(_RANDOM_MAX_ATTEMPTS):
+                x = self._rng.randint(0, width - 1)
+                y = self._rng.randint(0, height - 1)
+                if not self._is_in_bounds(x, y, planet_key):
+                    continue
+                if enforce and not self._far_from_buildings(x, y, building_tiles):
+                    continue
                 return (x, y)
         return None  # no valid tile found in the budget -> caller falls back
+
+    def _building_tiles(self, planet_key) -> list:
+        """Return the list of ``(x, y)`` building tiles on *planet_key*, or []."""
+        if self._buildings_locator_func is None:
+            return []
+        try:
+            tiles = self._buildings_locator_func(planet_key)
+        except Exception:  # noqa: BLE001 - a lookup failure just skips the constraint
+            return []
+        out = []
+        for t in tiles or ():
+            try:
+                out.append((int(t[0]), int(t[1])))
+            except (TypeError, ValueError, IndexError):
+                continue
+        return out
+
+    def _far_from_buildings(self, x: int, y: int, building_tiles) -> bool:
+        """True if ``(x, y)`` is >= min_building_distance from every building."""
+        d = self._min_building_distance
+        for bx, by in building_tiles:
+            if max(abs(x - bx), abs(y - by)) < d:
+                return False
+        return True
 
     def _planet_spawn(self, planet_key) -> tuple[str, int, int] | None:
         if self._planet_spawn_func is None:

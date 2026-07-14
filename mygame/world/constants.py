@@ -115,6 +115,13 @@ DEFAULT_RESOURCE_WEIGHT = 1.0
 #: Default throw range (Chebyshev) for a throwable whose effect declares none.
 DEFAULT_THROW_RANGE = 4
 
+#: Minimum Chebyshev distance a RANDOM respawn tile must keep from any building,
+#: so a "random location" spawn drops the player in open ground — not next to
+#: (or camped by) a base. A best-effort constraint: if the sampler can't find a
+#: tile this far from every building within its attempt budget, it relaxes to
+#: any in-bounds tile rather than dead-ending.
+RANDOM_SPAWN_MIN_BUILDING_DISTANCE = 20
+
 #: Bomb fuse bounds (WALL-CLOCK seconds, == ticks at 1 tick/s) used when a bomb's
 #: effect does not declare its own ``fuse_min``/``fuse_max``/``fuse_default``.
 #: The ``set <bomb> <seconds>`` command clamps the requested fuse to

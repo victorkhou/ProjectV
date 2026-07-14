@@ -428,7 +428,7 @@ HELP_ENTRY_DICTS = [
             Next, a numbered list of spawn points appears; type its |wnumber|n to pick:
             |cHeadquarters|n — deploy at your HQ.
             |cPlace of death|n — deploy where you last died.
-            |cRandom location|n — deploy at a random tile.
+            |cRandom location|n — deploy at a random tile in |wopen ground|n, well clear of any building.
             If your choice isn't available (no HQ yet, or you've never died), you deploy at your planet's default spawn instead. (|wspawn <where>|n also works.)
 
             # Enter the Game
