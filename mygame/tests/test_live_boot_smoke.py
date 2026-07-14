@@ -1155,6 +1155,93 @@ class LiveBootSmokeTest(EvenniaTest):
         finally:
             _teardown_game(systems)
 
+    def test_teleport_looks_after_coords_updated_cross_planet(self):
+        """On real objects: teleporting to a DIFFERENT planet updates all coords
+        (planet + x + y) and THEN issues one look — so the shown view reflects
+        the destination. The old bug: at_object_receive fired mid-move (before
+        x/y updated) on a Z change, leaking a stale-coord tile line; a same-planet
+        teleport showed nothing. Both are now a single, correct look."""
+        from server.conf.game_init import initialize_game
+        from commands.admin_commands import CmdTeleport
+
+        systems = initialize_game()
+        try:
+            planet_rooms = systems.get("planet_rooms") or {}
+            self.assertGreaterEqual(len(planet_rooms), 2,
+                                    "need two planets for a cross-planet teleport")
+            keys = list(planet_rooms.keys())
+            src_key, dst_key = keys[0], keys[1]
+            src_room = planet_rooms[src_key]
+
+            player = self._make_player(x=2, y=3, planet=src_key, location=src_room)
+            # Grant Builder perms so the command's lock passes.
+            player.permissions.add("Builder")
+
+            captured = []
+            orig_msg = player.msg
+            player.msg = lambda text=None, **kw: captured.append(
+                text[0] if isinstance(text, tuple) else text)
+
+            cmd = CmdTeleport()
+            cmd.caller = player
+            cmd.cmdstring = "goto"
+            cmd.args = f"7 9 {dst_key}"
+            cmd.func()
+
+            player.msg = orig_msg
+
+            # All three coords updated to the destination.
+            self.assertEqual(player.db.coord_planet, dst_key)
+            self.assertEqual((player.db.coord_x, player.db.coord_y), (7, 9))
+            self.assertIs(player.location, planet_rooms[dst_key])
+            # A look ran after the teleport (map/tile output was produced).
+            self.assertTrue(captured, "teleport must issue a look")
+            # No captured line references the ORIGIN coords (2,3) — the stale
+            # mid-move renders (auto-look + tile line) are suppressed.
+            self.assertFalse(
+                any("(2, 3)" in (m or "") or "2,3" in (m or "") for m in captured),
+                f"teleport leaked a stale-coord line: {captured!r}",
+            )
+            # The player no longer leaks in the ORIGIN planet's coordinate index
+            # (skipping move hooks means we de-indexed it manually).
+            self.assertNotIn(player, src_room.get_objects_at(2, 3))
+            # And it IS indexed at the destination tile on the new planet.
+            self.assertIn(player, planet_rooms[dst_key].get_objects_at(7, 9))
+        finally:
+            _teardown_game(systems)
+
+    def test_teleport_same_planet_issues_look(self):
+        """A same-planet (X/Y-only) teleport also issues a look — previously it
+        fired no arrival hook at all, so the view never refreshed."""
+        from server.conf.game_init import initialize_game
+        from commands.admin_commands import CmdTeleport
+
+        systems = initialize_game()
+        try:
+            planet_rooms = systems.get("planet_rooms") or {}
+            self.assertTrue(planet_rooms)
+            key = next(iter(planet_rooms.keys()))
+            room = planet_rooms[key]
+            player = self._make_player(x=2, y=3, planet=key, location=room)
+            player.permissions.add("Builder")
+
+            captured = []
+            orig_msg = player.msg
+            player.msg = lambda text=None, **kw: captured.append(
+                text[0] if isinstance(text, tuple) else text)
+
+            cmd = CmdTeleport()
+            cmd.caller = player
+            cmd.cmdstring = "goto"
+            cmd.args = "8 8"  # same planet, new x/y
+            cmd.func()
+
+            player.msg = orig_msg
+            self.assertEqual((player.db.coord_x, player.db.coord_y), (8, 8))
+            self.assertTrue(captured, "same-planet teleport must still issue a look")
+        finally:
+            _teardown_game(systems)
+
 
 def _teardown_game(systems):
     """Best-effort teardown: stop any scripts initialize_game created so they

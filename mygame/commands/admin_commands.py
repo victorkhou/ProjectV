@@ -1203,14 +1203,38 @@ class CmdTeleport(BaseCommand):
             caller.msg(f"No PlanetRoom found for {planet}.")
             return
 
+        # Capture the origin room + coords BEFORE anything changes, so a
+        # cross-planet jump can de-index the caller from the origin planet's
+        # coordinate index (we skip Evennia's move hooks below, which is what
+        # normally does that on at_object_leave).
+        origin_room = caller.location
+        old_x = getattr(caller.db, "coord_x", None)
+        old_y = getattr(caller.db, "coord_y", None)
+
         # Update planet attribute
         caller.db.coord_planet = planet
 
-        # Only move_to if changing planets (different PlanetRoom)
+        # Only move_to if changing planets (different PlanetRoom).
+        # move_hooks=False: skip Evennia's arrival hooks (at_object_receive AND
+        # the auto-look via at_post_move). Both fire DURING this move — before
+        # move_entity sets the new x/y below — so they'd render the destination
+        # room at the STALE origin coords (the reported bug: a look right after
+        # teleport showed the pre-teleport map). We do the index bookkeeping and
+        # a single correct look ourselves instead.
         if caller.location is not target_room:
-            caller.move_to(target_room, quiet=True)
+            # Skipping at_object_leave means the origin room's coordinate index
+            # still holds the caller — remove it explicitly so it doesn't leak.
+            if origin_room is not None and old_x is not None and old_y is not None:
+                idx = getattr(getattr(origin_room, "ndb", None), "_coord_index", None)
+                if idx is not None:
+                    try:
+                        idx.remove(caller, int(old_x), int(old_y))
+                    except Exception:  # pragma: no cover - defensive
+                        pass
+            caller.move_to(target_room, quiet=True, move_hooks=False)
 
-        # Use move_entity for coordinate update within the PlanetRoom.
+        # Use move_entity for coordinate update within the PlanetRoom (adds the
+        # caller to the destination index at the new tile).
         # notify=False: a teleport is not a step onto an adjacent tile — for a
         # cross-planet jump the stored old coords are the origin planet's, so
         # arrival/departure messaging would notify the wrong players.
@@ -1218,6 +1242,15 @@ class CmdTeleport(BaseCommand):
 
         logger.info("Admin %s teleported to (%d, %d, %s)", caller.key, tx, ty, planet)
         caller.msg(f"Teleported to ({tx}, {ty}) on {planet}.")
+
+        # Always show the destination after teleporting, now that ALL coords +
+        # planet are fully updated. A same-planet (X/Y-only) teleport fires no
+        # arrival hook at all, and the cross-planet move above suppressed its
+        # (stale-coord) auto-look — so this single explicit look is the one
+        # correct view (appearance + map + tile summary) for every teleport,
+        # regardless of which coordinate changed.
+        if hasattr(caller, "execute_cmd"):
+            caller.execute_cmd("look")
 
 
 class CmdClearFog(BaseCommand):
