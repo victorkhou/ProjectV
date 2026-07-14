@@ -548,45 +548,39 @@ except Exception:  # pragma: no cover - stubbed test env
 if _BaseQuit is not None:
 
     class CmdQuit(_BaseQuit):
-        """Quit the game — a CLEAN disconnect.
+        """Quit — leave the field to the staging area, or disconnect from it.
 
         Usage:
           quit
 
-        Marks this as a deliberate quit so your character is NOT left in the
-        world as a link-dead combat target: a PLAYING character returns to the
-        lobby (you re-enter on next login), rather than lingering on its tile
-        during the link-dead grace window.
+        Two levels, mirroring the lobby wizard:
+          * In the game → return to the |wstaging area|n (you stay connected;
+            re-deploy with the menu, or |wquit|n again to disconnect).
+          * In the staging area → disconnect from the game.
 
-        You cannot quit while in combat — this is the anti-combat-log rule:
+        You cannot quit the field while in combat — the anti-combat-log rule:
         wait for your combat timer to run out (see 'score'), then quit.
         """
 
         def func(self):
             account = self.account
 
-            # Anti-combat-log: refuse to quit while any puppet is in combat, so a
-            # losing fight can't be escaped by disconnecting. (Dropping the
-            # connection instead already routes to LINKDEAD, keeping the char a
-            # target during grace — this closes the clean-quit escape hatch.)
+            # When the lobby flow is on, a PLAYING quit is "leave the field to
+            # the staging area" (stay connected), NOT a disconnect. Only a quit
+            # from the staging area (LOBBY/SPAWNING) actually disconnects.
             try:
-                from world.combat_timer import player_in_combat
-                if account is not None:
-                    for puppet in account.get_all_puppets():
-                        if puppet is not None and player_in_combat(puppet):
-                            puppet.msg(
-                                "|rYou can't quit while in combat.|n Wait for your "
-                                "combat timer to run out (see |wscore|n)."
-                            )
-                            return
-            except Exception:  # noqa: BLE001 - a check hiccup must not block quit
-                pass
+                from world.lobby_flow import lobby_flow_enabled
+                if lobby_flow_enabled() and account is not None:
+                    if self._retreat_playing_puppets_to_lobby(account):
+                        return  # a puppet left the field; stay connected
+            except Exception:  # noqa: BLE001 - never let routing block quit
+                logger.debug("Quit-to-lobby routing failed", exc_info=True)
 
-            # Mark every puppet as a clean quit BEFORE the stock quit disconnects
-            # the session(s). Evennia's unpuppet_object does not forward a reason
-            # to at_post_unpuppet, so this transient ndb marker is how the
-            # character's disconnect hook tells a clean quit from a dropped
-            # connection. Guarded so a marking hiccup never blocks quitting.
+            # In the staging area (or flow off): a real disconnect. Mark every
+            # puppet as a clean quit BEFORE the stock quit disconnects the
+            # session(s) — Evennia's unpuppet_object does not forward a reason to
+            # at_post_unpuppet, so this transient ndb marker is how the disconnect
+            # hook tells a clean quit from a dropped connection.
             try:
                 if account is not None:
                     for puppet in account.get_all_puppets():
@@ -604,3 +598,37 @@ if _BaseQuit is not None:
                 if sessions:
                     self.session = sessions[-1]
             super().func()
+
+        @staticmethod
+        def _retreat_playing_puppets_to_lobby(account) -> bool:
+            """Send any PLAYING puppet back to the staging area (LOBBY).
+
+            Returns True if at least one puppet was retreated (so the caller
+            stays connected instead of disconnecting). Enforces the
+            anti-combat-log rule: a puppet in combat blocks the retreat and is
+            told to wait.
+            """
+            from world import player_lifecycle as pl
+            from world.constants import PLAYER_STATE_PLAYING
+            from world.combat_timer import player_in_combat
+
+            retreated = False
+            for puppet in account.get_all_puppets():
+                if puppet is None:
+                    continue
+                if pl.get_state(puppet) != PLAYER_STATE_PLAYING:
+                    continue
+                if player_in_combat(puppet):
+                    puppet.msg(
+                        "|rYou can't quit the field while in combat.|n Wait for "
+                        "your combat timer to run out (see |wscore|n)."
+                    )
+                    # Block the whole quit: don't retreat OR disconnect mid-fight.
+                    return True
+                # Leave the field: PLAYING -> LOBBY, stow OOC, show the menu.
+                pl.to_lobby(puppet, reason="quit")
+                if hasattr(puppet, "stow_from_world"):
+                    puppet.stow_from_world()
+                announce_lobby(puppet)
+                retreated = True
+            return retreated
