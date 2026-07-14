@@ -557,15 +557,36 @@ if _BaseQuit is not None:
         world as a link-dead combat target: a PLAYING character returns to the
         lobby (you re-enter on next login), rather than lingering on its tile
         during the link-dead grace window.
+
+        You cannot quit while in combat — this is the anti-combat-log rule:
+        wait for your combat timer to run out (see 'score'), then quit.
         """
 
         def func(self):
+            account = self.account
+
+            # Anti-combat-log: refuse to quit while any puppet is in combat, so a
+            # losing fight can't be escaped by disconnecting. (Dropping the
+            # connection instead already routes to LINKDEAD, keeping the char a
+            # target during grace — this closes the clean-quit escape hatch.)
+            try:
+                from world.combat_timer import player_in_combat
+                if account is not None:
+                    for puppet in account.get_all_puppets():
+                        if puppet is not None and player_in_combat(puppet):
+                            puppet.msg(
+                                "|rYou can't quit while in combat.|n Wait for your "
+                                "combat timer to run out (see |wscore|n)."
+                            )
+                            return
+            except Exception:  # noqa: BLE001 - a check hiccup must not block quit
+                pass
+
             # Mark every puppet as a clean quit BEFORE the stock quit disconnects
             # the session(s). Evennia's unpuppet_object does not forward a reason
             # to at_post_unpuppet, so this transient ndb marker is how the
             # character's disconnect hook tells a clean quit from a dropped
             # connection. Guarded so a marking hiccup never blocks quitting.
-            account = self.account
             try:
                 if account is not None:
                     for puppet in account.get_all_puppets():

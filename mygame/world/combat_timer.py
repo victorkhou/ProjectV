@@ -43,6 +43,28 @@ def _is_player(entity: Any) -> bool:
     return is_player(entity)
 
 
+def player_in_combat(char: Any) -> bool:
+    """Return True if *char* is currently in the combat state.
+
+    "In combat" means ``db.combat_timer_expires`` is strictly in the future
+    (the definition set by :func:`on_combat_action`). The single shared check
+    used by the command layer (movement/enter/leave gates, the quit gate). Falls
+    back to treating any positive expiry as in-combat if the tick count can't be
+    read, so a transient lookup failure errs on the side of blocking. Safe on a
+    ``None`` char or one without a ``db`` — returns False.
+    """
+    db = getattr(char, "db", None)
+    if db is None:
+        return False
+    expiry = getattr(db, "combat_timer_expires", 0) or 0
+    if expiry <= 0:
+        return False
+    try:
+        return expiry > _get_current_tick()
+    except Exception:  # noqa: BLE001 - lookup failure -> err on the side of blocking
+        return True
+
+
 def on_combat_action(event_bus: "EventBus", **kwargs) -> None:
     """Subscriber for COMBAT_ACTION events.
 

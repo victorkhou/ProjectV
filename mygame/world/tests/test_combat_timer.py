@@ -250,5 +250,39 @@ class TestCombatEngineIntegration(unittest.TestCase):
         self.assertEqual(target.db.combat_timer_expires, expected)
 
 
+class TestPlayerInCombat(unittest.TestCase):
+    """player_in_combat: True iff combat_timer_expires is strictly future."""
+
+    def _char(self, expiry):
+        c = _FakePlayer()
+        c.db.combat_timer_expires = expiry
+        return c
+
+    @patch("world.combat_timer._get_current_tick", return_value=100)
+    def test_future_expiry_is_in_combat(self, _t):
+        from world.combat_timer import player_in_combat
+        self.assertTrue(player_in_combat(self._char(150)))
+
+    @patch("world.combat_timer._get_current_tick", return_value=100)
+    def test_past_expiry_is_not_in_combat(self, _t):
+        from world.combat_timer import player_in_combat
+        self.assertFalse(player_in_combat(self._char(50)))
+
+    @patch("world.combat_timer._get_current_tick", return_value=100)
+    def test_zero_expiry_is_not_in_combat(self, _t):
+        from world.combat_timer import player_in_combat
+        self.assertFalse(player_in_combat(self._char(0)))
+
+    def test_none_char_is_not_in_combat(self):
+        from world.combat_timer import player_in_combat
+        self.assertFalse(player_in_combat(None))
+
+    @patch("world.combat_timer._get_current_tick", side_effect=RuntimeError("boom"))
+    def test_lookup_failure_errs_toward_in_combat(self, _t):
+        # A tick-lookup failure with a positive expiry blocks (safer default).
+        from world.combat_timer import player_in_combat
+        self.assertTrue(player_in_combat(self._char(50)))
+
+
 if __name__ == "__main__":
     unittest.main()

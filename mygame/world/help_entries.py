@@ -437,7 +437,7 @@ HELP_ENTRY_DICTS = [
 
             # Quitting & Reconnecting
 
-            If you |wquit|n cleanly, you return to the staging area and — on your next login — deploy |wright back where you left off|n (same tile), NOT a re-rolled spawn. If your connection |rdrops|n without |wquit|n, your character lingers in the world briefly (still a target) before being pulled back to staging — so don't rely on pulling the plug to escape a fight.
+            If you |wquit|n cleanly, you return to the staging area and — on your next login — deploy |wright back where you left off|n (same tile), NOT a re-rolled spawn. You |wcan't quit while in combat|n (see |wscore|n for your timer) — the anti-combat-log rule. If your connection |rdrops|n without |wquit|n, your character lingers in the world briefly (still a target) before being pulled back to staging — so don't rely on pulling the plug to escape a fight.
 
             # Dying
 
