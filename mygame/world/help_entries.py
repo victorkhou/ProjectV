@@ -417,19 +417,19 @@ HELP_ENTRY_DICTS = [
         "text": """
             |wDeploying into the Game|n
 
-            Before you enter the field you prepare in a |cstaging area|n: choose a |cclass|n and a |cspawn point|n, then deploy. You are not yet in the world while staging — you can't move, build, or fight until you |wenter|n.
+            Before you enter the field you prepare in a |cstaging area|n: choose a |cclass|n and a |cspawn point|n, then deploy. It's a short numbered wizard — just |wtype the number|n of your choice at each step. You are not yet in the world while staging — you can't move, build, or fight until you |wenter|n.
 
-            # Choose a Class
+            # Step 1 — Choose a Class
 
-            |wclass|n lists the available classes; |wclass <name>|n picks one (a name, or an unambiguous prefix like |wvan|n for Vanguard). Your class is a chosen identity shown on your |wscore|n and in |wwho|n.
+            A numbered list of classes is shown; type its |wnumber|n (e.g. |w1|n) to pick one. Your class is a chosen identity shown on your |wscore|n and in |wwho|n. (You can also type |wclass <name>|n — a name or unambiguous prefix like |wvan|n for Vanguard.)
 
-            # Choose a Spawn Point
+            # Step 2 — Choose a Spawn Point
 
-            |wspawn|n lists your options; |wspawn <where>|n picks one:
-            |wspawn hq|n — deploy at your |cHeadquarters|n.
-            |wspawn death|n — deploy at your |clast place of death|n.
-            |wspawn random|n — deploy at a |crandom|n location.
-            If your choice isn't available (no HQ yet, or you've never died), you deploy at your planet's default spawn instead.
+            Next, a numbered list of spawn points appears; type its |wnumber|n to pick:
+            |cHeadquarters|n — deploy at your HQ.
+            |cPlace of death|n — deploy where you last died.
+            |cRandom location|n — deploy at a random tile.
+            If your choice isn't available (no HQ yet, or you've never died), you deploy at your planet's default spawn instead. (|wspawn <where>|n also works.)
 
             # Enter the Game
 

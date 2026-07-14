@@ -43,6 +43,7 @@ from world.definitions import ClassDef  # noqa: E402
 from commands.lifecycle_commands import (  # noqa: E402
     CmdClass,
     CmdDeploy,
+    CmdSelect,
     CmdSpawn,
     require_in_game,
 )
@@ -100,10 +101,11 @@ _CLASSES = [
 ]
 
 
-def _run(cmd_cls, caller, args=""):
+def _run(cmd_cls, caller, args="", cmdstring=None):
     cmd = cmd_cls()
     cmd.caller = caller
     cmd.args = args
+    cmd.cmdstring = cmdstring if cmdstring is not None else getattr(cmd_cls, "key", "")
     cmd.func()
     return caller
 
@@ -138,11 +140,25 @@ class TestRequireInGame(unittest.TestCase):
 # -------------------------------------------------------------- #
 
 class TestCmdClass(unittest.TestCase):
-    def test_lists_choices_when_no_arg(self):
+    def test_lists_numbered_choices_when_no_arg(self):
         c = _Caller(state=PLAYER_STATE_SPAWNING, classes=_CLASSES)
         _run(CmdClass, c, "")
-        self.assertIn("Vanguard", c.last())
-        self.assertIn("Engineer", c.last())
+        msg = c.last()
+        self.assertIn("Vanguard", msg)
+        self.assertIn("Engineer", msg)
+        self.assertIn("1", msg)  # numbered
+        self.assertIn("2", msg)
+
+    def test_number_selects_class(self):
+        c = _Caller(state=PLAYER_STATE_SPAWNING, classes=_CLASSES)
+        _run(CmdClass, c, "1")  # classes sorted by key: engineer, vanguard
+        self.assertEqual(c.db.player_class, "engineer")
+
+    def test_out_of_range_number_reprompts(self):
+        c = _Caller(state=PLAYER_STATE_SPAWNING, classes=_CLASSES)
+        _run(CmdClass, c, "5")
+        self.assertIsNone(c.db.player_class)
+        self.assertTrue(any("between" in m.lower() for m in c._messages))
 
     def test_sets_class_by_name(self):
         c = _Caller(state=PLAYER_STATE_SPAWNING, classes=_CLASSES)
@@ -171,11 +187,14 @@ class TestCmdClass(unittest.TestCase):
 # -------------------------------------------------------------- #
 
 class TestCmdSpawn(unittest.TestCase):
-    def test_lists_options_when_no_arg(self):
+    def test_lists_numbered_options_when_no_arg(self):
         c = _Caller(state=PLAYER_STATE_SPAWNING)
         _run(CmdSpawn, c, "")
-        self.assertIn("hq", c.last().lower())
-        self.assertIn("random", c.last().lower())
+        msg = c.last()
+        # Numbered menu with human labels (not raw keys).
+        self.assertIn("1", msg)
+        self.assertIn("Headquarters", msg)
+        self.assertIn("Random location", msg)
 
     def test_sets_choice(self):
         c = _Caller(state=PLAYER_STATE_SPAWNING)
@@ -186,6 +205,17 @@ class TestCmdSpawn(unittest.TestCase):
         c = _Caller(state=PLAYER_STATE_SPAWNING)
         _run(CmdSpawn, c, "ran")
         self.assertEqual(c.db.pending_spawn_choice, "random")
+
+    def test_number_selects_spawn_option(self):
+        c = _Caller(state=PLAYER_STATE_SPAWNING)
+        _run(CmdSpawn, c, "1")  # first option = hq
+        self.assertEqual(c.db.pending_spawn_choice, "hq")
+
+    def test_out_of_range_number_reprompts(self):
+        c = _Caller(state=PLAYER_STATE_SPAWNING)
+        _run(CmdSpawn, c, "9")
+        self.assertIsNone(c.db.pending_spawn_choice)
+        self.assertTrue(any("between" in m.lower() for m in c._messages))
 
     def test_unknown_choice_reports(self):
         c = _Caller(state=PLAYER_STATE_SPAWNING)
@@ -211,6 +241,40 @@ class TestAdvanceToLobby(unittest.TestCase):
         self.assertEqual(c.db.player_state, PLAYER_STATE_SPAWNING)
         _run(CmdClass, c, "Engineer")
         self.assertEqual(c.db.player_state, PLAYER_STATE_LOBBY)
+
+
+# -------------------------------------------------------------- #
+#  Bare-number selection (CmdSelect) — the numbered wizard
+# -------------------------------------------------------------- #
+
+class TestCmdSelect(unittest.TestCase):
+    def test_bare_number_picks_class_then_spawn_in_order(self):
+        # A player types '1' then '1' — first pick is a class, second a spawn.
+        c = _Caller(state=PLAYER_STATE_SPAWNING, classes=_CLASSES)
+        _run(CmdSelect, c, args="", cmdstring="1")  # bare '1' -> class[0]
+        self.assertEqual(c.db.player_class, "engineer")
+        self.assertEqual(c.db.player_state, PLAYER_STATE_SPAWNING)  # spawn still needed
+        _run(CmdSelect, c, args="", cmdstring="1")  # bare '1' -> spawn[0] = hq
+        self.assertEqual(c.db.pending_spawn_choice, "hq")
+        self.assertEqual(c.db.player_state, PLAYER_STATE_LOBBY)
+
+    def test_select_with_arg_form(self):
+        c = _Caller(state=PLAYER_STATE_SPAWNING, classes=_CLASSES)
+        _run(CmdSelect, c, args="2", cmdstring="select")  # class[1] = vanguard
+        self.assertEqual(c.db.player_class, "vanguard")
+
+    def test_select_noop_outside_spawning(self):
+        c = _Caller(state=PLAYER_STATE_PLAYING, classes=_CLASSES)
+        _run(CmdSelect, c, args="", cmdstring="1")
+        self.assertIsNone(c.db.player_class)
+        self.assertIn("nothing to select", c.last().lower())
+
+    def test_select_non_number_reprompts_current_step(self):
+        c = _Caller(state=PLAYER_STATE_SPAWNING, classes=_CLASSES)
+        _run(CmdSelect, c, args="", cmdstring="select")  # no number given
+        # Reprompts the class menu (still on step 1).
+        self.assertIn("class", c.last().lower())
+        self.assertIsNone(c.db.player_class)
 
 
 # -------------------------------------------------------------- #

@@ -338,8 +338,13 @@ class LiveBootSmokeTest(EvenniaTest):
                 joined = "\n".join(str(m) for m in captured if m)
                 self.assertIn("eliminated", joined.lower(),
                               "a slain player must be told they died")
-                self.assertIn("class", joined.lower(),
-                              "the death prompt must guide the player to redeploy")
+                # Death re-presents the numbered spawning wizard. The player
+                # kept their class, so it resumes at the spawn-point step —
+                # assert on the step-agnostic wizard guidance, not "class".
+                self.assertTrue(
+                    "choose" in joined.lower() or "step" in joined.lower(),
+                    "the death prompt must re-present the spawning menu",
+                )
                 self.assertEqual(pl.get_state(player), PLAYER_STATE_SPAWNING)
                 self.assertEqual((player.db.death_x, player.db.death_y), (dx, dy))
                 self.assertIsNone(player.location,

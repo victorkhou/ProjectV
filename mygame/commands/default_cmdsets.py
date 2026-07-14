@@ -38,6 +38,7 @@ from commands.lifecycle_commands import (
     CmdClass,
     CmdSpawn,
     CmdDeploy,
+    CmdSelect,
 )
 from commands.admin_commands import (
     CmdReboot, CmdPurgeRooms, CmdTeleport, CmdClearFog, CmdMigrate,
@@ -180,9 +181,13 @@ class CharacterCmdSet(default_cmds.CharacterCmdSet):
         # Player lifecycle (spawning/lobby) commands. Harmless when the lobby
         # flow is disabled: 'class'/'spawn'/'deploy' just report you can only
         # use them while preparing to deploy (state != SPAWNING/LOBBY).
+        # CmdSelect binds the bare digit keys (1-9) so the numbered spawning
+        # menu can be answered by just typing a number; it's a no-op outside
+        # SPAWNING, so it never shadows normal input in-game.
         self.add(CmdClass())
         self.add(CmdSpawn())
         self.add(CmdDeploy())
+        self.add(CmdSelect())
 
 
 class AccountCmdSet(default_cmds.AccountCmdSet):

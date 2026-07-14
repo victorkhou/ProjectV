@@ -82,18 +82,127 @@ def _class_choices(caller):
 
 
 # ------------------------------------------------------------------ #
-#  State 3.2 — class selection
+#  Spawning menu — numbered, presented one step at a time
+# ------------------------------------------------------------------ #
+
+def _spawn_options():
+    """Return the ordered ``[(key, label)]`` spawn options for the menu."""
+    from world.spawn_resolver import SPAWN_OPTIONS, SPAWN_OPTION_LABELS
+    return [(opt, SPAWN_OPTION_LABELS[opt]) for opt in SPAWN_OPTIONS]
+
+
+def _present_class_menu(caller, prefix=""):
+    """Show the numbered class menu (spawning step 1).
+
+    With no class data defined, the numbered flow can't dead-end: assign a
+    default label and fall through to the spawn step.
+    """
+    choices = _class_choices(caller)
+    if not choices:
+        if caller.db.player_class is None:
+            caller.db.player_class = "Recruit"
+        _present_spawn_menu(caller, prefix=prefix)
+        return
+    lines = [prefix] if prefix else []
+    lines.append("|wStep 1/2 — choose your class|n (type the number):")
+    for i, c in enumerate(choices, 1):
+        desc = f" — {c.description}" if c.description else ""
+        lines.append(f"  |w{i}|n. |c{c.name}|n{desc}")
+    caller.msg("\n".join(lines))
+
+
+def _present_spawn_menu(caller, prefix=""):
+    """Show the numbered spawn-point menu (spawning step 2)."""
+    lines = [prefix] if prefix else []
+    lines.append("|wStep 2/2 — choose your spawn point|n (type the number):")
+    for i, (_key, label) in enumerate(_spawn_options(), 1):
+        lines.append(f"  |w{i}|n. |c{label}|n")
+    caller.msg("\n".join(lines))
+
+
+def present_spawning_step(caller, *, prefix=""):
+    """Present the current spawning step's numbered menu (or enter the lobby).
+
+    The single driver for the "one step after another" flow: shows the class
+    menu until a class is chosen, then the spawn menu until a spawn point is
+    chosen, then (both chosen) advances to the lobby. Shared by the login
+    router, the death path, and the selection commands. *prefix* is an optional
+    lead line (e.g. a death notice) shown above the menu.
+    """
+    if caller.db.player_class is None:
+        _present_class_menu(caller, prefix=prefix)
+    elif not caller.db.pending_spawn_choice:
+        _present_spawn_menu(caller, prefix=prefix)
+    elif pl.finish_spawning(caller):
+        _announce_lobby(caller)
+
+
+def _advance_spawning(caller):
+    """Apply-then-advance: after a pick, present the next step or the lobby."""
+    if caller.db.player_class is None:
+        _present_class_menu(caller)
+    elif not caller.db.pending_spawn_choice:
+        _present_spawn_menu(caller)
+    elif pl.finish_spawning(caller):
+        _announce_lobby(caller)
+
+
+def _apply_class(caller, cdef):
+    """Persist the chosen class, confirm it, and advance to the next step."""
+    caller.db.player_class = cdef.key
+    caller.msg(f"Class set to |c{cdef.name}|n. {cdef.description}".rstrip())
+    _advance_spawning(caller)
+
+
+def _apply_spawn(caller, key, label):
+    """Persist the chosen spawn point, confirm it, and advance."""
+    # Persist the choice so it survives a disconnect mid-spawn; the actual
+    # relocation happens on 'enter' (resolved fresh then, so a destroyed HQ or
+    # new death is reflected).
+    caller.db.pending_spawn_choice = key
+    caller.msg(f"Spawn point set to |c{label}|n.")
+    _advance_spawning(caller)
+
+
+def _select_class_by_number(caller, n):
+    """Pick the nth class from the numbered menu (1-based)."""
+    choices = _class_choices(caller)
+    if not choices:
+        caller.msg("No classes are defined. Type |wclass <name>|n to set one.")
+        return
+    if n < 1 or n > len(choices):
+        caller.msg(f"Choose a number between |w1|n and |w{len(choices)}|n.")
+        _present_class_menu(caller)
+        return
+    _apply_class(caller, choices[n - 1])
+
+
+def _select_spawn_by_number(caller, n):
+    """Pick the nth spawn option from the numbered menu (1-based)."""
+    options = _spawn_options()
+    if n < 1 or n > len(options):
+        caller.msg(f"Choose a number between |w1|n and |w{len(options)}|n.")
+        _present_spawn_menu(caller)
+        return
+    key, label = options[n - 1]
+    _apply_spawn(caller, key, label)
+
+
+# ------------------------------------------------------------------ #
+#  State 3.2 — class selection (by number, name, or prefix)
 # ------------------------------------------------------------------ #
 
 class CmdClass(BaseCommand):
     """Choose your class while preparing to deploy (spawning).
 
     Usage:
-      class            — list the available classes
-      class <name>     — pick a class (name, key, or unambiguous prefix)
+      class            — show the numbered class menu
+      class <n>        — pick the numbered class
+      class <name>     — pick by name, key, or unambiguous prefix
 
-    Your class is a chosen identity shown on your score and in 'who'. Pick a
-    class and a spawn point, then type 'enter' to deploy. See 'help spawning'.
+    Your class is a chosen identity shown on your score and in 'who'. While
+    spawning you can also just type the number of your choice. See
+    'help spawning'.
     """
 
     key = "class"
@@ -110,56 +219,30 @@ class CmdClass(BaseCommand):
         choices = _class_choices(caller)
         arg = self.args.strip()
         if not arg:
-            self._show_choices(caller, choices)
+            _present_class_menu(caller)
             return
 
-        # Resolve the choice (key / name / prefix) via the registry resolver.
+        # A bare number selects from the shown menu.
+        if arg.isdigit():
+            _select_class_by_number(caller, int(arg))
+            return
+
+        # Otherwise resolve by key / name / prefix via the registry resolver.
         registry = _get_system(caller, "registry")
         cdef = None
         if registry and hasattr(registry, "resolve_class"):
             cdef = registry.resolve_class(arg)
         if cdef is None:
-            # No class data at all → allow a single default label so the flow
-            # never dead-ends; otherwise report the miss.
+            # No class data at all → allow a free-text label so the flow never
+            # dead-ends; otherwise report the miss.
             if not choices:
                 caller.db.player_class = arg.title()
-                caller.msg(f"Class set to |w{arg.title()}|n.")
-                self._maybe_advance(caller)
+                caller.msg(f"Class set to |c{arg.title()}|n.")
+                _advance_spawning(caller)
                 return
             caller.msg(f"Unknown class '{arg}'. Type |wclass|n to list them.")
             return
-
-        caller.db.player_class = cdef.key
-        caller.msg(f"Class set to |w{cdef.name}|n. {cdef.description}".rstrip())
-        self._maybe_advance(caller)
-
-    @staticmethod
-    def _show_choices(caller, choices):
-        if not choices:
-            caller.msg(
-                "No classes are defined. Type |wclass <name>|n to set any "
-                "label, or just |wspawn|n and |wenter|n."
-            )
-            return
-        lines = ["|wChoose a class|n (type 'class <name>'):"]
-        for c in choices:
-            desc = f" — {c.description}" if c.description else ""
-            lines.append(f"  |w{c.name}|n{desc}")
-        current = caller.db.player_class
-        if current:
-            lines.append(f"\nCurrent: |w{current}|n")
-        caller.msg("\n".join(lines))
-
-    @staticmethod
-    def _maybe_advance(caller):
-        """If class + spawn are both chosen, advance SPAWNING → LOBBY."""
-        if caller.db.player_class is None:
-            return
-        if not caller.db.pending_spawn_choice:
-            caller.msg("Now choose a |wspawn|n point (type |wspawn|n).")
-            return
-        if pl.finish_spawning(caller):
-            _announce_lobby(caller)
+        _apply_class(caller, cdef)
 
 
 # ------------------------------------------------------------------ #
@@ -170,13 +253,14 @@ class CmdSpawn(BaseCommand):
     """Choose where you will deploy while preparing (spawning).
 
     Usage:
-      spawn                 — list spawn options
-      spawn hq              — deploy at your headquarters
-      spawn death           — deploy at your last place of death
-      spawn random          — deploy at a random location
+      spawn            — show the numbered spawn-point menu
+      spawn <n>        — pick the numbered spawn point
+      spawn hq         — deploy at your headquarters
+      spawn death      — deploy at your last place of death
+      spawn random     — deploy at a random location
 
-    Pick a class and a spawn point, then 'enter' to deploy. If your chosen
-    point is unavailable (no HQ, never died), you deploy at the planet's
+    While spawning you can also just type the number of your choice. If your
+    chosen point is unavailable (no HQ, never died), you deploy at the planet's
     default spawn instead. See 'help spawning'.
     """
 
@@ -190,30 +274,69 @@ class CmdSpawn(BaseCommand):
             caller.msg("You can only choose a spawn point while preparing to deploy.")
             return
 
-        from world.spawn_resolver import SPAWN_OPTIONS, SPAWN_OPTION_LABELS
-
         arg = self.args.strip().lower()
         if not arg:
-            lines = ["|wChoose a spawn point|n (type 'spawn <option>'):"]
-            for opt in SPAWN_OPTIONS:
-                lines.append(f"  |w{opt}|n — {SPAWN_OPTION_LABELS[opt]}")
-            caller.msg("\n".join(lines))
+            _present_spawn_menu(caller)
             return
 
-        # Accept a prefix of an option (hq/death/random).
-        match = [o for o in SPAWN_OPTIONS if o.startswith(arg)]
+        # A bare number selects from the shown menu.
+        if arg.isdigit():
+            _select_spawn_by_number(caller, int(arg))
+            return
+
+        # Otherwise accept a prefix of an option (hq/death/random).
+        options = _spawn_options()
+        match = [(k, lbl) for (k, lbl) in options if k.startswith(arg)]
         if len(match) != 1:
             caller.msg(f"Unknown spawn option '{arg}'. Type |wspawn|n to list them.")
             return
-        choice = match[0]
-        # Persist the choice so it survives a disconnect mid-spawn; the actual
-        # relocation happens on 'enter' (resolved fresh then, so a destroyed HQ
-        # or new death is reflected).
-        caller.db.pending_spawn_choice = choice
-        caller.msg(
-            f"Spawn point set to |w{SPAWN_OPTION_LABELS[choice]}|n."
-        )
-        CmdClass._maybe_advance(caller)
+        key, label = match[0]
+        _apply_spawn(caller, key, label)
+
+
+# ------------------------------------------------------------------ #
+#  Bare-number selection — the "type a number" front end
+# ------------------------------------------------------------------ #
+
+class CmdSelect(BaseCommand):
+    """Select a numbered option from the current spawning menu.
+
+    Usage:
+      <number>         (e.g. just type '1')
+      select <number>
+
+    While preparing to deploy, the class and spawn-point menus are numbered;
+    type the number of your choice to pick it. Bound to the digit keys, so a
+    bare '1' works. Outside spawning this does nothing.
+    """
+
+    key = "select"
+    aliases = [str(i) for i in range(1, 10)]  # bare 1-9 select from the menu
+    locks = "cmd:all()"
+    help_category = "Lifecycle"
+
+    def func(self):
+        caller = self.caller
+        if pl.get_state(caller) != PLAYER_STATE_SPAWNING:
+            caller.msg("There's nothing to select right now.")
+            return
+
+        # The number is either the command word itself (bare '1') or its arg
+        # ('select 1'). cmdstring is the alias the player typed.
+        raw = (self.args or "").strip() or (self.cmdstring or "").strip()
+        if not raw.isdigit():
+            present_spawning_step(caller)
+            return
+        n = int(raw)
+
+        # Route to whichever step the player is on.
+        if caller.db.player_class is None:
+            _select_class_by_number(caller, n)
+        elif not caller.db.pending_spawn_choice:
+            _select_spawn_by_number(caller, n)
+        else:
+            # Both already chosen (shouldn't linger in SPAWNING) — advance.
+            _advance_spawning(caller)
 
 
 # ------------------------------------------------------------------ #
@@ -340,26 +463,15 @@ def _announce_lobby(caller) -> None:
     )
 
 
-# The class/spawn/enter guidance shown whenever a player lands in SPAWNING —
-# on login routing AND after death. A single string so the two entry points
-# can't drift; callers prepend their own context line (e.g. the death notice).
-SPAWNING_PROMPT = (
-    "|wPrepare to deploy.|n Choose a |wclass|n (type |wclass|n to list) and a "
-    "|wspawn|n point (type |wspawn|n). Then |wenter|n the game. "
-    "See |whelp spawning|n."
-)
-
-
 def announce_spawning(caller, *, prefix: str = "") -> None:
-    """Show the SPAWNING class/spawn/enter prompt, with an optional lead line.
+    """Present the current SPAWNING step as a numbered menu.
 
     Shared by the login router (fresh/resumed spawning player) and the death
-    path (slain player routed back to SPAWNING), so a player always learns how
-    to redeploy. *prefix* is an optional context line shown first (e.g. the
-    death notice); it is separated from the prompt by a blank line.
+    path (slain player routed back to SPAWNING), so a player always sees the
+    numbered class → spawn → enter flow one step at a time. *prefix* is an
+    optional context line (e.g. a death notice) shown above the menu.
     """
-    lead = f"\n{prefix}\n" if prefix else "\n"
-    caller.msg(f"{lead}{SPAWNING_PROMPT}")
+    present_spawning_step(caller, prefix=prefix)
 
 
 # ------------------------------------------------------------------ #
