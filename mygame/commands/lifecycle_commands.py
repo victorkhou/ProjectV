@@ -340,6 +340,28 @@ def _announce_lobby(caller) -> None:
     )
 
 
+# The class/spawn/enter guidance shown whenever a player lands in SPAWNING —
+# on login routing AND after death. A single string so the two entry points
+# can't drift; callers prepend their own context line (e.g. the death notice).
+SPAWNING_PROMPT = (
+    "|wPrepare to deploy.|n Choose a |wclass|n (type |wclass|n to list) and a "
+    "|wspawn|n point (type |wspawn|n). Then |wenter|n the game. "
+    "See |whelp spawning|n."
+)
+
+
+def announce_spawning(caller, *, prefix: str = "") -> None:
+    """Show the SPAWNING class/spawn/enter prompt, with an optional lead line.
+
+    Shared by the login router (fresh/resumed spawning player) and the death
+    path (slain player routed back to SPAWNING), so a player always learns how
+    to redeploy. *prefix* is an optional context line shown first (e.g. the
+    death notice); it is separated from the prompt by a blank line.
+    """
+    lead = f"\n{prefix}\n" if prefix else "\n"
+    caller.msg(f"{lead}{SPAWNING_PROMPT}")
+
+
 # ------------------------------------------------------------------ #
 #  State 4.2 — quit (clean disconnect)
 # ------------------------------------------------------------------ #

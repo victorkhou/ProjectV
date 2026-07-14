@@ -100,6 +100,18 @@ def _route_player_death(victim: Any) -> bool:
         # drain). ``deploy`` relocates them back onto a tile.
         if hasattr(victim, "stow_from_world"):
             victim.stow_from_world()
+        # Tell the player they died and how to redeploy. Death routes them back
+        # to SPAWNING silently otherwise — the login path prompts, but death did
+        # not, so a slain player was left with no cue to re-pick and re-enter.
+        if hasattr(victim, "msg"):
+            try:
+                from commands.lifecycle_commands import announce_spawning
+                announce_spawning(
+                    victim,
+                    prefix="|rYou have been eliminated.|n",
+                )
+            except Exception:  # noqa: BLE001 - a prompt hiccup must not break combat
+                pass
         return True
     except Exception:  # noqa: BLE001 - death routing must never break combat
         logger.exception("Player death routing failed")

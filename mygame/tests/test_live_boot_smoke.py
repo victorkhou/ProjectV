@@ -324,7 +324,22 @@ class LiveBootSmokeTest(EvenniaTest):
                 # they can't be spawn-camped at full HP on the death tile.
                 dx, dy = player.db.coord_x, player.db.coord_y
                 from server.conf.game_init import _route_player_death
-                self.assertTrue(_route_player_death(player))
+                # Capture the player-facing death prompt: death routes to
+                # SPAWNING, and (like login) must tell the player they died and
+                # how to redeploy — otherwise they're silently dumped OOC.
+                captured = []
+                orig_msg = player.msg
+                player.msg = lambda text=None, **kw: captured.append(
+                    text[0] if isinstance(text, tuple) else text)
+                try:
+                    self.assertTrue(_route_player_death(player))
+                finally:
+                    player.msg = orig_msg
+                joined = "\n".join(str(m) for m in captured if m)
+                self.assertIn("eliminated", joined.lower(),
+                              "a slain player must be told they died")
+                self.assertIn("class", joined.lower(),
+                              "the death prompt must guide the player to redeploy")
                 self.assertEqual(pl.get_state(player), PLAYER_STATE_SPAWNING)
                 self.assertEqual((player.db.death_x, player.db.death_y), (dx, dy))
                 self.assertIsNone(player.location,

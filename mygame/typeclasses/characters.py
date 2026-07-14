@@ -414,11 +414,8 @@ class CombatCharacter(CombatEntity, DefaultCharacter):
                 # (_ensure_overworld_position, which ran just before this, may
                 # have placed it on the overworld; undo that for spawning.)
                 self.stow_from_world()
-                self.msg(
-                    "\n|wPrepare to deploy.|n Choose a |wclass|n (type "
-                    "|wclass|n to list) and a |wspawn|n point (type |wspawn|n). "
-                    "Then |wenter|n the game. See |whelp spawning|n."
-                )
+                from commands.lifecycle_commands import announce_spawning
+                announce_spawning(self)
             elif state == PLAYER_STATE_LOBBY:
                 self.msg(
                     "\n|wStaging area.|n Type |wenter|n to deploy, or |wquit|n "
