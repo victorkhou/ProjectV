@@ -207,23 +207,12 @@ class GameTickScript(DefaultScript):
                 if not pl.is_linkdead_expired(char, now):
                     continue
                 # Grace elapsed while still alive → route to lobby + stow away.
+                # stow_from_world() de-indexes from the coordinate grid (setting
+                # location=None alone does not fire at_object_leave) and is
+                # itself best-effort, so no inner guard is needed here.
                 pl.expire_linkdead(char)
-                try:
-                    room = getattr(char, "location", None)
-                    if room is not None:
-                        # De-index from the coordinate grid FIRST (setting
-                        # location=None does not fire at_object_leave, so the
-                        # index would otherwise keep the char as a phantom combat
-                        # target), then stow the character away.
-                        cx = getattr(char.db, "coord_x", None)
-                        cy = getattr(char.db, "coord_y", None)
-                        idx = getattr(getattr(room, "ndb", None), "_coord_index", None)
-                        if idx is not None and cx is not None and cy is not None:
-                            idx.remove(char, int(cx), int(cy))
-                        char.db.prelogout_location = room
-                        char.location = None
-                except Exception:  # noqa: BLE001
-                    pass
+                if hasattr(char, "stow_from_world"):
+                    char.stow_from_world()
         except Exception:  # noqa: BLE001 - tick step must never raise
             pass
 

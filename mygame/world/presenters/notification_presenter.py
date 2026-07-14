@@ -256,13 +256,6 @@ def _fmt_throw_failed(d: dict) -> str:
     return f"|y[Throw] {messages.get(reason, f'Cannot throw {item}.')}|n"
 
 
-def _fmt_bombed(d: dict) -> str:
-    return (
-        f"|y[Throw] Hit {d.get('count', 0)} target(s) "
-        f"at ({d.get('x', '?')},{d.get('y', '?')}).|n"
-    )
-
-
 # ------------------------------------------------------------------ #
 #  Bombs — grenades (thrown, directional) + mines (armed in place). A set fuse
 #  ticks down before an AoE blast. Everyone on a bomb's tile sees it arm/tick.
@@ -616,7 +609,6 @@ class NotificationPresenter:
         "healed": _fmt_healed,
         "buff_applied": _fmt_buff_applied,
         "throw_failed": _fmt_throw_failed,
-        "bombed": _fmt_bombed,
         # Bomb feature kinds (grenades + mines): fuse config, deploy, tick, blast.
         "not_a_bomb": _fmt_not_a_bomb,
         "not_a_mine": _fmt_not_a_mine,

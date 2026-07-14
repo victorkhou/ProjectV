@@ -559,18 +559,7 @@ class ResourceDrop(GameEntity):
         from evennia.utils import delay
         delay(0, self.delete)
 
-    def at_pre_get(self, getter, **kwargs):
-        """Block pickup if getter is not at the same coordinates."""
-        if self.db.coord_x is None:
-            return True  # not placed on the map, allow
-        gx = getattr(getattr(getter, "db", None), "coord_x", None)
-        gy = getattr(getattr(getter, "db", None), "coord_y", None)
-        if gx is None or gy is None:
-            return False
-        if int(gx) != int(self.db.coord_x) or int(gy) != int(self.db.coord_y):
-            getter.msg("That's not here.")
-            return False
-        return True
+    # at_pre_get (co-location gate) is inherited unchanged from GameEntity.
 
 
 def spawn_resource_drop(location, resource_type, amount, x=None, y=None):

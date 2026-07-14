@@ -279,11 +279,6 @@ def initialize_game() -> dict:
     # consumable buff through the real timed-effect machinery (correct entry
     # shape + tick-based expiry) rather than reaching into game_systems.
     equipment_system.set_powerup_system(powerup_system)
-    # Inject the area-damage applier so ``EquipmentSystem.throw`` routes each
-    # AoE victim through the CombatEngine damage pipeline (real armor reduction
-    # + min-0 clamp) rather than reaching into game_systems. Zero-arg callable
-    # returning the live CombatEngine.
-    equipment_system.set_area_damage_applier(lambda: combat_engine)
 
     # Inject the resource-drop spawner so ``EquipmentSystem.add_resource_capped``
     # can spill the over-capacity remainder of a *holder-pool* inflow (a

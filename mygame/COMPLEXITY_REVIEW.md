@@ -8,13 +8,15 @@ must edit to add one thing is the truest measure of a subsystem's complexity.**
 Each section below doubles as a mini-README ("how to add X") whose *touchpoint
 count* is the complexity meter. All `file:line` references are current.
 
-> **Status:** This document reflects the codebase **after** the consolidation
-> pass ([Part 3](#part-3--consolidations-applied)) **and** the subsequent
-> Dependency‑Inversion / Clean‑Architecture pass ([Part 4](#part-4--dependency-inversion--clean-architecture-pass)).
-> Every 🔴/🟡 finding from the original review has been addressed and the
-> framework‑coupling findings (4f and the definition‑access reach) are now
-> resolved behind ports; the full suite (**1499 tests**) passes. The
-> "before → after" deltas are called out inline.
+> **Status:** Parts 1–5 reflect the codebase through **2026-07-10**. Since then
+> several feature stacks landed — the **bomb system** (grenades/mines,
+> breach-cover), the **player-lifecycle state machine** (spawning/lobby/linkdead,
+> flagged off), **player classes**, and **admin index/prefix spawning** — plus a
+> follow-up **consolidation pass** ([Part 6](#part-6--post-lifecycle-consolidation-pass-2026-07-14)).
+> Parts 1–5 are preserved as-written for their "before → after" history; **read
+> Part 6 for what changed after them** (including corrections to a few now-stale
+> Part 5 claims). Test counts quoted inline in Parts 1–5 are point-in-time and
+> no longer current — the suite is validated by CI, not by a number in this doc.
 
 ---
 
@@ -589,3 +591,75 @@ warns about — and **round 2** closed the gaps:
 structurally couldn't catch bug C. Round-2 tests drive the **real**
 `WorldChunkManager`, and add coverage for A (base-destroy XP routing) and B (NPC
 passability past 256). Full suite after round 2: **2084 passing.**
+
+---
+
+# Part 6 — Post-lifecycle consolidation pass (2026-07-14)
+
+Four feature stacks landed after Part 5 and were **not** covered by Parts 1–5:
+the **bomb system** (grenades/mines, breach-cover blasts), the **player-lifecycle
+state machine** (spawning → lobby → playing → linkdead, behind
+`LOBBY_FLOW_ENABLED`, default off), **player classes** (selection + label), and
+**admin index/prefix spawning** (`@item`/`@building`/`@outpost` by `#N` or
+prefix). A Principal-level consolidation review (5 parallel reviewers, one
+adversarial verifier per finding — 34 raised, 0 rejected) then ran over the
+whole tree. This part records the review's confirmed findings and the **Tier-1
+fixes applied**.
+
+## New-subsystem touchpoints (scorecard additions)
+
+| To add one… | Files | Sites | Grade | Note |
+|---|---|---|---|---|
+| **A player class** | 1 | 1 | 🟢 A | data-only: one entry in `data/definitions/classes.yaml`; `ClassDef` + optional-loader already generic. Selection/label only — no mechanics yet. |
+| **A lifecycle state** | 2–3 | 3–4 | 🟡 C | value + label + transition edge in `constants.py`, plus a router/handler branch. Inherent to an FSM; the single-writer `player_lifecycle.transition` keeps writes in one place. |
+| **A bomb type / variant** | 1 | 1 | 🟢 A | data-only: an item entry with `bomb_type` + fuse fields in `items.yaml`; `BombSystem` reads them. |
+| **An admin spawn-by-index list** | 1 | 1–2 | 🟡 C→A− | each `@`-router still hand-rolls the index/prefix + numbered-list pattern (`admin_commands.py`); an `IndexedSpawnMixin` would make it data-only (open — see below). |
+
+## Tier-1 fixes applied in this pass 🟢
+
+1. **Deleted the dead `EquipmentSystem.throw` / `_resolve_throw_targets` /
+   `_apply_aoe_damage` path** (+ its `set_area_damage_applier` injection at the
+   composition root and its tests). It was a second, now-orphaned AoE
+   implementation fully superseded by `BombSystem` (the live `throw` command
+   routes to `bomb_system.throw_grenade`). This also retired the now-unemitted
+   `bombed` notification kind + its `_fmt_bombed` formatter (dead-kind cleanup).
+2. **Collapsed the linkdead-expiry stow block** in `scripts.py` into the
+   existing `CombatCharacter.stow_from_world()` — the de-index-then-null-location
+   logic was duplicated verbatim across `scripts.py` and `characters.py`.
+3. **Deleted `admin_commands._get_registry`** — a byte-for-byte re-implementation
+   of the already-imported `world.utils.get_system`; ~14 call sites now use
+   `_get_system(caller, "registry")`.
+4. **Removed the dead `_maybe_advance` guard** on `caller.ndb.spawn_choice`, an
+   attribute nothing ever set (the gate is `db.pending_spawn_choice`).
+5. **Deleted `ResourceDrop.at_pre_get`** — identical to the inherited
+   `GameEntity.at_pre_get` (the `LiveBomb` always-refuse override stays).
+
+## Corrections to now-stale Part 5 claims
+
+- The **`_nearby_players` extraction is done**: `world.utils.nearby_players` is
+  the single implementation; `CombatEngine`/`GuardCombatSystem` keep only thin
+  static wrappers that delegate to it (a justified seam, not duplication).
+- The **`at_repeat` / `TICK_STEP_ORDER` docstring drift is resolved**, and the
+  count moved again — `TICK_STEP_ORDER` now has **20** entries (added
+  `linkdead_expiry`). The `at_repeat` docstring correctly defers to the constant
+  rather than re-listing a count, so it can't drift again.
+
+## Open (deferred to a later pass, verified real)
+
+Confirmed by the review but intentionally **not** done in this Tier-1 pass (they
+warrant their own verification — larger or higher-risk):
+
+- **`schema_validator.py` field-list drift** — `int_fields`/`float_fields`/
+  `bool_fields` (~64 names) are a hand-maintained parallel copy of the
+  `BalanceConfig` dataclass; derive them from `dataclasses.fields()`.
+- **Two parallel map renderers** (`procedural_map_renderer.py` vs
+  `map_data_provider.py`) still duplicate viewport/bounds/classification; and
+  `_room_display_symbol` is fully dead. (Part 5's "two renderers" finding is
+  still open.)
+- **Combat kill-credit / defender-notification** logic repeats across the three
+  defeat handlers and `_finalize_miss`/`_notify_target` → extract
+  `_kill_credit` / `_notify_defender`.
+- **Admin `IndexedSpawnMixin`**, `CmdDeposit`/`CmdWithdraw` shared guard, the
+  instant-attack `_fire_instant` helper, and the `CmdCloseExit`/`CmdOpenExit`
+  bypass of `_resolve_exit_command` (which silently drops the base-deactivation
+  gate — a latent bug the consolidation would fix).

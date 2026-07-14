@@ -43,7 +43,7 @@ class CmdReboot(BaseCommand):
             getattr(caller, "key", "?"),
         )
 
-        registry = _get_registry(caller)
+        registry = _get_system(caller, "registry")
         if registry is None:
             caller.msg("Data Registry unavailable.")
             return
@@ -93,17 +93,6 @@ def _check_perm(caller, perm_name):
         return perm_name in caller._permissions
     return False
 
-
-def _get_registry(caller):
-    """Look up the DataRegistry."""
-    systems = getattr(getattr(caller, "ndb", None), "systems", None)
-    if systems and isinstance(systems, dict):
-        return systems.get("registry")
-    try:
-        from server.conf.game_init import game_systems
-        return game_systems.get("registry")
-    except (ImportError, AttributeError):
-        return None
 
 
 def _parse_index_token(token):
@@ -214,7 +203,7 @@ class CmdAdminBuilding(AdminSubcommandRouter):
         # '@building list'), an abbreviation (EX), a full name (extractor), or an
         # unambiguous prefix — same typo-tolerant resolver the player 'build'
         # command uses, plus the index shortcut.
-        registry = _get_registry(caller)
+        registry = _get_system(caller, "registry")
         if registry:
             bdef = _resolve_by_index(parts[0], self._building_index(registry))
             if bdef is None:
@@ -384,7 +373,7 @@ class CmdAdminBuilding(AdminSubcommandRouter):
             args: unused (accepted for router-signature consistency).
         """
         caller = self.caller
-        registry = _get_registry(caller)
+        registry = _get_system(caller, "registry")
         ordered = self._building_index(registry)
         if not ordered:
             caller.msg("No building definitions loaded.")
@@ -896,7 +885,7 @@ class CmdAdminItem(AdminSubcommandRouter):
         # Resolve the item definition. Accept an index (``#3`` or ``3``, as shown
         # by '@item list'), a key, a full name, or an unambiguous prefix — all
         # typo-tolerant via the shared registry resolver.
-        registry = _get_registry(caller)
+        registry = _get_system(caller, "registry")
         if registry is None:
             caller.msg("Data Registry unavailable.")
             return
@@ -1007,7 +996,7 @@ class CmdAdminItem(AdminSubcommandRouter):
             args: "[filter]" — optional category or slot to restrict the list.
         """
         caller = self.caller
-        registry = _get_registry(caller)
+        registry = _get_system(caller, "registry")
         ordered = self._item_index(registry)
         if not ordered:
             caller.msg("No item definitions loaded.")
@@ -1118,7 +1107,7 @@ class CmdAdminPlayer(AdminSubcommandRouter):
 
         # Look up rank name
         rank_name = f"Rank {rank_num}"
-        registry = _get_registry(caller)
+        registry = _get_system(caller, "registry")
         if registry and hasattr(registry, "ranks"):
             rank_def = next((r for r in registry.ranks if r.level == rank_num), None)
             if rank_def:
@@ -1190,7 +1179,7 @@ class CmdAdminPlayer(AdminSubcommandRouter):
 
         # Look up rank name
         rank_name = f"Rank {rank_id}"
-        registry = _get_registry(caller)
+        registry = _get_system(caller, "registry")
         if registry and hasattr(registry, "ranks"):
             rank_def = next((r for r in registry.ranks if r.level == rank_id), None)
             if rank_def:
@@ -1552,7 +1541,7 @@ class CmdAdminOutpost(AdminSubcommandRouter):
         if not parts:
             caller.msg("Usage: @outpost spawn <tier> [x y]")
             return
-        registry = _get_registry(caller)
+        registry = _get_system(caller, "registry")
         tier = self._resolve_tier(registry, parts[0])
         if tier is None:
             valid = ", ".join(self._tier_index(registry)) or "none loaded"
@@ -1615,7 +1604,7 @@ class CmdAdminOutpost(AdminSubcommandRouter):
         ``@outpost spawn <N>`` (or ``#N``) spawns the tier shown as ``[N]``.
         """
         caller = self.caller
-        registry = _get_registry(caller)
+        registry = _get_system(caller, "registry")
         tiers = self._tier_index(registry)
         if not tiers:
             caller.msg("No base tiers loaded.")

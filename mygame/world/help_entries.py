@@ -408,6 +408,43 @@ HELP_ENTRY_DICTS = [
         """,
     },
     # ----------------------------------------------------------------- #
+    #  Spawning & the staging area (lobby lifecycle)
+    # ----------------------------------------------------------------- #
+    {
+        "key": "spawning",
+        "aliases": ["spawn", "deploy", "lobby", "staging", "class", "classes"],
+        "category": "Game",
+        "text": """
+            |wDeploying into the Game|n
+
+            Before you enter the field you prepare in a |cstaging area|n: choose a |cclass|n and a |cspawn point|n, then deploy. You are not yet in the world while staging — you can't move, build, or fight until you |wenter|n.
+
+            # Choose a Class
+
+            |wclass|n lists the available classes; |wclass <name>|n picks one (a name, or an unambiguous prefix like |wvan|n for Vanguard). Your class is a chosen identity shown on your |wscore|n and in |wwho|n.
+
+            # Choose a Spawn Point
+
+            |wspawn|n lists your options; |wspawn <where>|n picks one:
+            |wspawn hq|n — deploy at your |cHeadquarters|n.
+            |wspawn death|n — deploy at your |clast place of death|n.
+            |wspawn random|n — deploy at a |crandom|n location.
+            If your choice isn't available (no HQ yet, or you've never died), you deploy at your planet's default spawn instead.
+
+            # Enter the Game
+
+            Once a class and spawn point are set, type |wenter|n (or |wdeploy|n) to drop into the world at your chosen point. Type |wquit|n to disconnect instead.
+
+            # Dying & Reconnecting
+
+            When you're defeated you return here to re-pick your spawn and deploy again. If your connection |rdrops|n mid-game without |wquit|n, your character lingers in the world briefly (still a target) before being pulled back to staging — so don't rely on pulling the plug to escape a fight.
+
+            # See Also
+
+            |whelp combat|n · |whelp headquarters|n · |whelp commands|n
+        """,
+    },
+    # ----------------------------------------------------------------- #
     #  Bombs — grenades & mines (fused explosives)
     # ----------------------------------------------------------------- #
     {
@@ -425,7 +462,7 @@ HELP_ENTRY_DICTS = [
 
             # Grenades — throw in a direction
 
-            |wthrow <grenade> <n/s/e/w>|n (alias |wth|n) hurls the grenade in a compass direction. It flies until it hits the |cfirst obstacle|n (a building or a unit) or reaches its |cmax range|n, then |clands|n on that tile and the fuse ticks down before it explodes. You can't pick a grenade up once it's away.
+            |wthrow <grenade> <n/s/e/w>|n (alias |wth|n) hurls the grenade in a compass direction. It flies until it hits the |cfirst obstacle|n or reaches its |cmax range|n, then |clands|n and the fuse ticks down before it explodes. It lands just |cin front of a building|n (the blast then breaches the wall from outside), on a |cunit's tile|n if it hits someone, or at max range on a clear line. You can't pick a grenade up once it's away.
 
             # Mines — arm in place
 
@@ -433,7 +470,7 @@ HELP_ENTRY_DICTS = [
 
             # Ticking & the Blast
 
-            Everyone standing on a bomb's tile sees it |rtick|n each second (and sees a grenade |cland|n or a mine |carm|n). When the fuse reaches zero it explodes: everything within the blast |cradius|n takes flat damage minus armor — |renemies, your own agents and buildings, and you|n if you're in range. A |cclosed building|n and anyone |csheltered|n inside one are safe from the blast (it can't reach inside cover), though they still see the tick. Kills you cause credit you.
+            Everyone standing on a bomb's tile sees it |rtick|n each second (and sees a grenade |cland|n or a mine |carm|n). When the fuse reaches zero it explodes: everything within the blast |cradius|n takes flat damage minus armor — |renemies, your own agents and buildings, and you|n if you're in range. A blast |cbreaches cover|n: unlike a gunshot, it damages buildings whether open or closed and reaches players sheltered inside them, so mind your distance. Kills you cause credit you.
 
             # See Also
 

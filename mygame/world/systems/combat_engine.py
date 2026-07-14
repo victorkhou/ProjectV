@@ -647,8 +647,9 @@ class CombatEngine(BaseSystem):
             include_attacker_bonus=include_attacker_bonus,
         )
         self._apply_damage(target, damage, attacker)
-        # notify_attacker_hit=False: the throw-AoE path fans many victims through
-        # here and reports one 'bombed' summary — no per-victim "You hit" spam.
+        # notify_attacker_hit=False: the bomb-blast AoE path fans many victims
+        # through here and reports one detonation summary of its own — no
+        # per-victim "You hit" spam.
         self._finalize_hit(attacker, target, weapon_item, damage, current_tick,
                            notify_attacker_hit=False)
         return damage
@@ -1209,7 +1210,7 @@ class CombatEngine(BaseSystem):
         elif self._is_player(attacker) and notify_attacker_hit:
             # A bare player landed a hit → confirm it to them (e.g. a 'shoot' or
             # 'attack' that connected). Without this a shooter got no feedback.
-            # Suppressed for the throw-AoE fan-out (one 'bombed' summary instead).
+            # Suppressed for the bomb-blast AoE fan-out (one detonation summary).
             self.notify(attacker, "attack_hit", target_name=target_name,
                         weapon_name=weapon_name, damage=damage)
 

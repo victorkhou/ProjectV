@@ -157,19 +157,6 @@ class FakeLocation:
         return out
 
 
-class FakeCombatEngine:
-    def apply_direct_hit(self, attacker, target, weapon,
-                         include_attacker_bonus=True, current_tick=None):
-        base = weapon.get_stat("damage", 0)
-        reduction = 0.0
-        eq = getattr(target, "equipment", None)
-        if eq is not None:
-            reduction = eq.get_stat_total("damage_reduction")
-        damage = max(0, int(base - reduction))
-        target.db.hp = target.db.hp - damage
-        return damage
-
-
 RANKS = [
     RankDef(name="Recruit", level=1, xp_threshold=0),
     RankDef(name="Sergeant", level=3, xp_threshold=100),
@@ -335,33 +322,6 @@ class TestProperty9RankGate(unittest.TestCase):
             player.equipment.get_supply("medkit"), 0 if expected else 1
         )
 
-    @given(
-        level=st.integers(min_value=1, max_value=60),
-        required=st.sampled_from([r.name for r in RANKS]),
-    )
-    @settings(max_examples=200)
-    def test_throw_gated_by_rank(self, level, required):
-        req_level = next(r.level for r in RANKS if r.name == required)
-        expected = rank_from_level(level) >= req_level
-        items = {
-            "frag_grenade": ItemDef(
-                key="frag_grenade", name="Frag Grenade", slot="",
-                category="throwable",
-                effect={"type": "aoe_damage", "amount": 20, "radius": 1,
-                        "range": 6},
-                required_rank=required,
-            )
-        }
-        system = _make_system(_make_registry(items))
-        system.set_area_damage_applier(lambda: FakeCombatEngine())
-        player = FakePlayer(level=level, coord_x=0, coord_y=0)
-        player.location = FakeLocation([player])
-        player.equipment.add_supply("frag_grenade", 1)
-        self.assertEqual(system.throw(player, "frag_grenade", 1, 0), expected)
-        self.assertEqual(
-            player.equipment.get_supply("frag_grenade"), 0 if expected else 1
-        )
-
 
 # -------------------------------------------------------------- #
 #  Property 10: Heal clamp
@@ -401,52 +361,6 @@ class TestProperty10HealClamp(unittest.TestCase):
         else:
             self.assertTrue(used)
             self.assertEqual(player.db.hp, min(hp_before + amount, hp_max))
-
-
-# -------------------------------------------------------------- #
-#  Property 12: Throw AoE + armor
-# -------------------------------------------------------------- #
-
-class TestProperty12ThrowArmor(unittest.TestCase):
-    """Property 12: Throw AoE + armor.
-
-    Damage applied to each target within radius ==
-    max(0, amount - target damage_reduction).
-    """
-
-    @given(
-        amount=st.integers(min_value=0, max_value=200),
-        reductions=st.lists(
-            st.integers(min_value=0, max_value=250), min_size=1, max_size=6
-        ),
-    )
-    @settings(max_examples=200)
-    def test_damage_respects_armor(self, amount, reductions):
-        items = {
-            "frag_grenade": ItemDef(
-                key="frag_grenade", name="Frag Grenade", slot="",
-                category="throwable",
-                effect={"type": "aoe_damage", "amount": amount, "radius": 3,
-                        "range": 6},
-            )
-        }
-        system = _make_system(_make_registry(items))
-        system.set_area_damage_applier(lambda: FakeCombatEngine())
-
-        player = FakePlayer(level=1, coord_x=0, coord_y=0)
-        # Place all targets within radius (Manhattan <= 3) of (0,0).
-        targets = [
-            FakeTarget(f"t{i}", 0, 1, hp=1000, damage_reduction=r)
-            for i, r in enumerate(reductions)
-        ]
-        player.location = FakeLocation(targets + [player])
-        player.equipment.add_supply("frag_grenade", 1)
-
-        self.assertTrue(system.throw(player, "frag_grenade", 0, 0))
-
-        for tgt, reduction in zip(targets, reductions):
-            expected_damage = max(0, amount - reduction)
-            self.assertEqual(tgt.db.hp, 1000 - expected_damage)
 
 
 # -------------------------------------------------------------- #

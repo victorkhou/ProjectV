@@ -193,9 +193,10 @@ import os
 from mygame.world.adapters.evennia_player_notifier import EvenniaPlayerNotifier
 
 
-# Sample payloads for every notification kind this feature added. The 11 "new"
-# kinds called out by the task, plus the four the presenter also formats
-# (equipped / unequipped / use_failed / throw_failed).
+# Sample payloads for every notification kind this feature added, plus the ones
+# the presenter also formats (equipped / unequipped / use_failed / throw_failed).
+# (The former 'bombed' kind was retired when the coordinate-targeted throw was
+# deleted — the bomb system emits its own detonation kinds instead.)
 _FEATURE_KIND_SAMPLES = {
     "equipped": {"item_name": "Kevlar Vest", "slot": "torso"},
     "unequipped": {"item_name": "Kevlar Vest", "slot": "torso"},
@@ -206,7 +207,6 @@ _FEATURE_KIND_SAMPLES = {
     "buff_applied": {"stat": "damage_bonus", "amount": 5, "duration_ticks": 30},
     "throw_failed": {"item_name": "Frag Grenade", "reason": "out_of_range",
                      "distance": 9, "range": 4},
-    "bombed": {"count": 3, "x": 12, "y": 7},
     "out_of_ammo": {"weapon_name": "Rifle", "ammo_name": "rifle_rounds"},
     "reloaded": {"weapon_name": "Rifle", "loaded": 30, "magazine_size": 30,
                  "remaining": 60, "ammo_name": "rifle_rounds"},
@@ -219,10 +219,11 @@ _FEATURE_KIND_SAMPLES = {
     "withdrew": {"amount": 25, "resource": "Iron", "carried": 25, "limit": 1000},
 }
 
-# The 11 kinds the task explicitly enumerates as "new".
-_ELEVEN_NEW_KINDS = [
+# The equipment-feature kinds (originally 11; 'bombed' retired with the old
+# throw path, leaving 10).
+_NEW_KINDS = [
     "equip_denied", "out_of_ammo", "reloaded", "reload_failed", "healed",
-    "buff_applied", "bombed", "carry_full", "storage_full", "deposited",
+    "buff_applied", "carry_full", "storage_full", "deposited",
     "withdrew",
 ]
 
@@ -374,17 +375,25 @@ class TestPresenterOwnershipStructural:
         )
 
     def test_feature_systems_route_kinds_through_notify(self):
-        """The equipment/combat systems emit their feature kinds via notify()."""
-        systems = _systems_dir()
-        emitted = _emitted_kind_literals(
-            os.path.join(systems, "equipment_system.py")
-        ) | _emitted_kind_literals(os.path.join(systems, "combat_engine.py"))
+        """The equipment/combat/bomb systems emit their feature kinds via notify().
 
-        # Kinds this feature's systems actually emit today (deposit/withdraw/
+        ``throw_failed``/``bombed`` moved to ``bomb_system.py`` when the
+        directional throw superseded the old coordinate-targeted
+        ``EquipmentSystem.throw`` (now deleted), so the bomb system is scanned
+        alongside equipment + combat.
+        """
+        systems = _systems_dir()
+        emitted = (
+            _emitted_kind_literals(os.path.join(systems, "equipment_system.py"))
+            | _emitted_kind_literals(os.path.join(systems, "combat_engine.py"))
+            | _emitted_kind_literals(os.path.join(systems, "bomb_system.py"))
+        )
+
+        # Kinds these feature systems actually emit today (deposit/withdraw/
         # storage_full are wired by a later task and are covered behaviorally).
         expected_routed = {
             "equipped", "unequipped", "equip_denied", "use_failed", "healed",
-            "buff_applied", "throw_failed", "bombed", "carry_full",
+            "buff_applied", "throw_failed", "carry_full",
             "out_of_ammo", "reloaded", "reload_failed",
         }
         missing = expected_routed - emitted
@@ -457,9 +466,9 @@ class TestPresenterOwnershipBehavioral:
                 f"kind {kind!r} rendered an empty message"
             )
 
-    def test_eleven_new_kinds_all_present_in_format_table(self):
+    def test_new_kinds_all_present_in_format_table(self):
         table = NotificationPresenter._FORMATTERS
-        missing = [k for k in _ELEVEN_NEW_KINDS if k not in table]
+        missing = [k for k in _NEW_KINDS if k not in table]
         assert not missing, f"Missing formatters for new kinds: {missing}"
 
     def test_bomb_broadcast_kinds_have_formatters(self):
@@ -502,7 +511,6 @@ class TestPresenterOwnershipBehavioral:
             "reload_failed": ["No ammo"],
             "healed": ["20", "80/100"],
             "buff_applied": ["damage_bonus", "30"],
-            "bombed": ["3", "12", "7"],
             "carry_full": ["Rifle Rounds", "10", "5"],
             "storage_full": ["HQ", "Iron"],
             "deposited": ["Iron", "HQ", "150/500"],

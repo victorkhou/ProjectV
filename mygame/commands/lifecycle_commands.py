@@ -155,7 +155,7 @@ class CmdClass(BaseCommand):
         """If class + spawn are both chosen, advance SPAWNING → LOBBY."""
         if caller.db.player_class is None:
             return
-        if not caller.ndb.spawn_choice and not caller.db.pending_spawn_choice:
+        if not caller.db.pending_spawn_choice:
             caller.msg("Now choose a |wspawn|n point (type |wspawn|n).")
             return
         if pl.finish_spawning(caller):

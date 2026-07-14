@@ -87,14 +87,6 @@ class EquipmentSystem(CarryWeightMixin, StorageMixin, BaseSystem):
         # through the real timed-effect machinery rather than reaching into a
         # global service locator. Keeps ``world/systems`` framework-free.
         self._powerup_system: Any = None
-        # Injected area-damage applier (composition root wires this via
-        # ``set_area_damage_applier`` — see game_init, task 3.7). A zero-arg
-        # callable returning the object that exposes the combat damage pipeline
-        # (``_calculate_damage`` + ``_apply_damage``), i.e. the CombatEngine.
-        # ``throw`` routes each AoE victim through it so target armor and the
-        # min-0 clamp apply for free. Kept as an injected callable (not a
-        # ``game_systems`` reach) so the layering guard stays green.
-        self._area_damage_applier: Callable[[], Any] | None = None
         # Injected supply-drop spawner (composition root wires this via
         # ``set_supply_drop_spawner``). A callable ``(player, item_key, count)``
         # that re-creates a ground pickup for supply units that could not be
@@ -102,8 +94,7 @@ class EquipmentSystem(CarryWeightMixin, StorageMixin, BaseSystem):
         # leftover so supplies are never destroyed (D9). Kept as an injected
         # callable — rather than a ``game_systems``/``typeclasses`` reach at
         # module scope — so ``world/systems`` stays framework-free and the
-        # layering guard stays green; when unwired the spill degrades to a log
-        # (mirroring :meth:`_apply_aoe_damage` without an applier).
+        # layering guard stays green; when unwired the spill degrades to a log.
         self._supply_drop_spawner: Callable[[Any, str, int], Any] | None = None
         # Injected resource-drop spawner (composition root wires this via
         # ``set_resource_drop_spawner`` — see game_init, task 11.1). A callable
@@ -111,8 +102,8 @@ class EquipmentSystem(CarryWeightMixin, StorageMixin, BaseSystem):
         # holder's coords for the over-capacity remainder of an inflow into a
         # *holder pool* (a player's Spend_Pool or a Storage_Building's pool).
         # ``add_resource_capped`` calls it to spill the leftover so resources
-        # are never destroyed (D9, Req 16.8). Mirrors the area-damage applier /
-        # supply-drop spawner pattern: an injected callable rather than a
+        # are never destroyed (D9, Req 16.8). Mirrors the supply-drop spawner
+        # pattern: an injected callable rather than a
         # ``game_systems``/``typeclasses`` reach at module scope, so
         # ``world/systems`` stays framework-free and the layering guard stays
         # green; when unwired the spill degrades to a log.
@@ -139,20 +130,6 @@ class EquipmentSystem(CarryWeightMixin, StorageMixin, BaseSystem):
         ``db.active_powerups`` shape and is registered for tick-based expiry.
         """
         self._powerup_system = powerup_system
-
-    def set_area_damage_applier(self, func: Callable[[], Any]) -> None:
-        """Inject the area-damage applier used by :meth:`throw`.
-
-        *func* is a zero-arg callable returning the object that owns the combat
-        damage pipeline (the :class:`~world.systems.combat_engine.CombatEngine`,
-        which exposes ``_calculate_damage`` and ``_apply_damage``). Wired once
-        at the composition root (``server/conf/game_init.py``, task 3.7) as
-        ``set_area_damage_applier(lambda: combat_engine)`` so ``throw`` can route
-        each AoE victim through the real damage formula — target
-        ``damage_reduction`` armor and the min-0 clamp apply for free — without
-        ``world/systems`` reaching into the ``game_systems`` service locator.
-        """
-        self._area_damage_applier = func
 
     def set_supply_drop_spawner(
         self, func: Callable[[Any, str, int], Any]
@@ -755,123 +732,6 @@ class EquipmentSystem(CarryWeightMixin, StorageMixin, BaseSystem):
         )
         return False
 
-    def throw(self, player: Any, item_key: str, tx: int, ty: int) -> bool:
-        """Throw one unit of a ``throwable`` Supply at ``(tx, ty)``.
-
-        The use-case mediates the raw :class:`EquipmentHandler` Supply_Bag and
-        the injected combat damage pipeline:
-
-        1. Reject if the player does not hold *item_key* in their Supply_Bag
-           (``handler.get_supply(item_key) <= 0``) or the item's category is
-           not ``throwable`` — Req 9.6.
-        2. Enforce the rank gate: if the item declares a ``required_rank`` the
-           player does not meet, reject — Req 7.3 (reuses the equip gate).
-        3. Enforce the throw range: the Chebyshev distance from the player to
-           ``(tx, ty)`` must be within the throwable's ``effect.range`` (or
-           :data:`~world.constants.DEFAULT_THROW_RANGE` when the effect declares
-           none) — Req 9.3.
-        4. Resolve every valid target within the effect's ``radius`` (Chebyshev)
-           of ``(tx, ty)`` on the player's current planet via the coordinate
-           index, and — when the effect type is ``aoe_damage`` — apply the
-           effect's ``amount`` to each through the injected area-damage applier,
-           so target armor (``damage_reduction``) and the min-0 clamp apply for
-           free (Req 9.4, 9.7).
-        5. Decrement the Supply_Bag by one (a throw with no valid targets still
-           consumes the item and reports ``count=0``) and notify the thrower
-           ``bombed`` with the number of targets hit — Req 9.5.
-
-        A player-facing notification is emitted for every outcome; the domain
-        composes no strings. Never raises into the command layer.
-
-        Args:
-            player: The throwing entity (a ``Combat_Entity``).
-            item_key: The Supply item key to throw.
-            tx: Target x coordinate.
-            ty: Target y coordinate.
-
-        Returns:
-            ``True`` if the throwable was thrown, ``False`` otherwise.
-        """
-        handler = getattr(player, "equipment", None)
-        item_def = self.registry.resolve_item(item_key)
-        item_name = getattr(item_def, "name", None) or item_key
-
-        # 1a. Held check (Req 9.6).
-        if handler is None or handler.get_supply(item_key) <= 0:
-            self.notify(
-                player, "throw_failed", item_name=item_name, reason="not_held"
-            )
-            return False
-
-        # 1b. Category check — only throwables are throwable (Req 9.6).
-        category = getattr(item_def, "category", None) if item_def else None
-        if category != "throwable":
-            self.notify(
-                player, "throw_failed", item_name=item_name, reason="not_throwable"
-            )
-            return False
-
-        # 2. Rank gate (Req 7.3) — reuse the equip rank-gate logic.
-        required_rank = getattr(item_def, "required_rank", None)
-        if not self._rank_allows(player, required_rank, item_name):
-            return False
-
-        effect = getattr(item_def, "effect", None) or {}
-
-        # 3. Throw-range gate (Req 9.3).
-        try:
-            throw_range = int(effect.get("range", DEFAULT_THROW_RANGE))
-        except (TypeError, ValueError):
-            throw_range = DEFAULT_THROW_RANGE
-        from world.utils import get_coords
-
-        p_coords = get_coords(player)
-        if p_coords is None:
-            self.notify(
-                player, "throw_failed", item_name=item_name, reason="no_position"
-            )
-            return False
-        from world.utils import chebyshev_distance
-        distance = chebyshev_distance(p_coords[0], p_coords[1], int(tx), int(ty))
-        if distance > throw_range:
-            self.notify(
-                player,
-                "throw_failed",
-                item_name=item_name,
-                reason="out_of_range",
-                distance=distance,
-                range=throw_range,
-            )
-            return False
-
-        # 4. Resolve targets and apply AoE damage (Req 9.4, 9.7).
-        try:
-            radius = int(effect.get("radius", 0))
-        except (TypeError, ValueError):
-            radius = 0
-        targets = self._resolve_throw_targets(player, int(tx), int(ty), radius)
-
-        count = 0
-        if effect.get("type") == "aoe_damage":
-            try:
-                amount = int(effect.get("amount", 0))
-            except (TypeError, ValueError):
-                amount = 0
-            count = self._apply_aoe_damage(
-                player, targets, amount, radius, weapon_name=item_name
-            )
-        else:
-            # Non-damage throwables are out of scope for this feature; the
-            # item is still consumed (content is load-validated to aoe_damage).
-            count = 0
-
-        # 5. Consume one unit and notify (Req 9.5). A throw with no valid
-        #    targets still consumes the item and reports count=0.
-        if not handler.remove_supply(item_key, 1):
-            return False
-        self.notify(player, "bombed", count=count, x=int(tx), y=int(ty))
-        return True
-
     def reload(self, player: Any, *_args: Any, **_kwargs: Any) -> bool:
         """Reload the player's equipped ranged weapon from the Supply_Bag.
 
@@ -1366,130 +1226,6 @@ class EquipmentSystem(CarryWeightMixin, StorageMixin, BaseSystem):
         except Exception:  # noqa: BLE001 - resolution must never break reload
             item_def = None
         return getattr(item_def, "name", None) or ammo_type
-
-    def _resolve_throw_targets(
-        self, player: Any, tx: int, ty: int, radius: int
-    ) -> list:
-        """Return valid AoE targets within *radius* (Chebyshev) of ``(tx, ty)``.
-
-        Queries the player's current planet (its coordinate index) for objects
-        inside the bounding box around the target tile, then keeps only
-        damageable entities (players/agents and buildings) whose Chebyshev
-        distance to the target is within *radius*.
-
-        Friendly fire is intentional: the blast is indiscriminate and damages
-        every player, agent, and building in radius — including the thrower's
-        own agents and buildings. Only the thrower entity itself is excluded so
-        a player never directly bombs their own character. (Direct weapon
-        attacks reject own-building targets; a thrown explosive deliberately
-        does not, so positioning matters.)
-
-        A blast BREACHES cover (matching :meth:`BombSystem._blast_targets`): it
-        reaches buildings whether open or CLOSED, and players even when sheltered
-        inside a closed building — an explosion is an anti-structure weapon, not
-        a ranged shot that cover stops. The only filter is Chebyshev range and
-        being a damageable combat entity.
-        """
-        from world.utils import get_coords, is_building, is_player
-
-        location = getattr(player, "location", None)
-        if location is None:
-            return []
-
-        x1, y1 = tx - radius, ty - radius
-        x2, y2 = tx + radius, ty + radius
-
-        candidates: list = []
-        getter = getattr(location, "get_objects_in_area", None)
-        if callable(getter):
-            candidates = list(getter(x1, y1, x2, y2))
-        else:
-            idx = getattr(location, "coord_index", None)
-            if idx is not None and hasattr(idx, "get_in_area"):
-                candidates = list(idx.get_in_area(x1, y1, x2, y2))
-
-        targets = []
-        for obj in candidates:
-            if obj is player:
-                continue
-            if not (is_player(obj) or is_building(obj)):
-                continue
-            coords = get_coords(obj)
-            if coords is None:
-                continue
-            from world.utils import chebyshev_distance
-            if chebyshev_distance(coords[0], coords[1], tx, ty) <= radius:
-                targets.append(obj)
-        return targets
-
-    def _apply_aoe_damage(
-        self,
-        player: Any,
-        targets: list,
-        amount: int,
-        radius: int,
-        weapon_name: str = "Throwable",
-    ) -> int:
-        """Apply *amount* AoE damage to each target via the injected applier.
-
-        Builds a :class:`SyntheticWeapon` (the same shape turrets use, mirroring the turret
-        pattern) and, for each target, routes through the combat engine's
-        ``_calculate_damage`` (with ``include_attacker_bonus=False`` so the
-        blast deals its flat ``amount − armor`` per spec Property 12),
-        ``_apply_damage``, and then ``_finalize_hit`` — the same post-damage
-        resolution (combat lockout, ``COMBAT_ACTION`` event, target/owner
-        notification, and defeat/destruction on HP<=0) that queued attacks use.
-        The blast is indiscriminate: it damages every player, agent, and
-        building in radius except the thrower, including the thrower's own
-        (friendly fire is intentional).
-
-        Returns the number of targets damaged. When no applier is injected
-        (e.g. before composition-root wiring or in a lightweight test), returns
-        the count of resolved targets without applying damage so the ``bombed``
-        notification is still meaningful.
-        """
-        if not targets:
-            return 0
-        if self._area_damage_applier is None:
-            # No applier wired (e.g. before composition-root wiring or in a
-            # lightweight test): report resolved targets without dealing damage.
-            return len(targets)
-
-        try:
-            engine = self._area_damage_applier()
-        except Exception:  # noqa: BLE001 - never let resolution break a throw
-            engine = None
-        if engine is None:
-            # An applier was wired but could not be resolved — in production it
-            # is always wired (game_init), so log so a genuine wiring break is
-            # visible rather than silently doing no damage.
-            logger.warning(
-                "throw: area-damage applier resolved to None; %d target(s) "
-                "took no damage",
-                len(targets),
-            )
-            return len(targets)
-
-        from world.systems.combat_engine import SyntheticWeapon
-        weapon = SyntheticWeapon(amount, radius, name=weapon_name)
-        hit = 0
-        for target in targets:
-            try:
-                # One public single-hit call resolves damage + the shared
-                # post-damage handling (lockout, event, victim notification,
-                # defeat/destruction). include_attacker_bonus=False so the blast
-                # deals a flat amount−armor (spec Property 12); without this a
-                # lethal bomb would leave a target at 0 HP but un-defeated.
-                engine.apply_direct_hit(
-                    player, target, weapon, include_attacker_bonus=False
-                )
-                hit += 1
-            except Exception:  # noqa: BLE001 - one bad target must not abort the AoE
-                logger.warning(
-                    "throw: failed to apply AoE damage to %r",
-                    getattr(target, "key", target),
-                )
-        return hit
 
     def _rank_allows(
         self, player: Any, required_rank: str | None, item_name: str
