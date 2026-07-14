@@ -435,9 +435,13 @@ HELP_ENTRY_DICTS = [
 
             Once a class and spawn point are set, a final menu appears: type |w1|n to enter the world at your chosen point, or |w0|n to quit. (|wenter|n / |wdeploy|n and |wquit|n also work.)
 
-            # Dying & Reconnecting
+            # Quitting & Reconnecting
 
-            When you're defeated you return here and re-run the whole wizard — |wpick a class again|n, then a spawn point, then deploy. You re-enter at full health with a |wcleared combat timer|n. If your connection |rdrops|n mid-game without |wquit|n, your character lingers in the world briefly (still a target) before being pulled back to staging — so don't rely on pulling the plug to escape a fight.
+            If you |wquit|n cleanly, you return to the staging area and — on your next login — deploy |wright back where you left off|n (same tile), NOT a re-rolled spawn. If your connection |rdrops|n without |wquit|n, your character lingers in the world briefly (still a target) before being pulled back to staging — so don't rely on pulling the plug to escape a fight.
+
+            # Dying
+
+            When you're defeated you return here and re-run the whole wizard — |wpick a class again|n, then a spawn point (|cHQ|n / |cplace of death|n / |crandom|n). You re-enter at full health with a |wcleared combat timer|n.
 
             # See Also
 

@@ -427,33 +427,50 @@ def deploy_from_lobby(caller) -> bool:
 #  Shared: apply the chosen spawn location (used by enter + respawn)
 # ------------------------------------------------------------------ #
 
-def apply_spawn_choice(caller, default_choice="hq") -> None:
-    """Relocate *caller* to their chosen spawn point via the spawn resolver.
+def apply_spawn_choice(caller) -> None:
+    """Place *caller* into the world on deploy.
 
-    Reads ``db.pending_spawn_choice`` (falling back to *default_choice*),
-    resolves it to a concrete ``(planet, x, y)`` through the wired
-    ``spawn_resolver`` system, and moves the character there. A missing resolver
-    or an unresolvable choice leaves the player where they are (they still enter
-    the game). Clears the pending choice once applied.
+    Two cases, distinguished by ``db.pending_spawn_choice``:
+
+    * **A choice is set** (a fresh chargen / post-death pick — hq/death/random):
+      resolve it to a concrete ``(planet, x, y)`` via the ``spawn_resolver`` and
+      move there. This is the ONLY path that relocates by spawn option.
+    * **No choice** (a clean quit → lobby → re-enter): deploy IN PLACE at the
+      location the player quit from — their last ``(coord_x, coord_y)``. A quit
+      is not a respawn, so it must NOT re-roll a spawn point (that was the "every
+      re-enter goes random" bug). If stowed (location None), re-index them at
+      those coords; if still located, leave them put.
+
+    Clears the pending choice once applied.
     """
-    resolver = _get_system(caller, "spawn_resolver")
-    choice = getattr(caller.db, "pending_spawn_choice", None) or default_choice
     planet = getattr(caller.db, "coord_planet", None)
-    target = None
-    if resolver is not None and planet:
-        try:
-            target = resolver.resolve(caller, choice, planet)
-        except Exception:  # noqa: BLE001 - a spawn miss must not block entering
-            target = None
-    if target is not None:
-        _relocate(caller, target[0], target[1], target[2])
+    choice = getattr(caller.db, "pending_spawn_choice", None)
+
+    if choice:
+        # Explicit chargen / post-death pick — resolve the chosen spawn option.
+        resolver = _get_system(caller, "spawn_resolver")
+        target = None
+        if resolver is not None and planet:
+            try:
+                target = resolver.resolve(caller, choice, planet)
+            except Exception:  # noqa: BLE001 - a spawn miss must not block entering
+                target = None
+        if target is not None:
+            _relocate(caller, target[0], target[1], target[2])
+        elif getattr(caller, "location", None) is None and planet:
+            # Resolver miss but the player is stowed — land them at their last
+            # coords rather than deploying into the void.
+            cx = getattr(caller.db, "coord_x", 0) or 0
+            cy = getattr(caller.db, "coord_y", 0) or 0
+            _relocate(caller, planet, cx, cy)
     elif getattr(caller, "location", None) is None and planet:
-        # No resolvable spawn, but the player is STOWED (location None, e.g.
-        # after death/spawning) — they must land SOMEWHERE or they'd deploy into
-        # the void. Fall back to their last coords on their planet room.
+        # No pending choice → a quit→re-enter: deploy in place at the quit
+        # location (last coords), NOT a re-rolled spawn.
         cx = getattr(caller.db, "coord_x", 0) or 0
         cy = getattr(caller.db, "coord_y", 0) or 0
         _relocate(caller, planet, cx, cy)
+    # else: no choice AND still located → already in place, nothing to do.
+
     caller.db.pending_spawn_choice = None
 
 

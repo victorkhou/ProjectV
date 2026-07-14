@@ -127,24 +127,30 @@ class SpawnResolver:
     ) -> tuple[str, int, int] | None:
         """Resolve *choice* to a concrete ``(planet, x, y)`` spawn target.
 
-        Applies the per-option fallback chain, ending at the planet's fixed
-        spawn point. Returns ``None`` only when even the planet spawn is
-        unavailable (misconfigured planet) — the caller then leaves the player
-        where they are.
+        Applies the per-option fallback chain. When the chosen option is
+        unavailable (no HQ, never died), the player falls back to a RANDOM open
+        tile — NOT the fixed planet spawn, which is a single crowded chokepoint
+        that would drop an HQ-less player onto (or beside) whatever sits there.
+        The fixed planet spawn is only the last resort when even random sampling
+        fails. Returns ``None`` only when nothing at all resolves (misconfigured
+        planet) — the caller then leaves the player where they are.
         """
         if choice == SPAWN_HQ:
             hq = self._hq_tile(player, planet_key)
             if hq is not None:
                 return (planet_key, hq[0], hq[1])
+            # No HQ → a random open location, not the fixed planet spawn.
         elif choice == SPAWN_DEATH:
             death = self._death_tile(player, planet_key)
             if death is not None:
                 return death  # already a (planet, x, y) — death may be off-planet
-        elif choice == SPAWN_RANDOM:
-            rand = self._random_tile(planet_key)
-            if rand is not None:
-                return (planet_key, rand[0], rand[1])
-        # Fallback (unknown/failed choice): the planet's fixed spawn point.
+            # Never died → a random open location.
+        # RANDOM, or an HQ/death miss: a random open tile (>= min distance from
+        # buildings). Falls through to the fixed planet spawn only if that fails.
+        rand = self._random_tile(planet_key)
+        if rand is not None:
+            return (planet_key, rand[0], rand[1])
+        # Last resort: the planet's fixed spawn point.
         return self._planet_spawn(planet_key)
 
     # ------------------------------------------------------------------ #

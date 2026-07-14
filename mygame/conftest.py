@@ -90,6 +90,11 @@ def _ensure_evennia_stubs():
             pass
         def at_post_login(self, session=None, **kwargs):
             pass
+        def at_post_puppet(self, **kwargs):
+            # Real DefaultCharacter.at_post_puppet emits "You become X" + a look;
+            # the stub records that the default puppet ran (see CombatCharacter,
+            # which calls super().at_post_puppet on a non-staging login).
+            self._became = True
 
     class DefaultRoom:
         def at_object_receive(self, moved_obj, source_location, **kwargs):

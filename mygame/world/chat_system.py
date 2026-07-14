@@ -65,13 +65,19 @@ class ChatSystem:
         if channel_db is None:
             return
 
+        # Isolate the channel/nick writes in a DB savepoint: if the Public
+        # channel is missing (e.g. a minimal test DB) the failing query would
+        # otherwise poison the surrounding transaction and cascade to unrelated
+        # queries. A savepoint rolls back ONLY this block's writes on failure.
         try:
-            channel = channel_db.objects.get(db_key=self.GLOBAL_CHANNEL_KEY)
-            if not channel.has_connection(account):
-                channel.connect(account)
-            # Add 'chat' as a personal nick for the Public channel
-            if hasattr(account, "nicks"):
-                account.nicks.add("chat", self.GLOBAL_CHANNEL_KEY, category="channel")
+            from django.db import transaction
+            with transaction.atomic():
+                channel = channel_db.objects.get(db_key=self.GLOBAL_CHANNEL_KEY)
+                if not channel.has_connection(account):
+                    channel.connect(account)
+                # Add 'chat' as a personal nick for the Public channel
+                if hasattr(account, "nicks"):
+                    account.nicks.add("chat", self.GLOBAL_CHANNEL_KEY, category="channel")
         except Exception:
             logger.exception("ChatSystem: Error auto-subscribing account")
 

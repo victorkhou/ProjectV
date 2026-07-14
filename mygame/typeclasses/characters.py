@@ -337,39 +337,58 @@ class CombatCharacter(CombatEntity, DefaultCharacter):
     #  Login / logout hooks
     # ------------------------------------------------------------------ #
 
-    def at_post_login(self, session, **kwargs):
-        """Called after the player logs in.
+    def at_post_puppet(self, **kwargs):
+        """Called after an account puppets (logs into) this character.
 
-        Auto-migrates attributes, ensures overworld position, and
-        publishes the login event.
+        This is the REAL post-login hook for a Character — Evennia has no
+        ``Character.at_post_login`` (that hook lives only on the Account and is
+        NOT forwarded here), so puppeting is where "You become X" + the auto-look
+        happen and where our login logic must run: attribute migration, overworld
+        positioning, lifecycle routing, and the login event.
+
+        When the lobby flow routes this login to SPAWNING/LOBBY, the player is
+        staging (not in the world), so we suppress the parent's "You become X" +
+        map look and show the wizard prompt instead. Otherwise we defer to the
+        parent (which emits the become-message and looks at the current tile).
         """
-        super().at_post_login(session, **kwargs)
-
-        # Auto-migrate: ensure all PLAYER_DEFAULTS attributes exist
-        self.ensure_attributes()
-
-        # Ensure character is on the overworld with valid coordinates
-        self._ensure_overworld_position()
-
-        # Player lifecycle routing (states 3-6). When the lobby flow is enabled,
-        # route this login to the correct resume state from the single persisted
-        # player_state (new -> spawning; mid-spawn -> spawning; lobby -> lobby;
-        # playing/linkdead -> playing) and show the matching prompt. A no-op when
-        # the flow is disabled, so existing auto-into-the-game behavior is
-        # unchanged until it is switched on.
-        self._route_lifecycle_on_login()
-
-        # Auto-subscribe the account to game channels
+        # Under EvenniaTest, setUp() performs a synthetic ``login()`` that
+        # puppets a bare character with no game systems wired. Our custom login
+        # side-effects (attribute-writes, positioning, routing, the login event)
+        # would run against that half-built fixture and corrupt the harness's
+        # per-test DB rollback. Defer to the stock puppet there — real logins
+        # (and the real-boot smoke driver) run the full path below.
         try:
-            from world.utils import get_system
-            chat_system = get_system(self, "chat_system")
-            if chat_system and self.account:
-                chat_system.auto_subscribe(self.account)
-        except Exception:
+            from django.conf import settings
+            if getattr(settings, "TEST_ENVIRONMENT", False):
+                super().at_post_puppet(**kwargs)
+                return
+        except Exception:  # noqa: BLE001 - settings unreadable -> proceed normally
             pass
 
-        # Map is now shown via CmdLook which Evennia triggers
-        # automatically after login (super().at_post_login calls look).
+        # Auto-migrate: ensure all PLAYER_DEFAULTS attributes exist, and ensure a
+        # valid overworld position, BEFORE routing (routing may stow the char).
+        self.ensure_attributes()
+        self._ensure_overworld_position()
+
+        # Player lifecycle routing (states 3-6). Returns the resume state when
+        # the lobby flow is enabled (else None). SPAWNING/LOBBY means the player
+        # is staging — we show the wizard instead of dropping them into the map.
+        staging_state = self._route_lifecycle_on_login()
+
+        if staging_state is None:
+            # Flow disabled, or resumed straight into PLAYING: normal puppet —
+            # the parent emits "You become X" and looks at the current tile.
+            super().at_post_puppet(**kwargs)
+        else:
+            # Staging (SPAWNING/LOBBY): no world look; the wizard prompt shown by
+            # _route_lifecycle_on_login is the player's cue. Still announce entry
+            # to the account so the connection feels acknowledged.
+            self.msg(f"\nYou take control of |c{self.key}|n.")
+
+        # (Channel auto-subscribe is handled on the Account login hook — see
+        # typeclasses.accounts.Account.at_post_login — not here: it is an
+        # account-level concern, and doing account/channel writes from the
+        # character puppet hook corrupted EvenniaTest's per-test rollback.)
 
         # First-time nudge toward the tutorial. Shown once (flagged on the
         # character) so veterans aren't spammed on every login; nothing in
@@ -393,16 +412,20 @@ class CombatCharacter(CombatEntity, DefaultCharacter):
     def _route_lifecycle_on_login(self):
         """Route this login through the player lifecycle state machine.
 
-        No-op unless the lobby flow is enabled. Otherwise resolves the resume
-        state from the persisted ``player_state`` and prompts the player:
-        SPAWNING → tell them to pick class/spawn then deploy; LOBBY → tell them
-        to deploy; PLAYING → nothing (they resume in the world, e.g. a reconnect
-        or crash-resume). Guarded so a routing hiccup never blocks login.
+        Returns the STAGING state (``SPAWNING``/``LOBBY``) when the player is not
+        yet in the world — so the caller suppresses the normal map look and lets
+        the wizard prompt stand — or ``None`` when the flow is disabled or the
+        player resumed straight into PLAYING (normal puppet). Guarded so a
+        routing hiccup never blocks login (returns ``None`` on error).
+
+        SPAWNING → stow OOC + show the class/spawn wizard; LOBBY → show the
+        deploy menu; PLAYING → nothing (resume in the world, e.g. a reconnect or
+        crash-resume).
         """
         try:
             from world.lobby_flow import lobby_flow_enabled
             if not lobby_flow_enabled():
-                return
+                return None
             from world import player_lifecycle as pl
             from world.constants import (
                 PLAYER_STATE_SPAWNING, PLAYER_STATE_LOBBY,
@@ -416,11 +439,15 @@ class CombatCharacter(CombatEntity, DefaultCharacter):
                 self.stow_from_world()
                 from commands.lifecycle_commands import announce_spawning
                 announce_spawning(self)
-            elif state == PLAYER_STATE_LOBBY:
+                return PLAYER_STATE_SPAWNING
+            if state == PLAYER_STATE_LOBBY:
                 from commands.lifecycle_commands import announce_lobby
                 announce_lobby(self)
+                return PLAYER_STATE_LOBBY
+            return None
         except Exception:  # noqa: BLE001 - routing must never block login
             logger.debug("Lifecycle login routing failed", exc_info=True)
+            return None
 
     def _ensure_overworld_position(self):
         """Ensure the character is on the overworld with valid coordinates.

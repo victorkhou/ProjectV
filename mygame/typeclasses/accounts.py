@@ -136,6 +136,23 @@ class Account(DefaultAccount):
 
     """
 
+    def at_post_login(self, session=None, **kwargs):
+        """Auto-subscribe the account to game channels on login.
+
+        Channel membership is an account-level concern, so it lives here rather
+        than on the character puppet hook. (Doing account/channel writes from the
+        character's ``at_post_puppet`` corrupted EvenniaTest's per-test DB
+        rollback.) Guarded so a subscribe hiccup never blocks login.
+        """
+        super().at_post_login(session=session, **kwargs)
+        try:
+            from world.utils import get_system
+            chat_system = get_system(self, "chat_system")
+            if chat_system:
+                chat_system.auto_subscribe(self)
+        except Exception:
+            pass
+
     def at_pre_channel_msg(self, message, channel, senders=None, **kwargs):
         """Format channel messages with player rank.
 

@@ -61,6 +61,12 @@ def _ensure_evennia_stubs():
             pass
         def at_post_login(self, session, **kwargs):
             pass
+        def at_post_puppet(self, **kwargs):
+            # The real Evennia DefaultCharacter.at_post_puppet emits
+            # "You become X" and an at_look; the stub records that it ran.
+            self._became = True
+            if hasattr(self, "msg"):
+                self.msg(f"You become {self.key}.")
 
     _mod("evennia")
     _mod("evennia.objects")
@@ -337,6 +343,53 @@ class TestEnsureOverworldPosition(unittest.TestCase):
         with patch.dict(sys.modules, {"world.coordinate.planet_registry": None}):
             char._ensure_overworld_position()
         # No exception raised — that's the test
+
+
+class TestAtPostPuppetLifecycle(unittest.TestCase):
+    """at_post_puppet is the REAL login hook (Characters have no at_post_login).
+
+    Regression: the lifecycle routing + welcome nudge + login event used to live
+    on at_post_login, which Evennia never calls on a Character — so on a real
+    server the wizard prompt never appeared. It now lives on at_post_puppet.
+    """
+
+    def _make_char(self):
+        char = _make_char()
+        char.msg = MagicMock()
+        char._ensure_overworld_position = MagicMock()
+        char.ensure_attributes = MagicMock()
+        return char
+
+    def test_flow_disabled_defers_to_super_puppet(self):
+        # Flow off -> normal puppet: parent runs ("You become X"), no wizard.
+        char = self._make_char()
+        with patch("world.lobby_flow.lobby_flow_enabled", return_value=False):
+            char.at_post_puppet()
+        self.assertTrue(getattr(char, "_became", False),
+                        "flow-off login must run the default puppet (become+look)")
+
+    def test_spawning_shows_wizard_and_suppresses_become(self):
+        char = self._make_char()
+        char.db.player_state = None  # fresh -> routes to SPAWNING
+        char.stow_from_world = MagicMock()
+        with patch("world.lobby_flow.lobby_flow_enabled", return_value=True):
+            char.at_post_puppet()
+        # A staging login shows the numbered wizard (no classes are defined in
+        # this stub env, so it opens at the spawn-point step) and does NOT run
+        # the default "You become X" map-look puppet.
+        msgs = " ".join(str(c.args[0]) for c in char.msg.call_args_list if c.args)
+        self.assertIn("choose your", msgs.lower())      # a wizard step is shown
+        self.assertIn("type the number", msgs.lower())  # it's the numbered menu
+        self.assertFalse(getattr(char, "_became", False),
+                         "a staging login must NOT run the map-look puppet")
+
+    def test_playing_resume_defers_to_super_puppet(self):
+        char = self._make_char()
+        char.db.player_state = "playing"  # crash-resume stays PLAYING
+        with patch("world.lobby_flow.lobby_flow_enabled", return_value=True):
+            char.at_post_puppet()
+        self.assertTrue(getattr(char, "_became", False),
+                        "resuming into PLAYING is a normal puppet (become+look)")
 
 
 class _FakeTargeting:

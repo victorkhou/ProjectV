@@ -51,15 +51,24 @@ class TestHQSpawn(unittest.TestCase):
         r = _resolver(hq_locator_func=lambda player, p: (10, 20))
         self.assertEqual(r.resolve(_Player(), SPAWN_HQ, "terra"), ("terra", 10, 20))
 
-    def test_hq_falls_back_to_planet_spawn(self):
-        # No HQ (locator returns None) -> planet's fixed spawn point.
-        r = _resolver(hq_locator_func=lambda player, p: None)
-        self.assertEqual(r.resolve(_Player(), SPAWN_HQ, "terra"), ("terra", 250, 250))
+    def test_hq_falls_back_to_random_not_planet_spawn(self):
+        # No HQ (locator returns None) -> a RANDOM open tile, NOT the fixed
+        # planet spawn (which would drop an HQ-less player on a crowded point).
+        r = _resolver(hq_locator_func=lambda player, p: None,
+                      rng=_SeqRandom([(33, 44)]))
+        self.assertEqual(r.resolve(_Player(), SPAWN_HQ, "terra"), ("terra", 33, 44))
 
-    def test_hq_locator_error_falls_back(self):
+    def test_hq_locator_error_falls_back_to_random(self):
         def boom(player, p):
             raise RuntimeError("db down")
-        r = _resolver(hq_locator_func=boom)
+        r = _resolver(hq_locator_func=boom, rng=_SeqRandom([(33, 44)]))
+        self.assertEqual(r.resolve(_Player(), SPAWN_HQ, "terra"), ("terra", 33, 44))
+
+    def test_hq_miss_uses_planet_spawn_only_when_random_fails(self):
+        # If even random sampling can't find a tile (bounds always False), the
+        # fixed planet spawn is the last resort.
+        r = _resolver(hq_locator_func=lambda player, p: None,
+                      rng=_SeqRandom([]), in_bounds_func=lambda x, y, p: False)
         self.assertEqual(r.resolve(_Player(), SPAWN_HQ, "terra"), ("terra", 250, 250))
 
 
@@ -76,14 +85,18 @@ class TestDeathSpawn(unittest.TestCase):
         p = _Player(death_x=5, death_y=5, death_planet="forge")
         self.assertEqual(r.resolve(p, SPAWN_DEATH, "terra"), ("forge", 5, 5))
 
-    def test_death_never_died_falls_back(self):
-        r = _resolver()
-        self.assertEqual(r.resolve(_Player(), SPAWN_DEATH, "terra"), ("terra", 250, 250))
+    def test_death_never_died_falls_back_to_random(self):
+        # Never died -> a RANDOM open tile, not the fixed planet spawn.
+        r = _resolver(rng=_SeqRandom([(33, 44)]))
+        self.assertEqual(r.resolve(_Player(), SPAWN_DEATH, "terra"), ("terra", 33, 44))
 
-    def test_death_out_of_bounds_falls_back(self):
-        r = _resolver(in_bounds_func=lambda x, y, p: False)
+    def test_death_out_of_bounds_falls_back_to_random(self):
+        # An out-of-bounds recorded death tile -> random open tile. (in_bounds
+        # rejects the death tile but accepts sampled tiles below 500.)
+        r = _resolver(rng=_SeqRandom([(33, 44)]),
+                      in_bounds_func=lambda x, y, p: 0 <= x < 500 and 0 <= y < 500)
         p = _Player(death_x=9999, death_y=9999, death_planet="terra")
-        self.assertEqual(r.resolve(p, SPAWN_DEATH, "terra"), ("terra", 250, 250))
+        self.assertEqual(r.resolve(p, SPAWN_DEATH, "terra"), ("terra", 33, 44))
 
 
 class TestRandomSpawn(unittest.TestCase):
@@ -157,8 +170,14 @@ class TestRandomSpawnBuildingDistance(unittest.TestCase):
 
 
 class TestFallbackAndDegradation(unittest.TestCase):
-    def test_unknown_choice_uses_planet_spawn(self):
-        r = _resolver()
+    def test_unknown_choice_falls_back_to_random(self):
+        # An unrecognized choice resolves like a miss: a random open tile.
+        r = _resolver(rng=_SeqRandom([(33, 44)]))
+        self.assertEqual(r.resolve(_Player(), "bogus", "terra"), ("terra", 33, 44))
+
+    def test_unknown_choice_uses_planet_spawn_when_random_fails(self):
+        # ... and the fixed planet spawn only when random can't resolve.
+        r = _resolver(rng=_SeqRandom([]), in_bounds_func=lambda x, y, p: False)
         self.assertEqual(r.resolve(_Player(), "bogus", "terra"), ("terra", 250, 250))
 
     def test_returns_none_when_planet_spawn_unavailable(self):
