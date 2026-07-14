@@ -115,8 +115,8 @@ guard_aggro_radius: 5            # detection distance (tiles) for guard AI
 # directional 'shoot <dir>' hits at accuracy_directional. Both baselines are
 # raised by the weapon's 'accuracy' stat modifier and clamped to [0, 1].
 target_lock_ticks: 3             # ticks to fully lock onto a target
-accuracy_targeted: 0.8           # hit chance vs a locked target (baseline)
-accuracy_directional: 0.5        # hit chance for a directional shot (baseline)
+accuracy_targeted: 0.9           # hit chance vs a locked target (baseline)
+accuracy_directional: 0.7        # hit chance for a directional shot (baseline)
 
 # --- Hybrid real-time combat ---
 # A player's own 'attack' (direct) and directional 'shoot' resolve INSTANTLY

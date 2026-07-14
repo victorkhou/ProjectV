@@ -345,10 +345,10 @@ class BalanceConfig:
     target_lock_ticks: int = 3
     #: Baseline hit chance (0..1) for a shot at a LOCKED target, before the
     #: weapon's ``accuracy`` stat modifier is added. Clamped to [0, 1].
-    accuracy_targeted: float = 0.8
+    accuracy_targeted: float = 0.9
     #: Baseline hit chance (0..1) for a DIRECTIONAL (unlocked) shot, before the
     #: weapon's ``accuracy`` stat modifier is added. Clamped to [0, 1].
-    accuracy_directional: float = 0.5
+    accuracy_directional: float = 0.7
     #: Default cooldown (WALL-CLOCK seconds) between a player's own instant
     #: attacks — direct ``attack`` and directional ``shoot`` resolve immediately
     #: (not tick-queued) and are throttled by this instead of the 1-second tick.
