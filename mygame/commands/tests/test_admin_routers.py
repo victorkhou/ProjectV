@@ -1007,6 +1007,14 @@ class _FakePlanetRegistry:
         return True
 
 
+class _EntityStub:
+    """A goto-target stand-in: any object with a key + coords + planet."""
+
+    def __init__(self, key, x, y, planet):
+        self.key = key
+        self.db = FakeDB(coord_x=x, coord_y=y, coord_planet=planet)
+
+
 class TestTeleportSuppressesNotifications(unittest.TestCase):
     """Regression: @teleport must relocate silently (notify=False).
 
@@ -1069,6 +1077,102 @@ class TestTeleportSuppressesNotifications(unittest.TestCase):
         self.assertEqual(len(room.calls), 1)
         _obj, tx, ty, _notify = room.calls[0]
         self.assertEqual((tx, ty), (50, 50))
+
+    def _entity_goto(self, caller, arg, room, search_results):
+        """Run 'goto <arg>' with the given search results, patching planet_rooms."""
+        caller._search_results = search_results
+        from server.conf import game_init
+        original = getattr(game_init, "game_systems", None)
+        game_init.game_systems = {"planet_rooms": {"earth": room}}
+        try:
+            cmd = _make_cmd(CmdTeleport, caller, arg)
+            cmd.cmdstring = "goto"
+            cmd.func()
+        finally:
+            if original is not None:
+                game_init.game_systems = original
+
+    def test_goto_name_jumps_to_entity_tile(self):
+        """'goto <name>' teleports the caller to that entity's coordinates."""
+        room = _RecordingRoom()
+        caller = FakeCaller(
+            perm_level="Builder",
+            systems={"planet_registry": _FakePlanetRegistry()},
+        )
+        caller.db.coord_planet = "earth"
+        caller.location = room
+
+        target = _EntityStub("Raider", x=30, y=42, planet="earth")
+        self._entity_goto(caller, "Raider", room, {"Raider": target})
+
+        self.assertEqual(len(room.calls), 1)
+        _obj, tx, ty, notify = room.calls[0]
+        self.assertEqual((tx, ty), (30, 42))
+        self.assertFalse(notify)  # a teleport is silent
+        self.assertTrue(any("Raider" in str(m) for m in caller._messages))
+
+    def test_goto_name_not_found(self):
+        """A name with no match is reported, not crashed, and no move happens."""
+        room = _RecordingRoom()
+        caller = FakeCaller(
+            perm_level="Builder",
+            systems={"planet_registry": _FakePlanetRegistry()},
+        )
+        caller.db.coord_planet = "earth"
+        self._entity_goto(caller, "Nobody", room, {})
+        self.assertEqual(len(room.calls), 0)
+        self.assertTrue(any("No entity named" in str(m) for m in caller._messages))
+
+    def test_goto_entity_without_coords_is_rejected(self):
+        """An entity that isn't on the overworld (no coords) can't be jumped to."""
+        room = _RecordingRoom()
+        caller = FakeCaller(
+            perm_level="Builder",
+            systems={"planet_registry": _FakePlanetRegistry()},
+        )
+        caller.db.coord_planet = "earth"
+        target = _EntityStub("Ghost", x=None, y=None, planet=None)
+        self._entity_goto(caller, "Ghost", room, {"Ghost": target})
+        self.assertEqual(len(room.calls), 0)
+        self.assertTrue(any("not on the overworld" in str(m) for m in caller._messages))
+
+    def test_goto_entity_on_unknown_planet_is_rejected(self):
+        """is_valid_coordinate raises KeyError on an unregistered planet; the
+        entity path must catch it and report cleanly, not crash."""
+        class _RaisingRegistry:
+            def resolve_planet(self, token):
+                return None
+            def is_valid_coordinate(self, x, y, planet):
+                raise KeyError(planet)
+
+        room = _RecordingRoom()
+        caller = FakeCaller(
+            perm_level="Builder",
+            systems={"planet_registry": _RaisingRegistry()},
+        )
+        caller.db.coord_planet = "earth"
+        caller.location = room
+        target = _EntityStub("Legacy", x=5, y=5, planet="atlantis")
+        self._entity_goto(caller, "Legacy", room, {"Legacy": target})
+        self.assertEqual(len(room.calls), 0)
+        self.assertTrue(any("unknown planet" in str(m) for m in caller._messages))
+
+    def test_goto_ambiguous_prefix_picks_nearest(self):
+        """Multiple matches → jump to the closest by Chebyshev distance."""
+        room = _RecordingRoom()
+        caller = FakeCaller(
+            perm_level="Builder",
+            systems={"planet_registry": _FakePlanetRegistry()},
+        )
+        caller.db.coord_planet = "earth"
+        caller.db.coord_x, caller.db.coord_y = 10, 10
+        caller.location = room  # same-planet -> no cross-planet move_to
+        far = _EntityStub("Agent-far", x=90, y=90, planet="earth")
+        near = _EntityStub("Agent-near", x=13, y=12, planet="earth")
+        self._entity_goto(caller, "Agent", room, {"Agent": [far, near]})
+        self.assertEqual(len(room.calls), 1)
+        _obj, tx, ty, _notify = room.calls[0]
+        self.assertEqual((tx, ty), (13, 12))  # the nearer Agent
 
 
 # -------------------------------------------------------------- #

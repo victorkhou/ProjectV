@@ -1197,27 +1197,32 @@ class CmdAdminPlayer(AdminSubcommandRouter):
 
 
 class CmdTeleport(BaseCommand):
-    """Teleport to coordinates on the overworld.
+    """Teleport to coordinates — or to any entity on the overworld.
 
     Usage:
       @teleport <x> <y> [planet]
       goto <x> <y> [z]
+      goto <name>
 
     Options:
       <x> <y>   destination coordinates (spaces or commas: "25 25" or "25,25")
       [planet]  optional target planet by name, prefix, or z-level (0/1/2);
                 defaults to your current planet
+      <name>    an entity to jump to — a player, NPC, building, or item, by
+                name or unambiguous prefix. You are placed on its tile.
 
     Examples:
       @teleport 25 25
-      @teleport 25,25
       @teleport 50 50 earth
       goto 25 25
       goto 50 50 2
+      goto Raider          (jump to the player Raider)
+      goto agent           (jump to the nearest/only matching NPC)
+      goto HQ              (jump to a building)
 
     Notes:
-      Aliases: @tel, goto. The third argument is the same in every form —
-      a planet name, prefix, or z-level (0/1/2). Builder+ only.
+      Aliases: @tel, goto. A leading number is read as coordinates; anything
+      else is resolved as an entity name. Builder+ only.
     """
 
     key = "@teleport"
@@ -1225,7 +1230,10 @@ class CmdTeleport(BaseCommand):
     locks = "cmd:perm(Builder);view:perm(Builder)"
     help_category = "Admin"
 
-    _USAGE = "Usage: teleport <x> <y> [planet]  (commas optional: <x>,<y>)"
+    _USAGE = (
+        "Usage: goto <x> <y> [planet]  |  goto <name>  "
+        "(commas optional: <x>,<y>)"
+    )
 
     def func(self):
         caller = self.caller
@@ -1234,6 +1242,19 @@ class CmdTeleport(BaseCommand):
             caller.msg(self._USAGE)
             return
 
+        # A leading number → coordinate teleport; anything else → jump to a
+        # named entity. (An entity name never starts with a digit, so this
+        # disambiguation is unambiguous.)
+        first = args.replace(",", " ").split()[0]
+        if first.lstrip("-").isdigit():
+            self._teleport_to_coords(caller, args)
+        else:
+            self._teleport_to_entity(caller, args)
+
+    # ------------------------------------------------------------------ #
+    #  goto <x> <y> [planet]
+    # ------------------------------------------------------------------ #
+    def _teleport_to_coords(self, caller, args):
         # Accept commas or spaces interchangeably between all parts, so
         # "25 25", "25,25", "50 50 earth", and "50,50,earth" all parse — the
         # same coordinate convention the 'throw' command uses.
@@ -1271,6 +1292,114 @@ class CmdTeleport(BaseCommand):
             caller.msg(f"Coordinates ({tx}, {ty}) are out of bounds for {planet}.")
             return
 
+        self._do_teleport(caller, tx, ty, planet)
+
+    # ------------------------------------------------------------------ #
+    #  goto <name> — jump to a player/NPC/building/item's tile
+    # ------------------------------------------------------------------ #
+    def _teleport_to_entity(self, caller, name):
+        target = self._resolve_entity(caller, name)
+        if target is None:
+            caller.msg(
+                f"No entity named '{name}' found. Use a name or unambiguous "
+                f"prefix, or 'goto <x> <y>' for coordinates."
+            )
+            return
+
+        from world.utils import get_coords
+
+        coords = get_coords(target)
+        planet = getattr(getattr(target, "db", None), "coord_planet", None)
+        if coords is None or not planet:
+            tname = getattr(target, "key", "that")
+            caller.msg(f"{tname} is not on the overworld — it has no location to go to.")
+            return
+
+        registry = _get_system(caller, "planet_registry")
+        if registry is not None:
+            try:
+                in_bounds = registry.is_valid_coordinate(coords[0], coords[1], planet)
+            except KeyError:
+                # The entity's planet isn't a registered planet (legacy/bad data).
+                caller.msg(
+                    f"{getattr(target, 'key', 'that')} is on an unknown planet "
+                    f"'{planet}' — cannot go there."
+                )
+                return
+            if not in_bounds:
+                caller.msg(
+                    f"{getattr(target, 'key', 'that')} is at ({coords[0]}, "
+                    f"{coords[1]}) on {planet}, which is out of bounds."
+                )
+                return
+
+        self._do_teleport(
+            caller, coords[0], coords[1], planet,
+            label=getattr(target, "key", None),
+        )
+
+    @staticmethod
+    def _resolve_entity(caller, name):
+        """Resolve *name* to a single overworld entity (or None).
+
+        Resolution order:
+
+        1. ``caller.search(name, quiet=True)`` — Evennia's search does partial
+           (prefix) matching scoped to the caller's location. Since every
+           overworld entity shares one PlanetRoom per planet, this finds any
+           player/NPC/building/item on the caller's *current* planet by name or
+           prefix (the common case: "go to someone here").
+        2. ``evennia.search_object(name)`` — a global exact-by-key fallback that
+           reaches entities on OTHER planets when the local search misses.
+
+        On multiple matches, picks the closest by Chebyshev distance so an
+        ambiguous prefix (e.g. two Agents) lands somewhere sensible rather than
+        erroring. Excludes the caller itself.
+        """
+        matches = []
+        if hasattr(caller, "search"):
+            res = caller.search(name, quiet=True)
+            if res:
+                matches = list(res) if isinstance(res, (list, tuple)) else [res]
+
+        if not matches:
+            try:
+                from evennia import search_object
+                matches = list(search_object(name) or [])
+            except Exception:  # noqa: BLE001 - no global search in stubbed tests
+                matches = []
+
+        candidates = [m for m in matches if m is not caller]
+        if not candidates:
+            return None
+        if len(candidates) == 1:
+            return candidates[0]
+
+        # Multiple hits — pick the nearest with coordinates.
+        from world.utils import get_coords, chebyshev_distance
+
+        cx = getattr(caller.db, "coord_x", None)
+        cy = getattr(caller.db, "coord_y", None)
+
+        def _rank(obj):
+            c = get_coords(obj)
+            if c is None:
+                return (1, 0)  # entities with no coords sort last
+            if cx is None or cy is None:
+                return (0, 0)
+            return (0, chebyshev_distance(cx, cy, c[0], c[1]))
+
+        return sorted(candidates, key=_rank)[0]
+
+    # ------------------------------------------------------------------ #
+    #  Shared relocation
+    # ------------------------------------------------------------------ #
+    def _do_teleport(self, caller, tx, ty, planet, label=None):
+        """Move *caller* to ``(tx, ty, planet)`` and show the destination.
+
+        Shared by the coordinate and entity paths. Handles the cross-planet
+        move + coordinate-index bookkeeping + the single correct look.
+        """
         # Get the shared planet room
         planet_rooms = None
         try:
@@ -1326,7 +1455,10 @@ class CmdTeleport(BaseCommand):
         target_room.move_entity(caller, tx, ty, notify=False)
 
         logger.info("Admin %s teleported to (%d, %d, %s)", caller.key, tx, ty, planet)
-        caller.msg(f"Teleported to ({tx}, {ty}) on {planet}.")
+        if label:
+            caller.msg(f"Teleported to |c{label}|n at ({tx}, {ty}) on {planet}.")
+        else:
+            caller.msg(f"Teleported to ({tx}, {ty}) on {planet}.")
 
         # Always show the destination after teleporting, now that ALL coords +
         # planet are fully updated. A same-planet (X/Y-only) teleport fires no
