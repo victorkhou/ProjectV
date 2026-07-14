@@ -8,6 +8,7 @@ Data Registry. Each validation method returns a list of error strings
 
 from __future__ import annotations
 
+import dataclasses
 from typing import TYPE_CHECKING
 
 from world.constants import (
@@ -20,9 +21,37 @@ from world.constants import (
     RESOURCE_TYPES,
     WEAPON_TYPES,
 )
+from world.definitions import BalanceConfig
 
 if TYPE_CHECKING:
     pass  # DataRegistry imported only for type hints in cross_validate
+
+
+# ---------------------------------------------------------------------------
+# Derive the balance-field type lists from BalanceConfig's dataclass fields so
+# they can never drift out of sync with the dataclass definition.
+# ---------------------------------------------------------------------------
+def _balance_fields_by_type():
+    """Partition BalanceConfig fields into (int_names, float_names, bool_names).
+
+    Dict-typed fields (production_scaling, resource_weights, etc.) require
+    per-field semantic validation and are handled individually — they are
+    excluded from the returned sets.
+    """
+    int_f, float_f, bool_f = [], [], []
+    for f in dataclasses.fields(BalanceConfig):
+        t = f.type if isinstance(f.type, str) else getattr(f.type, "__name__", str(f.type))
+        if t == "int":
+            int_f.append(f.name)
+        elif t == "float":
+            float_f.append(f.name)
+        elif t == "bool":
+            bool_f.append(f.name)
+        # dict[...] fields are validated individually (different key/value semantics)
+    return int_f, float_f, bool_f
+
+
+_BALANCE_INT_FIELDS, _BALANCE_FLOAT_FIELDS, _BALANCE_BOOL_FIELDS = _balance_fields_by_type()
 
 
 class SchemaValidator:
@@ -630,51 +659,12 @@ class SchemaValidator:
         if not isinstance(data, dict):
             return [f"balance: expected a dict, got {type(data).__name__}"]
 
-        int_fields = [
-            "turret_damage", "turret_radius", "xp_kill", "xp_building_destroy",
-            "xp_death_loss", "gather_amount", "player_default_health",
-            "resource_respawn_ticks", "combat_lockout_ticks", "chunk_size",
-            "save_interval", "metrics_interval",
-            "agent_xp_harvest", "agent_xp_delivery", "agent_xp_construction",
-            "agent_xp_combat", "agent_xp_time_served", "agent_xp_death_loss",
-            # Migrated economy tuning (formerly world.constants literals)
-            "base_training_ticks",
-            "harvest_cooldown_ticks", "harvest_yield_per_action",
-            "extractor_harvest_multiplier", "extractor_base_capacity",
-            "extractor_capacity_per_level", "vault_base_capacity",
-            "vault_capacity_per_level", "upgrade_cost_base", "upgrade_time_base",
-            # Coordinate-world / GC knobs. Present in balance.yaml and now read
-            # generically by DataRegistry._build_balance, so validate their type
-            # here too (previously the explicit constructor silently dropped them).
-            "player_vision_radius", "building_vision_radius", "room_cache_max_size",
-            "gc_interval_ticks", "gc_min_age_ticks", "map_border_tiles",
-            "equipment_production_ticks", "equipment_production_owner_cap",
-            "hp_regen_interval_ticks",
-            # Guard combat AI (PvE NPC bases feature, Phase 3).
-            "guard_melee_damage", "guard_ranged_damage", "guard_ranged_range",
-            "guard_aggro_radius",
-            # Ranged targeting / shooting lock-on.
-            "target_lock_ticks",
-            # NPC base spawner + elimination (PvE NPC bases, Phase 5).
-            "xp_hq_destroy", "outpost_respawn_ticks", "outpost_count",
-            "fortress_count", "outpost_guard_hp", "fortress_guard_hp",
-            # Tile (room) item-capacity caps.
-            "room_capacity_empty", "room_capacity_building",
-            "room_capacity_per_storage_level",
-        ]
-        float_fields = [
-            "xp_damage", "tick_interval",
-            "academy_training_reduction_per_level", "extractor_level_bonus",
-            "turret_level_bonus", "demolish_refund_default",
-            "hp_regen_percent", "repair_cost_fraction",
-            # Ranged shot baseline accuracies (0..1).
-            "accuracy_targeted", "accuracy_directional",
-            # Wall-clock cooldown (seconds) between a player's instant attacks.
-            "attack_cooldown_seconds",
-            # Wall-clock linkdead grace window (seconds).
-            "linkdead_grace_seconds",
-        ]
-        bool_fields = ["metrics_enabled"]
+        # Derived from BalanceConfig's dataclass fields at module-import time.
+        # See _balance_fields_by_type() — adding a new int/float/bool field to
+        # BalanceConfig automatically validates it here; no second list to edit.
+        int_fields = _BALANCE_INT_FIELDS
+        float_fields = _BALANCE_FLOAT_FIELDS
+        bool_fields = _BALANCE_BOOL_FIELDS
         # Resource->int maps: keys are resource names, values positive ints
         resource_map_fields = ["base_training_cost"]
         # Level->float maps: keys are building levels (1-5), values fractions

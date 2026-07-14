@@ -2223,6 +2223,40 @@ def _parse_resource_amount(args):
     return resource.title(), int(amount_tok)
 
 
+def _resolve_storage_command(cmd):
+    """Shared setup for deposit/withdraw: parse args, find owned storage.
+
+    Returns ``(equipment_system, building, resource, amount)`` on success, or
+    ``None`` after messaging the caller with the appropriate rejection.
+    """
+    equipment_system = cmd.require_system("equipment_system")
+    if equipment_system is None:
+        return None
+
+    parsed = _parse_resource_amount(cmd.args)
+    if parsed is None:
+        cmd.caller.msg(cmd._USAGE)
+        return None
+    resource, amount = parsed
+
+    building = cmd.find_storage_building()
+    if building is None:
+        cmd.caller.msg("No storage building here.")
+        return None
+
+    owner = get_building_attr(building, "owner")
+    if not is_owner(cmd.caller, owner):
+        cmd.caller.msg("You do not own this building.")
+        return None
+
+    # No banking while the base is deactivated (owner lost their HQ).
+    if not cmd._base_active(owner):
+        cmd.caller.msg(cmd._DEACTIVATED_MSG)
+        return None
+
+    return equipment_system, building, resource, amount
+
+
 class CmdDeposit(GameCommand):
     """Move resources from you into your storage building.
 
@@ -2255,38 +2289,10 @@ class CmdDeposit(GameCommand):
     _USAGE = "Usage: deposit <resource> [<amount>|all]"
 
     def func(self):
-        equipment_system = self.require_system("equipment_system")
-        if equipment_system is None:
+        resolved = _resolve_storage_command(self)
+        if resolved is None:
             return
-
-        parsed = _parse_resource_amount(self.args)
-        if parsed is None:
-            self.caller.msg(self._USAGE)
-            return
-        resource, amount = parsed
-
-        building = self.find_storage_building()
-        if building is None:
-            self.caller.msg("No storage building here.")
-            return
-
-        # Only the owner may use their storage (mirrors upgrade/demolish/exit
-        # commands). Without this any player could deposit into — or, via
-        # withdraw, drain — an enemy Vault/HQ they are standing on.
-        if not is_owner(self.caller, get_building_attr(building, "owner")):
-            self.caller.msg("You do not own this building.")
-            return
-
-        # No banking while the base is deactivated (owner lost their HQ).
-        if not self._base_active(get_building_attr(building, "owner")):
-            self.caller.msg(self._DEACTIVATED_MSG)
-            return
-
-        # The system caps by what the player holds and the building's remaining
-        # capacity, deducts only what was actually stored, and emits the
-        # player-facing notification (deposited / storage_full) via the
-        # presenter — including the building's new stored/capacity totals. The
-        # command composes no action-outcome string here.
+        equipment_system, building, resource, amount = resolved
         equipment_system.deposit(self.caller, building, resource, amount)
 
 
@@ -2322,36 +2328,10 @@ class CmdWithdraw(GameCommand):
     _USAGE = "Usage: withdraw <resource> [<amount>|all]"
 
     def func(self):
-        equipment_system = self.require_system("equipment_system")
-        if equipment_system is None:
+        resolved = _resolve_storage_command(self)
+        if resolved is None:
             return
-
-        parsed = _parse_resource_amount(self.args)
-        if parsed is None:
-            self.caller.msg(self._USAGE)
-            return
-        resource, amount = parsed
-
-        building = self.find_storage_building()
-        if building is None:
-            self.caller.msg("No storage building here.")
-            return
-
-        # Only the owner may withdraw from their storage (see CmdDeposit).
-        if not is_owner(self.caller, get_building_attr(building, "owner")):
-            self.caller.msg("You do not own this building.")
-            return
-
-        # No banking while the base is deactivated (owner lost their HQ).
-        if not self._base_active(get_building_attr(building, "owner")):
-            self.caller.msg(self._DEACTIVATED_MSG)
-            return
-
-        # The system caps by what the building stores and the player's remaining
-        # carry-weight room, adds only the fitting amount, and emits the
-        # player-facing notification (withdrew) via the presenter — including
-        # the player's carried weight against their limit. The command composes
-        # no action-outcome string here.
+        equipment_system, building, resource, amount = resolved
         equipment_system.withdraw(self.caller, building, resource, amount)
 
 
@@ -3411,47 +3391,22 @@ class CmdCloseExit(GameCommand):
     help_category = "Game"
 
     def func(self):
-        caller = self.caller
-        direction = self.args.strip().lower()
-        dir_map = {"n": "north", "s": "south", "e": "east", "w": "west"}
-        direction = dir_map.get(direction, direction)
-
-        if direction not in _CARDINAL_DIRS:
-            caller.msg("Usage: closeexit <north, south, east, or west>")
+        resolved = _resolve_exit_command(self, "close")
+        if resolved is None:
             return
-
-        if not getattr(caller.db, "inside_building", False):
-            caller.msg("You must be inside a building to close an exit.")
-            return
-
-        building = self._building_at_caller(caller)
-        if building is None:
-            caller.msg("No building here.")
-            return
-
-        owner = get_building_attr(building, "owner")
-        if not is_owner(caller, owner):
-            caller.msg("You do not own this building.")
-            return
-
-        # No exit changes while the base is deactivated (owner lost their HQ).
-        if not self._base_active(owner):
-            caller.msg(self._DEACTIVATED_MSG)
-            return
-
-        closed = get_closed_exits(building)
+        building, direction, closed = resolved
 
         if direction in closed:
-            caller.msg(f"The {direction} exit is already closed.")
+            self.caller.msg(f"The {direction} exit is already closed.")
             return
 
         if len(closed) >= 3:
-            caller.msg("You must leave at least one exit open.")
+            self.caller.msg("You must leave at least one exit open.")
             return
 
         closed.add(direction)
         building.attributes.add("closed_exits", list(closed))
-        caller.msg(f"Closed the {direction} exit.")
+        self.caller.msg(f"Closed the {direction} exit.")
 
 
 class CmdOpenExit(GameCommand):
@@ -3477,43 +3432,18 @@ class CmdOpenExit(GameCommand):
     help_category = "Game"
 
     def func(self):
-        caller = self.caller
-        direction = self.args.strip().lower()
-        dir_map = {"n": "north", "s": "south", "e": "east", "w": "west"}
-        direction = dir_map.get(direction, direction)
-
-        if direction not in _CARDINAL_DIRS:
-            caller.msg("Usage: openexit <north, south, east, or west>")
+        resolved = _resolve_exit_command(self, "open")
+        if resolved is None:
             return
-
-        if not getattr(caller.db, "inside_building", False):
-            caller.msg("You must be inside a building to open an exit.")
-            return
-
-        building = self._building_at_caller(caller)
-        if building is None:
-            caller.msg("No building here.")
-            return
-
-        owner = get_building_attr(building, "owner")
-        if not is_owner(caller, owner):
-            caller.msg("You do not own this building.")
-            return
-
-        # No exit changes while the base is deactivated (owner lost their HQ).
-        if not self._base_active(owner):
-            caller.msg(self._DEACTIVATED_MSG)
-            return
-
-        closed = get_closed_exits(building)
+        building, direction, closed = resolved
 
         if direction not in closed:
-            caller.msg(f"The {direction} exit is already open.")
+            self.caller.msg(f"The {direction} exit is already open.")
             return
 
         closed.discard(direction)
         building.attributes.add("closed_exits", list(closed))
-        caller.msg(f"Opened the {direction} exit.")
+        self.caller.msg(f"Opened the {direction} exit.")
 
 
 def _resolve_exit_command(cmd, action):
@@ -3538,8 +3468,13 @@ def _resolve_exit_command(cmd, action):
     if building is None:
         caller.msg("No building here.")
         return None
-    if not is_owner(caller, get_building_attr(building, "owner")):
+    owner = get_building_attr(building, "owner")
+    if not is_owner(caller, owner):
         caller.msg("You do not own this building.")
+        return None
+    # No exit changes while the base is deactivated (owner lost their HQ).
+    if not cmd._base_active(owner):
+        caller.msg(cmd._DEACTIVATED_MSG)
         return None
     return building, direction, get_closed_exits(building)
 

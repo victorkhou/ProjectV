@@ -2963,6 +2963,31 @@ class TestExitCommands(unittest.TestCase):
         cmd.func()
         self.assertIn("do not own", " ".join(caller._messages))
 
+    def test_exit_toggle_blocked_when_base_deactivated(self):
+        # Regression: 'exit <dir>' shares _resolve_exit_command with
+        # closeexit/openexit and must honor the base-deactivation gate too —
+        # it previously bypassed it (no HQ = base inert, but toggle still fired).
+        cmd, caller, building = self._setup(CmdExit, "north")
+        building.attributes.get("owner").get_buildings = lambda: []  # HQ gone
+        cmd.func()
+        self.assertIn("deactivated", " ".join(caller._messages).lower())
+        self.assertNotIn("north", building.attributes.get("closed_exits"))
+
+    def test_closeexit_blocked_when_base_deactivated(self):
+        cmd, caller, building = self._setup(CmdCloseExit, "north")
+        building.attributes.get("owner").get_buildings = lambda: []  # HQ gone
+        cmd.func()
+        self.assertIn("deactivated", " ".join(caller._messages).lower())
+        self.assertNotIn("north", building.attributes.get("closed_exits"))
+
+    def test_openexit_blocked_when_base_deactivated(self):
+        cmd, caller, building = self._setup(CmdOpenExit, "north")
+        building.attributes.add("closed_exits", {"north"})
+        building.attributes.get("owner").get_buildings = lambda: []  # HQ gone
+        cmd.func()
+        self.assertIn("deactivated", " ".join(caller._messages).lower())
+        self.assertIn("north", building.attributes.get("closed_exits"))
+
 
 class _FakeDrop:
     """Minimal gettable object at the caller's coordinates."""

@@ -549,10 +549,19 @@ class DataRegistry:
             except (KeyError, TypeError):
                 logger.warning("Skipping malformed player class entry %r.", entry)
                 continue
+            # key drives dict insertion (must be hashable), .title() for the
+            # default name, and persistence on db.player_class — so a non-string
+            # key would crash load, not degrade. Enforce str here, matching the
+            # "malformed → skip, never block start" contract in the docstring.
+            if not isinstance(key, str) or not key:
+                logger.warning("Skipping player class with non-string key %r.", key)
+                continue
+            name = entry.get("name")
+            description = entry.get("description")
             self.classes[key] = ClassDef(
                 key=key,
-                name=entry.get("name", key.title()),
-                description=(entry.get("description") or "").strip(),
+                name=name if isinstance(name, str) and name else key.title(),
+                description=(description if isinstance(description, str) else "").strip(),
             )
         logger.info("Loaded %d player class(es).", len(self.classes))
 

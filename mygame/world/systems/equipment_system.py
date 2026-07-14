@@ -26,7 +26,6 @@ from typing import Any, Callable
 from world.constants import (
     BASE_CARRY_WEIGHT,
     DEFAULT_RESOURCE_WEIGHT,
-    DEFAULT_THROW_RANGE,
     EQUIPMENT_SLOTS,
     GEAR_CATEGORIES,
     SUPPLY_CATEGORIES,

@@ -644,22 +644,55 @@ fixes applied**.
   `linkdead_expiry`). The `at_repeat` docstring correctly defers to the constant
   rather than re-listing a count, so it can't drift again.
 
-## Open (deferred to a later pass, verified real)
+## Tier-2 fixes applied in this pass 🟢
 
-Confirmed by the review but intentionally **not** done in this Tier-1 pass (they
-warrant their own verification — larger or higher-risk):
+6. **Consolidated `CmdCloseExit`/`CmdOpenExit` onto `_resolve_exit_command`** —
+   both now route through the shared helper (same as `CmdExit`/`exit`), removing
+   ~40 lines of duplicated resolution + ownership + inside-building checks.
+   **Bug fix**: added the `_base_active` gate to `_resolve_exit_command`, which
+   `CmdExit` was missing — a latent bypass that let a player toggle exits via
+   `exit <dir>` while their base was deactivated (only `closeexit`/`openexit`
+   enforced the gate). Three regression tests pin this.
+7. **Derived `schema_validator.py` balance field-lists from `BalanceConfig`** —
+   `int_fields`/`float_fields`/`bool_fields` are now computed at module-import
+   time via `dataclasses.fields(BalanceConfig)`. Adding a new `int`/`float`/`bool`
+   field to the dataclass automatically validates it; no parallel list to maintain.
+8. **Extracted `_resolve_storage_command`** for `CmdDeposit`/`CmdWithdraw` — the
+   identical 5-step guard chain (get system → parse args → find storage building
+   → ownership check → base-deactivation gate) now lives in one function; each
+   command's `func` is reduced to a single delegation + one action call.
 
-- **`schema_validator.py` field-list drift** — `int_fields`/`float_fields`/
-  `bool_fields` (~64 names) are a hand-maintained parallel copy of the
-  `BalanceConfig` dataclass; derive them from `dataclasses.fields()`.
+## Audit finds fixed alongside Tier-2 (2026-07-14) 🟢
+
+An adversarial audit (5 parallel finders over the branch's feature slices, one
+skeptic per finding) surfaced three more, all fixed:
+
+9. **Hardened `DataRegistry._load_classes`** against a non-string `key`/
+   `description` in `classes.yaml`. The docstring promised "malformed → skip,
+   never block start," but only a *missing* key was caught; a non-string key hit
+   `.title()`/dict-insert and a non-string description hit `.strip()` — both
+   crashed **server start** (`AttributeError: 'int' object has no attribute
+   'title'`). Now skips a bad key and coerces a bad description. Regression test
+   added.
+10. **Removed the dead `DEFAULT_THROW_RANGE` import** left in
+    `equipment_system.py` after the Tier-1 `throw()` deletion (the constant is
+    still live — only `bomb_system.py` uses it).
+11. **Fixed the last stale `bombed`-kind reference** in an `apply_direct_hit`
+    docstring (`combat_engine.py`) → "detonation summary".
+
+## Open (deferred — verified real but risk > reward in this pass)
+
 - **Two parallel map renderers** (`procedural_map_renderer.py` vs
   `map_data_provider.py`) still duplicate viewport/bounds/classification; and
   `_room_display_symbol` is fully dead. (Part 5's "two renderers" finding is
-  still open.)
+  still open.) Needs manual visual testing.
 - **Combat kill-credit / defender-notification** logic repeats across the three
   defeat handlers and `_finalize_miss`/`_notify_target` → extract
-  `_kill_credit` / `_notify_defender`.
-- **Admin `IndexedSpawnMixin`**, `CmdDeposit`/`CmdWithdraw` shared guard, the
-  instant-attack `_fire_instant` helper, and the `CmdCloseExit`/`CmdOpenExit`
-  bypass of `_resolve_exit_command` (which silently drops the base-deactivation
-  gate — a latent bug the consolidation would fix).
+  `_kill_credit` / `_notify_defender`. Deep interleaving across 6+ handlers;
+  warrants its own adversarial pass.
+- **Admin `IndexedSpawnMixin`**: after inspection only ~4 lines of resolution
+  logic per command (each domain's index, list formatting, and spawn args differ
+  enough that a mixin taking 3+ lambdas would add complexity without net gain).
+  Not worthwhile.
+- **`_fire_instant` helper**: 3 call sites × 7 lines, but pre-conditions diverge;
+  the inline form reads clearly in context. Not worthwhile.

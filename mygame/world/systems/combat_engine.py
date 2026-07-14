@@ -475,9 +475,9 @@ class CombatEngine(BaseSystem):
                 building and takes no lockout regardless.
             notify_attacker_hit: Whether to send the attacking player the
                 per-hit "You hit X" notice. True for a single wielded shot/melee;
-                False for the throw-AoE path, which resolves many victims through
-                here and reports one ``bombed`` summary instead (no per-victim
-                spam).
+                False for the bomb-blast AoE path, which resolves many victims
+                through here and reports one detonation summary instead (no
+                per-victim spam).
         """
         lockout_ticks = self.registry.balance.combat_lockout_ticks
         lockout_until = current_tick + lockout_ticks

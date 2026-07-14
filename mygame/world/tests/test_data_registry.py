@@ -939,6 +939,27 @@ class TestPlayerClasses:
         assert "vanguard" in reg.classes
         assert len(reg.classes) == 1  # the keyless entry was skipped
 
+    def test_non_string_key_or_description_does_not_crash(self, data_dir):
+        # A non-string key would crash on .title()/dict-insert, and a non-string
+        # truthy description would crash on .strip() — both must degrade to
+        # "skip the bad entry, keep the good ones" so a bad class file never
+        # blocks server start (matches _load_classes' documented contract).
+        _write_yaml(
+            os.path.join(data_dir, "definitions", "classes.yaml"),
+            {"classes": [
+                {"key": 123, "name": "IntKey"},            # non-string key
+                {"key": "gunner", "description": ["oops"]},  # non-string desc
+                {"key": "vanguard", "name": "Vanguard"},     # the good one
+            ]},
+        )
+        reg = DataRegistry()
+        reg.load_all(data_dir)
+        assert "vanguard" in reg.classes
+        assert 123 not in reg.classes  # non-string key skipped, not crashed
+        # gunner loads (missing name defaults; bad description coerced to "")
+        assert reg.get_class("gunner").description == ""
+        assert reg.get_class("gunner").name == "Gunner"
+
     def test_classes_swapped_on_reload(self, data_dir):
         reg = DataRegistry()
         reg.load_all(data_dir)
