@@ -294,6 +294,25 @@ class CmdSpawn(BaseCommand):
         _apply_spawn(caller, key, label)
 
 
+def _account_character_names(caller):
+    """Return the caller's account's character names (for the delete hint)."""
+    account = getattr(caller, "account", None)
+    if account is None:
+        return []
+    try:
+        chars = getattr(account, "characters", None)
+        if chars is not None:
+            seq = list(chars.all()) if hasattr(chars, "all") else list(chars)
+            return [c.key for c in seq if c]
+    except Exception:  # noqa: BLE001
+        pass
+    try:
+        legacy = getattr(account.db, "_playable_characters", None) or []
+        return [c.key for c in legacy if c]
+    except Exception:  # noqa: BLE001
+        return []
+
+
 # ------------------------------------------------------------------ #
 #  Bare-number selection — the "type a number" front end
 # ------------------------------------------------------------------ #
@@ -307,7 +326,8 @@ class CmdSelect(BaseCommand):
 
     Drives the numbered wizard by typing a number:
       * SPAWNING — the class then spawn-point menus (1-n).
-      * LOBBY — |w1|n to enter the game, |w0|n to quit.
+      * LOBBY — |w1|n enter the game, |w2|n change password, |w3|n delete a
+        character, |w0|n quit.
     Bound to the digit keys, so a bare '1' works. Outside staging it does
     nothing.
     """
@@ -348,9 +368,25 @@ class CmdSelect(BaseCommand):
 
     @staticmethod
     def _select_lobby(caller, raw, session=None):
-        """Handle the lobby deployment menu: 1 = enter game, 0 = quit."""
+        """Handle the lobby menu: 1 enter, 2 password, 3 delete char, 0 quit.
+
+        The account actions (password / chardelete) take arguments, so their
+        menu entry prints the command to type rather than running it blind.
+        """
         if raw == "1":
             deploy_from_lobby(caller)
+        elif raw == "2":
+            caller.msg(
+                "To change your password, type:  "
+                "|wpassword <oldpass> = <newpass>|n"
+            )
+        elif raw == "3":
+            chars = _account_character_names(caller)
+            listing = f" Your characters: {', '.join(chars)}." if chars else ""
+            caller.msg(
+                "To permanently delete a character, type:  "
+                "|wchardelete <name>|n (this cannot be undone)." + listing
+            )
         elif raw == "0":
             # Forward the invoking session so the quit disconnects THIS session
             # (CmdQuit is account_caller and crashes on a None session).
@@ -511,15 +547,18 @@ def _relocate(caller, planet, x, y) -> None:
 
 
 def announce_lobby(caller) -> None:
-    """Present the numbered lobby (deployment) menu (SPAWNING → LOBBY / on login).
+    """Present the numbered lobby menu.
 
-    The final wizard step: type |w1|n to enter the game or |w0|n to quit.
+    The staging-area hub: deploy, manage account, or disconnect. Replaces the
+    OOC state — auto-puppet drops the player straight here on login.
     """
     caller.msg(
-        "\n|wReady to deploy.|n\n"
+        "\n|wStaging area.|n\n"
         "  |w1|n. |cEnter the game|n\n"
-        "  |w0|n. |cQuit|n\n"
-        "(type the number, or |wenter|n / |wquit|n)"
+        "  |w2|n. |cChange password|n\n"
+        "  |w3|n. |cDelete character|n\n"
+        "  |w0|n. |cQuit (disconnect)|n\n"
+        "(type the number)"
     )
 
 

@@ -301,6 +301,18 @@ class TestCmdSelect(unittest.TestCase):
         self.assertEqual(c._executed, ["quit"])
         self.assertEqual(c._executed_sessions, [sentinel_session])
 
+    def test_lobby_select_2_shows_password_hint(self):
+        c = _Caller(state=PLAYER_STATE_LOBBY)
+        _run(CmdSelect, c, args="", cmdstring="2")
+        self.assertIn("password", c.last().lower())
+        self.assertEqual(c.db.player_state, PLAYER_STATE_LOBBY)
+
+    def test_lobby_select_3_shows_chardelete_hint(self):
+        c = _Caller(state=PLAYER_STATE_LOBBY)
+        _run(CmdSelect, c, args="", cmdstring="3")
+        self.assertIn("chardelete", c.last().lower())
+        self.assertEqual(c.db.player_state, PLAYER_STATE_LOBBY)
+
     def test_lobby_select_other_reprompts_menu(self):
         c = _Caller(state=PLAYER_STATE_LOBBY)
         _run(CmdSelect, c, args="", cmdstring="7")
