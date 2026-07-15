@@ -47,6 +47,14 @@ BASE_CHARACTER_TYPECLASS = "typeclasses.characters.CombatCharacter"
 # client handles scrolling.
 HELP_MORE_ENABLED = False
 
+# Do NOT auto-puppet the last character on login. With this off, a connecting
+# account lands at the character-select screen and must explicitly choose which
+# character to play (``ic <name>``) rather than being dropped straight into the
+# last-played puppet. (Evennia: disable AUTO_PUPPET_ON_LOGIN for a char-select
+# screen on login.) The lifecycle spawning/lobby flow then runs on the puppet
+# the player selects, via CombatCharacter.at_post_puppet.
+AUTO_PUPPET_ON_LOGIN = False
+
 # Player lobby / spawning lifecycle flow (states 3-4 of the player state
 # machine). ON: world commands are gated behind a PLAYING state, every login
 # routes through spawning/lobby, and death/disconnect reroute through the
