@@ -54,6 +54,52 @@ HELP_MORE_ENABLED = False
 # the legacy behavior (instant game entry on login, instant in-place respawn).
 LOBBY_FLOW_ENABLED = True
 
+# --- Session model the lifecycle flow depends on -------------------------- #
+# The staging flow (lobby/spawning) is built around Evennia AUTO-PUPPETING a
+# SINGLE character on login: at_post_puppet fires and drops the player straight
+# into the lobby menu / spawning wizard (announce_lobby / announce_spawning)
+# rather than an OOC character-select screen. These are Evennia's defaults, but
+# we pin them EXPLICITLY so a future edit can't silently break the flow (e.g.
+# flipping to multi-character select would land players at OOC char-select, and
+# at_post_puppet would not route them as designed). Authentication is unaffected:
+# a connection still always requires username + password; auto-puppet only skips
+# the 'ic <name>' character-select step. See .kiro/specs/player-lifecycle
+# (Requirement 12). Changing any of these requires revisiting the lifecycle
+# login/quit routing and its multi-puppet handling.
+AUTO_PUPPET_ON_LOGIN = True
+MULTISESSION_MODE = 0
+MAX_NR_CHARACTERS = 1
+
+# --- Require an explicit login on every new session ----------------------- #
+# By default Evennia auto-logs-in a new webclient connection from a shared
+# browser-session cookie: once any tab has authenticated, a new webclient session
+# silently logs in as that same account with no connect screen — and because
+# MULTISESSION_MODE=0 disconnects duplicate sessions on login, opening a new tab
+# USURPS the character already playing on another session. We want every new
+# session to require explicit credentials, so we disable BOTH cookie writers:
+#
+#   1. Drop SharedLoginMiddleware here (shares a *website* login into the
+#      webclient via the request/response cycle).
+#   2. Neutralize the webclient protocols' own at_login cookie write — done in
+#      server/conf/portal_services_plugins.py (a startup monkeypatch, which
+#      avoids the settings-path circular import the AJAX protocol class body
+#      would otherwise trigger).
+#
+# Trade-off: the shared cookie (webclient_authenticated_uid) is the ONLY thing
+# that re-authenticates a REOPENED webclient socket (Evennia webclient.py onOpen
+# / webclient_ajax.py mode_init gate the whole "already logged in" block on it).
+# Disabling it means EVERY new socket — a new tab AND a page reload of an
+# existing tab — lands at the login screen and must re-enter credentials. There
+# is no way to allow reload-reconnect while blocking new-tab usurpation, because
+# both are just "a fresh socket reading the same browser cookie." We accept the
+# reload cost to close the usurpation hole. (An in-place live socket that never
+# closes — e.g. the websocket staying open — is unaffected; only a NEW socket
+# re-authenticates.)
+MIDDLEWARE = [
+    m for m in MIDDLEWARE
+    if m != "evennia.web.utils.middleware.SharedLoginMiddleware"
+]
+
 # Add 'chat' as a server-level alias for the Public channel
 DEFAULT_CHANNELS = [
     {
