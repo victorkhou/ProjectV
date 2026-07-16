@@ -41,7 +41,7 @@ from commands.lifecycle_commands import (
     CmdSelect,
 )
 from commands.admin_commands import (
-    CmdReboot, CmdPurgeRooms, CmdTeleport, CmdClearFog, CmdMigrate,
+    CmdReboot, CmdPurgeRooms, CmdTeleport, CmdTransfer, CmdClearFog, CmdMigrate,
     CmdAdminBuilding, CmdAdminAgent, CmdAdminResource, CmdAdminItem,
     CmdAdminPlayer, CmdAdminOutpost,
 )
@@ -167,6 +167,7 @@ class CharacterCmdSet(default_cmds.CharacterCmdSet):
         self.add(CmdReboot())
         self.add(CmdPurgeRooms())
         self.add(CmdTeleport())
+        self.add(CmdTransfer())
         self.add(CmdClearFog())
         self.add(CmdMigrate())
         # Admin routers (replace old standalone admin commands)

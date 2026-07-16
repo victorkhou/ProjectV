@@ -108,6 +108,7 @@ from mygame.commands.admin_commands import (  # noqa: E402
     CmdAdminPlayer,
     CmdAdminOutpost,
     CmdTeleport,
+    CmdTransfer,
 )
 
 
@@ -146,6 +147,7 @@ class FakeCaller:
         self.ndb = FakeNDB(systems)
         self.db = FakeDB()
         self._messages = []
+        self._executed = []  # records execute_cmd calls (e.g. the post-transfer look)
         self._search_results = {}
         self.location = None
 
@@ -162,6 +164,9 @@ class FakeCaller:
 
     def msg(self, text, **kwargs):
         self._messages.append(text)
+
+    def execute_cmd(self, cmd, **kwargs):
+        self._executed.append(cmd)
 
     def search(self, name, **kwargs):
         return self._search_results.get(name)
@@ -1173,6 +1178,228 @@ class TestTeleportSuppressesNotifications(unittest.TestCase):
         self.assertEqual(len(room.calls), 1)
         _obj, tx, ty, _notify = room.calls[0]
         self.assertEqual((tx, ty), (13, 12))  # the nearer Agent
+
+
+# -------------------------------------------------------------- #
+#  CmdTransfer tests — pull a unit to the caller's tile
+# -------------------------------------------------------------- #
+
+class _UnitStub:
+    """A transferable unit stand-in (player or NPC).
+
+    Carries ``combat_xp`` so world.utils.is_player() treats it as movable, and
+    records whether it was notified. ``owner`` differentiates co-named agents.
+    """
+
+    def __init__(self, key, x, y, planet="earth", owner=None, agent_id=None,
+                 puppeted=False):
+        self.key = key
+        self.location = None
+        self.db = FakeDB(
+            coord_x=x, coord_y=y, coord_planet=planet,
+            combat_xp=0, owner=owner, agent_id=agent_id,
+        )
+        self._messages = []
+        self._executed = []
+        # A puppeted player has execute_cmd (so it gets a look-refresh); an
+        # agent/NPC does not. Add it conditionally to mirror the guard in
+        # _pull_to_caller.
+        if puppeted:
+            self.execute_cmd = lambda cmd, **kw: self._executed.append(cmd)
+
+    def msg(self, text, **kwargs):
+        self._messages.append(text)
+
+    def move_to(self, destination, **kwargs):
+        self.location = destination
+
+
+class _BuildingStub:
+    """A fixed structure — no combat_xp, so is_player() is False (not movable)."""
+
+    def __init__(self, key, x, y, planet="earth"):
+        self.key = key
+        self.location = None
+        self.db = FakeDB(coord_x=x, coord_y=y, coord_planet=planet)
+
+    def move_to(self, destination, **kwargs):
+        self.location = destination
+
+
+class _FakeAgentRoster:
+    """Minimal agent_system exposing get_agents(owner)."""
+
+    def __init__(self, by_owner):
+        self._by_owner = by_owner  # {owner_obj: [units]}
+
+    def get_agents(self, owner):
+        return self._by_owner.get(owner, [])
+
+
+class TestTransfer(unittest.TestCase):
+    """CmdTransfer pulls players/agents/NPCs to the caller's tile."""
+
+    def _caller(self, systems=None):
+        caller = FakeCaller(perm_level="Builder", systems=systems or {})
+        caller.db.coord_planet = "earth"
+        caller.db.coord_x, caller.db.coord_y = 100, 100
+        return caller
+
+    def _run(self, caller, args, room, search_results=None):
+        caller._search_results = search_results or {}
+        from server.conf import game_init
+        original = getattr(game_init, "game_systems", None)
+        game_init.game_systems = {"planet_rooms": {"earth": room}}
+        try:
+            cmd = _make_cmd(CmdTransfer, caller, args)
+            cmd.func()
+        finally:
+            if original is not None:
+                game_init.game_systems = original
+
+    def test_registers_expected_aliases(self):
+        self.assertIn("summon", CmdTransfer.aliases)
+        self.assertIn("@transfer", CmdTransfer.aliases)
+
+    def test_pulls_named_unit_to_caller_tile(self):
+        room = _RecordingRoom()
+        caller = self._caller()
+        unit = _UnitStub("Scout", x=5, y=5)
+        self._run(caller, "Scout", room, {"Scout": unit})
+
+        self.assertEqual(len(room.calls), 1)
+        obj, tx, ty, notify = room.calls[0]
+        self.assertIs(obj, unit)
+        self.assertEqual((tx, ty), (100, 100))  # the caller's tile
+        self.assertFalse(notify)  # relocation is silent
+        # The unit is told it moved.
+        self.assertTrue(any("transferred" in str(m).lower() for m in unit._messages))
+        self.assertTrue(any("Scout" in str(m) for m in caller._messages))
+
+    def test_transfer_refreshes_views_for_puppeted_target_and_caller(self):
+        # A puppeted player target gets a 'look' refresh (stale-map fix), and the
+        # caller's view refreshes too so the arriving unit shows on the tile.
+        room = _RecordingRoom()
+        caller = self._caller()
+        unit = _UnitStub("Scout", x=5, y=5, puppeted=True)
+        self._run(caller, "Scout", room, {"Scout": unit})
+
+        self.assertEqual(len(room.calls), 1)  # the move happened
+        self.assertIn("look", unit._executed,
+                      "a puppeted transferred player must get a look-refresh")
+        self.assertIn("look", caller._executed,
+                      "the caller's view must refresh after pulling a unit in")
+
+    def test_transfer_agent_target_without_execute_cmd_is_safe(self):
+        # An agent/NPC target has no execute_cmd; the look-refresh branch is
+        # guarded, so the transfer still succeeds without raising.
+        room = _RecordingRoom()
+        caller = self._caller()
+        agent = _UnitStub("Agent-1", x=5, y=5, puppeted=False)  # no execute_cmd
+        self.assertFalse(hasattr(agent, "execute_cmd"))
+        self._run(caller, "Agent-1", room, {"Agent-1": agent})
+        self.assertEqual(len(room.calls), 1)  # moved, no crash
+        self.assertIn("look", caller._executed)  # caller still refreshes
+
+    def test_buildings_cannot_be_transferred(self):
+        room = _RecordingRoom()
+        caller = self._caller()
+        bld = _BuildingStub("HQ", x=5, y=5)
+        self._run(caller, "HQ", room, {"HQ": bld})
+
+        self.assertEqual(len(room.calls), 0)  # no move happened
+        self.assertTrue(
+            any("not a movable unit" in str(m) for m in caller._messages)
+        )
+
+    def test_unknown_name_reports_and_does_not_move(self):
+        room = _RecordingRoom()
+        caller = self._caller()
+        self._run(caller, "Nobody", room, {})
+        self.assertEqual(len(room.calls), 0)
+        self.assertTrue(any("No unit named" in str(m) for m in caller._messages))
+
+    def test_ambiguous_name_lists_candidates_with_owners(self):
+        room = _RecordingRoom()
+        caller = self._caller()
+        raider = _UnitStub("Raider", x=1, y=1)
+        me = _UnitStub("Me", x=2, y=2)
+        a1 = _UnitStub("Agent-1", x=8, y=8, owner=raider)
+        a2 = _UnitStub("Agent-1", x=9, y=9, owner=me)
+        self._run(caller, "Agent-1", room, {"Agent-1": [a1, a2]})
+
+        # Ambiguous → NOT moved; both owners listed for disambiguation.
+        self.assertEqual(len(room.calls), 0)
+        joined = " ".join(str(m) for m in caller._messages)
+        self.assertIn("Multiple units match", joined)
+        self.assertIn("Raider", joined)
+        self.assertIn("Me", joined)
+
+    def test_owner_disambiguates_by_agent_id(self):
+        room = _RecordingRoom()
+        raider = _UnitStub("Raider", x=1, y=1)
+        a3 = _UnitStub("Agent-3", x=8, y=8, owner=raider, agent_id=3)
+        roster = _FakeAgentRoster({raider: [a3]})
+        caller = self._caller(systems={"agent_system": roster})
+        # owner= resolves the owner via caller.search; '#3' picks by agent_id.
+        self._run(caller, "#3 owner=Raider", room, {"Raider": raider})
+
+        self.assertEqual(len(room.calls), 1)
+        obj, tx, ty, _notify = room.calls[0]
+        self.assertIs(obj, a3)
+        self.assertEqual((tx, ty), (100, 100))
+
+    def test_owner_disambiguates_by_name(self):
+        # 'Agent-1 owner=Raider' searches by name, then keeps only Raider's.
+        room = _RecordingRoom()
+        raider = _UnitStub("Raider", x=1, y=1)
+        me = _UnitStub("Me", x=2, y=2)
+        mine = _UnitStub("Agent-1", x=3, y=3, owner=me)
+        theirs = _UnitStub("Agent-1", x=8, y=8, owner=raider)
+        caller = self._caller()
+        self._run(
+            caller, "Agent-1 owner=Raider", room,
+            {"Raider": raider, "Agent-1": [mine, theirs]},
+        )
+        self.assertEqual(len(room.calls), 1)
+        obj, _tx, _ty, _notify = room.calls[0]
+        self.assertIs(obj, theirs)  # Raider's, not mine
+
+    def test_owner_with_missing_agent_id_reports(self):
+        room = _RecordingRoom()
+        raider = _UnitStub("Raider", x=1, y=1)
+        roster = _FakeAgentRoster({raider: []})  # owns no agents
+        caller = self._caller(systems={"agent_system": roster})
+        self._run(caller, "#9 owner=Raider", room, {"Raider": raider})
+        self.assertEqual(len(room.calls), 0)
+        self.assertTrue(any("no agent #9" in str(m) for m in caller._messages))
+
+    def test_owner_not_found_reports(self):
+        room = _RecordingRoom()
+        caller = self._caller(systems={"agent_system": _FakeAgentRoster({})})
+        self._run(caller, "#1 owner=Ghost", room, {})
+        self.assertEqual(len(room.calls), 0)
+        self.assertTrue(
+            any("Could not find owner" in str(m) for m in caller._messages)
+        )
+
+    def test_no_args_shows_usage(self):
+        room = _RecordingRoom()
+        caller = self._caller()
+        self._run(caller, "", room, {})
+        self.assertEqual(len(room.calls), 0)
+        self.assertTrue(any("Usage:" in str(m) for m in caller._messages))
+
+    def test_caller_without_position_is_rejected(self):
+        room = _RecordingRoom()
+        caller = self._caller()
+        caller.db.coord_x = None  # no tile to pull to
+        unit = _UnitStub("Scout", x=5, y=5)
+        self._run(caller, "Scout", room, {"Scout": unit})
+        self.assertEqual(len(room.calls), 0)
+        self.assertTrue(
+            any("no overworld position" in str(m) for m in caller._messages)
+        )
 
 
 # -------------------------------------------------------------- #

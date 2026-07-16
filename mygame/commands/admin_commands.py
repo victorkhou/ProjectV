@@ -126,6 +126,117 @@ def _resolve_by_index(token, ordered):
     return ordered[n - 1]
 
 
+def _resolve_planet_room(caller, planet):
+    """Return the shared PlanetRoom for *planet*, or None (after messaging).
+
+    The single lookup shared by the teleport ('goto') and transfer commands:
+    both need the destination planet's one PlanetRoom to relocate an object
+    into. Messages the caller on any failure so callers just bail on None.
+    """
+    planet_rooms = None
+    try:
+        from server.conf.game_init import game_systems
+        planet_rooms = game_systems.get("planet_rooms", {})
+    except (ImportError, AttributeError):
+        pass
+
+    if not planet_rooms:
+        caller.msg("Planet rooms not available.")
+        return None
+
+    target_room = planet_rooms.get(planet)
+    if not target_room:
+        caller.msg(f"No PlanetRoom found for {planet}.")
+        return None
+    return target_room
+
+
+def _relocate_object(obj, target_room, tx, ty, planet):
+    """Relocate *obj* to ``(tx, ty, planet)`` within/into *target_room*.
+
+    The shared spatial move behind both 'goto' (relocating the caller) and
+    'transfer' (pulling another entity to the caller's tile). Handles the
+    cross-planet PlanetRoom move plus coordinate-index bookkeeping. Does NOT
+    message or look — that is the caller's concern, since who-sees-what differs
+    between moving yourself and summoning someone else.
+
+    move_hooks=False on the cross-planet move_to: Evennia's arrival hooks
+    (at_object_receive + the auto-look via at_post_move) fire DURING move_to —
+    before move_entity sets the new x/y below — so they'd render/react at the
+    STALE origin coords. We do the index bookkeeping ourselves instead.
+
+    notify=False on move_entity: a teleport/summon is not a step onto an
+    adjacent tile; for a cross-planet move the stored old coords belong to the
+    origin planet, so arrival/departure messaging would notify the wrong
+    players.
+    """
+    origin_room = obj.location
+    old_x = getattr(obj.db, "coord_x", None)
+    old_y = getattr(obj.db, "coord_y", None)
+
+    obj.db.coord_planet = planet
+
+    if obj.location is not target_room:
+        # Skipping at_object_leave means the origin room's coordinate index
+        # still holds the object — remove it explicitly so it doesn't leak.
+        if origin_room is not None and old_x is not None and old_y is not None:
+            idx = getattr(getattr(origin_room, "ndb", None), "_coord_index", None)
+            if idx is not None:
+                try:
+                    idx.remove(obj, int(old_x), int(old_y))
+                except Exception:  # pragma: no cover - defensive
+                    pass
+        obj.move_to(target_room, quiet=True, move_hooks=False)
+
+    target_room.move_entity(obj, tx, ty, notify=False)
+
+
+def _search_entities(caller, name):
+    """Return every entity matching *name*, excluding *caller* itself.
+
+    Resolution order (shared by 'goto' and 'transfer'):
+
+    1. ``caller.search(name, quiet=True)`` — Evennia's search does partial
+       (prefix) matching scoped to the caller's location. Since every overworld
+       entity shares one PlanetRoom per planet, this finds any
+       player/NPC/building/item on the caller's *current* planet by name or
+       prefix (the common case: acting on someone here).
+    2. ``evennia.search_object(name)`` — a global exact-by-key fallback that
+       reaches entities on OTHER planets when the local search misses.
+
+    Returns a (possibly empty) list. Callers decide how to handle 0 / 1 /
+    many matches — 'goto' picks the nearest, 'transfer' lists them.
+    """
+    matches = []
+    if hasattr(caller, "search"):
+        res = caller.search(name, quiet=True)
+        if res:
+            matches = list(res) if isinstance(res, (list, tuple)) else [res]
+
+    if not matches:
+        try:
+            from evennia import search_object
+            matches = list(search_object(name) or [])
+        except Exception:  # noqa: BLE001 - no global search in stubbed tests
+            matches = []
+
+    return [m for m in matches if m is not caller]
+
+
+def _owner_label(entity):
+    """Return a short owner tag for *entity* — '(yours)'-style disambiguator.
+
+    Agents and enemy NPCs share a name across owners (every player owns an
+    'Agent-1'), so the owner is the natural differentiator when 'transfer'
+    lists co-named candidates. Returns '' when the entity has no owner (players,
+    unowned buildings).
+    """
+    owner = getattr(getattr(entity, "db", None), "owner", None)
+    if owner is None:
+        return ""
+    return getattr(owner, "key", None) or "?"
+
+
 class CmdAdminBuilding(AdminSubcommandRouter):
     """Manage buildings on the overworld.
 
@@ -1342,34 +1453,16 @@ class CmdTeleport(BaseCommand):
     def _resolve_entity(caller, name):
         """Resolve *name* to a single overworld entity (or None).
 
-        Resolution order:
-
-        1. ``caller.search(name, quiet=True)`` — Evennia's search does partial
-           (prefix) matching scoped to the caller's location. Since every
-           overworld entity shares one PlanetRoom per planet, this finds any
-           player/NPC/building/item on the caller's *current* planet by name or
-           prefix (the common case: "go to someone here").
-        2. ``evennia.search_object(name)`` — a global exact-by-key fallback that
-           reaches entities on OTHER planets when the local search misses.
-
         On multiple matches, picks the closest by Chebyshev distance so an
         ambiguous prefix (e.g. two Agents) lands somewhere sensible rather than
-        erroring. Excludes the caller itself.
+        erroring. Excludes the caller itself. See :func:`_search_entities` for
+        the search order (local prefix search, then global exact fallback).
+
+        This is the RIGHT behavior for 'goto' — jumping the caller to *some*
+        match is harmless. 'transfer', which moves someone ELSE'S unit, must not
+        guess, so it lists the ambiguous candidates instead of picking one.
         """
-        matches = []
-        if hasattr(caller, "search"):
-            res = caller.search(name, quiet=True)
-            if res:
-                matches = list(res) if isinstance(res, (list, tuple)) else [res]
-
-        if not matches:
-            try:
-                from evennia import search_object
-                matches = list(search_object(name) or [])
-            except Exception:  # noqa: BLE001 - no global search in stubbed tests
-                matches = []
-
-        candidates = [m for m in matches if m is not caller]
+        candidates = _search_entities(caller, name)
         if not candidates:
             return None
         if len(candidates) == 1:
@@ -1400,59 +1493,14 @@ class CmdTeleport(BaseCommand):
         Shared by the coordinate and entity paths. Handles the cross-planet
         move + coordinate-index bookkeeping + the single correct look.
         """
-        # Get the shared planet room
-        planet_rooms = None
-        try:
-            from server.conf.game_init import game_systems
-            planet_rooms = game_systems.get("planet_rooms", {})
-        except (ImportError, AttributeError):
-            pass
-
-        if not planet_rooms:
-            caller.msg("Planet rooms not available.")
+        target_room = _resolve_planet_room(caller, planet)
+        if target_room is None:
             return
 
-        target_room = planet_rooms.get(planet)
-        if not target_room:
-            caller.msg(f"No PlanetRoom found for {planet}.")
-            return
-
-        # Capture the origin room + coords BEFORE anything changes, so a
-        # cross-planet jump can de-index the caller from the origin planet's
-        # coordinate index (we skip Evennia's move hooks below, which is what
-        # normally does that on at_object_leave).
-        origin_room = caller.location
-        old_x = getattr(caller.db, "coord_x", None)
-        old_y = getattr(caller.db, "coord_y", None)
-
-        # Update planet attribute
-        caller.db.coord_planet = planet
-
-        # Only move_to if changing planets (different PlanetRoom).
-        # move_hooks=False: skip Evennia's arrival hooks (at_object_receive AND
-        # the auto-look via at_post_move). Both fire DURING this move — before
-        # move_entity sets the new x/y below — so they'd render the destination
-        # room at the STALE origin coords (the reported bug: a look right after
-        # teleport showed the pre-teleport map). We do the index bookkeeping and
-        # a single correct look ourselves instead.
-        if caller.location is not target_room:
-            # Skipping at_object_leave means the origin room's coordinate index
-            # still holds the caller — remove it explicitly so it doesn't leak.
-            if origin_room is not None and old_x is not None and old_y is not None:
-                idx = getattr(getattr(origin_room, "ndb", None), "_coord_index", None)
-                if idx is not None:
-                    try:
-                        idx.remove(caller, int(old_x), int(old_y))
-                    except Exception:  # pragma: no cover - defensive
-                        pass
-            caller.move_to(target_room, quiet=True, move_hooks=False)
-
-        # Use move_entity for coordinate update within the PlanetRoom (adds the
-        # caller to the destination index at the new tile).
-        # notify=False: a teleport is not a step onto an adjacent tile — for a
-        # cross-planet jump the stored old coords are the origin planet's, so
-        # arrival/departure messaging would notify the wrong players.
-        target_room.move_entity(caller, tx, ty, notify=False)
+        # move_entity(notify=False) + the cross-planet index bookkeeping is
+        # shared with 'transfer' (which pulls another entity here) — see
+        # _relocate_object for the move_hooks=False / notify=False rationale.
+        _relocate_object(caller, target_room, tx, ty, planet)
 
         logger.info("Admin %s teleported to (%d, %d, %s)", caller.key, tx, ty, planet)
         if label:
@@ -1466,6 +1514,237 @@ class CmdTeleport(BaseCommand):
         # (stale-coord) auto-look — so this single explicit look is the one
         # correct view (appearance + map + tile summary) for every teleport,
         # regardless of which coordinate changed.
+        if hasattr(caller, "execute_cmd"):
+            caller.execute_cmd("look")
+
+
+class CmdTransfer(BaseCommand):
+    """Pull an entity to your current tile — the inverse of 'goto'.
+
+    Usage:
+      transfer <name>
+      transfer <name> owner=<player>
+      transfer #<id> owner=<player>
+
+    Options:
+      <name>          a movable unit to summon — a player, agent, or NPC — by
+                      name or unambiguous prefix. It is moved to YOUR tile
+                      (and planet).
+      owner=<player>  disambiguate co-named units by their owner. Agents are all
+                      named 'Agent-<n>', so 'transfer Agent-1 owner=Raider'
+                      pulls Raider's agent, not yours. Accepts a name or prefix.
+      #<id>           with owner=, selects that owner's agent by its stable
+                      agent ID (e.g. 'transfer #3 owner=Raider') — the surest
+                      way to name a specific agent.
+
+    Examples:
+      transfer Scout            (pull the player/NPC 'Scout' to you)
+      transfer Agent-2          (pull YOUR Agent-2, if unambiguous)
+      transfer #3 owner=Raider  (pull Raider's agent #3 to you)
+      transfer Guard-1 owner=Outpost #2   (pull that base's guard)
+
+    Notes:
+      Builder+ only. Only movable units (players, agents, NPCs) can be
+      transferred — buildings and dropped items are fixed to their tile. If a
+      name matches several units, they're listed with their owners so you can
+      re-run with 'owner=' to pick one.
+    """
+
+    key = "transfer"
+    aliases = ["@transfer", "summon"]
+    locks = "cmd:perm(Builder);view:perm(Builder)"
+    help_category = "Admin"
+
+    _USAGE = (
+        "Usage: transfer <name> [owner=<player>]  |  "
+        "transfer #<id> owner=<player>"
+    )
+
+    def func(self):
+        caller = self.caller
+        args = self.args.strip()
+        if not args:
+            caller.msg(self._USAGE)
+            return
+
+        name, owner_name = self._split_owner(args)
+        if not name:
+            caller.msg(self._USAGE)
+            return
+
+        target = self._resolve_unit(caller, name, owner_name)
+        if target is None:
+            return  # _resolve_unit already messaged the caller
+
+        # Movable units only. Buildings/items are fixed to their tile — pulling
+        # one would corrupt the coordinate index (two things claim a tile) and
+        # makes no sense for a fixed structure. is_player() is True for players
+        # AND all combat NPCs (they carry combat_xp); GameEntity-only buildings/
+        # items read None and are excluded.
+        from world.utils import is_player
+        if not is_player(target):
+            tname = getattr(target, "key", "that")
+            caller.msg(
+                f"{tname} is not a movable unit — only players, agents, and "
+                f"NPCs can be transferred."
+            )
+            return
+
+        self._pull_to_caller(caller, target)
+
+    @staticmethod
+    def _split_owner(args):
+        """Split ``"<name> owner=<player>"`` into ``(name, owner_name|None)``.
+
+        ``owner=`` may appear anywhere; everything before it is the unit name,
+        everything after is the owner name (which may itself contain spaces,
+        e.g. 'Outpost #2'). Returns ``owner_name=None`` when no ``owner=`` given.
+        """
+        lower = args.lower()
+        marker = "owner="
+        pos = lower.find(marker)
+        if pos == -1:
+            return args.strip(), None
+        name = args[:pos].strip()
+        owner_name = args[pos + len(marker):].strip()
+        return name, (owner_name or None)
+
+    def _resolve_unit(self, caller, name, owner_name):
+        """Resolve *name* (+ optional *owner_name*) to a single unit, or None.
+
+        Messages the caller on no-match or ambiguity (listing co-named
+        candidates with their owners) and returns None in those cases, so the
+        caller just bails on None.
+        """
+        # An explicit owner + '#<id>' or bare agent name: resolve via the owner's
+        # roster, which is the authoritative, unambiguous per-owner lookup.
+        if owner_name is not None:
+            resolved = self._resolve_by_owner(caller, name, owner_name)
+            # _resolve_by_owner messages + returns None on any failure.
+            return resolved
+
+        candidates = _search_entities(caller, name)
+        if not candidates:
+            caller.msg(
+                f"No unit named '{name}' found. Use a name or unambiguous "
+                f"prefix; add 'owner=<player>' to disambiguate agents/NPCs."
+            )
+            return None
+        if len(candidates) == 1:
+            return candidates[0]
+
+        # Ambiguous — do NOT guess when moving someone else's unit. List the
+        # matches with their owners so the operator can re-run with 'owner='.
+        self._report_ambiguous(caller, name, candidates)
+        return None
+
+    def _resolve_by_owner(self, caller, name, owner_name):
+        """Resolve an owned unit by its owner (+ '#id' or a name).
+
+        Returns the unit, or None after messaging. Two selectors:
+
+        * ``#<id>`` — the owner's agent with that stable agent ID, via the live
+          agent roster (agent IDs are an agent concept). Unambiguous even when
+          many players own an 'Agent-3'.
+        * a name/prefix — matched against the owner's units found by name, then
+          filtered to those actually owned by *owner*. This covers ANY owned
+          unit (agents AND enemy base guards), not just the agent roster.
+        """
+        owner_disp = owner_name
+        owner = None
+        if hasattr(caller, "search"):
+            found = caller.search(owner_name, quiet=True)
+            if found:
+                owner = found[0] if isinstance(found, (list, tuple)) else found
+        if owner is None:
+            caller.msg(f"Could not find owner '{owner_name}'.")
+            return None
+        owner_disp = getattr(owner, "key", owner_name)
+
+        # '#<id>' or bare digits → select that owner's agent by stable ID.
+        idn = _parse_index_token(name)
+        if idn is not None:
+            agent_system = _get_system(caller, "agent_system")
+            roster = agent_system.get_agents(owner) if agent_system else []
+            match = next(
+                (a for a in roster if getattr(a.db, "agent_id", None) == idn), None
+            )
+            if match is None:
+                caller.msg(f"{owner_disp} has no agent #{idn}.")
+                return None
+            return match
+
+        # A name/prefix → search by name, keep only units owned by *owner*. Works
+        # for agents and enemy NPCs alike (both carry db.owner).
+        candidates = [
+            c for c in _search_entities(caller, name)
+            if getattr(getattr(c, "db", None), "owner", None) is owner
+        ]
+        if not candidates:
+            caller.msg(
+                f"{owner_disp} has no unit matching '{name}'. Try "
+                f"'transfer #<id> owner={owner_disp}' or '@agent list {owner_disp}'."
+            )
+            return None
+        if len(candidates) > 1:
+            self._report_ambiguous(caller, name, candidates)
+            return None
+        return candidates[0]
+
+    @staticmethod
+    def _report_ambiguous(caller, name, candidates):
+        """List co-named candidates with owner + coords so the op can pick one."""
+        from world.utils import get_coords
+
+        lines = [
+            f"|yMultiple units match '{name}'|n — add 'owner=<player>' to pick one:"
+        ]
+        for c in candidates:
+            owner = _owner_label(c)
+            owner_tag = f" owner={owner}" if owner else " (unowned)"
+            coords = get_coords(c)
+            loc = f" at ({coords[0]}, {coords[1]})" if coords else ""
+            lines.append(f"  |c{getattr(c, 'key', '?')}|n{owner_tag}{loc}")
+        caller.msg("\n".join(lines))
+
+    def _pull_to_caller(self, caller, target):
+        """Move *target* to the caller's tile + planet, then re-render for both."""
+        planet = getattr(caller.db, "coord_planet", None)
+        tx = getattr(caller.db, "coord_x", None)
+        ty = getattr(caller.db, "coord_y", None)
+        if not planet or tx is None or ty is None:
+            caller.msg("You have no overworld position to transfer a unit to.")
+            return
+
+        target_room = _resolve_planet_room(caller, planet)
+        if target_room is None:
+            return
+
+        _relocate_object(target, target_room, int(tx), int(ty), planet)
+
+        tname = getattr(target, "key", "the unit")
+        owner = _owner_label(target)
+        owner_tag = f" ({owner}'s)" if owner else ""
+        logger.info(
+            "Admin %s transferred %s%s to (%s, %s, %s)",
+            caller.key, tname, owner_tag, tx, ty, planet,
+        )
+        caller.msg(
+            f"Transferred |c{tname}|n{owner_tag} to your tile ({tx}, {ty}) on {planet}."
+        )
+
+        # Tell the summoned unit it was moved and refresh ITS view (a puppeted
+        # player would otherwise see a stale map until their next action; agents/
+        # NPCs have neither msg nor execute_cmd, so both calls are guarded).
+        if target is not caller:
+            if hasattr(target, "msg"):
+                target.msg(
+                    f"|yYou have been transferred to {caller.key}'s location.|n"
+                )
+            if hasattr(target, "execute_cmd"):
+                target.execute_cmd("look")
+
+        # Refresh the caller's view so the arriving unit shows on the tile summary.
         if hasattr(caller, "execute_cmd"):
             caller.execute_cmd("look")
 
