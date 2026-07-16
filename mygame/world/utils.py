@@ -359,10 +359,18 @@ def get_building_level(building: Any) -> int:
 
 
 def is_player(entity: Any) -> bool:
-    """Return True if the entity is a player character or player-owned agent.
+    """Return True if the entity is a ``CombatEntity`` — i.e. a mobile combat unit.
 
-    Both players and agents are ``CombatEntity`` instances, so they carry a
-    ``db.combat_xp`` value; buildings/items/drops (``GameEntity`` only) do not.
+    Despite the name, this is really "is this a combat entity that carries
+    ``db.combat_xp``": that covers player characters AND every NPC
+    (``CombatEntity``: player-owned agents AND enemy-base guards). It does NOT
+    cover buildings/items/drops (``GameEntity`` only, no ``combat_xp``). Callers
+    that mean specifically "player character" should additionally check
+    ``has_account`` / ``npc_type``; callers that mean "any movable combat unit"
+    (e.g. the ``transfer`` admin command, which pulls players AND NPCs but must
+    reject fixed structures) use this predicate as-is. Combat routing relies on
+    the same breadth — see ``combat_engine`` / ``base_elimination`` ("enemy NPCs
+    also satisfy is_player").
 
     The check reads the VALUE of ``combat_xp``, not merely whether the attribute
     is accessible: on a real Evennia object ``db`` is a ``DbHolder`` whose
@@ -370,8 +378,8 @@ def is_player(entity: Any) -> bool:
     raises, so ``hasattr(entity.db, "combat_xp")`` is ``True`` for *every* object
     with a ``.db``. A value-based check (``combat_xp is not None``) correctly
     excludes buildings, whose ``combat_xp`` is unset (``None``). ``combat_xp`` is
-    always initialised to ``0`` on a CombatEntity, so a live player/agent still
-    reads a non-``None`` value.
+    always initialised to ``0`` on a CombatEntity, so a live unit still reads a
+    non-``None`` value.
     """
     if entity is None or not hasattr(entity, "db"):
         return False
@@ -415,6 +423,32 @@ def player_is_present(entity: Any) -> bool:
     # Puppeted: present only if actually in the game (PLAYING) or the flow is
     # off / legacy (state None). SPAWNING/LOBBY are OOC and not targetable.
     return state in (None, PLAYER_STATE_PLAYING)
+
+
+def find_linkdead_characters() -> list:
+    """Return every character persisted in the LINKDEAD state (or ``[]``).
+
+    The single enumeration of linkdead characters, shared by the tick-loop grace
+    expiry (``GameTickScript._process_linkdead_expiry``) and the ``who`` roster
+    (``CmdWho._append_linkdead_rows``) — they hold no session, so the
+    online-players roster misses them and both callers must search the DB.
+
+    Correctness note (the reason this is a function, not an inline ORM filter):
+    a plain ``db.player_state = "..."`` assignment stores the value PICKLED in
+    ``db_value`` with ``db_strvalue`` left ``None``, so a ``db_strvalue`` ORM
+    filter matches NOTHING on a real DB (the "grace timer effectively infinite"
+    regression). ``search_object_attribute`` matches on the actual stored value.
+    Best-effort — returns ``[]`` if the search is unavailable (e.g. stubbed test
+    env) so neither caller breaks.
+    """
+    try:
+        from evennia.utils.search import search_object_attribute
+        from world.constants import PLAYER_STATE_LINKDEAD
+        return list(
+            search_object_attribute(key="player_state", value=PLAYER_STATE_LINKDEAD)
+        )
+    except Exception:  # noqa: BLE001 - enumeration must never raise into callers
+        return []
 
 
 # ------------------------------------------------------------------ #

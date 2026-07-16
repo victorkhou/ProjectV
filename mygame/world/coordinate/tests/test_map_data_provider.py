@@ -158,6 +158,29 @@ class TestMapDataProvider:
         assert bounds["min_x"] <= 10 <= bounds["max_x"]
         assert bounds["min_y"] <= 10 <= bounds["max_y"]
 
+    def test_linkdead_player_listed_on_tile(self):
+        """A LINKDEAD player (no session) still occupies its tile during grace,
+        so _visible_tile_from_objects must include it in the tile's player list —
+        it uses player_is_present, not raw has_account (False when sessionless).
+        A staging (SPAWNING/LOBBY) player, by contrast, is OOC and excluded."""
+        provider, _ = self._make_provider()
+        looker = _FakePlayer(name="Looker", x=5, y=5)
+
+        linkdead = _FakePlayer(name="Dropped", x=6, y=5)
+        linkdead.has_account = False
+        linkdead.db.player_state = "linkdead"
+
+        staging = _FakePlayer(name="Staging", x=6, y=5)
+        staging.has_account = True
+        staging.db.player_state = "lobby"
+
+        tile = provider._visible_tile_from_objects(
+            6, 5, "Plains", looker, [linkdead, staging]
+        )
+        assert tile.get("players") == ["Dropped"], (
+            "linkdead player must be listed; staging player must not"
+        )
+
     def test_tiles_are_json_serializable(self):
         """Ensure the output can be JSON-serialized for the webclient."""
         import json

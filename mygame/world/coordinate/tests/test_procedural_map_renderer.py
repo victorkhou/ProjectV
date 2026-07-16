@@ -451,6 +451,58 @@ class TestVisibilityStates:
         assert "@@" in result
         assert "**" in result
 
+    def test_visible_tile_shows_linkdead_player(self):
+        """A LINKDEAD player (dropped connection, no session) still lingers on its
+        tile as a combat target during grace, so it must still render as '**' —
+        the map uses player_is_present, not raw has_account (False when
+        sessionless)."""
+        planet_room = _FakePlanetRoom()
+        player = _FakePlayer(x=5, y=5, planet="earth", location=planet_room)
+        linkdead = _FakePlayer(name="Dropped", x=6, y=5, planet="earth",
+                               location=planet_room)
+        # Simulate a dropped connection: no session, but LINKDEAD state.
+        linkdead.has_account = False
+        linkdead.db.player_state = "linkdead"
+        planet_room.add_object(player, 5, 5)
+        planet_room.add_object(linkdead, 6, 5)
+        room_player = _FakeRoom(x=5, y=5, terrain="Plains", contents=[player])
+        room_ld = _FakeRoom(x=6, y=5, terrain="Plains", contents=[linkdead])
+        renderer, _ = _make_renderer(
+            pvr=1,
+            rooms={
+                (5, 5, "earth"): room_player,
+                (6, 5, "earth"): room_ld,
+            },
+        )
+        result = renderer.render(player, [])
+        assert "**" in result, "a linkdead player must still show on the map"
+
+    def test_visible_tile_hides_staging_player(self):
+        """Contrast: a SPAWNING/LOBBY player is OOC (stowed off-tile) and must NOT
+        render even if it somehow shares a tile — player_is_present is False for
+        staging states, so the map matches targeting (they can't be hit either)."""
+        planet_room = _FakePlanetRoom()
+        player = _FakePlayer(x=5, y=5, planet="earth", location=planet_room)
+        staging = _FakePlayer(name="Staging", x=6, y=5, planet="earth",
+                              location=planet_room)
+        staging.has_account = True  # connected...
+        staging.db.player_state = "spawning"  # ...but not deployed
+        planet_room.add_object(player, 5, 5)
+        planet_room.add_object(staging, 6, 5)
+        room_player = _FakeRoom(x=5, y=5, terrain="Plains", contents=[player])
+        room_staging = _FakeRoom(x=6, y=5, terrain="Plains", contents=[staging])
+        renderer, _ = _make_renderer(
+            pvr=1,
+            rooms={
+                (5, 5, "earth"): room_player,
+                (6, 5, "earth"): room_staging,
+            },
+        )
+        result = renderer.render(player, [])
+        # Own tile still shows @@; the staging player's tile shows terrain, not **.
+        assert "@@" in result
+        assert "**" not in result, "a staging (OOC) player must not show on the map"
+
     def test_visible_tile_shows_building(self):
         """A building on a visible tile (no players) shows abbreviation."""
         planet_room = _FakePlanetRoom()

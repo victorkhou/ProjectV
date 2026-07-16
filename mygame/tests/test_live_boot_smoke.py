@@ -230,9 +230,11 @@ class LiveBootSmokeTest(EvenniaTest):
         self.assertFalse(pl.transition(c, PLAYER_STATE_PLAYING))
         self.assertEqual(c.db.player_state, PLAYER_STATE_SPAWNING)
 
-        # Pick a class, advance through the lobby into play, then die back to
-        # spawning — the full walk against a real persisted db.
+        # Pick a class AND a spawn point, advance through the lobby into play,
+        # then die back to spawning — the full walk against a real persisted db.
+        # (finish_spawning gates on BOTH class and spawn choice — R13.2.)
         c.db.player_class = "Vanguard"
+        c.db.pending_spawn_choice = "random"
         self.assertTrue(pl.finish_spawning(c))
         self.assertEqual(c.db.player_state, PLAYER_STATE_LOBBY)
         self.assertTrue(pl.enter_game(c))
@@ -263,6 +265,83 @@ class LiveBootSmokeTest(EvenniaTest):
         c.db.player_class = "Vanguard"
         c.ensure_attributes()
         self.assertEqual(c.db.player_class, "Vanguard")
+
+    def test_session_model_settings_the_lifecycle_flow_depends_on(self):
+        """The staging flow assumes single-character auto-puppet (R12): a login
+        auto-puppets ONE character so at_post_puppet fires and drops the player
+        into the lobby/spawning UI instead of an OOC character-select screen.
+        These are Evennia defaults, but we pin them explicitly in settings.py so a
+        future edit can't silently break the flow — assert they hold on a real
+        boot."""
+        from django.conf import settings
+
+        self.assertTrue(
+            getattr(settings, "AUTO_PUPPET_ON_LOGIN", None),
+            "lifecycle flow requires AUTO_PUPPET_ON_LOGIN=True (else players land "
+            "at OOC char-select and at_post_puppet doesn't route them)",
+        )
+        self.assertEqual(
+            getattr(settings, "MULTISESSION_MODE", None), 0,
+            "lifecycle flow assumes MULTISESSION_MODE=0 (single-puppet)",
+        )
+        self.assertEqual(
+            getattr(settings, "MAX_NR_CHARACTERS", None), 1,
+            "lifecycle flow assumes one character per account",
+        )
+
+    def test_new_session_requires_explicit_login_no_autologin_cookie(self):
+        """Every new webclient socket must land at the login screen — never
+        auto-authenticate from a shared browser cookie (which, with
+        MULTISESSION_MODE=0, would usurp the character already playing).
+
+        Two writers of the webclient_authenticated_uid cookie are disabled:
+          1. SharedLoginMiddleware is removed from MIDDLEWARE (settings.py).
+          2. Both webclient protocols' at_login cookie-write is neutralized by
+             the portal startup monkeypatch (portal_services_plugins.py).
+        Assert both, on a real boot, so a regression (Evennia rename, settings
+        edit) is caught."""
+        from django.conf import settings
+
+        # (1) The website->webclient shared-login middleware is gone.
+        self.assertNotIn(
+            "evennia.web.utils.middleware.SharedLoginMiddleware",
+            list(getattr(settings, "MIDDLEWARE", [])),
+            "SharedLoginMiddleware must be removed so a website login can't "
+            "auto-authenticate the webclient",
+        )
+
+        # (2) Run the portal plugin hook (idempotent) and confirm at_login no
+        # longer persists the cookie on EITHER webclient protocol.
+        from server.conf.portal_services_plugins import (
+            _disable_webclient_autologin_cookie,
+        )
+        _disable_webclient_autologin_cookie()
+
+        from evennia.server.portal.webclient import WebSocketClient
+        from evennia.server.portal.webclient_ajax import AjaxWebClientSession
+
+        class _FakeCsession(dict):
+            saved = False
+            def save(self):
+                self.saved = True
+
+        for cls, label in ((WebSocketClient, "websocket"),
+                           (AjaxWebClientSession, "ajax")):
+            obj = cls.__new__(cls)
+            obj.uid = 4242
+            # The real at_login guards its cookie write on ``if csession:`` — an
+            # EMPTY dict is falsy and would short-circuit the write even with the
+            # monkeypatch absent, making this assertion a false-positive that
+            # never fails on regression. Seed the csession so it is truthy: now
+            # the real (unpatched) at_login WOULD persist the cookie, so this
+            # assertion genuinely fails if the monkeypatch is removed.
+            cs = _FakeCsession(existing_session_key="seed")
+            obj.get_client_session = lambda cs=cs: cs
+            obj.at_login()  # must NOT write the auth cookie
+            self.assertNotIn(
+                "webclient_authenticated_uid", cs,
+                f"{label} at_login must not persist the auto-login cookie",
+            )
 
     def test_full_lobby_flow_enabled_end_to_end(self):
         """With LOBBY_FLOW_ENABLED, exercise the whole flow on real objects:
@@ -427,6 +506,108 @@ class LiveBootSmokeTest(EvenniaTest):
                 self.assertIn(dropper, room.get_players_at(4, 4))
         finally:
             _teardown_game(systems)
+
+    def test_quit_retreat_multi_puppet_any_in_combat_blocks_all(self):
+        """CmdQuit._retreat_playing_puppets_to_lobby iterates ALL of an account's
+        puppets (R12.2 multi-puppet handling). Even though MULTISESSION_MODE=0
+        means one puppet in practice, the coded behavior is: if ANY PLAYING puppet
+        is in combat, the whole quit is blocked (return True, nobody retreats or
+        disconnects); otherwise every PLAYING puppet is retreated to the lobby.
+
+        Exercised on real CombatCharacters via a fake account exposing
+        get_all_puppets()."""
+        from django.test import override_settings
+        from server.conf.game_init import initialize_game
+        from world import player_lifecycle as pl
+        from world.constants import PLAYER_STATE_PLAYING, PLAYER_STATE_LOBBY
+        from world.combat_timer import _get_current_tick, COMBAT_TIMER_DURATION
+        from commands.lifecycle_commands import CmdQuit
+
+        systems = initialize_game()
+        try:
+            with override_settings(LOBBY_FLOW_ENABLED=True):
+                room = self._make_planet_room("terra")
+
+                class _FakeAccount:
+                    def __init__(self, puppets):
+                        self._puppets = puppets
+                    def get_all_puppets(self):
+                        return self._puppets
+
+                # Case 1: two PLAYING puppets, one in combat → whole quit blocked,
+                # NEITHER retreats (both stay PLAYING).
+                a = self._make_player(x=2, y=2, planet="terra", location=room)
+                b = self._make_player(x=3, y=3, planet="terra", location=room)
+                for c in (a, b):
+                    c.db.player_state = PLAYER_STATE_PLAYING
+                b.db.combat_timer_expires = _get_current_tick() + COMBAT_TIMER_DURATION
+
+                blocked = CmdQuit._retreat_playing_puppets_to_lobby(
+                    _FakeAccount([a, b]))
+                self.assertTrue(blocked, "any puppet in combat blocks the quit")
+                self.assertEqual(pl.get_state(a), PLAYER_STATE_PLAYING,
+                                 "no puppet retreats when the quit is blocked")
+                self.assertEqual(pl.get_state(b), PLAYER_STATE_PLAYING)
+
+                # Case 2: none in combat → every PLAYING puppet retreats to LOBBY.
+                c1 = self._make_player(x=4, y=4, planet="terra", location=room)
+                c2 = self._make_player(x=5, y=5, planet="terra", location=room)
+                for c in (c1, c2):
+                    c.db.player_state = PLAYER_STATE_PLAYING
+                    c.db.combat_timer_expires = 0
+
+                retreated = CmdQuit._retreat_playing_puppets_to_lobby(
+                    _FakeAccount([c1, c2]))
+                self.assertTrue(retreated, "a clear puppet retreats (stay connected)")
+                self.assertEqual(pl.get_state(c1), PLAYER_STATE_LOBBY)
+                self.assertEqual(pl.get_state(c2), PLAYER_STATE_LOBBY)
+        finally:
+            _teardown_game(systems)
+
+    def test_quit_fails_closed_when_retreat_raises(self):
+        """Anti-combat-log fail-CLOSED: if _retreat_playing_puppets_to_lobby
+        raises, CmdQuit.func must NOT fall through to the disconnect path (which
+        would let an in-combat player escape to a non-targetable LOBBY). It must
+        return early — no clean-quit marker set, no super().func() disconnect."""
+        from django.test import override_settings
+        from commands.lifecycle_commands import CmdQuit
+
+        with override_settings(LOBBY_FLOW_ENABLED=True):
+            disconnected = []  # records if super().func() (the real disconnect) ran
+
+            class _Sessions:
+                @staticmethod
+                def all():
+                    return []
+
+            class _Account:
+                sessions = _Sessions()
+                def get_all_puppets(self):
+                    return []
+
+            cmd = CmdQuit()
+            cmd.account = _Account()
+            cmd.session = None
+            cmd.msg = lambda *a, **k: None
+            # Force the retreat gate to raise, simulating a bug in it.
+            cmd._retreat_playing_puppets_to_lobby = (
+                lambda account: (_ for _ in ()).throw(RuntimeError("boom"))
+            )
+            # Failing OPEN would reach super().func() (the real disconnect);
+            # patch it to record instead of actually disconnecting a session.
+            import commands.lifecycle_commands as _lc
+            orig_super_func = _lc._BaseQuit.func
+            _lc._BaseQuit.func = lambda self: disconnected.append(True)
+            try:
+                cmd.func()
+            finally:
+                _lc._BaseQuit.func = orig_super_func
+
+            self.assertEqual(
+                disconnected, [],
+                "quit must NOT disconnect when the retreat gate raises "
+                "(fail-closed: an in-combat player can't escape via an error)",
+            )
 
     def test_linkdead_present_to_turret_targeting_on_real_room(self):
         """A LINKDEAD character (no session) is still 'present' to turret/guard

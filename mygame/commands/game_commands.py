@@ -3308,11 +3308,19 @@ def _show_tile_summary(caller, planet_room):
     if item_strs:
         parts.append(f"Items: {', '.join(item_strs)}")
 
-    # Other players
+    # Other players. A linkdead player still stands on the tile (they linger as
+    # a combat target during grace — get_players_at includes them), so tag them
+    # so onlookers know the player is disconnected, not actively present.
+    from world import player_lifecycle as pl
+    from world.constants import PLAYER_STATE_LINKDEAD
     others = []
     for p in planet_room.get_players_at(x, y):
-        if p is not caller:
-            others.append(getattr(p, "key", "?"))
+        if p is caller:
+            continue
+        name = getattr(p, "key", "?")
+        if pl.get_state(p) == PLAYER_STATE_LINKDEAD:
+            name = f"{name} |x(linkdead)|n"
+        others.append(name)
     if others:
         parts.append(f"Players: {', '.join(others)}")
 
@@ -4086,14 +4094,16 @@ class CmdWho(GameCommand):
                 )
 
         # Linkdead characters have no live session, so the session loop above
-        # skips them — but they persist in the world during their grace timer.
-        # Show them to admins as an extra sessionless row so a dropped player is
-        # visible (and can be attacked/found) rather than silently absent.
-        linkdead_rows = 0
-        if show_admin:
-            linkdead_rows = self._append_linkdead_rows(
-                table, session_list, rank_map, get_state, state_label,
-            )
+        # skips them — but they persist in the world during their grace timer
+        # (still attackable). Show them to EVERYONE as a sessionless row so a
+        # dropped player is visible (and can be found/attacked) rather than
+        # silently absent — the row shape matches whichever table (admin or
+        # plain) was built. Mortals see them MASKED as "Hidden Player" (identity
+        # withheld); admins see the real name + Linkdead state.
+        linkdead_rows = self._append_linkdead_rows(
+            table, session_list, rank_map, get_state, state_label,
+            show_admin=show_admin,
+        )
 
         naccounts += linkdead_rows
         is_one = naccounts == 1
@@ -4129,47 +4139,65 @@ class CmdWho(GameCommand):
         except Exception:  # noqa: BLE001
             return None
 
-    @staticmethod
-    def _append_linkdead_rows(table, session_list, rank_map, get_state, state_label):
-        """Add an admin-only row per LINKDEAD character with no live session.
+    #: Masked name mortals see for a hidden player on ``who``. Linkdead is the
+    #: first source of hidden-ness; future features (stealth/cloak) will surface
+    #: the same label, so a mortal can tell "someone is out there" without their
+    #: identity. Admins always see the real character name instead.
+    HIDDEN_PLAYER_NAME = "Hidden Player"
+
+    @classmethod
+    def _append_linkdead_rows(
+        cls, table, session_list, rank_map, get_state, state_label,
+        *, show_admin,
+    ):
+        """Add a row per LINKDEAD character with no live session.
 
         A linkdead character lingers in the world (still attackable) during its
         grace window but owns no session, so the session-based roster misses it.
         Enumerate characters whose ``db.player_state == 'linkdead'`` that aren't
-        already represented by a live session, and append a sessionless row.
-        Returns the number of rows added. Best-effort — never raises into who.
-        """
-        from world.constants import PLAYER_STATE_LINKDEAD
+        already represented by a live session, and append a sessionless row —
+        for EVERYONE, not just admins (a dropped player must be visible so they
+        can be found/attacked). The row shape matches the table that was built:
+        the admin table has extra Puppeting + State columns.
 
+        Mortals see the player fully masked — the name is ``HIDDEN_PLAYER_NAME``
+        ("Hidden Player") and rank/level are blanked (``-``), so they know
+        someone is out there but learn nothing identifying (not even rank).
+        Admins see the real character name, rank, level, plus its Linkdead
+        state. Returns the number of rows added. Best-effort — never raises into
+        who.
+        """
         try:
-            from evennia.utils.search import search_object_attribute
             from world.systems.rank_system import rank_from_level
+            from world.utils import find_linkdead_characters
             from evennia import utils as _u
 
             live_accounts = {
                 s.get_account() for s in session_list if s.logged_in
             }
-            # player_state is stored pickled in db_value (db_strvalue is None for
-            # a plain attribute assignment), so match on the actual value via
-            # search_object_attribute — a db_strvalue filter would find nothing.
-            candidates = search_object_attribute(
-                key="player_state", value=PLAYER_STATE_LINKDEAD
-            )
+            # Shared enumeration (handles the db_value-vs-db_strvalue pickling
+            # subtlety in one place — see world.utils.find_linkdead_characters).
+            candidates = find_linkdead_characters()
             added = 0
             for char in candidates:
                 if getattr(char, "account", None) in live_accounts:
                     continue  # already shown via a live session
-                lvl = getattr(char.db, "level", None) or \
-                    getattr(char.db, "rank_level", 1) or 1
-                rank_num = rank_from_level(lvl)
-                rank_name = rank_map.get(rank_num, f"Rank {rank_num}")
-                table.add_row(
-                    _u.crop(char.get_display_name(char), width=25),
-                    rank_name,
-                    str(lvl),
-                    "-", "-", "None",
-                    state_label(get_state(char)),
-                )
+                if show_admin:
+                    # Admins see the real name, rank, level + the Linkdead state.
+                    lvl = getattr(char.db, "level", None) or \
+                        getattr(char.db, "rank_level", 1) or 1
+                    rank_num = rank_from_level(lvl)
+                    rank_name = rank_map.get(rank_num, f"Rank {rank_num}")
+                    table.add_row(
+                        _u.crop(char.key, width=25), rank_name, str(lvl),
+                        "-", "-", "None", state_label(get_state(char)),
+                    )
+                else:
+                    # Mortals see a fully-masked "Hidden Player" — visible, but
+                    # nothing identifying (name, rank, and level all blanked).
+                    table.add_row(
+                        cls.HIDDEN_PLAYER_NAME, "-", "-", "-", "-",
+                    )
                 added += 1
             return added
         except Exception:  # noqa: BLE001 - who must render even if this query fails

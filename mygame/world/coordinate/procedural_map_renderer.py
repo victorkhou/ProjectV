@@ -25,6 +25,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any
 
 from world.coordinate.fog_of_war import _get_planet, _get_coord
+from world.utils import player_is_present
 
 if TYPE_CHECKING:
     from world.coordinate.fog_of_war import FogOfWarSystem
@@ -245,7 +246,12 @@ class ProceduralMapRenderer:
             objs = planet_room.get_objects_at(x, y)
             if objs:
                 for obj in objs:
-                    if hasattr(obj, "has_account") and obj.has_account:
+                    # A linkdead player still occupies its tile (it lingers as a
+                    # combat target during grace), so it must still render — use
+                    # player_is_present, not the raw has_account (False when
+                    # sessionless). One predicate shared with turret/guard
+                    # targeting, so the map and what-can-be-hit never disagree.
+                    if player_is_present(obj):
                         if obj is player:
                             return "@@"
                         return "**"
@@ -336,8 +342,10 @@ class ProceduralMapRenderer:
         building_obj = None
 
         for obj in objects:
-            # Player characters
-            if hasattr(obj, "has_account") and obj.has_account:
+            # Player characters (incl. linkdead — still on the tile during grace;
+            # player_is_present, not raw has_account, so sessionless linkdead
+            # players still render).
+            if player_is_present(obj):
                 if obj is looker:
                     return "|Y@@|n"
                 return "|r**|n"
@@ -388,7 +396,7 @@ class ProceduralMapRenderer:
             bld_contents = getattr(bld, "contents", [])
             has_entity_inside = False
             for obj in bld_contents:
-                if hasattr(obj, "has_account") and obj.has_account:
+                if player_is_present(obj):
                     has_entity_inside = True
                     break
                 if hasattr(obj, "tags") and obj.tags.get(category="npc_type"):

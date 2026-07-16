@@ -192,18 +192,12 @@ class GameTickScript(DefaultScript):
                 return
             import time as _t
             from world import player_lifecycle as pl
-            from world.constants import PLAYER_STATE_LINKDEAD
-            from evennia.utils.search import search_object_attribute
+            from world.utils import find_linkdead_characters
 
             now = _t.monotonic()
-            # A plain ``db.player_state = "..."`` stores the value PICKLED in
-            # db_value (db_strvalue stays None), so a db_strvalue ORM filter
-            # matches nothing on a real DB. search_object_attribute matches on
-            # the actual stored value — the correct enumeration.
-            candidates = search_object_attribute(
-                key="player_state", value=PLAYER_STATE_LINKDEAD
-            )
-            for char in candidates:
+            # Shared enumeration (handles the db_value-vs-db_strvalue pickling
+            # subtlety in one place — see world.utils.find_linkdead_characters).
+            for char in find_linkdead_characters():
                 if not pl.is_linkdead_expired(char, now):
                     continue
                 # Grace elapsed while still alive → route to lobby + stow away.

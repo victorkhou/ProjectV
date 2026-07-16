@@ -3187,6 +3187,37 @@ class TestGetAllAndLookMessages(unittest.TestCase):
             f"look/tile summary should list dropped items; got {caller._messages}",
         )
 
+    def test_tile_summary_tags_linkdead_player(self):
+        """A linkdead player standing on the tile is listed with a '(linkdead)'
+        tag so onlookers know they're disconnected, while a normal (PLAYING)
+        player on the same tile is listed plainly."""
+        from mygame.commands.game_commands import _show_tile_summary
+
+        class _OtherPlayer:
+            def __init__(self, key, state):
+                self.key = key
+                self.has_account = True
+                self.db = types.SimpleNamespace(
+                    coord_x=5, coord_y=5, player_state=state
+                )
+
+        loc = FakeLocation()
+        active = _OtherPlayer("Ally", None)          # PLAYING/legacy -> plain
+        dropped = _OtherPlayer("Raider", "linkdead")  # linkdead -> tagged
+        loc.contents = [active, dropped]
+        caller = FakeCaller(location=loc)
+
+        _show_tile_summary(caller, loc)
+        players_line = next(
+            (m for m in caller._messages if m.startswith("Players:")), ""
+        )
+        self.assertIn("Ally", players_line)
+        self.assertIn("Raider", players_line)
+        self.assertIn("(linkdead)", players_line)
+        # Only the linkdead player is tagged, not the active one.
+        self.assertNotIn("Ally |x(linkdead)", players_line)
+        self.assertIn("Raider |x(linkdead)|n", players_line)
+
     def test_tile_summary_lists_hostile_npcs(self):
         """An enemy guard on the caller's tile shows under 'Hostiles here' with
         an [Enemy] tag — previously invisible to look/move."""
@@ -3336,6 +3367,84 @@ class TestCmdWhoFirstPlayable(unittest.TestCase):
             db=types.SimpleNamespace(_playable_characters=[]),
         )
         self.assertIsNone(self._CmdWho._first_playable(acct))
+
+
+class TestCmdWhoLinkdeadRows(unittest.TestCase):
+    """CmdWho._append_linkdead_rows: linkdead players appear for everyone, masked
+    as 'Hidden Player' for mortals and shown by real name (+ State) for admins."""
+
+    from mygame.commands.game_commands import CmdWho as _CmdWho
+
+    class _Table:
+        def __init__(self):
+            self.rows = []
+        def add_row(self, *cols):
+            self.rows.append(cols)
+
+    def _run(self, chars, *, show_admin, live_accounts=()):
+        """Invoke _append_linkdead_rows with search stubbed to return *chars*."""
+        table = self._Table()
+        session_list = [
+            types.SimpleNamespace(logged_in=True, get_account=lambda a=a: a)
+            for a in live_accounts
+        ]
+
+        # Stub the in-method imports: evennia.utils.search.search_object_attribute
+        # and evennia.utils.crop. rank_system is real and imports fine.
+        search_mod = types.ModuleType("evennia.utils.search")
+        search_mod.search_object_attribute = lambda key=None, value=None: list(chars)
+        utils_mod = types.ModuleType("evennia.utils")
+        utils_mod.crop = lambda s, width=25: s
+
+        with patch.dict(sys.modules, {
+            "evennia.utils.search": search_mod,
+            "evennia.utils": utils_mod,
+        }):
+            added = self._CmdWho._append_linkdead_rows(
+                table, session_list, {}, lambda c: "linkdead",
+                lambda s: "Linkdead", show_admin=show_admin,
+            )
+        return table, added
+
+    def _char(self, key="Dropped", level=3, account=None):
+        return types.SimpleNamespace(
+            key=key, account=account,
+            db=types.SimpleNamespace(level=level, rank_level=level,
+                                     player_state="linkdead"),
+        )
+
+    def test_mortal_sees_fully_masked_hidden_player(self):
+        table, added = self._run(
+            [self._char(key="Raider", level=7)], show_admin=False
+        )
+        self.assertEqual(added, 1)
+        self.assertEqual(len(table.rows), 1)
+        row = table.rows[0]
+        self.assertEqual(row[0], self._CmdWho.HIDDEN_PLAYER_NAME)
+        # Nothing identifying leaks: name masked, rank + level blanked.
+        joined = " ".join(str(c) for c in row)
+        self.assertNotIn("Raider", joined)  # real identity masked
+        self.assertNotIn("7", joined)        # level not revealed
+        self.assertEqual(row[1], "-")        # rank masked
+        self.assertEqual(row[2], "-")        # level masked
+        self.assertEqual(len(row), 5)        # plain table shape (no State column)
+
+    def test_admin_sees_real_name_and_state(self):
+        table, added = self._run([self._char(key="Raider")], show_admin=True)
+        self.assertEqual(added, 1)
+        row = table.rows[0]
+        self.assertEqual(row[0], "Raider")           # real name for admins
+        self.assertEqual(len(row), 7)                # admin table shape
+        self.assertEqual(row[-1], "Linkdead")        # State column
+
+    def test_char_with_live_session_is_skipped(self):
+        # A linkdead-flagged char whose account already has a live session is
+        # shown by the normal loop, so the linkdead pass must skip it.
+        acct = object()
+        char = self._char(account=acct)
+        table, added = self._run([char], show_admin=False, live_accounts=(acct,))
+        self.assertEqual(added, 0)
+        self.assertEqual(table.rows, [])
 
 
 if __name__ == "__main__":
