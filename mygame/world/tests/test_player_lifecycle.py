@@ -125,6 +125,27 @@ class TestRouteOnLogin(unittest.TestCase):
         self.assertEqual(p.db.player_state, PLAYER_STATE_PLAYING)
         self.assertEqual(p.db.linkdead_until, 0.0)  # grace cleared on reconnect
 
+    def test_reconnect_after_grace_expiry_resumes_in_lobby_not_playing(self):
+        # INTENDED reconnect-vs-expiry behavior (R13.3): if the tick loop's grace
+        # expiry ran BEFORE the player reconnected, they are already LOBBY (the
+        # linkdead body was swept away + stowed). Reconnect then resumes them in
+        # the LOBBY — they re-deploy fresh rather than silently popping back into
+        # the world at stale coords. With the 30-min grace this race is rare, but
+        # landing in the lobby is the correct outcome when you were gone that long.
+        p = _Player(state=PLAYER_STATE_LOBBY)  # expire_linkdead already ran
+        self.assertEqual(pl.route_on_login(p), PLAYER_STATE_LOBBY)
+        self.assertEqual(p.db.player_state, PLAYER_STATE_LOBBY)
+
+    def test_crash_resume_playing_stays_in_place(self):
+        # INTENDED crash-resume behavior (R13.4): a server crash leaves the
+        # character persisted PLAYING with no clean unpuppet. Login resumes it in
+        # place (PLAYING) at its persisted coords/HP — the player picks up where
+        # they were, rather than being force-restaged on every crash. Treated
+        # identically to a linkdead reconnect (both are "return to play").
+        p = _Player(state=PLAYER_STATE_PLAYING)
+        self.assertEqual(pl.route_on_login(p), PLAYER_STATE_PLAYING)
+        self.assertEqual(p.db.player_state, PLAYER_STATE_PLAYING)
+
 
 # -------------------------------------------------------------- #
 #  Death
@@ -216,11 +237,21 @@ class TestLobbyAndEnter(unittest.TestCase):
     def test_finish_spawning_requires_class(self):
         # No class chosen yet -> gate refuses, stays spawning.
         p = _Player(state=PLAYER_STATE_SPAWNING, player_class=None)
+        p.db.pending_spawn_choice = "hq"
         self.assertFalse(pl.finish_spawning(p))
         self.assertEqual(p.db.player_state, PLAYER_STATE_SPAWNING)
 
-    def test_finish_spawning_advances_once_class_chosen(self):
+    def test_finish_spawning_requires_spawn_choice(self):
+        # Class chosen but no spawn point -> gate refuses (would otherwise let
+        # apply_spawn_choice misread the deploy as a quit-in-place).
         p = _Player(state=PLAYER_STATE_SPAWNING, player_class="Vanguard")
+        self.assertIsNone(p.db.pending_spawn_choice)
+        self.assertFalse(pl.finish_spawning(p))
+        self.assertEqual(p.db.player_state, PLAYER_STATE_SPAWNING)
+
+    def test_finish_spawning_advances_once_class_and_spawn_chosen(self):
+        p = _Player(state=PLAYER_STATE_SPAWNING, player_class="Vanguard")
+        p.db.pending_spawn_choice = "random"
         self.assertTrue(pl.finish_spawning(p))
         self.assertEqual(p.db.player_state, PLAYER_STATE_LOBBY)
 
@@ -246,12 +277,15 @@ class TestReads(unittest.TestCase):
         p = _Player(state=None)
         self.assertEqual(pl.route_on_login(p), PLAYER_STATE_SPAWNING)
         p.db.player_class = "Vanguard"
+        p.db.pending_spawn_choice = "hq"
         self.assertTrue(pl.finish_spawning(p))          # -> lobby
         self.assertTrue(pl.enter_game(p))               # -> playing
         pl.record_death(p, 5, 5, "terra")               # -> spawning
         self.assertEqual(p.db.player_state, PLAYER_STATE_SPAWNING)
         self.assertIsNone(p.db.player_class)            # death re-runs stage 3
+        self.assertIsNone(p.db.pending_spawn_choice)    # ...and clears the spawn pick
         p.db.player_class = "Vanguard"                  # re-pick class
+        p.db.pending_spawn_choice = "random"            # ...and spawn point
         self.assertTrue(pl.finish_spawning(p))          # -> lobby
         self.assertTrue(pl.enter_game(p))               # -> playing
         self.assertTrue(pl.to_lobby(p))                 # -> lobby (quit)

@@ -709,17 +709,18 @@ class CombatCharacter(CombatEntity, DefaultCharacter):
 
     @staticmethod
     def _linkdead_grace_seconds() -> float:
-        """Linkdead grace window (seconds) from balance config, default 30.
+        """Linkdead grace window (seconds) from balance config, default 1800 (30 min).
 
         Falls back to a safe default when the registry/balance is unavailable
-        (early boot / tests). Tuned to be >= the combat lockout so pulling the
-        plug can't dodge an active fight.
+        (early boot / tests). Set far above the ~60s combat timer so pulling the
+        plug can't dodge an active fight — the dropped body stays a live target
+        well past when any combat timer would expire.
         """
         try:
             from world.data_registry import DataRegistry
             reg = DataRegistry.get_instance()
             if reg is not None:
-                return float(getattr(reg.balance, "linkdead_grace_seconds", 30.0))
+                return float(getattr(reg.balance, "linkdead_grace_seconds", 1800.0))
         except Exception:  # noqa: BLE001
             pass
-        return 30.0
+        return 1800.0

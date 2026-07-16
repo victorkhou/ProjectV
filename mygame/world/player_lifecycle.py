@@ -302,15 +302,22 @@ def to_lobby(player: Any, *, reason: str = "quit", event_bus: Any = None) -> boo
 
 
 def finish_spawning(player: Any, *, event_bus: Any = None) -> bool:
-    """Advance from SPAWNING to the lobby once class + location are chosen.
+    """Advance from SPAWNING to the lobby once class AND spawn choice are set.
 
-    Guarded: refuses (returns ``False``) unless the player has actually picked a
-    class (``db.player_class``) — the spawn location is applied by the caller
-    (it moves the character), but the class selection is the persisted gate. The
-    caller checks the return value before showing the lobby.
+    Guarded: refuses (returns ``False``) unless the player has picked BOTH a
+    class (``db.player_class``) and a spawn point (``db.pending_spawn_choice``).
+    Both are the persisted gate — the spawn choice is resolved to a concrete tile
+    on ``deploy``, but it must be recorded before leaving SPAWNING. Advancing with
+    no spawn choice would let ``apply_spawn_choice`` misread the deploy as a
+    quit-in-place (landing at possibly-default coords). The caller checks the
+    return value before showing the lobby.
     """
     db = getattr(player, "db", None)
-    if db is None or getattr(db, "player_class", None) is None:
+    if db is None:
+        return False
+    if getattr(db, "player_class", None) is None:
+        return False
+    if not getattr(db, "pending_spawn_choice", None):
         return False
     return transition(player, PLAYER_STATE_LOBBY, reason="spawned",
                       event_bus=event_bus)

@@ -377,9 +377,11 @@ class BalanceConfig:
     #: Linkdead grace window (WALL-CLOCK seconds): when a PLAYING player drops
     #: their connection without ``quit``, their character stays a live combat
     #: target for this long before it is removed to the lobby (the anti-combat-
-    #: log rule). Tuned >= the combat lockout so pulling the plug can't dodge an
-    #: active fight. Only used when the lobby lifecycle flow is enabled.
-    linkdead_grace_seconds: float = 30.0
+    #: log rule). Defaults to 30 minutes (1800s) — far longer than the ~60s combat
+    #: timer (``COMBAT_TIMER_DURATION`` ticks), so pulling the plug mid-fight can't
+    #: dodge an active fight (the dropped body outlives any combat timer). Only
+    #: used when the lobby lifecycle flow is enabled.
+    linkdead_grace_seconds: float = 1800.0
 
     # --- NPC base spawner + elimination (PvE NPC bases, Phase 5) ------ #
     #: XP awarded for destroying an NPC base's HQ (the whole base is wiped) —
