@@ -14,11 +14,26 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any
 
 from world.coordinate.fog_of_war import _get_planet, _get_coord
-from world.utils import player_is_present
+from world.utils import player_is_present, get_system
 
 if TYPE_CHECKING:
     from world.coordinate.fog_of_war import FogOfWarSystem
     from world.coordinate.terrain_generator import TerrainGenerator
+
+
+def _alliance_tag(obj: Any) -> str | None:
+    """Return *obj*'s alliance tag for the map payload, or ``None``.
+
+    Best-effort via the AllianceSystem's ``tag_for``; ``None`` when there is no
+    system or the player is not in an alliance. Never raises into map building.
+    """
+    try:
+        system = get_system(obj, "alliance_system")
+        if system is None:
+            return None
+        return system.tag_for(obj)
+    except Exception:  # noqa: BLE001
+        return None
 
 
 class MapDataProvider:
@@ -60,8 +75,10 @@ class MapDataProvider:
         pvr = self._fog_system.player_vision_radius
         border = getattr(self._fog_system, "_map_border", 5)
 
-        # Compute visibility
-        visible_tiles = self._fog_system.get_visible_tiles(player, player_buildings)
+        # Compute visibility (unioned with PLAYING allies' if the shared-vision
+        # perk is active — via the one shared helper all three fog callers use).
+        from world.utils import shared_visible_tiles
+        visible_tiles = shared_visible_tiles(player, player_buildings, self._fog_system)
 
         # Bulk query all objects in the viewport from PlanetRoom
         planet_room = getattr(player, "location", None)
@@ -146,6 +163,9 @@ class MapDataProvider:
                     players_here.append({
                         "name": getattr(obj, "key", "?"),
                         "linkdead": _get_state(obj) == PLAYER_STATE_LINKDEAD,
+                        # Alliance tag (or None) so the client can render the
+                        # shared-side identity. For every player, friend or foe.
+                        "tag": _alliance_tag(obj),
                     })
                 continue
 

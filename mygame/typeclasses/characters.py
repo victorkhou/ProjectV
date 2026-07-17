@@ -352,6 +352,24 @@ class CombatCharacter(CombatEntity, DefaultCharacter):
             "combat_lockout_tick": self.db.combat_lockout_tick or 0,
         }
 
+    def at_object_delete(self):
+        """Route a character deletion through the AllianceSystem first.
+
+        A deleted member must not leave an orphaned Member_Pointer / roster entry
+        (which would let a stale id linger in an Alliance_Record). Treated as an
+        implicit leave; a deleted Leader triggers succession on the next
+        reconcile. Best-effort — a routing failure must never block deletion, so
+        it is guarded and we always defer to the parent for the actual delete.
+        """
+        try:
+            from world.utils import get_system
+            alliance = get_system(self, "alliance_system")
+            if alliance is not None:
+                alliance.on_character_deleted(self)
+        except Exception:
+            logger.debug("Alliance chardelete routing failed", exc_info=True)
+        return super().at_object_delete()
+
     # ------------------------------------------------------------------ #
     #  Login / logout hooks
     # ------------------------------------------------------------------ #
@@ -425,6 +443,17 @@ class CombatCharacter(CombatEntity, DefaultCharacter):
         try:
             from world.event_bus import event_bus, PLAYER_LOGIN
             event_bus.publish(PLAYER_LOGIN, player=self)
+        except Exception:
+            pass
+
+        # Re-deliver any pending alliance invitations on login (they may have
+        # been sent while this player was offline). Best-effort — a replay
+        # failure must never affect login.
+        try:
+            from world.utils import get_system
+            alliance = get_system(self, "alliance_system")
+            if alliance is not None:
+                alliance.replay_invites(self)
         except Exception:
             pass
 

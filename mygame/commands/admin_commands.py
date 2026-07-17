@@ -2035,3 +2035,177 @@ class CmdAdminOutpost(AdminSubcommandRouter):
         "list": (sub_list, "List active NPC bases", "Builder"),
         "tiers": (sub_tiers, "List spawnable base tiers with index numbers", "Builder"),
     }
+
+
+class CmdAdminAlliance(AdminSubcommandRouter):
+    """Inspect and moderate alliances (staff).
+
+    Usage:
+        @alliance list
+        @alliance inspect <tag>
+        @alliance disband <tag>
+        @alliance kick <tag> <player>
+        @alliance transfer <tag> <player>
+        @alliance rename <tag> <new name> = <new tag>
+
+    Every write verb routes its mutation THROUGH the AllianceSystem (the single
+    writer), so the single-writer invariant holds even for staff actions.
+    Inspect/list read full state (treasury, pending invites/requests) bypassing
+    the normal member/outsider scoping.
+    """
+
+    key = "@alliance"
+
+    def _system(self):
+        return self.require_system("alliance_system", "Alliance system")
+
+    def _find(self, system, tag):
+        """Resolve an alliance by tag, or msg + return None."""
+        rec = system._alliances.by_tag(tag) if system._alliances else None
+        if rec is None:
+            self.caller.msg(f"No alliance with tag '{tag}'.")
+        return rec
+
+    def _resolve_member_by_name(self, system, record, name):
+        """Resolve a roster member of *record* by (case-insensitive) name."""
+        from world.systems.alliance_system import _roster_ids
+        for cid in _roster_ids(record):
+            obj = system._resolve_member(cid)
+            if obj is not None and getattr(obj, "key", "").lower() == name.lower():
+                return obj
+        self.caller.msg(f"No member '{name}' in that alliance.")
+        return None
+
+    def sub_list(self, args):
+        system = self._system()
+        if system is None:
+            return
+        alliances = system._alliances.all_alliances() if system._alliances else []
+        if not alliances:
+            self.caller.msg("No alliances exist.")
+            return
+        lines = ["|wAlliances:|n  (id / tag / name / members / level)"]
+        for rec in alliances:
+            lines.append(
+                f"  #{rec['id']} [{rec['tag']}] {rec['name']} — "
+                f"{len(system._live_members(rec['id']))} members, "
+                f"level {system.compute_alliance_level(rec['id'])}"
+            )
+        self.caller.msg("\n".join(lines))
+        self._log_admin("list", f"{len(alliances)} alliances")
+
+    def sub_inspect(self, args):
+        system = self._system()
+        if system is None:
+            return
+        rec = self._find(system, args.strip())
+        if rec is None:
+            return
+        summary = system.alliance_summary(rec["id"], for_member=True)
+        lines = [
+            f"|w#{rec['id']} {rec['name']}|n [{rec['tag']}]",
+            f"  Leader: {summary['leader']}  Members: {summary['member_count']}"
+            f"  Level: {summary['level']}  Open-join: {summary['open_join']}",
+            f"  Officers: {rec.get('officer_ids')}  Members: {rec.get('member_ids')}",
+            f"  Treasury: {summary.get('treasury')}",
+            f"  Active perks: {summary.get('active_perks')}",
+            f"  Pending invites: {summary.get('pending_invites')}",
+            f"  Pending requests: {summary.get('pending_requests')}",
+        ]
+        self.caller.msg("\n".join(lines))
+        self._log_admin("inspect", f"#{rec['id']} {rec['tag']}")
+
+    def sub_disband(self, args):
+        system = self._system()
+        if system is None:
+            return
+        rec = self._find(system, args.strip())
+        if rec is None:
+            return
+        # Route through the single-writer teardown (even-split + channel destroy).
+        system._do_disband(rec)
+        self.caller.msg(f"Force-disbanded [{rec['tag']}] {rec['name']}.")
+        self._log_admin("disband", f"#{rec['id']} {rec['tag']}")
+
+    def sub_kick(self, args):
+        system = self._system()
+        if system is None:
+            return
+        parts = args.split(None, 1)
+        if len(parts) < 2:
+            self.caller.msg("Usage: @alliance kick <tag> <player>")
+            return
+        rec = self._find(system, parts[0])
+        if rec is None:
+            return
+        member = self._resolve_member_by_name(system, rec, parts[1].strip())
+        if member is None:
+            return
+        # Force-kick through the single writer: strip from roster + clear pointer.
+        system._remove_from_roster(rec, getattr(member, "id", None))
+        system._alliances.put(rec)
+        system._unsubscribe(member, rec["id"])
+        system._clear_pointer(member)
+        self.caller.msg(f"Force-kicked {member.key} from [{rec['tag']}].")
+        self._log_admin("kick", f"{member.key} from #{rec['id']}")
+
+    def sub_transfer(self, args):
+        system = self._system()
+        if system is None:
+            return
+        parts = args.split(None, 1)
+        if len(parts) < 2:
+            self.caller.msg("Usage: @alliance transfer <tag> <player>")
+            return
+        rec = self._find(system, parts[0])
+        if rec is None:
+            return
+        member = self._resolve_member_by_name(system, rec, parts[1].strip())
+        if member is None:
+            return
+        old_leader = system._resolve_member(rec.get("leader_id"))
+        system._install_leader(rec, old_leader, member)
+        self.caller.msg(f"Transferred [{rec['tag']}] leadership to {member.key}.")
+        self._log_admin("transfer", f"#{rec['id']} -> {member.key}")
+
+    def sub_rename(self, args):
+        system = self._system()
+        if system is None:
+            return
+        # "<tag> <new name> = <new tag>"
+        if "=" not in args:
+            self.caller.msg("Usage: @alliance rename <tag> <new name> = <new tag>")
+            return
+        left, new_tag = (p.strip() for p in args.split("=", 1))
+        parts = left.split(None, 1)
+        if len(parts) < 2:
+            self.caller.msg("Usage: @alliance rename <tag> <new name> = <new tag>")
+            return
+        rec = self._find(system, parts[0])
+        if rec is None:
+            return
+        new_name = parts[1].strip()
+        # Validate + apply through the system (bypassing the leader/cooldown gate
+        # by writing the record after a validation-only check).
+        err = system._validate_name_tag(new_name, new_tag, exclude_id=rec["id"])
+        if err:
+            self.caller.msg(err)
+            return
+        old = (rec["name"], rec["tag"])
+        rec["name"] = new_name
+        rec["tag"] = new_tag
+        system._alliances.put(rec)
+        from world.event_bus import ALLIANCE_RENAMED
+        system._publish(ALLIANCE_RENAMED, alliance_id=rec["id"], old=old,
+                        new=(new_name, new_tag))
+        self.caller.msg(f"Renamed to [{new_tag}] {new_name}.")
+        self._log_admin("rename", f"#{rec['id']} -> {new_tag}")
+
+    subcommands = {
+        "list": (sub_list, "List all alliances", "Builder"),
+        "inspect": (sub_inspect, "Inspect an alliance's full state", "Builder"),
+        "disband": (sub_disband, "Force-disband an alliance", "Builder"),
+        "kick": (sub_kick, "Force-kick a member", "Builder"),
+        "transfer": (sub_transfer, "Force-transfer leadership", "Builder"),
+        "rename": (sub_rename, "Rename/retag an alliance", "Builder"),
+    }

@@ -594,7 +594,8 @@ class CmdMove(GameCommand):
         if fog_system is not None:
             try:
                 buildings = caller.get_buildings() if hasattr(caller, "get_buildings") else []
-                visible = fog_system.get_visible_tiles(caller, buildings)
+                from world.utils import shared_visible_tiles
+                visible = shared_visible_tiles(caller, buildings, fog_system)
                 fog_system.update_discovery(caller, visible, planet_room)
             except Exception:
                 import logging
@@ -3313,11 +3314,19 @@ def _show_tile_summary(caller, planet_room):
     # so onlookers know the player is disconnected, not actively present.
     from world import player_lifecycle as pl
     from world.constants import PLAYER_STATE_LINKDEAD
+    from world.utils import get_system
+    _alliance = get_system(caller, "alliance_system")
     others = []
     for p in planet_room.get_players_at(x, y):
         if p is caller:
             continue
         name = getattr(p, "key", "?")
+        # Prefix the alliance tag ("[TAG] Name") so a player's shared-side
+        # identity is visible on the tile — for friend and foe alike.
+        if _alliance is not None:
+            tag = _alliance.tag_for(p)
+            if tag:
+                name = f"[{tag}] {name}"
         if pl.get_state(p) == PLAYER_STATE_LINKDEAD:
             name = f"{name} |x(linkdead)|n"
         others.append(name)

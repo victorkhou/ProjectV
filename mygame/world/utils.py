@@ -830,6 +830,32 @@ def are_allied(a: Any, b: Any) -> bool:
         return False
 
 
+def shared_visible_tiles(player: Any, player_buildings: Any, fog_system: Any) -> set:
+    """Return *player*'s visible tiles, unioned with PLAYING allies' if the
+    shared-vision perk is active.
+
+    The single entry point the three fog-of-war callers (ASCII renderer, web
+    map-data provider, and the ``look`` path) use so shared vision cannot drift
+    between them. Delegates to ``AllianceSystem.shared_visible_tiles`` (which
+    applies the PLAYING-only filter and the per-ally union); falls back to the
+    player's own ``fog_system.get_visible_tiles(player, player_buildings)`` when
+    there is no AllianceSystem or the perk is inactive. Never raises into map
+    building.
+    """
+    try:
+        system = get_system(player, "alliance_system")
+        if system is not None:
+            return system.shared_visible_tiles(
+                player, player_buildings, fog_system,
+                building_lookup=lambda ally: (
+                    ally.get_buildings() if hasattr(ally, "get_buildings") else []
+                ),
+            )
+    except Exception:  # noqa: BLE001 - shared vision never breaks the base view
+        logger.debug("shared_visible_tiles failed; using own vision", exc_info=True)
+    return set(fog_system.get_visible_tiles(player, player_buildings) or [])
+
+
 def is_admin(caller: Any) -> bool:
     """Check if caller has Builder+ permissions."""
     if hasattr(caller, "check_permstring"):

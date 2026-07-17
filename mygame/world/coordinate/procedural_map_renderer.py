@@ -145,8 +145,10 @@ class ProceduralMapRenderer:
         """
         planet = _get_planet(player)
 
-        # 1. Compute visible tiles
-        visible_tiles = self._fog_system.get_visible_tiles(player, player_buildings)
+        # 1. Compute visible tiles (unioned with PLAYING allies' when the
+        # shared-vision perk is active — via the one shared helper).
+        from world.utils import shared_visible_tiles
+        visible_tiles = shared_visible_tiles(player, player_buildings, self._fog_system)
 
         # 2. Update discovery memory
         self._fog_system.update_discovery(

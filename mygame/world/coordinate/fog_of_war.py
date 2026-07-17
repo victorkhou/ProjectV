@@ -163,7 +163,12 @@ class FogOfWarSystem:
                 owner = _get_building_owner(building)
                 owner_name = _owner_name(owner)
 
-                if owner is not player and owner_name != player_key:
+                # An allied member's building is treated like the player's own —
+                # it is NOT recorded as an enemy discovery (shared-vision perk).
+                from world.utils import are_allied
+                allied = are_allied(player, owner)
+
+                if owner is not player and owner_name != player_key and not allied:
                     btype = _get_building_type(building)
                     new_snap = {
                         "building_type": btype,

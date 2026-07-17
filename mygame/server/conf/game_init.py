@@ -231,6 +231,25 @@ def initialize_game() -> dict:
     tech_system = TechLabSystem(registry, event_bus)
     from world.systems.regen_system import RegenSystem
     regen_system = RegenSystem(registry, event_bus)
+
+    # Alliance system — the single writer of alliance state. Backed by the
+    # persistent AllianceRegistry script (ensured below in start_scripts); wired
+    # here with the shared tick clock so expiry/decay/cooldown math is live.
+    from world.systems.alliance_system import AllianceSystem
+    alliance_system = AllianceSystem(
+        registry, event_bus, alliance_registry=None,
+        tick_provider=_get_current_tick,
+    )
+    # The shared_regen perk is realized as a regen modifier provider: a
+    # (entity)->float returning the alliance multiplier for a member's owning
+    # player, else 1.0. Read live each tick, so leaving removes it immediately.
+    def _alliance_regen_provider(entity):
+        try:
+            owner = getattr(getattr(entity, "db", None), "owner", None) or entity
+            return alliance_system.perk_multiplier(owner, "shared_regen")
+        except Exception:  # noqa: BLE001
+            return 1.0
+    regen_system.add_modifier_provider(_alliance_regen_provider)
     # Inject the live-GameItem production factory so Gear produced each tick is a
     # real, equippable Evennia object (not the framework-free dict placeholder
     # the use-case defaults to for tests). The ``typeclasses`` import lives here
@@ -634,6 +653,7 @@ def initialize_game() -> dict:
         "movement_system": movement_system,
         "chunking": chunking,
         "chat_system": chat_system,
+        "alliance_system": alliance_system,
         "notification_system": notification_system,
         "metrics": metrics,
         "planet_registry": planet_registry,
@@ -742,6 +762,35 @@ def _start_scripts(systems: dict) -> None:
                 persistent=True,
             )
             logger.info("Created new AutoSaveScript.")
+
+        # AllianceRegistry — persistent store of alliance records. Ensure it
+        # exists (idempotent), coerce a legacy next_alliance_id to >= 1, and link
+        # it into the AllianceSystem so the single writer can persist/look up.
+        existing = search_script("alliance_registry")
+        if existing:
+            alliance_registry = existing[0]
+        else:
+            alliance_registry = create_script(
+                "typeclasses.scripts.AllianceRegistry",
+                key="alliance_registry",
+                persistent=True,
+            )
+            logger.info("Created new AllianceRegistry.")
+        if alliance_registry is not None:
+            if not isinstance(getattr(alliance_registry.db, "next_alliance_id", None), int) \
+                    or alliance_registry.db.next_alliance_id < 1:
+                alliance_registry.db.next_alliance_id = 1
+            if alliance_registry.db.alliances is None:
+                alliance_registry.db.alliances = {}
+            alliance_sys = systems.get("alliance_system")
+            if alliance_sys is not None:
+                alliance_sys._alliances = alliance_registry
+                # Reconcile rosters against Member_Pointers on load (on-demand
+                # + on-load cadence, no timer).
+                try:
+                    alliance_sys.reconcile()
+                except Exception:  # noqa: BLE001
+                    logger.exception("AllianceRegistry reconcile on load failed.")
 
     except ImportError:
         logger.info("Evennia script API not available — skipping script start.")
