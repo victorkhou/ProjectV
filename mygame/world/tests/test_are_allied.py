@@ -34,12 +34,19 @@ class _NoTags:
 class _Player:
     _n = 500
 
-    def __init__(self, alliance=None, has_account=True, npc_type=None, sentinel=False):
+    def __init__(self, alliance=None, offline=False, npc_type=None, sentinel=False):
         _Player._n += 1
         self.id = _Player._n
         self.key = "P"
-        self.has_account = has_account
-        self.db = _Db(player_alliance=alliance, npc_type=npc_type)
+        # has_account is Evennia's SESSION count — offline real players have 0.
+        # _is_real_player must NOT depend on it (an offline ally is still real).
+        self.has_account = 0 if offline else 1
+        self.db = _Db(
+            player_alliance=alliance,
+            npc_type=npc_type,
+            combat_xp=0,  # a real combat character carries this (is_player)
+            is_sentinel=sentinel,
+        )
         self.tags = _SentinelTags() if sentinel else _NoTags()
 
 
@@ -104,10 +111,12 @@ class TestAreAllied(_AreAlliedBase):
         b = _Player(alliance=7)
         self.assertFalse(utils.are_allied(a, b))
 
-    def test_non_account_holder_not_allied(self):
+    def test_offline_real_player_still_allied(self):
+        # has_account (session count) is 0 for an offline player, but membership
+        # is session-independent — an offline ally must STILL be allied.
         a = _Player(alliance=1)
-        b = _Player(alliance=1, has_account=False)
-        self.assertFalse(utils.are_allied(a, b))
+        b = _Player(alliance=1, offline=True)
+        self.assertTrue(utils.are_allied(a, b))
 
     def test_npc_holder_not_allied(self):
         a = _Player(alliance=1)

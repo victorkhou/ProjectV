@@ -38,6 +38,10 @@ class _FakePlayer:
             player_alliance=None,
             alliance_rank=None,
             level=level,
+            # combat_xp present so is_player (and thus _is_real_player) treats
+            # this fake as a genuine combat character; is_sentinel False.
+            combat_xp=0,
+            is_sentinel=False,
             scored_kills_pvp=0.0,
             scored_kills_pve=0.0,
             last_kill_decay_tick=0,

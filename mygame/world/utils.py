@@ -742,27 +742,37 @@ def _is_real_player(entity: Any) -> bool:
     """Return True if *entity* is a real player character (not an NPC/Sentinel).
 
     The belt-and-braces guard behind the alliance real-player invariant (C8):
-    an alliance member must have a live account, must not be a Sentinel (the
-    never-puppeted NPC-base owner), and must not carry an ``npc_type`` (agents /
-    enemy guards). Even if a stray ``player_alliance`` pointer were somehow
-    written onto an NPC base owner, :func:`are_allied` would still refuse to
-    treat it as an ally — so a PvE fortress can never be made untargetable.
+    an alliance member must be a genuine player character — not a Sentinel (the
+    never-puppeted NPC-base owner) and not an ``npc_type`` unit (agents / enemy
+    guards). Even if a stray ``player_alliance`` pointer were somehow written
+    onto an NPC base owner, :func:`are_allied` would still refuse to treat it as
+    an ally — so a PvE fortress can never be made untargetable.
+
+    IMPORTANT: this must NOT gate on ``has_account`` — Evennia's ``has_account``
+    is ``self.sessions.count()`` (i.e. *currently connected*), so an OFFLINE
+    real player would fail it and an offline ally would wrongly be treated as
+    hostile / un-invitable. Membership is a persistent, session-independent fact,
+    so we identify a player structurally: a character (carries ``combat_xp`` via
+    :func:`is_player`) that is neither a Sentinel nor an ``npc_type`` unit. The
+    persistent account link (``db_account``), when present, is a positive signal
+    but its absence does not disqualify a legitimately-offline character.
 
     Value-based reads only; never raises.
     """
     if entity is None:
         return False
-    try:
-        if not getattr(entity, "has_account", False):
-            return False
-    except Exception:  # noqa: BLE001
-        return False
     db = getattr(entity, "db", None)
     if db is None:
         return False
-    # An NPC (agent/enemy guard) carries npc_type; a Sentinel is a non-account
-    # CombatCharacter (already excluded by has_account) but guard on the tag too.
+    # Must be a combat character (players + NPCs carry combat_xp); this excludes
+    # buildings/items/rooms up front.
+    if not is_player(entity):
+        return False
+    # An NPC (agent/enemy guard) carries npc_type.
     if getattr(db, "npc_type", None) is not None:
+        return False
+    # A Sentinel (NPC-base owner) is flagged/tagged — the authoritative signal.
+    if getattr(db, "is_sentinel", False):
         return False
     try:
         if entity.tags.get("sentinel", category="npc_role"):

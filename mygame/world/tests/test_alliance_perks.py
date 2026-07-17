@@ -43,7 +43,7 @@ class _Player:
         self.key = f"P{self.id}"
         self.has_account = True
         self.db = _Db(player_alliance=alliance, alliance_rank="member",
-                      npc_type=None, player_state=state)
+                      npc_type=None, player_state=state, combat_xp=0)
         self.tags = _NoTags()
 
     def get_buildings(self):
