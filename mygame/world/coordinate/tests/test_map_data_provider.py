@@ -162,7 +162,9 @@ class TestMapDataProvider:
         """A LINKDEAD player (no session) still occupies its tile during grace,
         so _visible_tile_from_objects must include it in the tile's player list —
         it uses player_is_present, not raw has_account (False when sessionless).
-        A staging (SPAWNING/LOBBY) player, by contrast, is OOC and excluded."""
+        A staging (SPAWNING/LOBBY) player, by contrast, is OOC and excluded. Each
+        listed player carries its linkdead flag so the client draws the linkdead
+        variant."""
         provider, _ = self._make_provider()
         looker = _FakePlayer(name="Looker", x=5, y=5)
 
@@ -177,9 +179,23 @@ class TestMapDataProvider:
         tile = provider._visible_tile_from_objects(
             6, 5, "Plains", looker, [linkdead, staging]
         )
-        assert tile.get("players") == ["Dropped"], (
-            "linkdead player must be listed; staging player must not"
+        assert tile.get("players") == [{"name": "Dropped", "linkdead": True}], (
+            "linkdead player must be listed (flagged linkdead); staging excluded"
         )
+
+    def test_live_player_flagged_not_linkdead(self):
+        """A live (PLAYING) player on the tile is listed with linkdead=False, so
+        the client draws the live-enemy variant, not the linkdead one."""
+        provider, _ = self._make_provider()
+        looker = _FakePlayer(name="Looker", x=5, y=5)
+        live = _FakePlayer(name="Rival", x=6, y=5)
+        live.has_account = True
+        live.db.player_state = "playing"
+
+        tile = provider._visible_tile_from_objects(
+            6, 5, "Plains", looker, [live]
+        )
+        assert tile.get("players") == [{"name": "Rival", "linkdead": False}]
 
     def test_tiles_are_json_serializable(self):
         """Ensure the output can be JSON-serialized for the webclient."""

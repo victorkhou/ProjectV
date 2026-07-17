@@ -47,7 +47,8 @@ class MapDataProvider:
                 "vision_radius": int,
                 "tiles": [
                     {"x": int, "y": int, "terrain": str, "state": str,
-                     "building": {...} | null, "players": [...]}
+                     "building": {...} | null,
+                     "players": [{"name": str, "linkdead": bool}, ...]}
                 ]
             }
 
@@ -131,13 +132,21 @@ class MapDataProvider:
         agents_here = []
         building_obj = None
 
+        from world.player_lifecycle import get_state as _get_state
+        from world.constants import PLAYER_STATE_LINKDEAD
+
         for obj in tile_objects:
             # Player characters (incl. linkdead — still on the tile during grace;
             # player_is_present, not raw has_account, so sessionless linkdead
-            # players still appear in the tile's player list).
+            # players still appear in the tile's player list). Carry each one's
+            # linkdead flag so the client can draw the linkdead variant instead
+            # of a live enemy (mirrors the 'look' tile summary's (linkdead) tag).
             if player_is_present(obj):
                 if obj is not player:
-                    players_here.append(getattr(obj, "key", "?"))
+                    players_here.append({
+                        "name": getattr(obj, "key", "?"),
+                        "linkdead": _get_state(obj) == PLAYER_STATE_LINKDEAD,
+                    })
                 continue
 
             # NPC agents

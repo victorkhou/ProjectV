@@ -306,16 +306,19 @@ let map_renderer_plugin = (function () {
         ctx.textAlign="center";ctx.textBaseline="middle";ctx.fillText("@",cx,cy);
     }
 
-    function drawEnemyPlayer(ctx,x,y){
-        var spr=SPRITES.units["player_enemy"];
+    function drawEnemyPlayer(ctx,x,y,linkdead){
+        // A linkdead (disconnected) player lingers on the tile as a target —
+        // draw the greyed 'linkdead' variant instead of the live enemy.
+        var spr=linkdead?SPRITES.units["player_linkdead"]:SPRITES.units["player_enemy"];
         if(_spriteReady(spr)){ ctx.drawImage(spr,x+1,y+1,TILE-2,TILE-2); return; }
-        // ---- Fallback: red circle + '!'. ----
-        ctx.fillStyle="#ff3333";ctx.beginPath();
+        // ---- Fallback: circle + marker (grey/'z' for linkdead, red/'!' else). ----
+        ctx.fillStyle=linkdead?"#777777":"#ff3333";ctx.beginPath();
         ctx.arc(x+HALF,y+HALF,8,0,Math.PI*2);ctx.fill();
         ctx.strokeStyle="#fff";ctx.lineWidth=1.5;ctx.beginPath();
         ctx.arc(x+HALF,y+HALF,8,0,Math.PI*2);ctx.stroke();
         ctx.fillStyle="#fff";ctx.font="bold 10px sans-serif";
-        ctx.textAlign="center";ctx.textBaseline="middle";ctx.fillText("!",x+HALF,y+HALF);
+        ctx.textAlign="center";ctx.textBaseline="middle";
+        ctx.fillText(linkdead?"z":"!",x+HALF,y+HALF);
     }
 
     // Terrain detail overlays for resource tiles
@@ -445,8 +448,16 @@ let map_renderer_plugin = (function () {
                         drawAgent(ctx,sx,sy,ag);
                     }
                 }
-                // Enemy players
-                if(tile.players&&tile.players.length>0){drawEnemyPlayer(ctx,sx,sy);}
+                // Other players on the tile. Each entry is {name, linkdead}.
+                // Draw the linkdead variant when EVERY player here is linkdead
+                // (a live player among them means the tile is actively contested,
+                // so it should read as a live threat).
+                if(tile.players&&tile.players.length>0){
+                    var allLinkdead=tile.players.every(function(p){
+                        return p&&typeof p==="object"&&p.linkdead;
+                    });
+                    drawEnemyPlayer(ctx,sx,sy,allLinkdead);
+                }
             }
         }
         // Player marker (always on top)
