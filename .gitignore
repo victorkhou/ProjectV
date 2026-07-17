@@ -25,6 +25,9 @@ __pycache__
 *.restart
 *.db3
 
+# macOS
+.DS_Store
+
 # Installer logs
 pip-log.txt
 

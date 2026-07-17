@@ -99,6 +99,87 @@ let map_renderer_plugin = (function () {
         return "rgb("+Math.floor(r*f)+","+Math.floor(g*f)+","+Math.floor(b*f)+")";
     }
 
+    // ---- Sprite assets ----
+    // 32x32 PNGs served from /static/webclient/sprites/. Each draw path tries a
+    // sprite first and falls back to the original canvas-shape drawing when a
+    // sprite is missing/still loading/failed — so a partial asset set (or none)
+    // still renders, and a bad path never blanks the map.
+    var SPRITE_BASE = "/static/webclient/sprites/";
+    var SPRITES = { buildings:{}, terrain:{}, units:{}, resources:{}, ui:{} };
+
+    function _spriteReady(img){
+        return !!(img && img.complete && img.naturalWidth > 0 && !img._failed);
+    }
+
+    // Coalesce the re-render triggered as sprites finish loading: the first
+    // map_update may arrive before images are ready (fallback shapes drawn),
+    // then each load schedules one repaint on the next frame.
+    var _rerenderQueued = false;
+    function _scheduleRerender(){
+        if (_rerenderQueued) return;
+        _rerenderQueued = true;
+        requestAnimationFrame(function(){
+            _rerenderQueued = false;
+            if (lastMapData && currentView === "map") renderMap(lastMapData);
+        });
+    }
+
+    function _loadSprite(cat, key, file){
+        var img = new Image();
+        img.onload = function(){ _scheduleRerender(); };
+        img.onerror = function(){ img._failed = true; };  // silent → fallback path
+        img.src = SPRITE_BASE + cat + "/" + file;
+        SPRITES[cat][key] = img;
+    }
+
+    // Resource-bearing terrain → resource sprite key (mirrors data/definitions/
+    // terrain.yaml resource_type). Drives the corner resource badge; terrains not
+    // listed here bear no resource.
+    var TERRAIN_RESOURCE = {
+        "Forest":"wood","Pine_Forest":"wood",
+        "Rock":"stone","Permafrost":"stone","Obsidian_Plain":"stone",
+        "Mountain":"iron","Scrapyard":"iron","Ice_Cave":"iron",
+        "Scorched_Rock":"iron","Asteroid":"iron","Armory_Ruin":"iron",
+        "Power_Grid":"energy","Magma_Vent":"energy","Generator_Room":"energy","Nebula":"energy",
+        "Circuit_Field":"circuits","Control_Room":"circuits","Debris":"circuits",
+        "Vault_Room":"nexium",
+    };
+
+    function loadAllSprites(){
+        // Buildings — keyed <abbr>_<own|enemy>, matching tile.building.type.
+        ["hq","ex","ac","lb","ar","tu","vt","rd","wl","bk","mb","rl"].forEach(function(a){
+            _loadSprite("buildings", a+"_own",   "building_"+a+"_own.png");
+            _loadSprite("buildings", a+"_enemy", "building_"+a+"_enemy.png");
+        });
+        _loadSprite("buildings","occupied_overlay","building_occupied_overlay.png");
+        _loadSprite("buildings","unknown","building_unknown.png");
+        // Terrain — keyed by canonical type name (file is the lowercased form).
+        Object.keys(TERRAIN_COLORS).forEach(function(t){
+            if (t === "unknown") return;
+            _loadSprite("terrain", t, "terrain_"+t.toLowerCase()+".png");
+        });
+        _loadSprite("terrain","out_of_bounds","terrain_out_of_bounds.png");
+        // Units.
+        ["player_self","player_enemy","player_linkdead"].forEach(function(k){
+            _loadSprite("units", k, k+".png");
+        });
+        ["harvester","engineer","soldier","guard","scout","medic"].forEach(function(r){
+            _loadSprite("units", r+"_own",   "unit_"+r+"_own.png");
+            _loadSprite("units", r+"_enemy", "unit_"+r+"_enemy.png");
+        });
+        _loadSprite("units","enemy_guard","unit_enemy_guard.png");
+        // Resources.
+        ["wood","stone","iron","energy","circuits","nexium"].forEach(function(r){
+            _loadSprite("resources", r, "resource_"+r+".png");
+        });
+        // UI — preloaded for future per-tile signals (selection / reticle /
+        // construction). Not drawn yet: the map_update payload carries no such
+        // per-tile flag, so wiring these needs a server-side data change.
+        ["selection","target_reticle","construction"].forEach(function(u){
+            _loadSprite("ui", u, "ui_"+u+".png");
+        });
+    }
+
     // ---- Sprite drawing helpers ----
     var TILE = TILE_SIZE;
     var HALF = TILE/2;
@@ -152,6 +233,23 @@ let map_renderer_plugin = (function () {
         var type=(bld.type||"??").substring(0,2);
         var own=bld.own;
         var occupied=bld.occupied;
+
+        // Sprite path: <abbr>_<own|enemy>, else the generic 'unknown' building.
+        var key=type.toLowerCase()+(own?"_own":"_enemy");
+        var spr=SPRITES.buildings[key];
+        if(!_spriteReady(spr)) spr=SPRITES.buildings["unknown"];
+        if(_spriteReady(spr)){
+            ctx.drawImage(spr,x+2,y+2,TILE-4,TILE-4);
+            if(state==="fog"){ctx.fillStyle="rgba(0,0,0,0.55)";ctx.fillRect(x+2,y+2,TILE-4,TILE-4);}
+            if(occupied){
+                var ov=SPRITES.buildings["occupied_overlay"];
+                if(_spriteReady(ov)){ ctx.drawImage(ov,x+2,y+2,TILE-4,TILE-4); }
+                else{ ctx.strokeStyle="#4466cc";ctx.lineWidth=2;ctx.strokeRect(x+3,y+3,TILE-6,TILE-6); }
+            }
+            return;
+        }
+
+        // ---- Fallback: original canvas shapes (no sprite available). ----
         if(occupied){
             // Dark blue background for occupied buildings
             ctx.fillStyle="#2244aa";ctx.fillRect(x+2,y+2,TILE-4,TILE-4);
@@ -173,9 +271,16 @@ let map_renderer_plugin = (function () {
     }
 
     function drawAgent(ctx,x,y,ag){
+        // Sprite path: <role>_<own|enemy>; an enemy with no known role uses the
+        // NPC-base guard sprite.
+        var role=(ag.role||"").toLowerCase();
+        var spr=role?SPRITES.units[role+(ag.own?"_own":"_enemy")]:null;
+        if(!_spriteReady(spr)&&!ag.own) spr=SPRITES.units["enemy_guard"];
+        if(_spriteReady(spr)){ ctx.drawImage(spr,x+2,y+2,TILE-4,TILE-4); return; }
+
+        // ---- Fallback: colored circle + role initial. ----
         var color=ag.own?"#33cc33":"#ff3333";
         var label=ag.own?(ag.role?ag.role.charAt(0).toUpperCase():"A"):"!";
-        // Circle with role initial
         ctx.fillStyle=color;ctx.beginPath();
         ctx.arc(x+HALF,y+HALF,7,0,Math.PI*2);ctx.fill();
         ctx.strokeStyle="#fff";ctx.lineWidth=1;ctx.beginPath();
@@ -185,7 +290,9 @@ let map_renderer_plugin = (function () {
     }
 
     function drawPlayer(ctx,x,y){
-        // Diamond with glow
+        var spr=SPRITES.units["player_self"];
+        if(_spriteReady(spr)){ ctx.drawImage(spr,x+1,y+1,TILE-2,TILE-2); return; }
+        // ---- Fallback: gold diamond with glow. ----
         var cx=x+HALF,cy=y+HALF;
         ctx.shadowColor="#ffdd00";ctx.shadowBlur=6;
         ctx.fillStyle="#ffdd00";ctx.beginPath();
@@ -200,6 +307,9 @@ let map_renderer_plugin = (function () {
     }
 
     function drawEnemyPlayer(ctx,x,y){
+        var spr=SPRITES.units["player_enemy"];
+        if(_spriteReady(spr)){ ctx.drawImage(spr,x+1,y+1,TILE-2,TILE-2); return; }
+        // ---- Fallback: red circle + '!'. ----
         ctx.fillStyle="#ff3333";ctx.beginPath();
         ctx.arc(x+HALF,y+HALF,8,0,Math.PI*2);ctx.fill();
         ctx.strokeStyle="#fff";ctx.lineWidth=1.5;ctx.beginPath();
@@ -210,7 +320,18 @@ let map_renderer_plugin = (function () {
 
     // Terrain detail overlays for resource tiles
     function drawTerrainDetail(ctx,x,y,terrain){
-        // Small icon in corner for resource-bearing terrain
+        // Prefer the resource sprite badge (bottom-right corner, ~11px) when the
+        // terrain bears a resource and the sprite is loaded.
+        var rkey=TERRAIN_RESOURCE[terrain];
+        if(rkey){
+            var rspr=SPRITES.resources[rkey];
+            if(_spriteReady(rspr)){
+                var s=11;
+                ctx.drawImage(rspr,x+TILE-s-1,y+TILE-s-1,s,s);
+                return;
+            }
+        }
+        // Fallback: glyph in the corner for resource-bearing terrain.
         var icon=null,color=null;
         switch(terrain){
             case "Forest":case "Pine_Forest":icon="♣";color="#1a4a0a";break;
@@ -250,6 +371,11 @@ let map_renderer_plugin = (function () {
         canvas.width = cols*TILE_SIZE;
         canvas.height = rows*TILE_SIZE;
 
+        // Crisp pixel-art scaling — never blur the 32px sprites up/down to the
+        // tile size. (Resetting canvas.width above clears this flag, so set it
+        // every render.)
+        ctx.imageSmoothingEnabled = false;
+
         ctx.fillStyle="#0a0a0a"; ctx.fillRect(0,0,canvas.width,canvas.height);
 
         var lookup={};
@@ -264,35 +390,59 @@ let map_renderer_plugin = (function () {
                 // not real land — draw a flat grey off-map fill, not dimmed
                 // terrain, so the map edge reads as "outside the world".
                 if(tile.out_of_bounds){
-                    ctx.fillStyle="#1a1a1a";ctx.fillRect(sx,sy,TILE_SIZE,TILE_SIZE);
-                    ctx.strokeStyle="rgba(0,0,0,0.25)";ctx.lineWidth=0.5;ctx.strokeRect(sx,sy,TILE_SIZE,TILE_SIZE);
+                    var oob=SPRITES.terrain["out_of_bounds"];
+                    if(_spriteReady(oob)){ ctx.drawImage(oob,sx,sy,TILE_SIZE,TILE_SIZE); }
+                    else{
+                        ctx.fillStyle="#1a1a1a";ctx.fillRect(sx,sy,TILE_SIZE,TILE_SIZE);
+                        ctx.strokeStyle="rgba(0,0,0,0.25)";ctx.lineWidth=0.5;ctx.strokeRect(sx,sy,TILE_SIZE,TILE_SIZE);
+                    }
                     continue;
                 }
+                if(tile.state==="unexplored"){
+                    ctx.fillStyle="#0a0a0a";ctx.fillRect(sx,sy,TILE_SIZE,TILE_SIZE);
+                    ctx.fillStyle="#151515";ctx.fillRect(sx+8,sy+8,3,3);
+                    continue;
+                }
+                // Terrain base: sprite if loaded, else the flat color fill.
                 var bc=getColor(tile.terrain);
-                if(tile.state==="visible"){ctx.fillStyle=bc;}
-                else if(tile.state==="fog"){ctx.fillStyle=dimColor(bc,0.35);}
-                else{ctx.fillStyle="#0a0a0a";ctx.fillRect(sx,sy,TILE_SIZE,TILE_SIZE);ctx.fillStyle="#151515";ctx.fillRect(sx+8,sy+8,3,3);continue;}
-                ctx.fillRect(sx,sy,TILE_SIZE,TILE_SIZE);
+                var tspr=SPRITES.terrain[tile.terrain];
+                if(_spriteReady(tspr)){
+                    ctx.drawImage(tspr,sx,sy,TILE_SIZE,TILE_SIZE);
+                    // Fog dims the sprite via a translucent black overlay (can't
+                    // recolor a bitmap like a fillStyle).
+                    if(tile.state==="fog"){ctx.fillStyle="rgba(0,0,0,0.65)";ctx.fillRect(sx,sy,TILE_SIZE,TILE_SIZE);}
+                }else{
+                    ctx.fillStyle=(tile.state==="fog")?dimColor(bc,0.35):bc;
+                    ctx.fillRect(sx,sy,TILE_SIZE,TILE_SIZE);
+                }
                 // Subtle grid lines
                 ctx.strokeStyle="rgba(0,0,0,0.15)";ctx.lineWidth=0.5;ctx.strokeRect(sx,sy,TILE_SIZE,TILE_SIZE);
-                // Terrain detail icon for resource tiles
+                // Terrain resource badge (only on visible tiles).
                 if(tile.state==="visible"){drawTerrainDetail(ctx,sx,sy,tile.terrain);}
                 // Building
                 if(tile.building){drawBuilding(ctx,sx,sy,tile.building,tile.state);}
                 // Agent marker — show as small badge in corner when on a building tile
                 if(tile.agents&&tile.agents.length>0&&tile.state==="visible"){
+                    var ag=tile.agents[0];
                     if(tile.building){
-                        // Small badge in top-right corner
-                        var ag=tile.agents[0];
-                        var agc=ag.own?"#33cc33":"#ff3333";
-                        var agl=ag.own?(ag.role?ag.role.charAt(0).toUpperCase():"A"):"!";
-                        ctx.fillStyle=agc;ctx.beginPath();
-                        ctx.arc(sx+TILE-5,sy+5,5,0,Math.PI*2);ctx.fill();
-                        ctx.fillStyle="#fff";ctx.font="bold 7px sans-serif";
-                        ctx.textAlign="center";ctx.textBaseline="middle";
-                        ctx.fillText(agl,sx+TILE-5,sy+5);
+                        // Agent shares a building tile — small badge, top-right.
+                        var arole=(ag.role||"").toLowerCase();
+                        var aspr=arole?SPRITES.units[arole+(ag.own?"_own":"_enemy")]:null;
+                        if(!_spriteReady(aspr)&&!ag.own) aspr=SPRITES.units["enemy_guard"];
+                        if(_spriteReady(aspr)){
+                            var bs=13;
+                            ctx.drawImage(aspr,sx+TILE-bs-1,sy+1,bs,bs);
+                        }else{
+                            var agc=ag.own?"#33cc33":"#ff3333";
+                            var agl=ag.own?(ag.role?ag.role.charAt(0).toUpperCase():"A"):"!";
+                            ctx.fillStyle=agc;ctx.beginPath();
+                            ctx.arc(sx+TILE-5,sy+5,5,0,Math.PI*2);ctx.fill();
+                            ctx.fillStyle="#fff";ctx.font="bold 7px sans-serif";
+                            ctx.textAlign="center";ctx.textBaseline="middle";
+                            ctx.fillText(agl,sx+TILE-5,sy+5);
+                        }
                     } else {
-                        drawAgent(ctx,sx,sy,tile.agents[0]);
+                        drawAgent(ctx,sx,sy,ag);
                     }
                 }
                 // Enemy players
@@ -505,6 +655,10 @@ let map_renderer_plugin = (function () {
     var init = function() {
         canvas = document.getElementById("map-canvas");
         if (canvas) ctx = canvas.getContext("2d");
+
+        // Begin loading the 32x32 pixel-art sprites; each load re-renders the
+        // last map so sprites pop in as they arrive (fallback shapes until then).
+        loadAllSprites();
 
         if (typeof Evennia !== "undefined" && Evennia.emitter) {
             Evennia.emitter.on("map_update", function(args, kwargs) {
