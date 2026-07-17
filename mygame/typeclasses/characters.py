@@ -200,6 +200,25 @@ PLAYER_DEFAULTS: dict[str, object] = {
     # Set when an unclean disconnect enters LINKDEAD; the character stays a full
     # combat target until this passes, then is removed to the lobby.
     "linkdead_until": 0.0,
+    # --- Alliances (Member_Pointer + leaderboard tallies) ---
+    # The alliance_id this character belongs to, or None. Compared with `is None`
+    # / `== id` (never truthiness) so a legitimate id can never be misread. The
+    # single WRITER of player_alliance/alliance_rank is world.systems.
+    # alliance_system.AllianceSystem — never assign them directly.
+    "player_alliance": None,
+    # "leader" / "officer" / "member" (world.constants.ALLIANCE_RANKS), or None.
+    "alliance_rank": None,
+    # Decaying leaderboard kill tallies, split PvP vs PvE (weighted differently
+    # and decayed over time). Stored as floats; distinct from the cosmetic
+    # db.kills tally, which counts every kill including betrayals and never
+    # decays. Incremented only on a non-friendly XP-reward kill.
+    "scored_kills_pvp": 0.0,
+    "scored_kills_pve": 0.0,
+    # Anchor tick for lazy Score_Decay of both kill tallies.
+    "last_kill_decay_tick": 0,
+    # Invite Ignore_List: a set of blocked inviter ids, or the "all" sentinel.
+    # None = accepting invites from everyone.
+    "alliance_invite_ignore": None,
 }
 
 

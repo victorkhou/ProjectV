@@ -205,14 +205,19 @@ class GuardCombatSystem(BaseSystem):
         a closed building is not acquired — ranged fire can't reach an occupant
         under cover.
         """
-        from world.utils import chebyshev_distance, is_owner, player_is_sheltered
+        from world.utils import (
+            chebyshev_distance, is_owner, player_is_sheltered, are_allied,
+        )
 
         players = self._nearby_players(location, gx, gy, aggro_radius)
         nearest = None
         nearest_dist = aggro_radius + 1
         for player in players:
-            # Never attack the guard's own owner or a fellow unit of that owner.
-            if is_owner(player, owner):
+            # Never attack the guard's own owner or a fellow unit of that owner,
+            # nor any player ALLIED to the owner — automated units never fire on
+            # an ally (the hybrid friendly-fire rule; only direct player fire can
+            # hit an ally).
+            if is_owner(player, owner) or are_allied(player, owner):
                 continue
             # A ranged guard can't hit a player sheltered in a closed building.
             if skip_sheltered and player_is_sheltered(player):

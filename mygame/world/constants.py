@@ -374,6 +374,50 @@ BUILDING_CAPABILITIES: frozenset[str] = frozenset({
 })
 
 # ------------------------------------------------------------------ #
+#  Alliances
+# ------------------------------------------------------------------ #
+
+#: The ranks a player can hold within an alliance, ordered Leader > Officer >
+#: Member. Stored on ``db.alliance_rank``. Structural: the permission matrix and
+#: the strictly-lower-rank kick check branch on these values.
+ALLIANCE_RANK_LEADER = "leader"
+ALLIANCE_RANK_OFFICER = "officer"
+ALLIANCE_RANK_MEMBER = "member"
+
+ALLIANCE_RANKS = (ALLIANCE_RANK_LEADER, ALLIANCE_RANK_OFFICER, ALLIANCE_RANK_MEMBER)
+
+#: Rank -> integer weight, higher = more authority. Used for the
+#: strictly-lower-rank kick guard and the succession seniority order.
+ALLIANCE_RANK_ORDER = {
+    ALLIANCE_RANK_LEADER: 3,
+    ALLIANCE_RANK_OFFICER: 2,
+    ALLIANCE_RANK_MEMBER: 1,
+}
+
+#: The perk categories. At most ONE perk may be active per category at a time
+#: (no same-category stacking). Each maps to a concrete gameplay hook:
+#:   - ``shared_vision``: fog-of-war union across PLAYING allies
+#:   - ``shared_regen``: HP-regen multiplier for members
+#:   - ``harvest_boost``: extractor active-presence yield multiplier
+#:   - ``combat_damage``: flat additive damage bonus
+#:   - ``combat_armor``: flat additive damage reduction
+ALLIANCE_PERK_CATEGORIES = (
+    "shared_vision",
+    "shared_regen",
+    "harvest_boost",
+    "combat_damage",
+    "combat_armor",
+)
+
+#: Reserved substrings an alliance name/tag may not contain (case-insensitive,
+#: post-NFKC-normalization). Blocks impersonation of staff/system channels and
+#: collisions with the reserved global chat channel key/aliases (Public/chat/pub).
+ALLIANCE_NAME_DENYLIST = ("admin", "system", "staff", "public", "chat", "pub")
+
+#: Sentinel stored in ``db.alliance_invite_ignore`` meaning "block ALL invites".
+ALLIANCE_IGNORE_ALL = "all"
+
+# ------------------------------------------------------------------ #
 #  Disconnect cleanup
 # ------------------------------------------------------------------ #
 

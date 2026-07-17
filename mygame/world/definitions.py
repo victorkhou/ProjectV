@@ -416,3 +416,55 @@ class BalanceConfig:
     #: Per building-level cap for storage (Vault) and resource (Extractor)
     #: tiles: capacity = this x the building's level (e.g. 20 x Vault level).
     room_capacity_per_storage_level: int = 20
+
+    # --- Alliances -------------------------------------------------------- #
+    #: Minimum Entity_Level to FOUND an alliance.
+    alliance_found_min_level: int = 10
+    #: Minimum Entity_Level to JOIN an alliance (accept/apply/open-join).
+    alliance_join_min_level: int = 5
+    #: Max members (leader + officers + members) an alliance may hold.
+    alliance_max_members: int = 10
+    #: Max officers a Leader may promote (keeps withdraw/kick privilege scarce).
+    alliance_max_officers: int = 3
+    #: Max characters in an alliance tag.
+    alliance_tag_max_len: int = 5
+    #: Days a Leader must be offline before an Officer may `claim` leadership
+    #: (judged on-demand from last-seen data; no timer).
+    alliance_leader_absence_days: int = 7
+    #: Days a pending invite lives before it expires and is purged.
+    alliance_invite_expiry_days: int = 7
+    #: Ticks an inviter must wait between invites to the SAME target (and after
+    #: that target declines) — anti-harassment throttle.
+    alliance_invite_cooldown_ticks: int = 600
+    #: Ticks a player must wait after leaving/being kicked before joining any
+    #: alliance again (blunts serial-hop-for-fog-intel).
+    alliance_rejoin_cooldown_ticks: int = 1800
+    #: Ticks between a Leader's rename/retag operations.
+    alliance_rename_cooldown_ticks: int = 3600
+    #: Per-window cap on the quantity of any single resource an OFFICER may
+    #: withdraw from the treasury (a Leader withdraw bypasses the cap).
+    alliance_withdraw_cap_per_window: int = 500
+    #: Length (ticks) of the rolling withdrawal-cap window.
+    alliance_withdraw_window_ticks: int = 3600
+    #: Max rows the cross-alliance leaderboard shows.
+    alliance_leaderboard_top_n: int = 20
+    #: Composite-score weights. Score per member = level * w_level +
+    #: decayed_pvp_kills * w_kills_pvp + decayed_pve_kills * w_kills_pve +
+    #: buildings * w_buildings. PvP outweighs PvE. First-guess, tune live.
+    alliance_score_w_level: float = 1.0
+    alliance_score_w_kills_pvp: float = 3.0
+    alliance_score_w_kills_pve: float = 1.0
+    alliance_score_w_buildings: float = 1.5
+    #: Leaderboard kill-tally decay: on each read/increment a tally is multiplied
+    #: by factor ** (elapsed_ticks / decay_interval_ticks), so old kills fade and
+    #: the board reflects recent activity. factor in (0, 1]; 1.0 disables decay.
+    alliance_score_decay_factor: float = 0.98
+    alliance_score_decay_interval_ticks: int = 600
+    #: Alliance_Level tier table: SUM of member Entity_Levels -> tier (1..N).
+    #: Keys are the minimum summed member level for that tier. Chosen over an
+    #: average so a bigger active alliance climbs faster; the top threshold is
+    #: reachable by a realistic mid-size roster, NOT the ~600 theoretical max.
+    #: The number of tiers here is the MAX Alliance_Level. First-guess; tune live.
+    alliance_level_thresholds: dict[int, int] = field(default_factory=lambda: {
+        0: 1, 40: 2, 100: 3, 180: 4, 280: 5,
+    })

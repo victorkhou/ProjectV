@@ -776,6 +776,28 @@ class SchemaValidator:
                         f"got {type(rate).__name__}"
                     )
 
+        # alliance_level_thresholds: summed-level(int >= 0) -> tier(int >= 1) map.
+        alt = data.get("alliance_level_thresholds")
+        if alt is not None:
+            if not isinstance(alt, dict):
+                errors.append(
+                    f"balance.alliance_level_thresholds: expected dict, "
+                    f"got {type(alt).__name__}"
+                )
+            else:
+                for key, tier in alt.items():
+                    k = int(key) if isinstance(key, str) and key.isdigit() else key
+                    if not isinstance(k, int) or isinstance(k, bool) or k < 0:
+                        errors.append(
+                            f"balance.alliance_level_thresholds: key must be a "
+                            f"non-negative int, got {key!r}"
+                        )
+                    if not isinstance(tier, int) or isinstance(tier, bool) or tier < 1:
+                        errors.append(
+                            f"balance.alliance_level_thresholds[{key}]: tier must be "
+                            f"a positive int, got {tier!r}"
+                        )
+
         # production_scaling keys must be 1-5
         ps = data.get("production_scaling")
         if ps is not None:

@@ -252,6 +252,11 @@ class ResourceSystem(BaseSystem):
                 level = self._get_building_level(extractor)
                 amount = int(amount * bal.extractor_harvest_multiplier
                              * (1 + bal.extractor_level_bonus * (level - 1)))
+                # Alliance harvest_boost perk: an OWN multiplier applied ON TOP
+                # of the base extractor factor (never reusing that key), read
+                # LIVE from the harvesting player's alliance membership. 1.0
+                # (no change) for a non-member or an alliance without the perk.
+                amount = int(amount * self._alliance_harvest_multiplier(player))
 
             # Determine drop location and coordinates
             if hasattr(tile, "is_node_depleted") and px is not None and py is not None:
@@ -574,6 +579,24 @@ class ResourceSystem(BaseSystem):
         """Read the building level from a building."""
         from world.utils import get_building_level
         return get_building_level(building)
+
+    @staticmethod
+    def _alliance_harvest_multiplier(player: Any) -> float:
+        """Return the alliance harvest_boost multiplier for *player* (1.0 if none).
+
+        Read LIVE from the player's alliance membership so leaving the alliance
+        removes the boost immediately. ``1.0`` (no change) when there is no
+        AllianceSystem, the player is not a member, or the alliance has no active
+        harvest_boost perk. Guarded so a lookup never breaks harvesting.
+        """
+        try:
+            from world.utils import get_system
+            system = get_system(player, "alliance_system")
+            if system is None:
+                return 1.0
+            return float(system.perk_multiplier(player, "harvest_boost"))
+        except Exception:  # noqa: BLE001 - a perk lookup never breaks harvest
+            return 1.0
 
     @staticmethod
     def _player_on_tile(player: Any, tile: Any) -> bool:

@@ -54,6 +54,10 @@ _OPTIONAL_FILES = {
     # loads fine without it — an absent/empty file just means the spawning
     # flow offers a single default class.
     "classes": "definitions/classes.yaml",
+    # Alliance perk catalog (alliance feature). Optional so the game loads fine
+    # without it — an absent/empty file just means the alliance feature offers
+    # no perks (membership/treasury/leaderboard still work).
+    "alliance_perks": "definitions/alliance_perks.yaml",
 }
 
 
@@ -111,6 +115,13 @@ class DataRegistry:
         #: from the optional data/definitions/classes.yaml. Empty when absent
         #: (the spawning flow then offers a single default class).
         self.classes: dict[str, ClassDef] = {}
+        #: Alliance perk catalog keyed by perk key ("shared_vision", ...); loaded
+        #: from the optional data/definitions/alliance_perks.yaml. Each value is a
+        #: dict {category, effect_type, levels: {int_level: {tier, cost, ...}}}.
+        #: Empty when absent (the alliance feature then offers no perks). Kept as
+        #: raw nested dicts (not a dataclass) since AllianceSystem interprets the
+        #: level/tier/cost/effect payloads directly.
+        self.alliance_perks: dict[str, dict] = {}
         self.balance: BalanceConfig = BalanceConfig()
         self._base_path: str = "data"
         self._validator = SchemaValidator()
@@ -196,6 +207,9 @@ class DataRegistry:
         # --- Load optional player classes ---
         self._load_classes(base_path)
 
+        # --- Load optional alliance perk catalog ---
+        self._load_alliance_perks(base_path)
+
         logger.info("Data Registry loaded successfully from '%s'", base_path)
 
     def reload_all(self) -> tuple[bool, list[str]]:
@@ -229,6 +243,7 @@ class DataRegistry:
         self.planets = temp.planets
         self.base_templates = temp.base_templates
         self.classes = temp.classes
+        self.alliance_perks = temp.alliance_perks
         self.balance = temp.balance
 
         # Rebuild the shared level<->XP threshold curve from the newly-swapped
@@ -421,7 +436,7 @@ class DataRegistry:
         # scalar copy below and rebuilt explicitly.
         special = {
             "production_scaling", "demolish_refund_rates", "base_training_cost",
-            "resource_weights",
+            "resource_weights", "alliance_level_thresholds",
         }
 
         kwargs: dict[str, Any] = {}
@@ -456,6 +471,15 @@ class DataRegistry:
         rw_raw = raw.get("resource_weights")
         kwargs["resource_weights"] = (
             dict(rw_raw) if rw_raw is not None else defaults.resource_weights
+        )
+
+        # alliance_level_thresholds: summed-level keys may be strings → coerce to
+        # int (same reason as production_scaling: int-level lookups would miss).
+        alt_raw = raw.get("alliance_level_thresholds")
+        kwargs["alliance_level_thresholds"] = (
+            {int(k): int(v) for k, v in alt_raw.items()}
+            if alt_raw is not None
+            else defaults.alliance_level_thresholds
         )
 
         return BalanceConfig(**kwargs)
@@ -564,6 +588,61 @@ class DataRegistry:
                 description=(description if isinstance(description, str) else "").strip(),
             )
         logger.info("Loaded %d player class(es).", len(self.classes))
+
+    def _load_alliance_perks(self, base_path: str) -> None:
+        """Load the optional alliance perk catalog from alliance_perks.yaml.
+
+        Absent, empty, or malformed → an empty catalog (the alliance feature
+        offers no perks), so a perk-content problem never blocks server start.
+        Each top-level perk key maps to ``{category, effect_type, levels}`` where
+        ``levels`` is ``{int_level: {tier, cost, <effect payload>}}``. YAML level
+        keys may arrive as strings, so they are coerced to int (int-level lookups
+        would otherwise miss — the same class of bug as production_scaling).
+        Malformed individual perks/levels are skipped, not fatal.
+        """
+        self.alliance_perks = {}
+        path = os.path.join(base_path, _OPTIONAL_FILES["alliance_perks"])
+        if not os.path.isfile(path):
+            logger.info("No alliance perks at '%s' — alliances offer no perks.", path)
+            return
+        try:
+            with open(path, "r") as f:
+                raw = yaml.safe_load(f)
+        except Exception:
+            logger.exception("Failed to read alliance perks at '%s'.", path)
+            return
+        if not isinstance(raw, dict):
+            return
+        for key, spec in (raw.get("perks", {}) or {}).items():
+            if not isinstance(key, str) or not isinstance(spec, dict):
+                logger.warning("Skipping malformed alliance perk %r.", key)
+                continue
+            levels_raw = spec.get("levels")
+            if not isinstance(levels_raw, dict) or not levels_raw:
+                logger.warning("Alliance perk '%s' has no levels — skipping.", key)
+                continue
+            levels: dict[int, dict] = {}
+            for lvl, payload in levels_raw.items():
+                try:
+                    lvl_int = int(lvl)
+                except (TypeError, ValueError):
+                    logger.warning("Perk '%s' has non-int level %r — skipping.", key, lvl)
+                    continue
+                if not isinstance(payload, dict):
+                    continue
+                levels[lvl_int] = dict(payload)
+            if not levels:
+                continue
+            self.alliance_perks[key] = {
+                "category": spec.get("category", key),
+                "effect_type": spec.get("effect_type"),
+                "levels": levels,
+            }
+        logger.info("Loaded %d alliance perk(s).", len(self.alliance_perks))
+
+    def get_alliance_perk(self, key: str) -> "dict | None":
+        """Return the alliance perk spec for *key*, or ``None`` if undefined."""
+        return self.alliance_perks.get(key)
 
     def get_class(self, key: str) -> "ClassDef | None":
         """Return the player class for *key*, or ``None`` if undefined."""

@@ -738,6 +738,98 @@ def is_owner(caller: Any, owner: Any) -> bool:
     return owner is caller
 
 
+def _is_real_player(entity: Any) -> bool:
+    """Return True if *entity* is a real player character (not an NPC/Sentinel).
+
+    The belt-and-braces guard behind the alliance real-player invariant (C8):
+    an alliance member must have a live account, must not be a Sentinel (the
+    never-puppeted NPC-base owner), and must not carry an ``npc_type`` (agents /
+    enemy guards). Even if a stray ``player_alliance`` pointer were somehow
+    written onto an NPC base owner, :func:`are_allied` would still refuse to
+    treat it as an ally — so a PvE fortress can never be made untargetable.
+
+    Value-based reads only; never raises.
+    """
+    if entity is None:
+        return False
+    try:
+        if not getattr(entity, "has_account", False):
+            return False
+    except Exception:  # noqa: BLE001
+        return False
+    db = getattr(entity, "db", None)
+    if db is None:
+        return False
+    # An NPC (agent/enemy guard) carries npc_type; a Sentinel is a non-account
+    # CombatCharacter (already excluded by has_account) but guard on the tag too.
+    if getattr(db, "npc_type", None) is not None:
+        return False
+    try:
+        if entity.tags.get("sentinel", category="npc_role"):
+            return False
+    except Exception:  # noqa: BLE001
+        pass
+    return True
+
+
+def are_allied(a: Any, b: Any) -> bool:
+    """Return True iff *a* and *b* are two DISTINCT real players in the same alliance.
+
+    The single ally predicate — the alliance counterpart to :func:`is_owner`,
+    added alongside it as the one authority for "same side". In combat it is
+    ALWAYS called with the Owning_Players (via ``_owning_player``), never raw
+    units, so a turret/agent is judged by its owner's alliance.
+
+    Returns ``True`` only when ALL hold:
+
+    * both *a* and *b* are real player characters (:func:`_is_real_player` — has
+      an account, not a Sentinel, no ``npc_type``), so an NPC base owner can
+      never be treated as an ally (C8);
+    * they are DISTINCT players — sameness decided exactly like ``is_owner``
+      (compare ``.id`` when both non-``None``; else identity), so a unit is never
+      "allied to itself" and two same-PK instances after an idmapper flush are
+      treated as the same player (→ ``False``);
+    * both hold the SAME non-``None`` ``db.player_alliance`` (value-based reads:
+      ``is None`` / ``==``, never truthiness — a legitimate ``alliance_id`` is
+      always ``>= 1`` so this never trips on ``0``);
+    * that shared ``alliance_id`` STILL resolves to a live Alliance_Record via
+      the AllianceSystem — a stale pointer left by a disband while a member was
+      offline resolves to nothing and yields ``False``.
+
+    Fails toward ``False`` on any missing ``db``, unavailable AllianceSystem, or
+    unresolved record: a lookup failure must never SUPPRESS legitimate hostile
+    targeting (the safe direction is "treat as enemies").
+    """
+    if a is None or b is None:
+        return False
+    if not (_is_real_player(a) and _is_real_player(b)):
+        return False
+    # Distinct-player check, mirroring is_owner's idmapper-safe comparison.
+    a_id = getattr(a, "id", None)
+    b_id = getattr(b, "id", None)
+    if a_id is not None and b_id is not None:
+        if a_id == b_id:
+            return False
+    elif a is b:
+        return False
+
+    a_alliance = getattr(getattr(a, "db", None), "player_alliance", None)
+    b_alliance = getattr(getattr(b, "db", None), "player_alliance", None)
+    if a_alliance is None or b_alliance is None:
+        return False
+    if a_alliance != b_alliance:
+        return False
+
+    # The shared id must still resolve to a LIVE record (defends stale pointers).
+    system = get_system(a, "alliance_system")
+    if system is None:
+        return False
+    try:
+        return system.alliance_exists(a_alliance)
+    except Exception:  # noqa: BLE001 - a lookup failure never suppresses hostility
+        return False
+
+
 def is_admin(caller: Any) -> bool:
     """Check if caller has Builder+ permissions."""
     if hasattr(caller, "check_permstring"):

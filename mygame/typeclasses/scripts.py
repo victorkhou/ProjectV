@@ -655,3 +655,72 @@ class AutoSaveScript(DefaultScript):
                         pass
         except Exception:
             logger.exception("AutoSave: could not access SESSION_HANDLER")
+
+
+class AllianceRegistry(DefaultScript):
+    """Persistent store of every Alliance_Record.
+
+    A single global ``DefaultScript`` (like :class:`GameTickScript`) so alliance
+    records survive restarts. Holds ``db.alliances`` (``{alliance_id: record
+    dict}``) and ``db.next_alliance_id`` (a monotonic counter starting at 1,
+    never 0 — so a legitimate id can never be confused with the ``None`` "no
+    alliance" pointer).
+
+    Thin data holder only: ALL mutation logic lives in
+    ``world.systems.alliance_system.AllianceSystem`` (the single writer). This
+    class just persists and looks up. It lives here in ``typeclasses`` (not in
+    ``world/systems``) because a layering invariant forbids ``world/systems`` from
+    importing evennia at module scope.
+    """
+
+    def at_script_creation(self):
+        self.key = "alliance_registry"
+        self.desc = "Persistent store of alliance records"
+        self.persistent = True
+        self.db.alliances = {}
+        self.db.next_alliance_id = 1
+
+    # -- lookups (read-only) -- #
+
+    def get(self, alliance_id):
+        """Return the Alliance_Record for *alliance_id*, or ``None``."""
+        if alliance_id is None:
+            return None
+        return (self.db.alliances or {}).get(alliance_id)
+
+    def all_alliances(self):
+        """Return every Alliance_Record (a list of dicts)."""
+        return list((self.db.alliances or {}).values())
+
+    def by_tag(self, tag):
+        """Return the Alliance_Record whose normalized tag matches *tag* (or None)."""
+        if not tag:
+            return None
+        from world.systems.alliance_system import _normalize
+        norm = _normalize(tag)
+        for rec in (self.db.alliances or {}).values():
+            if _normalize(rec.get("tag", "")) == norm:
+                return rec
+        return None
+
+    # -- id allocation + record write-back (used only by AllianceSystem) -- #
+
+    def allocate_id(self):
+        """Reserve and return the next alliance id (monotonic, >= 1)."""
+        nid = self.db.next_alliance_id
+        if not isinstance(nid, int) or nid < 1:
+            nid = 1
+        self.db.next_alliance_id = nid + 1
+        return nid
+
+    def put(self, record):
+        """Insert/replace *record* (keyed by its ``id``), read-modify-reassign."""
+        alliances = dict(self.db.alliances or {})
+        alliances[record["id"]] = record
+        self.db.alliances = alliances
+
+    def delete(self, alliance_id):
+        """Remove the Alliance_Record for *alliance_id* (read-modify-reassign)."""
+        alliances = dict(self.db.alliances or {})
+        alliances.pop(alliance_id, None)
+        self.db.alliances = alliances
