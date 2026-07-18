@@ -1319,7 +1319,8 @@ class AllianceSystem(BaseSystem):
         from world.event_bus import ALLIANCE_TREASURY_DEPOSITED
         self._publish(ALLIANCE_TREASURY_DEPOSITED, alliance_id=record["id"],
                       actor=player, amounts=dict(costs))
-        summary = ", ".join(f"{a} {r}" for r, a in costs.items())
+        from world.utils import format_cost_summary
+        summary = format_cost_summary(costs)
         player.msg(f"You deposit {summary} into the treasury.")
         self._broadcast(record["id"], f"{player.key} deposited {summary}.")
         return True
@@ -1381,7 +1382,8 @@ class AllianceSystem(BaseSystem):
         from world.event_bus import ALLIANCE_TREASURY_WITHDRAWN
         self._publish(ALLIANCE_TREASURY_WITHDRAWN, alliance_id=record["id"],
                       actor=actor, amounts=dict(costs))
-        summary = ", ".join(f"{a} {r}" for r, a in costs.items())
+        from world.utils import format_cost_summary
+        summary = format_cost_summary(costs)
         actor.msg(f"You withdraw {summary} from the treasury.")
         self._broadcast(record["id"], f"{actor.key} withdrew {summary}.")
         return True

@@ -22,6 +22,7 @@ from world.utils import (
     is_admin,
     owner_has_active_hq,
     format_dm_message,
+    format_cost_summary,
 )
 
 
@@ -772,7 +773,7 @@ class CmdBuild(GameCommand):
         for abbr, bdef in sorted(registry.buildings.items(), key=lambda x: x[1].rank_requirement):
             if bdef.rank_requirement > player_level:
                 continue
-            cost_str = ", ".join(f"{amt} {res}" for res, amt in bdef.cost.items())
+            cost_str = format_cost_summary(bdef.cost)
             lines.append(f"  |w{abbr}|n — {bdef.name} ({cost_str}) [{bdef.build_time_seconds}s]")
 
         if len(lines) == 1:

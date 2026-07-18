@@ -840,6 +840,17 @@ def are_allied(a: Any, b: Any) -> bool:
         return False
 
 
+def is_friendly(a: Any, b: Any) -> bool:
+    """Return True if *a* is *b*'s owner or an ally of *b* — the "same side" test.
+
+    The single friend/foe predicate that automated defenses use to decide whom
+    NOT to fire on: a unit never targets its own owner (:func:`is_owner`) nor any
+    player allied to that owner (:func:`are_allied`). Both underlying predicates
+    guard non-player / ``None`` operands themselves, so passing raw units is safe.
+    """
+    return is_owner(a, b) or are_allied(a, b)
+
+
 def shared_visible_tiles(player: Any, player_buildings: Any, fog_system: Any) -> set:
     """Return *player*'s visible tiles, unioned with PLAYING allies' if the
     shared-vision perk is active.
@@ -1035,6 +1046,15 @@ def format_insufficient_resources(player: Any, costs: dict[str, int]) -> str:
         color = "|g" if current >= needed else "|r"
         lines.append(f"  {color}{resource}: {current}/{needed}|n")
     return "\n".join(lines)
+
+
+def format_cost_summary(costs: dict[str, int]) -> str:
+    """Format a resource-cost dict as a compact ``"30 Iron, 10 Wood"`` string.
+
+    The shared one-line rendering of a ``{resource: amount}`` mapping used
+    wherever a cost, price, deposit, withdrawal, or refund is echoed to a player.
+    """
+    return ", ".join(f"{amount} {resource}" for resource, amount in costs.items())
 
 
 # ------------------------------------------------------------------ #

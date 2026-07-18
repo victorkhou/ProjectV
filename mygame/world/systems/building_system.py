@@ -297,7 +297,8 @@ class BuildingSystem(BaseSystem):
             tile=getattr(building, "location", None),
         )
 
-        cost_str = ", ".join(f"{amt} {res}" for res, amt in upgrade_cost.items())
+        from world.utils import format_cost_summary
+        cost_str = format_cost_summary(upgrade_cost)
         return True, (
             f"Upgrading {building_def.name} to level {target_level} "
             f"(0/{upgrade_time}s, cost: {cost_str}). Stay on the tile to continue."
@@ -844,8 +845,9 @@ class BuildingSystem(BaseSystem):
         if was_offline:
             self._set_building_attr(building, "offline", False)
 
+        from world.utils import format_cost_summary
         name = self._building_name(building_type)
-        cost_str = ", ".join(f"{amt} {res}" for res, amt in cost.items())
+        cost_str = format_cost_summary(cost)
         restored = hp_max - hp
         online_note = " It is back online." if was_offline else ""
         return True, (

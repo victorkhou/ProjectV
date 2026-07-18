@@ -2,8 +2,9 @@
 Chat System for the RTS Combat Overworld game.
 
 A thin wrapper over Evennia's existing communication infrastructure.
-Configures game channels on startup and overrides message formatting
-to include player rank.
+Configures game channels on startup. Message formatting (the rank-prefixed
+lines) lives in :mod:`world.utils` (``format_channel_message`` /
+``format_dm_message``), the single source of truth used by production.
 
 """
 
@@ -80,76 +81,3 @@ class ChatSystem:
                     account.nicks.add("chat", self.GLOBAL_CHANNEL_KEY, category="channel")
         except Exception:
             logger.exception("ChatSystem: Error auto-subscribing account")
-
-    def format_channel_message(self, sender: Any, message: str) -> str:
-        """Format a channel message with the sender's rank.
-
-        Format: "[{rank}] {name}: {message}"
-
-        Args:
-            sender: The player sending the message.
-            message: The message text.
-
-        Returns:
-            Formatted message string.
-        """
-        name = getattr(sender, "key", "Unknown")
-        rank = self._get_player_rank_name(sender)
-        return f"[{rank}] {name}: {message}"
-
-    def format_dm_message(self, sender: Any, message: str) -> str:
-        """Format a direct message with the sender's rank.
-
-        Format: "[{rank}] {name} (DM): {message}"
-
-        Args:
-            sender: The player sending the message.
-            message: The message text.
-
-        Returns:
-            Formatted message string.
-        """
-        name = getattr(sender, "key", "Unknown")
-        rank = self._get_player_rank_name(sender)
-        return f"[{rank}] {name} (DM): {message}"
-
-    @staticmethod
-    def _get_player_rank_name(player: Any) -> str:
-        """Get the rank name for a player.
-
-        Tries multiple attribute patterns for flexibility.
-
-        Args:
-            player: The player character.
-
-        Returns:
-            The rank name string.
-        """
-        # Try rank_name attribute directly
-        rank_name = getattr(player, "rank_name", None)
-        if rank_name:
-            return rank_name
-
-        # Derive rank from level via the rank system, resolving rank
-        # definitions through a DefinitionsProvider over the live registry
-        # (single choke point; no direct singleton reach here).
-        try:
-            from world.systems.rank_system import rank_from_level
-            from world.adapters.registry_definitions_provider import (
-                default_definitions_provider,
-            )
-            level = getattr(getattr(player, "db", None), "level", None)
-            if level is None:
-                level = getattr(getattr(player, "db", None), "rank_level", None)
-            if level is not None:
-                rank_num = rank_from_level(int(level))
-                provider = default_definitions_provider()
-                if provider is not None:
-                    for r in provider.ranks:
-                        if r.level == rank_num:
-                            return r.name.replace("_", " ")
-                return f"Rank {rank_num}"
-        except Exception:
-            pass
-
-        return "Recruit"

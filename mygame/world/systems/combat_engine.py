@@ -682,7 +682,7 @@ class CombatEngine(BaseSystem):
                 query. When ``None`` (isolated tests), it falls back to the
                 per-owner :func:`owner_has_active_hq` live query.
         """
-        from world.utils import is_owner, owner_has_active_hq, are_allied
+        from world.utils import is_friendly, owner_has_active_hq
 
         turret_radius = self.registry.balance.turret_radius
         turret_damage = self.registry.balance.turret_damage
@@ -734,7 +734,7 @@ class CombatEngine(BaseSystem):
                 # player allied to the owner — automated defenses never fire on
                 # an ally (the hybrid friendly-fire rule: only DIRECT player fire
                 # can hit an ally, see _handle_player_defeat).
-                if is_owner(player, owner) or are_allied(player, owner):
+                if is_friendly(player, owner):
                     continue
 
                 # A player sheltered inside a closed building is not a valid

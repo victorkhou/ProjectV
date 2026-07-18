@@ -206,7 +206,7 @@ class GuardCombatSystem(BaseSystem):
         under cover.
         """
         from world.utils import (
-            chebyshev_distance, is_owner, player_is_sheltered, are_allied,
+            chebyshev_distance, is_friendly, player_is_sheltered,
         )
 
         players = self._nearby_players(location, gx, gy, aggro_radius)
@@ -217,7 +217,7 @@ class GuardCombatSystem(BaseSystem):
             # nor any player ALLIED to the owner — automated units never fire on
             # an ally (the hybrid friendly-fire rule; only direct player fire can
             # hit an ally).
-            if is_owner(player, owner) or are_allied(player, owner):
+            if is_friendly(player, owner):
                 continue
             # A ranged guard can't hit a player sheltered in a closed building.
             if skip_sheltered and player_is_sheltered(player):

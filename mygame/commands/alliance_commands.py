@@ -422,7 +422,8 @@ class CmdAlliance(GameSubcommandRouter):
             lines.append("  Open-join: ON")
         if "treasury" in s:
             if s["treasury"]:
-                tre = ", ".join(f"{a} {r}" for r, a in s["treasury"].items())
+                from world.utils import format_cost_summary
+                tre = format_cost_summary(s["treasury"])
                 lines.append(f"  Treasury: {tre}")
             else:
                 lines.append("  Treasury: empty")

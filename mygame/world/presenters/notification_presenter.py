@@ -477,10 +477,11 @@ def _fmt_harvester_produced(d: dict) -> str:
 
 
 def _fmt_sold(d: dict) -> str:
+    from world.utils import format_cost_summary
     name = d.get("item_name", "item")
     refund = d.get("refund") or {}
     if refund:
-        parts = ", ".join(f"{amt} {res}" for res, amt in refund.items())
+        parts = format_cost_summary(refund)
         return f"|g[Sell] Sold {name} for {parts}.|n"
     return f"|g[Sell] Sold {name}.|n"
 

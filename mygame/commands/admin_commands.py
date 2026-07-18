@@ -539,10 +539,8 @@ class CmdAdminAgent(AdminSubcommandRouter):
         player_name = parts[0]
         count = 1
         if len(parts) >= 2:
-            try:
-                count = int(parts[1])
-            except ValueError:
-                caller.msg("Count must be a number.")
+            count = self.parse_int(parts[1], "Count")
+            if count is None:
                 return
             if count < 1:
                 caller.msg("Count must be at least 1.")
@@ -1170,10 +1168,8 @@ class CmdAdminPlayer(AdminSubcommandRouter):
             return
 
         parts = args.strip().split()
-        try:
-            level = int(parts[0])
-        except ValueError:
-            caller.msg("Level must be a number.")
+        level = self.parse_int(parts[0], "Level")
+        if level is None:
             return
 
         player_name = parts[1] if len(parts) >= 2 else None
@@ -1242,10 +1238,8 @@ class CmdAdminPlayer(AdminSubcommandRouter):
             return
 
         parts = args.strip().split()
-        try:
-            rank_id = int(parts[0])
-        except ValueError:
-            caller.msg("Rank ID must be a number.")
+        rank_id = self.parse_int(parts[0], "Rank ID")
+        if rank_id is None:
             return
 
         player_name = parts[1] if len(parts) >= 2 else None
