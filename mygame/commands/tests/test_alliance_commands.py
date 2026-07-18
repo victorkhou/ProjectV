@@ -219,6 +219,38 @@ class TestGates(_AllianceCmdBase):
         finally:
             ct.player_in_combat = orig
 
+    # Fix #1 — membership-ADDING verbs (accept/join) are combat-gated too, so a
+    # player can't flip allied mid-fight to silence turrets/guards.
+    def test_accept_and_join_refused_in_combat(self):
+        import world.combat_timer as ct
+        orig = ct.player_in_combat
+        ct.player_in_combat = lambda char: True
+        try:
+            for verb in ("accept COAL", "join COAL"):
+                c = _Caller(state="playing")
+                cmd = _make(c, verb)
+                self.assertTrue(cmd.at_pre_cmd(), f"{verb} must be combat-gated")
+                self.assertTrue(any("in combat" in m for m in c.messages))
+        finally:
+            ct.player_in_combat = orig
+
+    # Fix #8 — the combat gate holds even when the lobby flow is DISABLED.
+    def test_combat_gate_independent_of_lobby_flow(self):
+        import world.lobby_flow as lf
+        import world.combat_timer as ct
+        orig_flow, orig_combat = lf.lobby_flow_enabled, ct.player_in_combat
+        lf.lobby_flow_enabled = lambda: False   # flag flipped off
+        ct.player_in_combat = lambda char: True
+        try:
+            c = _Caller(alliance=1, state="playing")
+            cmd = _make(c, "leave")
+            self.assertTrue(cmd.at_pre_cmd(),
+                            "combat gate must hold with lobby flow off")
+            self.assertTrue(any("in combat" in m for m in c.messages))
+        finally:
+            lf.lobby_flow_enabled = orig_flow
+            ct.player_in_combat = orig_combat
+
 
 if __name__ == "__main__":
     unittest.main()

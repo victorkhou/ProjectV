@@ -37,13 +37,14 @@ class _Db(types.SimpleNamespace):
 class _Player:
     _n = 0
 
-    def __init__(self, alliance=None, state="playing"):
+    def __init__(self, alliance=None, state="playing", planet="terra"):
         _Player._n += 1
         self.id = _Player._n
         self.key = f"P{self.id}"
         self.has_account = True
         self.db = _Db(player_alliance=alliance, alliance_rank="member",
-                      npc_type=None, player_state=state, combat_xp=0)
+                      npc_type=None, player_state=state, combat_xp=0,
+                      coord_planet=planet)
         self.tags = _NoTags()
 
     def get_buildings(self):
@@ -149,6 +150,23 @@ class TestSharedVisionUnion(unittest.TestCase):
         self.reg.get(aid)["active_perks"] = {}
         tiles = self.sys.shared_visible_tiles(a, [], self.fog)
         self.assertEqual(tiles, {(a.id, 0)})
+
+    def test_cross_planet_ally_does_not_contribute(self):
+        # A PLAYING ally on a DIFFERENT planet must NOT leak vision — (x,y)
+        # tuples carry no planet and planets share numeric ranges (Fix #3).
+        a = self._mk(state="playing", planet="terra")
+        b = self._mk(state="playing", planet="forge")
+        self._alliance_with(a, b)
+        tiles = self.sys.shared_visible_tiles(a, [], self.fog)
+        self.assertIn((a.id, 0), tiles)
+        self.assertNotIn((b.id, 0), tiles, "cross-planet ally vision must not leak")
+
+    def test_same_planet_ally_still_contributes(self):
+        a = self._mk(state="playing", planet="terra")
+        b = self._mk(state="playing", planet="terra")
+        self._alliance_with(a, b)
+        tiles = self.sys.shared_visible_tiles(a, [], self.fog)
+        self.assertIn((b.id, 0), tiles)
 
 
 # -------------------------------------------------------------- #

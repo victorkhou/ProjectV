@@ -28,8 +28,15 @@ MUTATING_LOBBY_VERBS = frozenset({
 })
 # Verbs usable from either OOC state (LOBBY or SPAWNING) — read-only.
 READONLY_OOC_VERBS = frozenset({"info", "board", "leaderboard", "invites"})
-# Verbs refused while the actor is in combat (anti-combat-log; side-changing).
-COMBAT_GATED_VERBS = frozenset({"leave", "transfer", "disband", "kick"})
+# Verbs refused while the actor is in combat (anti-combat-log). Covers BOTH
+# directions of a mid-fight side-change: membership-REMOVING verbs (leave/kick/
+# disband/transfer) that drop you out of a side, AND membership-ADDING verbs
+# (accept/join) that flip you allied to whoever is shooting you — becoming an
+# ally silences their turrets/guards (are_allied skip), which is the same
+# combat-log escape in the fire-suppressing direction.
+COMBAT_GATED_VERBS = frozenset({
+    "leave", "transfer", "disband", "kick", "accept", "join",
+})
 
 
 def _resolve_player(caller, name):
@@ -97,19 +104,38 @@ class CmdAlliance(GameSubcommandRouter):
     # ------------------------------------------------------------------ #
 
     def at_pre_cmd(self):
-        """Gate by parsed verb: OOC availability + combat lock. Abort => True."""
+        """Gate by parsed verb: combat lock + OOC availability. Abort => True.
+
+        The combat (anti-combat-log) gate is evaluated INDEPENDENTLY of the lobby
+        flow flag — it is a security control, not a lobby concern, and must not
+        silently disappear if LOBBY_FLOW_ENABLED is flipped off (its documented
+        one-line-revert purpose). Only the OOC lobby-vs-spawning availability
+        rules are conditioned on lobby_flow_enabled().
+        """
         verb, _ = self._get_subcommand_and_args()
+        if verb is None:
+            return super().at_pre_cmd()
         try:
+            # 1) Combat gate — ALWAYS, regardless of the lobby flow flag. Blocks
+            # both membership-removing and membership-adding side-changes while
+            # in combat (the anti-combat-log rule, both directions).
+            if verb in COMBAT_GATED_VERBS:
+                from world.combat_timer import player_in_combat
+                if player_in_combat(self.caller):
+                    self.caller.msg(
+                        "You can't change your alliance while in combat."
+                    )
+                    return True
+
+            # 2) OOC availability — only meaningful while the lobby flow is on.
             from world.lobby_flow import lobby_flow_enabled
-            if verb is not None and lobby_flow_enabled():
+            if lobby_flow_enabled():
                 from world import player_lifecycle as pl
                 from world.constants import (
-                    PLAYER_STATE_PLAYING, PLAYER_STATE_LOBBY,
-                    PLAYER_STATE_SPAWNING,
+                    PLAYER_STATE_LOBBY, PLAYER_STATE_SPAWNING,
                 )
                 state = pl.get_state(self.caller)
                 if state in (PLAYER_STATE_LOBBY, PLAYER_STATE_SPAWNING):
-                    # OOC: only the allowed verbs run here.
                     if verb in READONLY_OOC_VERBS:
                         return False
                     if verb in MUTATING_LOBBY_VERBS:
@@ -121,14 +147,6 @@ class CmdAlliance(GameSubcommandRouter):
                         return False  # LOBBY: allowed
                     self.caller.msg(f"'{verb}' is available in-game only.")
                     return True
-                # PLAYING (or legacy None): combat gate on side-changing verbs.
-                if verb in COMBAT_GATED_VERBS:
-                    from world.combat_timer import player_in_combat
-                    if player_in_combat(self.caller):
-                        self.caller.msg(
-                            "You can't change your alliance while in combat."
-                        )
-                        return True
         except Exception:  # noqa: BLE001 - a gate must never hard-block a command
             pass
         return super().at_pre_cmd()

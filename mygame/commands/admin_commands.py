@@ -2141,6 +2141,16 @@ class CmdAdminAlliance(AdminSubcommandRouter):
         member = self._resolve_member_by_name(system, rec, parts[1].strip())
         if member is None:
             return
+        # Kicking the LEADER would strand the alliance: _remove_from_roster never
+        # touches leader_id, so leader_id would dangle at the kicked player with
+        # no succession (and `claim` can't recover while the ex-leader is online).
+        # Refuse — staff should transfer or disband instead.
+        if getattr(member, "id", None) == rec.get("leader_id"):
+            self.caller.msg(
+                "Cannot kick the leader — use '@alliance transfer' to hand off "
+                "leadership first, or '@alliance disband'."
+            )
+            return
         # Force-kick through the single writer: strip from roster + clear pointer.
         system._remove_from_roster(rec, getattr(member, "id", None))
         system._alliances.put(rec)

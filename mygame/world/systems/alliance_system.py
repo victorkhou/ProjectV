@@ -336,8 +336,15 @@ class AllianceSystem(BaseSystem):
 
         norm_name = _normalize(name)
         norm_tag = _normalize(tag)
+        # Also test a space-STRIPPED form: interior spaces are allowed in a name,
+        # so "a d m i n" normalizes to "a d m i n" and would slip a plain
+        # substring check — collapse spaces so spaced-out reserved words are
+        # caught too (defeats the impersonation bypass).
+        norm_name_nospace = norm_name.replace(" ", "")
+        norm_tag_nospace = norm_tag.replace(" ", "")
         for banned in ALLIANCE_NAME_DENYLIST:
-            if banned in norm_name or banned in norm_tag:
+            if (banned in norm_name or banned in norm_tag
+                    or banned in norm_name_nospace or banned in norm_tag_nospace):
                 return f"Names/tags may not contain the reserved word '{banned}'."
 
         for rec in (self._alliances.all_alliances() if self._alliances else []):
@@ -572,13 +579,20 @@ class AllianceSystem(BaseSystem):
         tid = getattr(target, "id", None)
         for inv in invites:
             if inv.get("id") == tid:
-                # Cooldown gate on re-invite (also covers post-decline suppression).
+                # Cooldown gate on re-invite — also enforces the post-decline
+                # suppression window (a declined stub carries the same shape).
                 cd = int(self._bal.alliance_invite_cooldown_ticks)
                 if now - inv.get("sent_tick", 0) < cd:
-                    actor.msg(f"{target.key} was invited recently — wait before re-inviting.")
+                    if inv.get("declined"):
+                        actor.msg(f"{target.key} recently declined — wait before re-inviting.")
+                    else:
+                        actor.msg(f"{target.key} was invited recently — wait before re-inviting.")
                     return False
+                # Cooldown elapsed: revive as a fresh, live invite (clear the
+                # declined suppression flag so it shows in the target's inbox).
                 inv["sent_tick"] = now
                 inv["expiry_tick"] = self._invite_expiry_tick()
+                inv.pop("declined", None)
                 break
         else:
             invites.append({
@@ -649,6 +663,10 @@ class AllianceSystem(BaseSystem):
                     continue
                 if inv.get("expiry_tick", 0) <= now:
                     continue
+                # A declined stub is a suppression marker, not a live invite —
+                # it must not show in the inbox nor be acceptable.
+                if inv.get("declined"):
+                    continue
                 out.append({
                     "alliance_id": rec["id"],
                     "tag": rec.get("tag", ""),
@@ -704,15 +722,28 @@ class AllianceSystem(BaseSystem):
     def _remove_invite(self, record, char_id, *, decline=False) -> None:
         """Remove *char_id*'s pending invite from *record* (read-modify-reassign).
 
-        On a decline, leave a suppression stub (``sent_tick`` = now) so the same
-        inviter can't immediately re-invite; but since the invite is removed, we
-        instead record the decline on the target via a short cooldown handled at
-        invite time — here we simply drop the entry.
+        On a DECLINE, replace the entry with a suppression stub (``declined``
+        flag, ``sent_tick`` = now, ``expiry_tick`` = now + invite cooldown)
+        instead of dropping it, so ``invite()``'s cooldown branch finds it and
+        refuses an immediate re-invite for the anti-harassment window. The stub
+        is excluded from the inbox / accept resolution (``pending_invites_for``
+        skips ``declined``) and self-cleans when the window elapses (pruned by
+        ``expiry_tick``). A non-decline removal (stale invite after a failed
+        level gate) just drops the entry.
         """
         invites = [
             inv for inv in (record.get("pending_invites", []) or [])
             if inv.get("id") != char_id
         ]
+        if decline:
+            now = self._now_tick()
+            cd = int(self._bal.alliance_invite_cooldown_ticks)
+            invites.append({
+                "id": char_id,
+                "sent_tick": now,
+                "expiry_tick": now + cd,
+                "declined": True,
+            })
         record["pending_invites"] = invites
         self._alliances.put(record)
 
@@ -970,19 +1001,28 @@ class AllianceSystem(BaseSystem):
         admin force-disband — the single teardown path.
         """
         alliance_id = record["id"]
-        # Even-split the treasury across the current live roster first.
+        name = record.get("name", "The alliance")
+        # Announce the disband on the channel FIRST — before anyone is
+        # unsubscribed and before the channel is destroyed, or the broadcast
+        # reaches no one (an empty/deleted channel is a silent no-op).
+        self._broadcast(alliance_id, f"{name} has been disbanded.")
+        # Even-split the treasury across the current live roster.
         self._even_split_treasury(record)
-        # Clear every member's pointer + unsubscribe.
+        # Clear every member's pointer + unsubscribe, and DM each one so the
+        # dissolution is acknowledged even after they leave the channel.
         for cid in _roster_ids(record):
             member = self._resolve_member(cid)
             if member is not None and self._alliance_of(member) == alliance_id:
+                try:
+                    member.msg(f"{name} has been disbanded.")
+                except Exception:  # noqa: BLE001
+                    pass
                 self._unsubscribe(member, alliance_id)
                 self._clear_pointer(member)
         self._destroy_channel(alliance_id)
         self._alliances.delete(alliance_id)
         from world.event_bus import ALLIANCE_DISBANDED
         self._publish(ALLIANCE_DISBANDED, alliance_id=alliance_id)
-        self._broadcast(alliance_id, "The alliance has been disbanded.")
 
     def transfer(self, actor, target) -> bool:
         """Transfer leadership to a member (Leader only). Demotes actor to Officer."""
@@ -1108,28 +1148,39 @@ class AllianceSystem(BaseSystem):
         return True
 
     def _leader_absent(self, leader) -> bool:
-        """Return True if *leader* has been offline past the absence threshold."""
+        """Return True if *leader* has been offline past the absence threshold.
+
+        An unresolvable leader (``None``) is absent. A currently-connected leader
+        is present. Otherwise the leader is absent iff their last-seen wall-clock
+        stamp (``db.last_seen_time``, epoch seconds, set on disconnect by
+        ``Character.at_post_unpuppet``) is older than
+        ``alliance_leader_absence_days``. This uses a real LAST-SEEN time, NOT
+        ``account.last_login`` (which is set only at connect and never updated,
+        so an actively-played 8-day session would read as absent). A leader with
+        no recorded last-seen (never disconnected via our hook) reads present —
+        we do not coup an online-or-unknown leader on missing data.
+        """
+        if leader is None:
+            return True
         days = int(self._bal.alliance_leader_absence_days)
         try:
             # A connected account means present.
-            if getattr(leader, "has_account", False) and getattr(leader, "sessions", None):
-                if leader.sessions.count() > 0:
-                    return False
+            sessions = getattr(leader, "sessions", None)
+            if sessions is not None and sessions.count() > 0:
+                return False
         except Exception:  # noqa: BLE001
             pass
-        # Use Evennia's last-connection timestamp on the account, if available.
         try:
             import time as _t
-            account = self._account_of(leader)
-            last = getattr(account, "db_is_connected", None)
-            last_seen = getattr(account, "last_login", None)
-            if last_seen is not None:
-                elapsed = _t.time() - last_seen.timestamp()
-                return elapsed > days * _SECONDS_PER_DAY
+            last_seen = getattr(getattr(leader, "db", None), "last_seen_time", None)
+            if last_seen is None:
+                # No recorded last-seen (offline but never stamped) — do not
+                # treat an unknown leader as absent; require real evidence.
+                return False
+            elapsed = _t.time() - float(last_seen)
+            return elapsed > days * _SECONDS_PER_DAY
         except Exception:  # noqa: BLE001
-            pass
-        # Unknown last-seen -> treat an unresolvable/never-seen leader as absent.
-        return leader is None
+            return False
 
     def rename(self, actor, new_name) -> bool:
         """Rename the alliance (Leader only), re-running validators + cooldown."""
@@ -1202,18 +1253,26 @@ class AllianceSystem(BaseSystem):
         if record is None:
             return
         alliance_id = record["id"]
-        if self._rank_of(player) == ALLIANCE_RANK_LEADER:
-            # Leader deleted: strip from roster and let reconcile run succession.
-            self._remove_from_roster(record, getattr(player, "id", None))
-            self._alliances.put(record)
-            self.reconcile(alliance_id)
-        else:
-            self._remove_from_roster(record, getattr(player, "id", None))
-            self._alliances.put(record)
+        pid = getattr(player, "id", None)
+        was_leader = self._rank_of(player) == ALLIANCE_RANK_LEADER
+        # Strip from the roster AND clear the member pointer BEFORE reconcile.
+        # on_character_deleted runs from at_object_delete, i.e. while the row is
+        # still ORM-resolvable — so if we reconcile before clearing the pointer,
+        # _live_members still resolves the dying leader (pointer + rank intact)
+        # and succession is skipped, re-stamping leader_id onto a dead PK. Clear
+        # both first so reconcile sees the leader as truly absent.
+        self._remove_from_roster(record, pid)
+        if was_leader:
+            # _remove_from_roster never touches leader_id by design; null it here
+            # so reconcile's "no leader resolves" branch promotes an heir.
+            record["leader_id"] = None
+        self._alliances.put(record)
         try:
             self._clear_pointer(player)
         except Exception:  # noqa: BLE001
             pass
+        if was_leader:
+            self.reconcile(alliance_id)
 
     # ------------------------------------------------------------------ #
     #  Shared treasury (R7)
@@ -1602,22 +1661,33 @@ class AllianceSystem(BaseSystem):
                              building_lookup=None) -> set:
         """Union *member*'s own visible tiles with each PLAYING ally's.
 
-        Only allies whose ``player_state == PLAYING`` contribute (a live coord
-        position exists only while deployed — this closes the offline-member
-        phantom-vision leak). ``building_lookup(ally)`` supplies an ally's own
-        buildings for their building-vision circles; when omitted, allies
-        contribute only their position circle. Returns the member's own tiles
-        unchanged when the perk is inactive.
+        Only allies who are (a) ``player_state == PLAYING`` AND (b) on the SAME
+        planet as *member* contribute. The PLAYING filter closes the offline
+        phantom-vision leak; the same-planet filter is essential because
+        ``get_visible_tiles`` returns bare ``(x, y)`` tuples with NO planet
+        dimension, and planets have overlapping numeric coordinate ranges — so
+        unioning a cross-planet ally's circle would render (and permanently
+        discover) wrong-planet coordinates on the member's viewport.
+        ``building_lookup(ally)`` supplies an ally's own buildings for their
+        building-vision circles; when omitted, allies contribute only their
+        position circle. Returns the member's own tiles unchanged when the perk
+        is inactive.
         """
         own = set(fog_system.get_visible_tiles(member, member_buildings) or [])
         if not self.has_shared_vision(member):
             return own
+        member_planet = getattr(getattr(member, "db", None), "coord_planet", None)
         alliance_id = self._alliance_of(member)
         for ally in self._live_members(alliance_id):
             if getattr(ally, "id", None) == getattr(member, "id", None):
                 continue
-            state = getattr(getattr(ally, "db", None), "player_state", None)
+            ally_db = getattr(ally, "db", None)
+            state = getattr(ally_db, "player_state", None)
             if state != PLAYER_STATE_PLAYING:
+                continue
+            # Same-planet only — (x, y) tuples carry no planet, and planets share
+            # numeric ranges, so a cross-planet ally would leak/pollute vision.
+            if getattr(ally_db, "coord_planet", None) != member_planet:
                 continue
             ally_buildings = []
             if building_lookup is not None:

@@ -1546,8 +1546,16 @@ class _FakeAllianceSystemForAdmin:
         self.calls = []
         self._records = {
             7: {"id": 7, "name": "Wolves", "tag": "WLV", "leader_id": 100,
-                "officer_ids": [], "member_ids": [], "treasury": {"Iron": 5},
+                "officer_ids": [], "member_ids": [200], "treasury": {"Iron": 5},
                 "active_perks": {}, "pending_invites": [], "pending_requests": []},
+        }
+        # Resolvable roster members for the kick tests: id 100 = leader, 200 = a
+        # plain member.
+        self._members = {
+            100: types.SimpleNamespace(id=100, key="Boss",
+                                       db=types.SimpleNamespace(player_alliance=7)),
+            200: types.SimpleNamespace(id=200, key="Grunt",
+                                       db=types.SimpleNamespace(player_alliance=7)),
         }
 
         class _Reg:
@@ -1563,10 +1571,27 @@ class _FakeAllianceSystemForAdmin:
                         return r
                 return None
 
+            def put(self, rec):
+                self._recs[rec["id"]] = rec
+
         self._alliances = _Reg(self._records)
 
     def _record(self, aid):
         return self._records.get(aid)
+
+    def _resolve_member(self, cid):
+        return self._members.get(cid)
+
+    def _remove_from_roster(self, record, cid):
+        record["officer_ids"] = [i for i in record.get("officer_ids", []) if i != cid]
+        record["member_ids"] = [i for i in record.get("member_ids", []) if i != cid]
+        self.calls.append(("_remove_from_roster", cid))
+
+    def _clear_pointer(self, member):
+        self.calls.append(("_clear_pointer", member.id))
+
+    def _unsubscribe(self, member, aid):
+        pass
 
     def _live_members(self, aid):
         return []
@@ -1625,6 +1650,20 @@ class TestAdminAlliance(unittest.TestCase):
         _make_cmd(CmdAdminAlliance, caller, " disband WLV").func()
         # A non-Builder is refused; the disband never routes through.
         self.assertNotIn(("_do_disband", 7), system.calls)
+
+    # Fix #4 — @alliance kick must refuse the leader (would strand leader_id).
+    def test_kick_leader_refused(self):
+        caller, system = _alliance_caller()
+        _make_cmd(CmdAdminAlliance, caller, " kick WLV Boss").func()
+        self.assertTrue(any("Cannot kick the leader" in m for m in caller._messages))
+        # No roster mutation happened.
+        self.assertNotIn(("_remove_from_roster", 100), system.calls)
+
+    def test_kick_non_leader_member_works(self):
+        caller, system = _alliance_caller()
+        _make_cmd(CmdAdminAlliance, caller, " kick WLV Grunt").func()
+        self.assertIn(("_remove_from_roster", 200), system.calls)
+        self.assertIn(("_clear_pointer", 200), system.calls)
 
 
 if __name__ == "__main__":

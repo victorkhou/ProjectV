@@ -695,6 +695,16 @@ class CombatCharacter(CombatEntity, DefaultCharacter):
         → LINKDEAD. A no-op beyond the default when the flow is disabled, so
         current behavior is unchanged.
         """
+        # Stamp last-seen wall-clock time on disconnect (epoch seconds). Read by
+        # AllianceSystem._leader_absent to judge an absentee-leader `claim`
+        # against real last-seen — NOT account.last_login (connect time). Set
+        # first + guarded so it records regardless of which branch runs below.
+        try:
+            import time as _t
+            self.db.last_seen_time = _t.time()
+        except Exception:  # noqa: BLE001
+            pass
+
         linkdead = False
         try:
             from world.lobby_flow import lobby_flow_enabled

@@ -668,5 +668,94 @@ class TestReconcile(_AllianceTestBase):
         self.assertIsNone(self.alliances.get(aid))
 
 
+# -------------------------------------------------------------- #
+#  Code-review fix regressions
+# -------------------------------------------------------------- #
+
+class TestReviewFixes(_AllianceTestBase):
+    def _team(self, n_members=1):
+        leader = self._mk("Leader", level=20)
+        aid = self.sys.found(leader, "Alliance", "ALN")
+        members = []
+        for i in range(n_members):
+            m = self._mk(f"M{i}", level=10)
+            self.sys.invite(leader, m)
+            self.sys.accept(m, "ALN")
+            members.append(m)
+        return leader, aid, members
+
+    # Fix #2 — leader chardelete promotes an heir, no dangling leader_id.
+    def test_leader_chardelete_runs_succession(self):
+        leader, aid, members = self._team(1)
+        heir = members[0]
+        # Simulate chardelete: the row is still resolvable when the hook runs,
+        # so on_character_deleted must clear the pointer BEFORE reconcile.
+        self.sys.on_character_deleted(leader)
+        rec = self.alliances.get(aid)
+        self.assertIsNotNone(rec, "alliance survives (had another member)")
+        self.assertEqual(rec["leader_id"], heir.id,
+                         "heir promoted; leader_id not left dangling at deleted id")
+        self.assertEqual(heir.db.alliance_rank, "leader")
+
+    def test_sole_leader_chardelete_disbands(self):
+        leader = self._mk("Solo", level=20)
+        aid = self.sys.found(leader, "Solo", "SOLO")
+        self.sys.on_character_deleted(leader)
+        self.assertIsNone(self.alliances.get(aid), "no members left -> disbanded")
+
+    # Fix #5 — declining suppresses an immediate re-invite for the cooldown.
+    def test_decline_suppresses_reinvite(self):
+        leader, aid, _ = self._team(0)
+        rookie = self._mk("Rookie", level=10)
+        self.assertTrue(self.sys.invite(leader, rookie))
+        self.assertTrue(self.sys.decline(rookie, "ALN"))
+        # Immediate re-invite is refused (still within the cooldown window).
+        self.assertFalse(self.sys.invite(leader, rookie))
+        # The declined stub is NOT shown as a live invite.
+        self.assertEqual(self.sys.pending_invites_for(rookie), [])
+        # After the cooldown elapses, a re-invite works and shows in the inbox.
+        self.tick[0] += int(self.registry.balance.alliance_invite_cooldown_ticks) + 1
+        self.assertTrue(self.sys.invite(leader, rookie))
+        self.assertEqual(len(self.sys.pending_invites_for(rookie)), 1)
+
+    # Fix #7 — disband notifies members (DM) and does so before teardown.
+    def test_disband_notifies_members(self):
+        # Use a real broadcast/DM capture rather than the no-op stub.
+        broadcasts = []
+        self.sys._broadcast = lambda aid, msg: broadcasts.append((aid, msg))
+        leader, aid, members = self._team(1)
+        member = members[0]
+        member.messages.clear()
+        self.sys.disband(leader)
+        # The channel broadcast fired for the disband...
+        self.assertTrue(any("disbanded" in m.lower() for _, m in broadcasts))
+        # ...and the member got a direct message too.
+        self.assertTrue(any("disbanded" in m.lower() for m in member.messages))
+
+    # Fix #9 — spaced-out reserved words are rejected.
+    def test_denylist_blocks_spaced_reserved_word(self):
+        p = self._mk("Sneaky", level=20)
+        self.assertIsNone(self.sys.found(p, "a d m i n", "SNK"),
+                          "'a d m i n' must be rejected (spaced-out 'admin')")
+        self.assertIsNone(p.db.player_alliance)
+
+    # Fix #6 — _leader_absent uses last_seen_time, not a coup on an active leader.
+    def test_leader_absent_uses_last_seen(self):
+        import time as _t
+        leader = self._mk("Leader", level=20)
+        # Offline (no sessions) but seen 1 hour ago -> NOT absent.
+        leader.sessions = types.SimpleNamespace(count=lambda: 0)
+        leader.db.last_seen_time = _t.time() - 3600
+        self.assertFalse(self.sys._leader_absent(leader))
+        # Seen 30 days ago -> absent (default threshold 7 days).
+        leader.db.last_seen_time = _t.time() - 30 * 86400
+        self.assertTrue(self.sys._leader_absent(leader))
+        # Currently connected -> present regardless of last_seen.
+        leader.sessions = types.SimpleNamespace(count=lambda: 1)
+        self.assertFalse(self.sys._leader_absent(leader))
+        # Unresolvable leader -> absent.
+        self.assertTrue(self.sys._leader_absent(None))
+
+
 if __name__ == "__main__":
     unittest.main()
