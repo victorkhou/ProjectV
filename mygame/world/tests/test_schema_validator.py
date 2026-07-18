@@ -100,6 +100,23 @@ class TestValidateBuildings:
         errs = self.v.validate_buildings([make_valid_building(cost={"wood": 1.5})])
         assert any("positive integer" in e for e in errs)
 
+    def test_positive_int_field_non_numeric_does_not_crash(self):
+        # Regression: a non-numeric scalar (e.g. a typo'd 'build_time_seconds:
+        # soon') must produce a graceful validation error, NOT raise TypeError
+        # from comparing str > 0. Guards must short-circuit before the bound.
+        for bad in ("soon", [1], {"a": 1}):
+            errs = self.v.validate_buildings(
+                [make_valid_building(build_time_seconds=bad)]
+            )
+            assert any("build_time_seconds must be a positive integer" in e for e in errs)
+
+    def test_non_negative_int_field_non_numeric_does_not_crash(self):
+        # Same guard for an allow_zero field (storage_capacity).
+        errs = self.v.validate_buildings(
+            [make_valid_building(storage_capacity="lots")]
+        )
+        assert any("storage_capacity must be a non-negative integer" in e for e in errs)
+
     def test_max_health_zero(self):
         errs = self.v.validate_buildings([make_valid_building(max_health=0)])
         assert any("max_health must be > 0" in e for e in errs)

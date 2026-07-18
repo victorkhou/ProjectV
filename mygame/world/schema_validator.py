@@ -707,8 +707,15 @@ class SchemaValidator:
         if value is None:
             return
         label = "non-negative" if allow_zero else "positive"
-        bound_ok = value >= 0 if allow_zero else value > 0
-        if not isinstance(value, int) or isinstance(value, bool) or not bound_ok:
+        # Order matters: the type/bool guards must short-circuit BEFORE the
+        # numeric comparison, or a non-numeric value (str/list/dict) would raise
+        # TypeError on ``value > 0`` instead of producing a validation error.
+        bad = (
+            not isinstance(value, int)
+            or isinstance(value, bool)
+            or (value < 0 if allow_zero else value <= 0)
+        )
+        if bad:
             errors.append(
                 f"{prefix}: {name} must be a {label} integer, got {value!r}"
             )
