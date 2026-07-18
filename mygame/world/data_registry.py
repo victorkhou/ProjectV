@@ -807,6 +807,18 @@ class DataRegistry:
                 return rank
         raise KeyError(f"Rank '{name}' not found")
 
+    def get_rank_by_level(self, level: int) -> RankDef | None:
+        """Get the rank definition whose ``level`` matches, or ``None``.
+
+        The single exact-match ``level -> RankDef`` lookup that several callers
+        need to turn a rank number into its display name. Returns ``None`` (not
+        a raise) so display paths can fall back to a ``"Rank N"`` label.
+        """
+        for rank in self.ranks:
+            if rank.level == level:
+                return rank
+        return None
+
     def _rank_names_at_or_below(self, rank_level: int) -> set[str]:
         """Return the set of rank names whose level is <= ``rank_level``.
 

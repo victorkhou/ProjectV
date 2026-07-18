@@ -72,17 +72,12 @@ class PowerupSystem(BaseSystem):
 
         # 2. Rank check — compare player's derived rank against required rank
         player_level = self._get_player_level(player)
-        try:
-            required_rank = self.registry.get_rank_by_name(pdef.required_rank)
-            from world.systems.rank_system import rank_from_level
-            player_rank = rank_from_level(player_level)
-            if player_rank < required_rank.level:
-                return False, (
-                    f"Requires rank {pdef.required_rank} "
-                    f"(you are level {player_level})."
-                )
-        except (KeyError, ImportError):
-            pass  # If rank not found, allow activation
+        from world.systems.rank_system import player_meets_rank
+        if not player_meets_rank(player_level, pdef.required_rank, self.registry):
+            return False, (
+                f"Requires rank {pdef.required_rank} "
+                f"(you are level {player_level})."
+            )
 
         current_tick = self._current_tick_func()
 

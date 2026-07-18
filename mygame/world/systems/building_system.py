@@ -149,15 +149,10 @@ class BuildingSystem(BaseSystem):
             except TypeError:
                 # Factory doesn't accept x/y — call without and set coords after
                 building = self._create_building_func(building_def, tile, owner)
-                if hasattr(building, "db"):
-                    building.db.coord_x = x
-                    building.db.coord_y = y
-                elif hasattr(building, "attributes"):
-                    building.attributes.add("coord_x", x)
-                    building.attributes.add("coord_y", y)
-                # Register in coordinate index (at_object_receive missed it)
-                if hasattr(tile, "coord_index"):
-                    tile.coord_index.add(building, x, y)
+                # Stamp coords + register in the coordinate index
+                # (at_object_receive missed it during create_object).
+                from world.utils import place_on_tile
+                place_on_tile(building, tile, x, y)
                 return building
         return self._create_building_func(building_def, tile, owner)
 

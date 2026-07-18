@@ -615,12 +615,10 @@ def spawn_resource_drop(location, resource_type, amount, x=None, y=None):
     drop.db.resource_type = resource_type
     drop.db.amount = amount
     if x is not None and y is not None:
-        drop.db.coord_x = x
-        drop.db.coord_y = y
-        # at_object_receive saw coord_x=None during create_object,
-        # so manually register in the coordinate index now.
-        if hasattr(location, "coord_index"):
-            location.coord_index.add(drop, x, y)
+        # at_object_receive saw coord_x=None during create_object, so
+        # place_on_tile stamps coords and registers in the index now.
+        from world.utils import place_on_tile
+        place_on_tile(drop, location, x, y)
     return drop
 
 
@@ -722,12 +720,10 @@ def spawn_gear_drop(location, item_def, x=None, y=None):
     )
     _apply_item_def(item, item_def)
     if x is not None and y is not None:
-        item.db.coord_x = int(x)
-        item.db.coord_y = int(y)
-        # at_object_receive saw coord_x=None during create_object, so register
-        # in the coordinate index now (same pattern as spawn_supply_drop).
-        if hasattr(location, "coord_index"):
-            location.coord_index.add(item, int(x), int(y))
+        # at_object_receive saw coord_x=None during create_object, so
+        # place_on_tile stamps coords and registers in the index now.
+        from world.utils import place_on_tile
+        place_on_tile(item, location, x, y)
     return item
 
 
@@ -798,12 +794,10 @@ def spawn_supply_drop(location, item_key, count, x=None, y=None):
     drop.db.item_key = item_key
     drop.db.count = count
     if x is not None and y is not None:
-        drop.db.coord_x = x
-        drop.db.coord_y = y
-        # at_object_receive saw coord_x=None during create_object,
-        # so manually register in the coordinate index now.
-        if hasattr(location, "coord_index"):
-            location.coord_index.add(drop, x, y)
+        # at_object_receive saw coord_x=None during create_object, so
+        # place_on_tile stamps coords and registers in the index now.
+        from world.utils import place_on_tile
+        place_on_tile(drop, location, x, y)
     return drop
 
 
@@ -916,8 +910,6 @@ def spawn_bomb(location, item_def, x, y, owner, bomb_type, fuse, amount, radius)
     bomb.db.amount = int(amount)
     bomb.db.radius = int(radius)
     bomb.db.fuse_remaining = int(fuse)
-    bomb.db.coord_x = int(x)
-    bomb.db.coord_y = int(y)
-    if hasattr(location, "coord_index"):
-        location.coord_index.add(bomb, int(x), int(y))
+    from world.utils import place_on_tile
+    place_on_tile(bomb, location, x, y)
     return bomb

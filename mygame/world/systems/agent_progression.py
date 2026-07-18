@@ -476,9 +476,10 @@ class AgentProgressionMixin:
         from world.systems.rank_system import rank_from_level
 
         rank_num = rank_from_level(int(level))
-        for rank in getattr(self.registry, "ranks", []) or []:
-            if getattr(rank, "level", None) == rank_num:
-                return str(rank.name).replace("_", " ")
+        getter = getattr(self.registry, "get_rank_by_level", None)
+        rank = getter(rank_num) if callable(getter) else None
+        if rank is not None:
+            return str(rank.name).replace("_", " ")
         return f"Rank {rank_num}"
 
     def get_agent_progression_view(self, agent: Any) -> dict:

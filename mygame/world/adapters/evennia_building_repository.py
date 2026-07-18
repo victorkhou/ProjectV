@@ -42,13 +42,11 @@ class EvenniaBuildingFactory(BuildingFactory):
             location=tile,
         )
         if x is not None and y is not None:
-            building.db.coord_x = x
-            building.db.coord_y = y
             # create_object added the building to PlanetRoom.contents, but
-            # at_object_receive saw coord_x=None; register it now that coords
-            # are set.
-            if hasattr(tile, "coord_index"):
-                tile.coord_index.add(building, x, y)
+            # at_object_receive saw coord_x=None; place_on_tile stamps coords
+            # and registers it now that they are set.
+            from world.utils import place_on_tile
+            place_on_tile(building, tile, x, y)
         building.attributes.add("building_type", building_def.abbreviation)
         building.attributes.add("owner", owner)
         building.attributes.add("building_level", 1)

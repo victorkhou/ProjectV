@@ -371,13 +371,10 @@ class CmdAdminBuilding(AdminSubcommandRouter):
             building.attributes.add("hp", hp)
             building.attributes.add("hp_max", hp)
             building.attributes.add("offline", False)
-            # Set coordinates on the building
-            building.db.coord_x = cx
-            building.db.coord_y = cy
-            # at_object_receive saw coord_x=None during create_object,
-            # so manually register in the coordinate index now.
-            if hasattr(planet_room, "coord_index"):
-                planet_room.coord_index.add(building, int(cx), int(cy))
+            # Stamp coords + register in the coordinate index (at_object_receive
+            # saw coord_x=None during create_object).
+            from world.utils import place_on_tile
+            place_on_tile(building, planet_room, cx, cy)
 
             owner_name = getattr(owner, "key", "nobody") if owner else "nobody"
             self._log_admin(
@@ -546,9 +543,8 @@ class CmdAdminAgent(AdminSubcommandRouter):
                 caller.msg("Count must be at least 1.")
                 return
 
-        target = caller.search(player_name) if hasattr(caller, "search") else None
+        target = self.resolve_player(player_name)
         if target is None:
-            caller.msg(f"Could not find player '{player_name}'.")
             return
 
         agent_system = self.require_system("agent_system")
@@ -599,9 +595,8 @@ class CmdAdminAgent(AdminSubcommandRouter):
         player_name = parts[1]
 
         # Find the target player
-        target = caller.search(player_name) if hasattr(caller, "search") else None
+        target = self.resolve_player(player_name)
         if target is None:
-            caller.msg(f"Could not find player '{player_name}'.")
             return
 
         if first_arg.lower() == "training":
@@ -718,9 +713,8 @@ class CmdAdminAgent(AdminSubcommandRouter):
             caller.msg("Usage: @agent list <player>")
             return
 
-        target = caller.search(player_name) if hasattr(caller, "search") else None
+        target = self.resolve_player(player_name)
         if target is None:
-            caller.msg(f"Could not find player '{player_name}'.")
             return
 
         agent_system = self.require_system("agent_system")
@@ -836,9 +830,8 @@ class CmdAdminResource(AdminSubcommandRouter):
 
         # Resolve target: specified player or self
         if player_name:
-            target = caller.search(player_name) if hasattr(caller, "search") else None
+            target = self.resolve_player(player_name)
             if target is None:
-                caller.msg(f"Could not find player '{player_name}'.")
                 return
         else:
             target = caller
@@ -878,9 +871,8 @@ class CmdAdminResource(AdminSubcommandRouter):
 
         if player_name:
             # Reset a single player
-            target = caller.search(player_name) if hasattr(caller, "search") else None
+            target = self.resolve_player(player_name)
             if target is None:
-                caller.msg(f"Could not find player '{player_name}'.")
                 return
 
             try:
@@ -1017,9 +1009,8 @@ class CmdAdminItem(AdminSubcommandRouter):
 
         # Resolve recipient: named player or self.
         if player_name:
-            target = caller.search(player_name) if hasattr(caller, "search") else None
+            target = self.resolve_player(player_name)
             if target is None:
-                caller.msg(f"Could not find player '{player_name}'.")
                 return
         else:
             target = caller
@@ -1181,9 +1172,8 @@ class CmdAdminPlayer(AdminSubcommandRouter):
 
         # Resolve target: specified player or self
         if player_name:
-            target = caller.search(player_name) if hasattr(caller, "search") else None
+            target = self.resolve_player(player_name)
             if target is None:
-                caller.msg(f"Could not find player '{player_name}'.")
                 return
         else:
             target = caller
@@ -1251,9 +1241,8 @@ class CmdAdminPlayer(AdminSubcommandRouter):
 
         # Resolve target: specified player or self
         if player_name:
-            target = caller.search(player_name) if hasattr(caller, "search") else None
+            target = self.resolve_player(player_name)
             if target is None:
-                caller.msg(f"Could not find player '{player_name}'.")
                 return
         else:
             target = caller

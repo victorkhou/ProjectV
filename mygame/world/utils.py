@@ -115,6 +115,29 @@ def get_coords(obj: Any) -> tuple[int, int] | None:
     return None
 
 
+def place_on_tile(obj: Any, room: Any, x: Any, y: Any) -> None:
+    """Stamp ``obj``'s tile coords and register it in ``room``'s coordinate index.
+
+    The shared spawn-placement step every drop/agent/guard/building creation
+    path repeats: set ``obj.db.coord_x``/``coord_y`` (int-coerced) and — because
+    ``at_object_receive`` fired during ``create_object`` while the coords were
+    still ``None`` — add the object to ``room.coord_index`` now that they are
+    set. Falls back to the ``attributes`` handler for objects without a ``db``
+    proxy, and no-ops the index step when the room carries no ``coord_index``.
+    Callers keep their own None/validity and tile-capacity checks; this only
+    performs the write.
+    """
+    ix, iy = int(x), int(y)
+    if hasattr(obj, "db"):
+        obj.db.coord_x = ix
+        obj.db.coord_y = iy
+    elif hasattr(obj, "attributes"):
+        obj.attributes.add("coord_x", ix)
+        obj.attributes.add("coord_y", iy)
+    if room is not None and hasattr(room, "coord_index"):
+        room.coord_index.add(obj, ix, iy)
+
+
 def chebyshev_distance(x1: int, y1: int, x2: int, y2: int) -> int:
     """Return the Chebyshev (chessboard) distance between two coordinate pairs.
 

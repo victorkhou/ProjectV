@@ -170,6 +170,21 @@ class AdminSubcommandRouter(SubcommandRouter):
     help_category = "Admin"
     locks = "cmd:perm(Builder);view:perm(Builder)"
 
+    def resolve_player(self, name):
+        """Search for a player by *name*, or msg the caller and return ``None``.
+
+        Collapses the ``target = caller.search(name) if hasattr(caller,
+        "search") else None; if target is None: msg; return`` block repeated
+        across every admin handler that takes a player argument. The
+        ``hasattr`` guard keeps it working under the command test doubles that
+        don't provide ``search``.
+        """
+        caller = self.caller
+        target = caller.search(name) if hasattr(caller, "search") else None
+        if target is None:
+            caller.msg(f"Could not find player '{name}'.")
+        return target
+
 
 class GameSubcommandRouter(SubcommandDispatchMixin, GameCommand):
     """
