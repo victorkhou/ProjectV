@@ -107,6 +107,7 @@ from mygame.commands.admin_commands import (  # noqa: E402
     CmdAdminItem,
     CmdAdminPlayer,
     CmdAdminOutpost,
+    CmdAdminAlliance,
     CmdTeleport,
     CmdTransfer,
 )
@@ -1532,6 +1533,137 @@ class TestCmdAdminOutpost(unittest.TestCase):
         self.assertIn("[1]", output)
         self.assertIn("fortress", output)
         self.assertIn("outpost", output)
+
+
+# -------------------------------------------------------------- #
+#  CmdAdminAlliance tests
+# -------------------------------------------------------------- #
+
+class _FakeAllianceSystemForAdmin:
+    """Records the single-writer calls the admin router should route through."""
+
+    def __init__(self):
+        self.calls = []
+        self._records = {
+            7: {"id": 7, "name": "Wolves", "tag": "WLV", "leader_id": 100,
+                "officer_ids": [], "member_ids": [200], "treasury": {"Iron": 5},
+                "active_perks": {}, "pending_invites": [], "pending_requests": []},
+        }
+        # Resolvable roster members for the kick tests: id 100 = leader, 200 = a
+        # plain member.
+        self._members = {
+            100: types.SimpleNamespace(id=100, key="Boss",
+                                       db=types.SimpleNamespace(player_alliance=7)),
+            200: types.SimpleNamespace(id=200, key="Grunt",
+                                       db=types.SimpleNamespace(player_alliance=7)),
+        }
+
+        class _Reg:
+            def __init__(self, recs):
+                self._recs = recs
+
+            def all_alliances(self):
+                return list(self._recs.values())
+
+            def by_tag(self, tag):
+                for r in self._recs.values():
+                    if r["tag"].lower() == tag.lower():
+                        return r
+                return None
+
+            def put(self, rec):
+                self._recs[rec["id"]] = rec
+
+        self._alliances = _Reg(self._records)
+
+    def _record(self, aid):
+        return self._records.get(aid)
+
+    def _resolve_member(self, cid):
+        return self._members.get(cid)
+
+    def _remove_from_roster(self, record, cid):
+        record["officer_ids"] = [i for i in record.get("officer_ids", []) if i != cid]
+        record["member_ids"] = [i for i in record.get("member_ids", []) if i != cid]
+        self.calls.append(("_remove_from_roster", cid))
+
+    def _clear_pointer(self, member):
+        self.calls.append(("_clear_pointer", member.id))
+
+    def _unsubscribe(self, member, aid):
+        pass
+
+    def _live_members(self, aid):
+        return []
+
+    def compute_alliance_level(self, aid):
+        return 1
+
+    def alliance_summary(self, aid, for_member=False):
+        r = self._records.get(aid)
+        if r is None:
+            return None
+        return {
+            "name": r["name"], "tag": r["tag"], "leader": "Leader",
+            "member_count": 1, "level": 1, "active_perks": {}, "open_join": False,
+            "treasury": dict(r["treasury"]), "pending_invites": [],
+            "pending_requests": [],
+        }
+
+    def _do_disband(self, record):
+        self.calls.append(("_do_disband", record["id"]))
+        self._records.pop(record["id"], None)
+
+
+def _alliance_caller(perm="Builder"):
+    system = _FakeAllianceSystemForAdmin()
+    caller = FakeCaller(perm_level=perm, systems={"alliance_system": system})
+    return caller, system
+
+
+class TestAdminAlliance(unittest.TestCase):
+    def test_list_reads_alliances(self):
+        caller, system = _alliance_caller()
+        _make_cmd(CmdAdminAlliance, caller, " list").func()
+        out = "\n".join(caller._messages)
+        self.assertIn("Wolves", out)
+        self.assertIn("WLV", out)
+
+    def test_inspect_shows_full_state(self):
+        caller, system = _alliance_caller()
+        _make_cmd(CmdAdminAlliance, caller, " inspect WLV").func()
+        out = "\n".join(caller._messages)
+        self.assertIn("Treasury", out)
+
+    def test_force_disband_routes_through_system(self):
+        caller, system = _alliance_caller()
+        _make_cmd(CmdAdminAlliance, caller, " disband WLV").func()
+        self.assertIn(("_do_disband", 7), system.calls)
+
+    def test_unknown_tag_reports(self):
+        caller, system = _alliance_caller()
+        _make_cmd(CmdAdminAlliance, caller, " inspect NOPE").func()
+        self.assertTrue(any("No alliance" in m for m in caller._messages))
+
+    def test_requires_builder(self):
+        caller, system = _alliance_caller(perm="Player")
+        _make_cmd(CmdAdminAlliance, caller, " disband WLV").func()
+        # A non-Builder is refused; the disband never routes through.
+        self.assertNotIn(("_do_disband", 7), system.calls)
+
+    # Fix #4 — @alliance kick must refuse the leader (would strand leader_id).
+    def test_kick_leader_refused(self):
+        caller, system = _alliance_caller()
+        _make_cmd(CmdAdminAlliance, caller, " kick WLV Boss").func()
+        self.assertTrue(any("Cannot kick the leader" in m for m in caller._messages))
+        # No roster mutation happened.
+        self.assertNotIn(("_remove_from_roster", 100), system.calls)
+
+    def test_kick_non_leader_member_works(self):
+        caller, system = _alliance_caller()
+        _make_cmd(CmdAdminAlliance, caller, " kick WLV Grunt").func()
+        self.assertIn(("_remove_from_roster", 200), system.calls)
+        self.assertIn(("_clear_pointer", 200), system.calls)
 
 
 if __name__ == "__main__":

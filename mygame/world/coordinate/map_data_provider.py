@@ -14,11 +14,30 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any
 
 from world.coordinate.fog_of_war import _get_planet, _get_coord
-from world.utils import player_is_present
+from world.coordinate.tile_render import (
+    building_is_occupied,
+    partition_tile_objects,
+)
+from world.utils import get_system
 
 if TYPE_CHECKING:
     from world.coordinate.fog_of_war import FogOfWarSystem
     from world.coordinate.terrain_generator import TerrainGenerator
+
+
+def _alliance_tag(obj: Any) -> str | None:
+    """Return *obj*'s alliance tag for the map payload, or ``None``.
+
+    Best-effort via the AllianceSystem's ``tag_for``; ``None`` when there is no
+    system or the player is not in an alliance. Never raises into map building.
+    """
+    try:
+        system = get_system(obj, "alliance_system")
+        if system is None:
+            return None
+        return system.tag_for(obj)
+    except Exception:  # noqa: BLE001
+        return None
 
 
 class MapDataProvider:
@@ -60,8 +79,10 @@ class MapDataProvider:
         pvr = self._fog_system.player_vision_radius
         border = getattr(self._fog_system, "_map_border", 5)
 
-        # Compute visibility
-        visible_tiles = self._fog_system.get_visible_tiles(player, player_buildings)
+        # Compute visibility (unioned with PLAYING allies' if the shared-vision
+        # perk is active — via the one shared helper all three fog callers use).
+        from world.utils import shared_visible_tiles
+        visible_tiles = shared_visible_tiles(player, player_buildings, self._fog_system)
 
         # Bulk query all objects in the viewport from PlanetRoom
         planet_room = getattr(player, "location", None)
@@ -128,42 +149,26 @@ class MapDataProvider:
         if not tile_objects:
             return tile
 
-        players_here = []
-        agents_here = []
-        building_obj = None
-
         from world.player_lifecycle import get_state as _get_state
         from world.constants import PLAYER_STATE_LINKDEAD
 
-        for obj in tile_objects:
-            # Player characters (incl. linkdead — still on the tile during grace;
-            # player_is_present, not raw has_account, so sessionless linkdead
-            # players still appear in the tile's player list). Carry each one's
-            # linkdead flag so the client can draw the linkdead variant instead
-            # of a live enemy (mirrors the 'look' tile summary's (linkdead) tag).
-            if player_is_present(obj):
-                if obj is not player:
-                    players_here.append({
-                        "name": getattr(obj, "key", "?"),
-                        "linkdead": _get_state(obj) == PLAYER_STATE_LINKDEAD,
-                    })
-                continue
+        occ = partition_tile_objects(tile_objects, player)
 
-            # NPC agents
-            if hasattr(obj, "tags") and obj.tags.get(category="npc_type"):
-                npc_owner = getattr(obj.db, "owner", None) if hasattr(obj, "db") else None
-                npc_owner_id = getattr(npc_owner, "id", None) if npc_owner else None
-                role = getattr(obj.db, "role", "") if hasattr(obj, "db") else ""
-                agents_here.append({
-                    "own": npc_owner_id is not None and npc_owner_id == player_id,
-                    "role": role,
-                })
-                continue
-
-            # Building objects
-            if hasattr(obj, "tags") and obj.tags.get("building", category="object_type"):
-                if building_obj is None:
-                    building_obj = obj
+        # Present players other than the looker (incl. linkdead — still on the
+        # tile during grace). Carry each one's linkdead flag so the client can
+        # draw the linkdead variant instead of a live enemy, plus the alliance
+        # tag (friend or foe) for shared-side identity.
+        players_here = [
+            {
+                "name": getattr(obj, "key", "?"),
+                "linkdead": _get_state(obj) == PLAYER_STATE_LINKDEAD,
+                "tag": _alliance_tag(obj),
+            }
+            for obj in occ.other_players
+        ]
+        # NPC agents: keep only the own/role fields the client needs.
+        agents_here = [{"own": own, "role": role} for _obj, own, role in occ.agents]
+        building_obj = occ.building
 
         if building_obj is not None:
             bld = building_obj
@@ -179,16 +184,7 @@ class MapDataProvider:
             }
 
             # Check if building has entities inside (occupied flag)
-            bld_contents = getattr(bld, "contents", [])
-            occupied = False
-            for obj in bld_contents:
-                if player_is_present(obj):
-                    occupied = True
-                    break
-                if hasattr(obj, "tags") and obj.tags.get(category="npc_type"):
-                    occupied = True
-                    break
-            tile["building"]["occupied"] = occupied
+            tile["building"]["occupied"] = building_is_occupied(bld)
 
         if players_here:
             tile["players"] = players_here

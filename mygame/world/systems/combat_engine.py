@@ -682,7 +682,7 @@ class CombatEngine(BaseSystem):
                 query. When ``None`` (isolated tests), it falls back to the
                 per-owner :func:`owner_has_active_hq` live query.
         """
-        from world.utils import is_owner, owner_has_active_hq
+        from world.utils import is_friendly, owner_has_active_hq
 
         turret_radius = self.registry.balance.turret_radius
         turret_damage = self.registry.balance.turret_damage
@@ -730,8 +730,11 @@ class CombatEngine(BaseSystem):
             nearest = None
             nearest_dist = turret_radius + 1
             for player in players:
-                # Skip the turret owner (compare by .id, not identity).
-                if is_owner(player, owner):
+                # Skip the turret owner (compare by .id, not identity) AND any
+                # player allied to the owner — automated defenses never fire on
+                # an ally (the hybrid friendly-fire rule: only DIRECT player fire
+                # can hit an ally, see _handle_player_defeat).
+                if is_friendly(player, owner):
                     continue
 
                 # A player sheltered inside a closed building is not a valid
@@ -945,9 +948,13 @@ class CombatEngine(BaseSystem):
         # allowed but purely costly. Compare owners by .id (via is_owner), not
         # identity: an anti-farm guard must not false-negative if the owner and
         # attacker are distinct instances of the same PK after an idmapper flush.
-        from world.utils import is_owner
+        from world.utils import is_owner, are_allied
         victim_owner = getattr(getattr(victim, "db", None), "owner", None)
         attacker_owner = self._owning_player(attacker)
+        # The victim's OWNING PLAYER — a bare player is its own owner, so this is
+        # the correct operand for the ally check (victim.db.owner is None for a
+        # player, so it must NOT be used to decide alliance).
+        victim_player = self._owning_player(victim)
         # "Friendly fire" (no reward) covers every way the kill is on your own
         # side, so it can't be farmed:
         #   - the attacker IS the victim (you bombed yourself standing in the
@@ -956,7 +963,10 @@ class CombatEngine(BaseSystem):
         #   - the victim is a unit the attacker owns (is_owner(attacker, owner));
         #   - the attacker acts on behalf of the victim (your own bomb/turret/
         #     agent downed you), or on behalf of the victim's owner (your unit
-        #     killed another of your units) — compared via the owning players.
+        #     killed another of your units) — compared via the owning players;
+        #   - the attacker and victim are ALLIED players (the hybrid rule: a
+        #     manual betrayal of an ally lands, but grants no XP and no
+        #     leaderboard credit) — evaluated against the OWNING PLAYERS.
         own_victim = (
             attacker is victim
             or is_owner(attacker, victim_owner)
@@ -964,14 +974,16 @@ class CombatEngine(BaseSystem):
                 attacker_owner is victim
                 or is_owner(attacker_owner, victim_owner)
             ))
+            or (attacker_owner is not None
+                and are_allied(attacker_owner, victim_player))
         )
 
         # Award XP to the attacker's OWNING PLAYER — a kill by A's turret or A's
         # agent is credited to A (single-owner model), not banked on the unit.
-        # A bare player is its own owner. Friendly fire and ownerless/enemy
-        # attackers earn nothing.
+        # A bare player is its own owner. Friendly fire (incl. allied betrayal)
+        # and ownerless/enemy attackers earn nothing.
         if own_victim:
-            pass  # no reward for friendly fire on your own unit
+            pass  # no reward for friendly fire on your own unit or an ally
         elif attacker_owner is not None:
             # Route through the progression path (recompute level/rank + events),
             # not a raw db.combat_xp write.
@@ -980,6 +992,10 @@ class CombatEngine(BaseSystem):
             # player or agent tracks its own; a turret's tallies on its owner).
             # This does NOT feed XP/level/cap — it's a stat, not progression.
             self._record_kill(attacker)
+            # Leaderboard-eligible PvP kill tally on the owning player (decaying;
+            # never bumped for friendly fire / allied betrayal, which are gated
+            # out above).
+            self._record_scored_kill(attacker_owner, "scored_kills_pvp")
 
         # Cosmetic death tally on the victim (player or agent) — the mirror of
         # the kill tally. Counts every defeat, including friendly fire (a death
@@ -1068,6 +1084,8 @@ class CombatEngine(BaseSystem):
             self._award_player_combat_xp(attacker_owner, xp_kill)
             # Cosmetic kill tally on the acting unit (see _handle_player_defeat).
             self._record_kill(attacker)
+            # Leaderboard-eligible PvE kill tally on the owning player (decaying).
+            self._record_scored_kill(attacker_owner, "scored_kills_pve")
 
         tile = self._get_target_location(victim)
         victim_name = getattr(victim, "key", "enemy")
@@ -1117,9 +1135,16 @@ class CombatEngine(BaseSystem):
         # no XP or benefit, so it can't be farmed for progression. Compare by
         # .id (via is_owner), not identity, so the guard survives an idmapper
         # flush that leaves owner and attacker as distinct same-PK instances.
-        from world.utils import is_owner
+        from world.utils import is_owner, are_allied
         owner = self._get_building_owner(building)
-        own_building = is_owner(attacker, owner)
+        # Resolve the attacker's OWNING PLAYER (a bare player is its own owner;
+        # an agent/turret/bomb resolves to its owner) so the ally check below
+        # compares players, and razing an ALLY's building grants no XP.
+        attacker_owner = self._owning_player(attacker)
+        own_building = (
+            is_owner(attacker, owner)
+            or (attacker_owner is not None and are_allied(attacker_owner, owner))
+        )
         # An enemy NPC satisfies _is_player (carries combat_xp) but has no
         # progression — exclude it so a (future) enemy-destroys-building path
         # can't route XP into the RankSystem. Agents earn no building XP either.
@@ -1362,16 +1387,46 @@ class CombatEngine(BaseSystem):
                         if effect.get("effect_type") == "damage_bonus":
                             # Multiplicative bonus stored as multiplier
                             bonus += float(effect.get("effect_value", 0))
+
+        # Alliance combat_damage perk: a FLAT additive term, membership-derived
+        # and read LIVE (never copied onto db.active_powerups, so it vanishes the
+        # moment the attacker's owning player leaves the alliance). Attributed to
+        # the OWNING PLAYER so a turret/agent shot benefits from its owner's perk.
+        bonus += self._alliance_combat_bonus(attacker, "combat_damage", "damage_bonus")
         return bonus
 
     def _get_target_armor_reduction(self, target: Any) -> float:
         """Get armor damage_reduction from the target."""
         if not self._is_player(target):
             return 0.0
+        reduction = 0.0
         equipment = getattr(target, "equipment", None)
         if equipment and hasattr(equipment, "get_stat_total"):
-            return equipment.get_stat_total("damage_reduction")
-        return 0.0
+            reduction += equipment.get_stat_total("damage_reduction")
+        # Alliance combat_armor perk: a FLAT additive reduction, read LIVE here
+        # (this site never consults db.active_powerups, so the perk MUST be added
+        # directly rather than routed through a powerup that would be ignored).
+        reduction += self._alliance_combat_bonus(target, "combat_armor", "damage_reduction")
+        return reduction
+
+    def _alliance_combat_bonus(self, entity: Any, category: str, field: str) -> float:
+        """Return the flat alliance combat-perk bonus for *entity*'s owning player.
+
+        ``0.0`` when there is no AllianceSystem, the entity has no owning player,
+        or that player's alliance has no active perk in *category*. Guarded so a
+        perk lookup never breaks damage resolution.
+        """
+        try:
+            from world.utils import get_system
+            system = get_system(entity, "alliance_system")
+            if system is None:
+                return 0.0
+            player = self._owning_player(entity)
+            if player is None:
+                return 0.0
+            return float(system.perk_flat_bonus(player, category, field))
+        except Exception:  # noqa: BLE001 - a perk lookup never breaks combat
+            return 0.0
 
     @staticmethod
     def _get_coords(obj: Any) -> tuple[int, int] | None:
@@ -1484,6 +1539,42 @@ class CombatEngine(BaseSystem):
             return
         try:
             db.deaths = int(getattr(db, "deaths", 0) or 0) + 1
+        except Exception:  # noqa: BLE001 - a tally must never break combat
+            pass
+
+    def _record_scored_kill(self, player: Any, field: str) -> None:
+        """Increment a decaying leaderboard kill tally on *player*.
+
+        *field* is ``"scored_kills_pvp"`` or ``"scored_kills_pve"``. These are
+        the alliance leaderboard's kill terms, split PvP/PvE and DECAYED lazily:
+        before adding +1, the current tally is first faded to the present tick
+        (multiply by ``decay_factor ** elapsed_intervals``) and
+        ``last_kill_decay_tick`` is stamped, so a leaderboard read after a lull
+        reflects the decayed value with no global sweep. Only ever called on the
+        non-friendly XP-reward branch (allied betrayals are gated out upstream),
+        so it never credits friendly fire. Purely a stat; guarded so a tally can
+        never break combat. Distinct from the cosmetic, never-decaying db.kills.
+        """
+        db = getattr(player, "db", None)
+        if db is None:
+            return
+        try:
+            from world.utils import get_system
+            system = get_system(player, "alliance_system")
+            now = 0
+            if system is not None and system._tick_provider is not None:
+                now = int(system._tick_provider())
+            factor = 1.0
+            if system is not None:
+                factor = system._decay_multiplier(getattr(db, "last_kill_decay_tick", 0) or 0)
+            current = float(getattr(db, field, 0.0) or 0.0)
+            # Decay BOTH tallies to 'now' so they share one decay anchor, then
+            # bump the one that scored.
+            other = ("scored_kills_pve" if field == "scored_kills_pvp"
+                     else "scored_kills_pvp")
+            setattr(db, other, float(getattr(db, other, 0.0) or 0.0) * factor)
+            setattr(db, field, current * factor + 1.0)
+            db.last_kill_decay_tick = now
         except Exception:  # noqa: BLE001 - a tally must never break combat
             pass
 

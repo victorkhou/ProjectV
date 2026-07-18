@@ -151,24 +151,16 @@ class BombSystem(BaseSystem):
         if not required_rank:
             return True
         from world.utils import get_player_level
+        from world.systems.rank_system import rank_from_level, player_meets_rank
 
         player_level = get_player_level(player)
-        try:
-            req_rank_def = self.registry.get_rank_by_name(required_rank)
-            from world.systems.rank_system import rank_from_level
-
-            if rank_from_level(player_level) < req_rank_def.level:
-                current = f"Rank {rank_from_level(player_level)}"
-                for rank in self.registry.ranks:
-                    if rank.level == rank_from_level(player_level):
-                        current = rank.name
-                        break
-                self.notify(player, "equip_denied", item_name=item_name,
-                            required_rank=required_rank, current_rank=current)
-                return False
-        except (KeyError, ImportError, AttributeError):
-            # Unknown rank name / missing rank data: fall open rather than block.
-            pass
+        if not player_meets_rank(player_level, required_rank, self.registry):
+            rank_num = rank_from_level(player_level)
+            current_def = self.registry.get_rank_by_level(rank_num)
+            current = current_def.name if current_def else f"Rank {rank_num}"
+            self.notify(player, "equip_denied", item_name=item_name,
+                        required_rank=required_rank, current_rank=current)
+            return False
         return True
 
     @staticmethod

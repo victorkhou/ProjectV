@@ -58,6 +58,20 @@ TICK_COMPLETED = "tick_completed"
 # formatting and delivery. Keeps presentation out of the domain.
 PLAYER_NOTIFICATION = "player_notification"
 
+# --- Alliances --- (all published by world.systems.alliance_system.AllianceSystem)
+# Payload conventions noted per event; publishing is best-effort (swallowed on
+# error) so telemetry never breaks a membership mutation.
+ALLIANCE_CREATED = "alliance_created"              # alliance_id, leader
+ALLIANCE_MEMBER_JOINED = "alliance_member_joined"  # alliance_id, player
+ALLIANCE_MEMBER_LEFT = "alliance_member_left"      # alliance_id, player
+ALLIANCE_DISBANDED = "alliance_disbanded"          # alliance_id
+ALLIANCE_RANK_CHANGED = "alliance_rank_changed"    # alliance_id, member, new_rank
+ALLIANCE_PERK_ACTIVATED = "alliance_perk_activated"  # alliance_id, perk_key, level
+ALLIANCE_RENAMED = "alliance_renamed"              # alliance_id, old, new
+ALLIANCE_REQUEST_CREATED = "alliance_request_created"  # alliance_id, requester
+ALLIANCE_TREASURY_DEPOSITED = "alliance_treasury_deposited"  # alliance_id, actor, amounts
+ALLIANCE_TREASURY_WITHDRAWN = "alliance_treasury_withdrawn"  # alliance_id, actor, amounts
+
 ALL_EVENTS = (
     PLAYER_LOGIN,
     PLAYER_LOGOUT,
@@ -82,6 +96,16 @@ ALL_EVENTS = (
     RESOURCE_GATHERED,
     TICK_COMPLETED,
     PLAYER_NOTIFICATION,
+    ALLIANCE_CREATED,
+    ALLIANCE_MEMBER_JOINED,
+    ALLIANCE_MEMBER_LEFT,
+    ALLIANCE_DISBANDED,
+    ALLIANCE_RANK_CHANGED,
+    ALLIANCE_PERK_ACTIVATED,
+    ALLIANCE_RENAMED,
+    ALLIANCE_REQUEST_CREATED,
+    ALLIANCE_TREASURY_DEPOSITED,
+    ALLIANCE_TREASURY_WITHDRAWN,
 )
 
 

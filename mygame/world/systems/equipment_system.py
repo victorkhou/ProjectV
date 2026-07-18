@@ -1239,25 +1239,18 @@ class EquipmentSystem(CarryWeightMixin, StorageMixin, BaseSystem):
         if not required_rank:
             return True
         from world.utils import get_player_level
+        from world.systems.rank_system import player_meets_rank
 
         player_level = get_player_level(player)
-        try:
-            req_rank_def = self.registry.get_rank_by_name(required_rank)
-            from world.systems.rank_system import rank_from_level
-
-            player_rank = rank_from_level(player_level)
-            if player_rank < req_rank_def.level:
-                self.notify(
-                    player,
-                    "equip_denied",
-                    item_name=item_name,
-                    required_rank=required_rank,
-                    current_rank=self._current_rank_name(player_level),
-                )
-                return False
-        except (KeyError, ImportError):
-            # Unknown rank name: fall open rather than block.
-            pass
+        if not player_meets_rank(player_level, required_rank, self.registry):
+            self.notify(
+                player,
+                "equip_denied",
+                item_name=item_name,
+                required_rank=required_rank,
+                current_rank=self._current_rank_name(player_level),
+            )
+            return False
         return True
 
     @staticmethod
@@ -1333,10 +1326,8 @@ class EquipmentSystem(CarryWeightMixin, StorageMixin, BaseSystem):
         from world.systems.rank_system import rank_from_level
 
         rank_num = rank_from_level(player_level)
-        for rank in self.registry.ranks:
-            if rank.level == rank_num:
-                return rank.name
-        return f"Rank {rank_num}"
+        rank = self.registry.get_rank_by_level(rank_num)
+        return rank.name if rank else f"Rank {rank_num}"
 
     @staticmethod
     def _get_building_type(building: Any) -> str | None:

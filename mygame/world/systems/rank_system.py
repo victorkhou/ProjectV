@@ -51,6 +51,26 @@ def level_range_for_rank(rank: int) -> tuple[int, int]:
     return low, min(high, MAX_LEVEL)
 
 
+def player_meets_rank(player_level: int, required_rank_name: str, registry) -> bool:
+    """Return True if a player at *player_level* satisfies *required_rank_name*.
+
+    The single rank-requirement gate shared by every content gate (equipment
+    equip/use, bomb deploy, powerup activation, tech research): map the level to
+    a rank number via :func:`rank_from_level` and compare against the required
+    rank's ``.level``. FALLS OPEN — returns True — when *required_rank_name* is
+    empty/unset or does not resolve to a loaded rank, so unknown or missing rank
+    content never hard-blocks the action. Callers keep their own rejection
+    side-effect (notification, message); this only decides the boolean.
+    """
+    if not required_rank_name:
+        return True
+    try:
+        required = registry.get_rank_by_name(required_rank_name)
+    except (KeyError, AttributeError):
+        return True
+    return rank_from_level(player_level) >= required.level
+
+
 class RankSystem(BaseSystem):
     """Manages player level/rank progression based on Combat XP.
 
@@ -306,17 +326,11 @@ class RankSystem(BaseSystem):
 
     def _get_rank_by_level(self, rank_num: int) -> "RankDef | None":
         """Find a RankDef by its rank number (1-12)."""
-        for rank in self.registry.ranks:
-            if rank.level == rank_num:
-                return rank
-        return None
+        return self.registry.get_rank_by_level(rank_num)
 
     def _get_next_rank(self, current_rank_num: int) -> "RankDef | None":
         """Return the next rank above current_rank_num, or None."""
-        for rank in self.registry.ranks:
-            if rank.level == current_rank_num + 1:
-                return rank
-        return None
+        return self.registry.get_rank_by_level(current_rank_num + 1)
 
     def _unlock_for_rank(self, player: Any, rank_num: int) -> None:
         """Unlock techs/powerups available at rank_num and below."""

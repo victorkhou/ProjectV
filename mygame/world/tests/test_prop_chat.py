@@ -51,7 +51,10 @@ def _ensure_evennia_stubs():
 
 _ensure_evennia_stubs()
 
-from mygame.world.chat_system import ChatSystem  # noqa: E402
+from mygame.world.utils import (  # noqa: E402
+    format_channel_message,
+    format_dm_message,
+)
 
 # -------------------------------------------------------------- #
 #  Helpers / Fakes
@@ -118,8 +121,7 @@ class TestProperty24ChatMessageDeliveryScope(unittest.TestCase):
     @settings(max_examples=100)
     def test_channel_message_includes_rank_and_name(self, player, message):
         """Global channel messages include sender rank and name."""
-        chat = ChatSystem()
-        formatted = chat.format_channel_message(player, message)
+        formatted = format_channel_message(player, message)
 
         self.assertIn(
             player.rank_name, formatted,
@@ -141,8 +143,7 @@ class TestProperty24ChatMessageDeliveryScope(unittest.TestCase):
     @settings(max_examples=100)
     def test_channel_message_format(self, player, message):
         """Global channel message follows '[rank] name: message' format."""
-        chat = ChatSystem()
-        formatted = chat.format_channel_message(player, message)
+        formatted = format_channel_message(player, message)
 
         expected = f"[{player.rank_name}] {player.key}: {message}"
         self.assertEqual(
@@ -157,8 +158,7 @@ class TestProperty24ChatMessageDeliveryScope(unittest.TestCase):
     @settings(max_examples=100)
     def test_dm_message_includes_rank(self, player, message):
         """Direct messages include sender rank."""
-        chat = ChatSystem()
-        formatted = chat.format_dm_message(player, message)
+        formatted = format_dm_message(player, message)
 
         self.assertIn(
             player.rank_name, formatted,
@@ -180,8 +180,7 @@ class TestProperty24ChatMessageDeliveryScope(unittest.TestCase):
     @settings(max_examples=100)
     def test_dm_message_format(self, player, message):
         """DM follows '[rank] name (DM): message' format."""
-        chat = ChatSystem()
-        formatted = chat.format_dm_message(player, message)
+        formatted = format_dm_message(player, message)
 
         expected = f"[{player.rank_name}] {player.key} (DM): {message}"
         self.assertEqual(
@@ -197,9 +196,8 @@ class TestProperty24ChatMessageDeliveryScope(unittest.TestCase):
     @settings(max_examples=100)
     def test_different_senders_produce_different_formats(self, player1, player2, message):
         """Different senders produce messages with their own rank/name."""
-        chat = ChatSystem()
-        msg1 = chat.format_channel_message(player1, message)
-        msg2 = chat.format_channel_message(player2, message)
+        msg1 = format_channel_message(player1, message)
+        msg2 = format_channel_message(player2, message)
 
         if player1.key != player2.key or player1.rank_name != player2.rank_name:
             self.assertNotEqual(

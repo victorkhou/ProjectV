@@ -163,7 +163,12 @@ class FogOfWarSystem:
                 owner = _get_building_owner(building)
                 owner_name = _owner_name(owner)
 
-                if owner is not player and owner_name != player_key:
+                # An allied member's building is treated like the player's own —
+                # it is NOT recorded as an enemy discovery (shared-vision perk).
+                from world.utils import are_allied
+                allied = are_allied(player, owner)
+
+                if owner is not player and owner_name != player_key and not allied:
                     btype = _get_building_type(building)
                     new_snap = {
                         "building_type": btype,
@@ -310,13 +315,11 @@ def _get_planet(player: Any) -> str:
 
 def _get_building_coords(building: Any) -> tuple[int, int]:
     """Extract (x, y) from a building's coordinate attributes."""
-    # Read coord_x/coord_y directly from the building
-    if hasattr(building, "db"):
-        bx = getattr(building.db, "coord_x", None)
-        by = getattr(building.db, "coord_y", None)
-        if bx is not None and by is not None:
-            return (int(bx), int(by))
-    # Last resort
+    from world.utils import get_coords
+    coords = get_coords(building)
+    if coords is not None:
+        return coords
+    # Last resort: bare x/y attributes.
     x = getattr(building, "x", 0) or 0
     y = getattr(building, "y", 0) or 0
     return (int(x), int(y))
@@ -324,30 +327,16 @@ def _get_building_coords(building: Any) -> tuple[int, int]:
 
 def _get_building_owner(building: Any) -> Any | None:
     """Get the owner of a building."""
-    # Try attributes system first (Evennia)
-    if hasattr(building, "attributes") and hasattr(building.attributes, "get"):
-        owner = building.attributes.get("owner", default=None)
-        if owner is not None:
-            return owner
-    # Fallback: db attribute
-    if hasattr(building, "db"):
-        return getattr(building.db, "owner", None)
-    return getattr(building, "owner", None)
+    from world.utils import get_obj_attr
+    return get_obj_attr(building, "owner")
 
 
 def _get_building_type(building: Any) -> str:
     """Get the building type abbreviation."""
     if hasattr(building, "get_display_abbreviation"):
         return building.get_display_abbreviation()
-    if hasattr(building, "attributes") and hasattr(building.attributes, "get"):
-        btype = building.attributes.get("building_type", default=None)
-        if btype:
-            return str(btype)
-    if hasattr(building, "db"):
-        btype = getattr(building.db, "building_type", None)
-        if btype:
-            return str(btype)
-    return "??"
+    from world.utils import get_building_type
+    return get_building_type(building) or "??"
 
 
 def _owner_name(owner: Any) -> str:

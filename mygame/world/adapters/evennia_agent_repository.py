@@ -114,12 +114,10 @@ class EvenniaAgentFactory(AgentFactory):
 
         spawn_x, spawn_y = self._resolve_spawn_coords(owner)
         if spawn_x is not None and spawn_y is not None:
-            npc.db.coord_x = int(spawn_x)
-            npc.db.coord_y = int(spawn_y)
             # at_object_receive saw coord_x=None during create_object, so
-            # register in the coordinate index now.
-            if planet_room is not None and hasattr(planet_room, "coord_index"):
-                planet_room.coord_index.add(npc, int(spawn_x), int(spawn_y))
+            # place_on_tile stamps coords and registers in the index now.
+            from world.utils import place_on_tile
+            place_on_tile(npc, planet_room, spawn_x, spawn_y)
 
         return npc
 

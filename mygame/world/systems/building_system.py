@@ -149,15 +149,10 @@ class BuildingSystem(BaseSystem):
             except TypeError:
                 # Factory doesn't accept x/y — call without and set coords after
                 building = self._create_building_func(building_def, tile, owner)
-                if hasattr(building, "db"):
-                    building.db.coord_x = x
-                    building.db.coord_y = y
-                elif hasattr(building, "attributes"):
-                    building.attributes.add("coord_x", x)
-                    building.attributes.add("coord_y", y)
-                # Register in coordinate index (at_object_receive missed it)
-                if hasattr(tile, "coord_index"):
-                    tile.coord_index.add(building, x, y)
+                # Stamp coords + register in the coordinate index
+                # (at_object_receive missed it during create_object).
+                from world.utils import place_on_tile
+                place_on_tile(building, tile, x, y)
                 return building
         return self._create_building_func(building_def, tile, owner)
 
@@ -297,7 +292,8 @@ class BuildingSystem(BaseSystem):
             tile=getattr(building, "location", None),
         )
 
-        cost_str = ", ".join(f"{amt} {res}" for res, amt in upgrade_cost.items())
+        from world.utils import format_cost_summary
+        cost_str = format_cost_summary(upgrade_cost)
         return True, (
             f"Upgrading {building_def.name} to level {target_level} "
             f"(0/{upgrade_time}s, cost: {cost_str}). Stay on the tile to continue."
@@ -844,8 +840,9 @@ class BuildingSystem(BaseSystem):
         if was_offline:
             self._set_building_attr(building, "offline", False)
 
+        from world.utils import format_cost_summary
         name = self._building_name(building_type)
-        cost_str = ", ".join(f"{amt} {res}" for res, amt in cost.items())
+        cost_str = format_cost_summary(cost)
         restored = hp_max - hp
         online_note = " It is back online." if was_offline else ""
         return True, (

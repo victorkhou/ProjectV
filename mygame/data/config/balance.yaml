@@ -158,3 +158,39 @@ fortress_guard_hp: 150           # HP per fortress guard
 room_capacity_empty: 1              # bare tile holds a single dropped item
 room_capacity_building: 10          # tile with a non-storage/resource building
 room_capacity_per_storage_level: 20 # x level for Vault (storage) & Extractor
+
+# --- Alliances ---
+# Group-of-players feature. Level/treasury double-gated perks, a composite-score
+# leaderboard (PvP-weighted, decaying), invite/rename/withdraw throttles, and an
+# absentee-leader claim threshold. All values are first-guess — tune live.
+alliance_found_min_level: 10        # min Entity_Level to FOUND an alliance
+alliance_join_min_level: 5          # min Entity_Level to JOIN (accept/apply/open)
+alliance_max_members: 10            # leader + officers + members
+alliance_max_officers: 3            # max officers a Leader may promote
+alliance_tag_max_len: 5             # max characters in a tag
+alliance_leader_absence_days: 7     # Leader offline this long -> Officer may claim
+alliance_invite_expiry_days: 7      # a pending invite lives this long
+alliance_invite_cooldown_ticks: 600     # per-target invite/anti-harass throttle
+alliance_rejoin_cooldown_ticks: 1800    # wait after leave/kick before rejoining
+alliance_rename_cooldown_ticks: 3600    # between rename/retag operations
+alliance_withdraw_cap_per_window: 500   # per-resource officer withdraw cap/window
+alliance_withdraw_window_ticks: 3600    # rolling withdrawal-cap window length
+alliance_leaderboard_top_n: 20          # rows shown on the cross-alliance board
+# Composite score weights (per member): level*w_level + decayed_pvp*w_kills_pvp
+# + decayed_pve*w_kills_pve + buildings*w_buildings. PvP outweighs PvE.
+alliance_score_w_level: 1.0
+alliance_score_w_kills_pvp: 3.0
+alliance_score_w_kills_pve: 1.0
+alliance_score_w_buildings: 1.5
+# Leaderboard kill-tally decay: tally *= factor ** (elapsed / interval_ticks).
+alliance_score_decay_factor: 0.98
+alliance_score_decay_interval_ticks: 600
+# Alliance_Level tier table: SUM of member Entity_Levels -> tier. Keys = minimum
+# summed member level. Number of tiers = MAX Alliance_Level. Chosen over average
+# so bigger active alliances climb faster; top threshold well under the ~600 max.
+alliance_level_thresholds:
+  0: 1      # tier 1 — any founded alliance
+  40: 2     # tier 2 — ~2 members near founding level
+  100: 3    # tier 3 — a small active roster
+  180: 4    # tier 4 — a mid-size active roster
+  280: 5    # tier 5 (max) — a large, active, high-level roster

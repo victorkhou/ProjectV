@@ -179,8 +179,11 @@ class TestMapDataProvider:
         tile = provider._visible_tile_from_objects(
             6, 5, "Plains", looker, [linkdead, staging]
         )
-        assert tile.get("players") == [{"name": "Dropped", "linkdead": True}], (
-            "linkdead player must be listed (flagged linkdead); staging excluded"
+        assert tile.get("players") == [
+            {"name": "Dropped", "linkdead": True, "tag": None}
+        ], (
+            "linkdead player must be listed (flagged linkdead, no alliance tag); "
+            "staging excluded"
         )
 
     def test_live_player_flagged_not_linkdead(self):
@@ -195,7 +198,9 @@ class TestMapDataProvider:
         tile = provider._visible_tile_from_objects(
             6, 5, "Plains", looker, [live]
         )
-        assert tile.get("players") == [{"name": "Rival", "linkdead": False}]
+        assert tile.get("players") == [
+            {"name": "Rival", "linkdead": False, "tag": None}
+        ]
 
     def test_tiles_are_json_serializable(self):
         """Ensure the output can be JSON-serialized for the webclient."""

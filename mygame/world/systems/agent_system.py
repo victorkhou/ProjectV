@@ -315,10 +315,8 @@ class AgentSystem(AgentProgressionMixin, AgentBehaviorMixin, BaseSystem):
                         px = getattr(player.db, "coord_x", None)
                         py = getattr(player.db, "coord_y", None)
                         if px is not None and py is not None:
-                            agent.db.coord_x = int(px)
-                            agent.db.coord_y = int(py)
-                            if hasattr(planet_room, "coord_index"):
-                                planet_room.coord_index.add(agent, int(px), int(py))
+                            from world.utils import place_on_tile
+                            place_on_tile(agent, planet_room, px, py)
 
                 # Walk to the building, or snap there if no path/already there.
                 # The resting status on arrival ("Working") is derived from the

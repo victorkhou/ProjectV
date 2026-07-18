@@ -105,6 +105,10 @@ def _ensure_evennia_stubs():
         aliases = []
         locks = ""
         help_category = "General"
+        def at_pre_cmd(self):
+            # Real Evennia's Command defines at_pre_cmd (returns falsy = proceed);
+            # commands whose own at_pre_cmd calls super().at_pre_cmd() rely on it.
+            return False
         def func(self):
             pass
 

@@ -32,11 +32,8 @@ _DefaultCharacter = None
 
 def _get_building_type(building) -> str | None:
     """Return the building_type attribute, or None if missing."""
-    if hasattr(building, "attributes") and hasattr(building.attributes, "get"):
-        return building.attributes.get("building_type")
-    if hasattr(building, "db"):
-        return getattr(building.db, "building_type", None)
-    return None
+    from world.utils import get_building_type
+    return get_building_type(building)
 
 
 def _clear_extractor_inventory(building) -> None:
@@ -200,6 +197,25 @@ PLAYER_DEFAULTS: dict[str, object] = {
     # Set when an unclean disconnect enters LINKDEAD; the character stays a full
     # combat target until this passes, then is removed to the lobby.
     "linkdead_until": 0.0,
+    # --- Alliances (Member_Pointer + leaderboard tallies) ---
+    # The alliance_id this character belongs to, or None. Compared with `is None`
+    # / `== id` (never truthiness) so a legitimate id can never be misread. The
+    # single WRITER of player_alliance/alliance_rank is world.systems.
+    # alliance_system.AllianceSystem — never assign them directly.
+    "player_alliance": None,
+    # "leader" / "officer" / "member" (world.constants.ALLIANCE_RANKS), or None.
+    "alliance_rank": None,
+    # Decaying leaderboard kill tallies, split PvP vs PvE (weighted differently
+    # and decayed over time). Stored as floats; distinct from the cosmetic
+    # db.kills tally, which counts every kill including betrayals and never
+    # decays. Incremented only on a non-friendly XP-reward kill.
+    "scored_kills_pvp": 0.0,
+    "scored_kills_pve": 0.0,
+    # Anchor tick for lazy Score_Decay of both kill tallies.
+    "last_kill_decay_tick": 0,
+    # Invite Ignore_List: a set of blocked inviter ids, or the "all" sentinel.
+    # None = accepting invites from everyone.
+    "alliance_invite_ignore": None,
 }
 
 
@@ -333,6 +349,24 @@ class CombatCharacter(CombatEntity, DefaultCharacter):
             "combat_lockout_tick": self.db.combat_lockout_tick or 0,
         }
 
+    def at_object_delete(self):
+        """Route a character deletion through the AllianceSystem first.
+
+        A deleted member must not leave an orphaned Member_Pointer / roster entry
+        (which would let a stale id linger in an Alliance_Record). Treated as an
+        implicit leave; a deleted Leader triggers succession on the next
+        reconcile. Best-effort — a routing failure must never block deletion, so
+        it is guarded and we always defer to the parent for the actual delete.
+        """
+        try:
+            from world.utils import get_system
+            alliance = get_system(self, "alliance_system")
+            if alliance is not None:
+                alliance.on_character_deleted(self)
+        except Exception:
+            logger.debug("Alliance chardelete routing failed", exc_info=True)
+        return super().at_object_delete()
+
     # ------------------------------------------------------------------ #
     #  Login / logout hooks
     # ------------------------------------------------------------------ #
@@ -406,6 +440,17 @@ class CombatCharacter(CombatEntity, DefaultCharacter):
         try:
             from world.event_bus import event_bus, PLAYER_LOGIN
             event_bus.publish(PLAYER_LOGIN, player=self)
+        except Exception:
+            pass
+
+        # Re-deliver any pending alliance invitations on login (they may have
+        # been sent while this player was offline). Best-effort — a replay
+        # failure must never affect login.
+        try:
+            from world.utils import get_system
+            alliance = get_system(self, "alliance_system")
+            if alliance is not None:
+                alliance.replay_invites(self)
         except Exception:
             pass
 
@@ -647,6 +692,16 @@ class CombatCharacter(CombatEntity, DefaultCharacter):
         → LINKDEAD. A no-op beyond the default when the flow is disabled, so
         current behavior is unchanged.
         """
+        # Stamp last-seen wall-clock time on disconnect (epoch seconds). Read by
+        # AllianceSystem._leader_absent to judge an absentee-leader `claim`
+        # against real last-seen — NOT account.last_login (connect time). Set
+        # first + guarded so it records regardless of which branch runs below.
+        try:
+            import time as _t
+            self.db.last_seen_time = _t.time()
+        except Exception:  # noqa: BLE001
+            pass
+
         linkdead = False
         try:
             from world.lobby_flow import lobby_flow_enabled

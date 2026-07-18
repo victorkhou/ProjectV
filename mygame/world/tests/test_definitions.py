@@ -270,8 +270,12 @@ class TestDataclassContracts:
         #    accuracy_directional).
         #  + 1 hybrid-combat instant-attack cooldown (attack_cooldown_seconds).
         #  + 1 player-lifecycle linkdead grace (linkdead_grace_seconds).
+        #  + 20 alliances (found/join min level, max members/officers, tag len,
+        #    leader-absence/invite-expiry days, invite/rejoin/rename cooldowns,
+        #    withdraw cap + window, leaderboard top-N, 4 score weights, 2 decay
+        #    knobs, and the alliance_level_thresholds table).
         # Bump this when adding a balance tunable.
-        assert len(fields(BalanceConfig)) == 68
+        assert len(fields(BalanceConfig)) == 88
 
     def test_coordinate_space_def_field_count(self):
         assert len(fields(CoordinateSpaceDef)) == 14

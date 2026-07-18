@@ -1717,13 +1717,129 @@ class LiveBootSmokeTest(EvenniaTest):
         finally:
             _teardown_game(systems)
 
+    # -------------------------------------------------------------- #
+    #  Alliances — real registry, roster rebuild, end-to-end, leaderboard
+    # -------------------------------------------------------------- #
+
+    def _prep_alliance_char(self, char, level=20):
+        """Seed an EvenniaTest-provided (account-linked) character for alliance ops.
+
+        Uses the harness's ``char1``/``char2`` (which have a real linked account,
+        so ``has_account`` is True and ``_is_real_player`` passes) rather than
+        fabricating one — ``has_account`` reads the real account FK, not a db attr.
+        """
+        char.db.coord_x = 1
+        char.db.coord_y = 1
+        char.db.coord_planet = "earth"
+        char.db.combat_xp = 0
+        char.db.level = level
+        char.db.player_state = "playing"
+        # Clear any leftover pointer so each test starts un-allianced.
+        char.db.player_alliance = None
+        char.db.alliance_rank = None
+        return char
+
+    def test_alliance_registry_persists_and_next_id_starts_at_one(self):
+        from server.conf.game_init import initialize_game
+        from evennia.utils.search import search_script
+
+        systems = initialize_game()
+        try:
+            found = search_script("alliance_registry")
+            self.assertTrue(found, "AllianceRegistry script must exist after boot")
+            reg = found[0]
+            self.assertEqual(reg.db.next_alliance_id, 1)
+            self.assertEqual(reg.db.alliances, {})
+            # And the system is linked to it.
+            self.assertIs(systems["alliance_system"]._alliances, reg)
+        finally:
+            _teardown_game(systems)
+
+    def test_alliance_roster_rebuild_via_search_object_attribute(self):
+        """Regression guard: a member's pointer is a pickled int, so it must be
+        found by search_object_attribute — a db_strvalue filter matches nothing."""
+        from server.conf.game_init import initialize_game
+        from evennia.utils.search import search_object_attribute
+
+        systems = initialize_game()
+        try:
+            system = systems["alliance_system"]
+            leader = self._prep_alliance_char(self.char1)
+            aid = system.found(leader, "Iron Wolves", "IW")
+            self.assertIsNotNone(aid)
+            self.assertEqual(leader.db.player_alliance, aid)
+            # The pickled-int pointer IS discoverable by search_object_attribute.
+            found = search_object_attribute(key="player_alliance", value=aid)
+            self.assertIn(leader, list(found))
+        finally:
+            _teardown_game(systems)
+
+    def test_alliance_end_to_end_found_invite_accept_deposit_disband(self):
+        from server.conf.game_init import initialize_game
+
+        systems = initialize_game()
+        try:
+            system = systems["alliance_system"]
+            leader = self._prep_alliance_char(self.char1)
+            member = self._prep_alliance_char(self.char2, level=10)
+            aid = system.found(leader, "Coalition", "COAL")
+            self.assertIsNotNone(aid)
+            self.assertTrue(system.invite(leader, member))
+            self.assertTrue(system.accept(member, "COAL"))
+            self.assertEqual(member.db.player_alliance, aid)
+            # Deposit into the treasury, then disband and confirm the even-split
+            # credits both members (11 Iron / 2 -> 5 each, remainder 1 to leader).
+            member.add_resource("Iron", 11)
+            self.assertTrue(system.deposit(member, {"Iron": 11}))
+            l_before = leader.get_resource("Iron")
+            m_before = member.get_resource("Iron")
+            self.assertTrue(system.disband(leader))
+            self.assertIsNone(system._record(aid), "record gone after disband")
+            self.assertIsNone(leader.db.player_alliance)
+            self.assertIsNone(member.db.player_alliance)
+            self.assertEqual(member.get_resource("Iron") - m_before, 5)
+            self.assertEqual(leader.get_resource("Iron") - l_before, 6)  # 5 + rem 1
+        finally:
+            _teardown_game(systems)
+
+    def test_alliance_leaderboard_exact_composite_score(self):
+        """A broken Member_Resolver (ranking everything at 0) fails this — it
+        asserts the EXACT PvP-weighted score for known member stats."""
+        from server.conf.game_init import initialize_game
+
+        systems = initialize_game()
+        try:
+            system = systems["alliance_system"]
+            bal = system.registry.balance
+            leader = self._prep_alliance_char(self.char1, level=10)
+            aid = system.found(leader, "Scorers", "SCR")
+            # Known stats: level 10, 2 pvp kills, 1 pve kill, 0 buildings. Anchor
+            # the decay tick to NOW (the real GameTickScript may have ticked past
+            # 0) so elapsed == 0 and no decay applies — score = 10*w_level +
+            # 2*w_pvp + 1*w_pve + 0.
+            leader.db.level = 10
+            leader.db.scored_kills_pvp = 2.0
+            leader.db.scored_kills_pve = 1.0
+            leader.db.last_kill_decay_tick = system._now_tick()
+            expected = (
+                10 * bal.alliance_score_w_level
+                + 2 * bal.alliance_score_w_kills_pvp
+                + 1 * bal.alliance_score_w_kills_pve
+            )
+            self.assertAlmostEqual(system.alliance_score(aid), expected)
+            board = system.leaderboard()
+            self.assertEqual(board[0][0], aid)
+            self.assertAlmostEqual(board[0][1], expected)
+        finally:
+            _teardown_game(systems)
+
 
 def _teardown_game(systems):
     """Best-effort teardown: stop any scripts initialize_game created so they
     don't leak across tests. The in-memory DB is rolled back by EvenniaTest."""
     try:
         from evennia.utils.search import search_script
-        for key in ("game_tick", "auto_save"):
+        for key in ("game_tick", "auto_save", "alliance_registry"):
             for s in search_script(key) or []:
                 try:
                     s.stop()

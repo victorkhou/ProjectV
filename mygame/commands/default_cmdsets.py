@@ -40,10 +40,11 @@ from commands.lifecycle_commands import (
     CmdDeploy,
     CmdSelect,
 )
+from commands.alliance_commands import CmdAlliance
 from commands.admin_commands import (
     CmdReboot, CmdPurgeRooms, CmdTeleport, CmdTransfer, CmdClearFog, CmdMigrate,
     CmdAdminBuilding, CmdAdminAgent, CmdAdminResource, CmdAdminItem,
-    CmdAdminPlayer, CmdAdminOutpost,
+    CmdAdminPlayer, CmdAdminOutpost, CmdAdminAlliance,
 )
 
 
@@ -163,6 +164,8 @@ class CharacterCmdSet(default_cmds.CharacterCmdSet):
         self.add(CmdTrain())
         self.add(CmdAssign())
         self.add(CmdUnassign())
+        # Alliance command (verb router)
+        self.add(CmdAlliance())
         # Admin commands (lock-gated to Builder+)
         self.add(CmdReboot())
         self.add(CmdPurgeRooms())
@@ -177,6 +180,7 @@ class CharacterCmdSet(default_cmds.CharacterCmdSet):
         self.add(CmdAdminItem())
         self.add(CmdAdminPlayer())
         self.add(CmdAdminOutpost())
+        self.add(CmdAdminAlliance())
         # Override Evennia's default who with rank/level display
         self.add(CmdWho())
         # Player lifecycle (spawning/lobby) commands. Harmless when the lobby

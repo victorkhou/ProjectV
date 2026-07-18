@@ -39,6 +39,24 @@ def get_game_systems() -> dict:
         return {}
 
 
+def require_system(caller: Any, name: str, label: str | None = None) -> Any | None:
+    """Return game system ``name``, or msg *caller* and return ``None``.
+
+    The single implementation behind both command-router ``require_system``
+    helpers (the ``SubcommandDispatchMixin`` and ``GameCommand`` methods both
+    delegate here) so the "look up system / msg on failure" boilerplate lives in
+    one place. The failure message is ``"{label} unavailable."`` where *label*
+    defaults to the system name with underscores spaced out and capitalized
+    (``"agent_system"`` → ``"Agent system unavailable."``).
+    """
+    system = get_system(caller, name)
+    if system is None:
+        pretty = label or name.replace("_", " ").capitalize()
+        caller.msg(f"{pretty} unavailable.")
+        return None
+    return system
+
+
 # ------------------------------------------------------------------ #
 #  Agent resting status (single derived authority)
 # ------------------------------------------------------------------ #
@@ -113,6 +131,29 @@ def get_coords(obj: Any) -> tuple[int, int] | None:
         if cx is not None and cy is not None:
             return (int(cx), int(cy))
     return None
+
+
+def place_on_tile(obj: Any, room: Any, x: Any, y: Any) -> None:
+    """Stamp ``obj``'s tile coords and register it in ``room``'s coordinate index.
+
+    The shared spawn-placement step every drop/agent/guard/building creation
+    path repeats: set ``obj.db.coord_x``/``coord_y`` (int-coerced) and — because
+    ``at_object_receive`` fired during ``create_object`` while the coords were
+    still ``None`` — add the object to ``room.coord_index`` now that they are
+    set. Falls back to the ``attributes`` handler for objects without a ``db``
+    proxy, and no-ops the index step when the room carries no ``coord_index``.
+    Callers keep their own None/validity and tile-capacity checks; this only
+    performs the write.
+    """
+    ix, iy = int(x), int(y)
+    if hasattr(obj, "db"):
+        obj.db.coord_x = ix
+        obj.db.coord_y = iy
+    elif hasattr(obj, "attributes"):
+        obj.attributes.add("coord_x", ix)
+        obj.attributes.add("coord_y", iy)
+    if room is not None and hasattr(room, "coord_index"):
+        room.coord_index.add(obj, ix, iy)
 
 
 def chebyshev_distance(x1: int, y1: int, x2: int, y2: int) -> int:
@@ -738,6 +779,145 @@ def is_owner(caller: Any, owner: Any) -> bool:
     return owner is caller
 
 
+def _is_real_player(entity: Any) -> bool:
+    """Return True if *entity* is a real player character (not an NPC/Sentinel).
+
+    The belt-and-braces guard behind the alliance real-player invariant (C8):
+    an alliance member must be a genuine player character — not a Sentinel (the
+    never-puppeted NPC-base owner) and not an ``npc_type`` unit (agents / enemy
+    guards). Even if a stray ``player_alliance`` pointer were somehow written
+    onto an NPC base owner, :func:`are_allied` would still refuse to treat it as
+    an ally — so a PvE fortress can never be made untargetable.
+
+    IMPORTANT: this must NOT gate on ``has_account`` — Evennia's ``has_account``
+    is ``self.sessions.count()`` (i.e. *currently connected*), so an OFFLINE
+    real player would fail it and an offline ally would wrongly be treated as
+    hostile / un-invitable. Membership is a persistent, session-independent fact,
+    so we identify a player structurally: a character (carries ``combat_xp`` via
+    :func:`is_player`) that is neither a Sentinel nor an ``npc_type`` unit. The
+    persistent account link (``db_account``), when present, is a positive signal
+    but its absence does not disqualify a legitimately-offline character.
+
+    Value-based reads only; never raises.
+    """
+    if entity is None:
+        return False
+    db = getattr(entity, "db", None)
+    if db is None:
+        return False
+    # Must be a combat character (players + NPCs carry combat_xp); this excludes
+    # buildings/items/rooms up front.
+    if not is_player(entity):
+        return False
+    # An NPC (agent/enemy guard) carries npc_type.
+    if getattr(db, "npc_type", None) is not None:
+        return False
+    # A Sentinel (NPC-base owner) is flagged/tagged — the authoritative signal.
+    if getattr(db, "is_sentinel", False):
+        return False
+    try:
+        if entity.tags.get("sentinel", category="npc_role"):
+            return False
+    except Exception:  # noqa: BLE001
+        pass
+    return True
+
+
+def are_allied(a: Any, b: Any) -> bool:
+    """Return True iff *a* and *b* are two DISTINCT real players in the same alliance.
+
+    The single ally predicate — the alliance counterpart to :func:`is_owner`,
+    added alongside it as the one authority for "same side". In combat it is
+    ALWAYS called with the Owning_Players (via ``_owning_player``), never raw
+    units, so a turret/agent is judged by its owner's alliance.
+
+    Returns ``True`` only when ALL hold:
+
+    * both *a* and *b* are real player characters (:func:`_is_real_player` — has
+      an account, not a Sentinel, no ``npc_type``), so an NPC base owner can
+      never be treated as an ally (C8);
+    * they are DISTINCT players — sameness decided exactly like ``is_owner``
+      (compare ``.id`` when both non-``None``; else identity), so a unit is never
+      "allied to itself" and two same-PK instances after an idmapper flush are
+      treated as the same player (→ ``False``);
+    * both hold the SAME non-``None`` ``db.player_alliance`` (value-based reads:
+      ``is None`` / ``==``, never truthiness — a legitimate ``alliance_id`` is
+      always ``>= 1`` so this never trips on ``0``);
+    * that shared ``alliance_id`` STILL resolves to a live Alliance_Record via
+      the AllianceSystem — a stale pointer left by a disband while a member was
+      offline resolves to nothing and yields ``False``.
+
+    Fails toward ``False`` on any missing ``db``, unavailable AllianceSystem, or
+    unresolved record: a lookup failure must never SUPPRESS legitimate hostile
+    targeting (the safe direction is "treat as enemies").
+    """
+    if a is None or b is None:
+        return False
+    if not (_is_real_player(a) and _is_real_player(b)):
+        return False
+    # Distinct-player check, mirroring is_owner's idmapper-safe comparison.
+    a_id = getattr(a, "id", None)
+    b_id = getattr(b, "id", None)
+    if a_id is not None and b_id is not None:
+        if a_id == b_id:
+            return False
+    elif a is b:
+        return False
+
+    a_alliance = getattr(getattr(a, "db", None), "player_alliance", None)
+    b_alliance = getattr(getattr(b, "db", None), "player_alliance", None)
+    if a_alliance is None or b_alliance is None:
+        return False
+    if a_alliance != b_alliance:
+        return False
+
+    # The shared id must still resolve to a LIVE record (defends stale pointers).
+    system = get_system(a, "alliance_system")
+    if system is None:
+        return False
+    try:
+        return system.alliance_exists(a_alliance)
+    except Exception:  # noqa: BLE001 - a lookup failure never suppresses hostility
+        return False
+
+
+def is_friendly(a: Any, b: Any) -> bool:
+    """Return True if *a* is *b*'s owner or an ally of *b* — the "same side" test.
+
+    The single friend/foe predicate that automated defenses use to decide whom
+    NOT to fire on: a unit never targets its own owner (:func:`is_owner`) nor any
+    player allied to that owner (:func:`are_allied`). Both underlying predicates
+    guard non-player / ``None`` operands themselves, so passing raw units is safe.
+    """
+    return is_owner(a, b) or are_allied(a, b)
+
+
+def shared_visible_tiles(player: Any, player_buildings: Any, fog_system: Any) -> set:
+    """Return *player*'s visible tiles, unioned with PLAYING allies' if the
+    shared-vision perk is active.
+
+    The single entry point the three fog-of-war callers (ASCII renderer, web
+    map-data provider, and the ``look`` path) use so shared vision cannot drift
+    between them. Delegates to ``AllianceSystem.shared_visible_tiles`` (which
+    applies the PLAYING-only filter and the per-ally union); falls back to the
+    player's own ``fog_system.get_visible_tiles(player, player_buildings)`` when
+    there is no AllianceSystem or the perk is inactive. Never raises into map
+    building.
+    """
+    try:
+        system = get_system(player, "alliance_system")
+        if system is not None:
+            return system.shared_visible_tiles(
+                player, player_buildings, fog_system,
+                building_lookup=lambda ally: (
+                    ally.get_buildings() if hasattr(ally, "get_buildings") else []
+                ),
+            )
+    except Exception:  # noqa: BLE001 - shared vision never breaks the base view
+        logger.debug("shared_visible_tiles failed; using own vision", exc_info=True)
+    return set(fog_system.get_visible_tiles(player, player_buildings) or [])
+
+
 def is_admin(caller: Any) -> bool:
     """Check if caller has Builder+ permissions."""
     if hasattr(caller, "check_permstring"):
@@ -907,6 +1087,15 @@ def format_insufficient_resources(player: Any, costs: dict[str, int]) -> str:
         color = "|g" if current >= needed else "|r"
         lines.append(f"  {color}{resource}: {current}/{needed}|n")
     return "\n".join(lines)
+
+
+def format_cost_summary(costs: dict[str, int]) -> str:
+    """Format a resource-cost dict as a compact ``"30 Iron, 10 Wood"`` string.
+
+    The shared one-line rendering of a ``{resource: amount}`` mapping used
+    wherever a cost, price, deposit, withdrawal, or refund is echoed to a player.
+    """
+    return ", ".join(f"{amount} {resource}" for resource, amount in costs.items())
 
 
 # ------------------------------------------------------------------ #

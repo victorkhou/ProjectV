@@ -31,7 +31,7 @@ class TestEventConstants:
     """Verify all event name constants are defined."""
 
     def test_all_events_has_correct_count(self):
-        assert len(ALL_EVENTS) == 23
+        assert len(ALL_EVENTS) == 33
 
     def test_all_event_names_are_unique(self):
         assert len(set(ALL_EVENTS)) == len(ALL_EVENTS)
@@ -61,6 +61,16 @@ class TestEventConstants:
             "resource_gathered",
             "tick_completed",
             "player_notification",
+            "alliance_created",
+            "alliance_member_joined",
+            "alliance_member_left",
+            "alliance_disbanded",
+            "alliance_rank_changed",
+            "alliance_perk_activated",
+            "alliance_renamed",
+            "alliance_request_created",
+            "alliance_treasury_deposited",
+            "alliance_treasury_withdrawn",
         }
         assert set(ALL_EVENTS) == expected
 

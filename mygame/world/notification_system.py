@@ -11,6 +11,7 @@ from __future__ import annotations
 import logging
 from typing import Any, TYPE_CHECKING
 
+from world.constants import UNIT_KIND_LABELS
 from world.event_bus import (
     EventBus,
     PLAYER_LOGIN,
@@ -106,8 +107,7 @@ class NotificationSystem:
         """
         if attacker is killer or not attacker_kind:
             return ""
-        labels = {"turret": "Turret", "agent": "Agent", "building": "Building"}
-        return f"'s {labels.get(attacker_kind, 'unit')}"
+        return f"'s {UNIT_KIND_LABELS.get(attacker_kind, 'unit')}"
 
     def on_rank_promoted(
         self,

@@ -32,23 +32,6 @@ class AgentProgressionMixin:
     #  Owner-level cap
     # ------------------------------------------------------------------ #
 
-    @staticmethod
-    def _coerce_level(value: Any) -> int | None:
-        """Coerce a stored level/rank value to ``int``; ``None`` if not numeric.
-
-        Corrupted out-of-band state (an admin edit or migration bug leaving a
-        non-numeric ``db.level``/``db.rank_level``) must not raise ``ValueError``
-        up through the owner-cap math into a command handler. Returns ``None``
-        so the caller can fall back to its conservative default with a log.
-        """
-        if value is None:
-            return None
-        try:
-            return int(value)
-        except (TypeError, ValueError):
-            logger.debug("Ignoring non-numeric level value %r; treating as unset.", value)
-            return None
-
     @classmethod
     def _level_from_player(cls, player: Any) -> int:
         """Resolve a player's Entity_Level using the shared level rule.
@@ -96,8 +79,9 @@ class AgentProgressionMixin:
         so ``compute_effective_level`` and ``get_agent_progression_view`` cannot
         drift apart.
         """
+        from world.utils import _coerce_level
         if hasattr(agent, "get_raw_level"):
-            raw = AgentProgressionMixin._coerce_level(agent.get_raw_level())
+            raw = _coerce_level(agent.get_raw_level())
             if raw is not None:
                 return raw
         from world import progression
@@ -492,9 +476,10 @@ class AgentProgressionMixin:
         from world.systems.rank_system import rank_from_level
 
         rank_num = rank_from_level(int(level))
-        for rank in getattr(self.registry, "ranks", []) or []:
-            if getattr(rank, "level", None) == rank_num:
-                return str(rank.name).replace("_", " ")
+        getter = getattr(self.registry, "get_rank_by_level", None)
+        rank = getter(rank_num) if callable(getter) else None
+        if rank is not None:
+            return str(rank.name).replace("_", " ")
         return f"Rank {rank_num}"
 
     def get_agent_progression_view(self, agent: Any) -> dict:

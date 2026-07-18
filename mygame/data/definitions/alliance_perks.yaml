@@ -1,0 +1,64 @@
+# Alliance perk catalog (alliance feature).
+#
+# The v1 catalog: ONE perk per category. Each perk has numbered upgrade levels;
+# every level declares:
+#   tier:  the Alliance_Level required to UNLOCK that level (see
+#          balance.alliance_level_thresholds — max Alliance_Level == #tiers == 5)
+#   cost:  the treasury cost to ACTIVATE/upgrade to that level (a map of the six
+#          resource types: Wood / Stone / Iron / Energy / Circuits / Nexium)
+#   plus the effect payload for the category's effect_type:
+#     - effect_type: multiplier -> `multiplier` (regen/harvest: yield/rate scaled)
+#     - effect_type: flat       -> `damage_bonus` or `damage_reduction` (raw +N)
+#     - effect_type: boolean    -> `effect: true` (vision: active/not)
+#
+# BOTH gates apply on activation AND on each upgrade: Alliance_Level must meet
+# the level's `tier`, AND the treasury must pay its `cost`.
+#
+# At most ONE perk may be active per category at a time (no same-category
+# stacking) — activating within an occupied category is only a next-level upgrade
+# of the already-active perk.
+#
+# All values are FIRST-GUESS and flagged for live tuning (like the score
+# weights). Optional file: if absent/empty, the alliance feature simply offers
+# no perks (membership/treasury/leaderboard still work).
+
+perks:
+  shared_vision:            # fog-of-war union across PLAYING allies (boolean)
+    category: shared_vision
+    effect_type: boolean
+    levels:
+      1: { tier: 2, effect: true, cost: { Energy: 200, Circuits: 40 } }
+      2: { tier: 3, effect: true, cost: { Energy: 400, Circuits: 90 } }
+      3: { tier: 4, effect: true, cost: { Energy: 700, Circuits: 160, Nexium: 20 } }
+
+  shared_regen:             # HP-regen MULTIPLIER for members
+    category: shared_regen
+    effect_type: multiplier
+    levels:
+      1: { tier: 2, multiplier: 1.25, cost: { Wood: 150, Energy: 150 } }
+      2: { tier: 3, multiplier: 1.40, cost: { Wood: 300, Energy: 300, Circuits: 60 } }
+      3: { tier: 4, multiplier: 1.55, cost: { Wood: 500, Energy: 500, Nexium: 25 } }
+
+  harvest_boost:            # extractor-yield MULTIPLIER, applied ON TOP of the
+    category: harvest_boost # existing extractor_harvest_multiplier (never reused)
+    effect_type: multiplier
+    levels:
+      1: { tier: 2, multiplier: 1.50, cost: { Stone: 200, Iron: 120 } }
+      2: { tier: 3, multiplier: 1.75, cost: { Stone: 400, Iron: 260, Circuits: 60 } }
+      3: { tier: 4, multiplier: 2.00, cost: { Stone: 700, Iron: 450, Nexium: 30 } }
+
+  combat_damage:            # FLAT additive damage_bonus at _get_attacker_bonus
+    category: combat_damage
+    effect_type: flat
+    levels:
+      1: { tier: 3, damage_bonus: 2, cost: { Iron: 250, Circuits: 80 } }
+      2: { tier: 4, damage_bonus: 4, cost: { Iron: 500, Circuits: 160, Nexium: 30 } }
+      3: { tier: 5, damage_bonus: 6, cost: { Iron: 800, Circuits: 300, Nexium: 80 } }
+
+  combat_armor:             # FLAT additive damage_reduction at _get_target_armor_reduction
+    category: combat_armor
+    effect_type: flat
+    levels:
+      1: { tier: 3, damage_reduction: 3, cost: { Stone: 250, Iron: 120 } }
+      2: { tier: 4, damage_reduction: 5, cost: { Stone: 500, Iron: 260, Nexium: 30 } }
+      3: { tier: 5, damage_reduction: 7, cost: { Stone: 800, Iron: 450, Nexium: 80 } }

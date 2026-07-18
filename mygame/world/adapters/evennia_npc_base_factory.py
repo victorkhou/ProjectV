@@ -73,8 +73,8 @@ class EvenniaNpcBaseFactory(NpcBaseFactory):
         owner_id = getattr(owner, "id", id(owner))
         npc.tags.add(f"player_{owner_id}", category="agent_owner")
 
-        npc.db.coord_x = int(x)
-        npc.db.coord_y = int(y)
+        from world.utils import place_on_tile
+        place_on_tile(npc, tile, x, y)
         # Stamp the planet so coordinate/planet-scoped logic (e.g. a player's
         # ranged lock-on, which drops when shooter and target aren't on the same
         # planet) sees the guard as a real map actor. Read from the tile's
@@ -88,6 +88,4 @@ class EvenniaNpcBaseFactory(NpcBaseFactory):
         # lured away.
         npc.db.home_x = int(x)
         npc.db.home_y = int(y)
-        if tile is not None and hasattr(tile, "coord_index"):
-            tile.coord_index.add(npc, int(x), int(y))
         return npc

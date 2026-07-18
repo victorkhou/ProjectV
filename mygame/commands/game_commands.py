@@ -22,6 +22,7 @@ from world.utils import (
     is_admin,
     owner_has_active_hq,
     format_dm_message,
+    format_cost_summary,
 )
 
 
@@ -198,13 +199,19 @@ class GameCommand(BaseCommand):
 
         return None, None
 
-    def _building_at_caller(self, caller):
+    def _building_at_caller(self, caller, inside_only: bool = False):
         """Return the Building at the caller's coordinates, or None.
 
         Coordinate-based lookup via the PlanetRoom spatial index — the
         replacement for the removed per-tile ``building`` attribute. Used by
         commands that act on the building the player is standing inside.
+
+        When ``inside_only`` is True, returns None unless the caller is actually
+        *inside* a building (``db.inside_building``), for the agent commands that
+        act only on the building the player has entered.
         """
+        if inside_only and not getattr(caller.db, "inside_building", False):
+            return None
         planet_room = getattr(caller, "location", None)
         if planet_room is None or not hasattr(planet_room, "get_buildings_at"):
             return None
@@ -219,20 +226,18 @@ class GameCommand(BaseCommand):
     #  Shared command helpers (absorb repeated boilerplate)
     # ------------------------------------------------------------------ #
 
-    def require_system(self, name, unavailable_msg=None):
+    def require_system(self, name, label=None):
         """Return the named game system, or message the caller and return None.
 
-        Collapses the ``sys = _get_system(caller, name); if sys is None: msg;
+        Collapses the ``sys = get_system(caller, name); if sys is None: msg;
         return`` block that recurred in almost every command. Callers do:
         ``sys = self.require_system("building_system"); if sys is None: return``.
+        Delegates to the single :func:`world.utils.require_system`; the message
+        is ``"{label} unavailable."`` where *label* defaults to the sentence-cased
+        system name (``"building_system"`` → ``"Building system unavailable."``).
         """
-        system = _get_system(self.caller, name)
-        if system is None:
-            # Sentence-case (e.g. "building_system" -> "Building system") to
-            # match the original per-command wording.
-            pretty = name.replace("_", " ").capitalize()
-            self.caller.msg(unavailable_msg or f"{pretty} unavailable.")
-        return system
+        from world.utils import require_system as _require_system
+        return _require_system(self.caller, name, label)
 
     def require_coords(self):
         """Return the caller's ``(x, y)`` as ints, or message and return None.
@@ -594,7 +599,8 @@ class CmdMove(GameCommand):
         if fog_system is not None:
             try:
                 buildings = caller.get_buildings() if hasattr(caller, "get_buildings") else []
-                visible = fog_system.get_visible_tiles(caller, buildings)
+                from world.utils import shared_visible_tiles
+                visible = shared_visible_tiles(caller, buildings, fog_system)
                 fog_system.update_discovery(caller, visible, planet_room)
             except Exception:
                 import logging
@@ -771,7 +777,7 @@ class CmdBuild(GameCommand):
         for abbr, bdef in sorted(registry.buildings.items(), key=lambda x: x[1].rank_requirement):
             if bdef.rank_requirement > player_level:
                 continue
-            cost_str = ", ".join(f"{amt} {res}" for res, amt in bdef.cost.items())
+            cost_str = format_cost_summary(bdef.cost)
             lines.append(f"  |w{abbr}|n — {bdef.name} ({cost_str}) [{bdef.build_time_seconds}s]")
 
         if len(lines) == 1:
@@ -1147,7 +1153,7 @@ class CmdAttack(GameCommand):
             return
 
         combat_engine = self.require_system(
-            "combat_engine", "Combat system unavailable."
+            "combat_engine", label="Combat system"
         )
         if combat_engine is None:
             return
@@ -2354,7 +2360,7 @@ class CmdResearch(GameCommand):
             self.caller.msg("Usage: research <tech_key>")
             return
 
-        tech_system = self.require_system("tech_system", "Tech system unavailable.")
+        tech_system = self.require_system("tech_system", label="Tech system")
         if tech_system is None:
             return
 
@@ -2397,7 +2403,7 @@ class CmdPowerup(GameCommand):
             return
 
         powerup_system = self.require_system(
-            "powerup_system", "Powerup system unavailable."
+            "powerup_system", label="Powerup system"
         )
         if powerup_system is None:
             return
@@ -3071,16 +3077,13 @@ class CmdChat(GameCommand):
             self.caller.msg("Usage: chat <message>")
             return
 
-        try:
-            from evennia.comms.models import ChannelDB
-            channel = ChannelDB.objects.get(db_key="Public")
-        except Exception:
+        from world import channel_utils
+        channel = channel_utils.find_channel("Public")
+        if channel is None:
             self.caller.msg("Public channel not available.")
             return
 
-        if not channel.has_connection(self.caller.account):
-            channel.connect(self.caller.account)
-
+        channel_utils.subscribe_account(self.caller.account, "Public")
         channel.msg(message, senders=self.caller.account)
 
 
@@ -3313,11 +3316,19 @@ def _show_tile_summary(caller, planet_room):
     # so onlookers know the player is disconnected, not actively present.
     from world import player_lifecycle as pl
     from world.constants import PLAYER_STATE_LINKDEAD
+    from world.utils import get_system
+    _alliance = get_system(caller, "alliance_system")
     others = []
     for p in planet_room.get_players_at(x, y):
         if p is caller:
             continue
         name = getattr(p, "key", "?")
+        # Prefix the alliance tag ("[TAG] Name") so a player's shared-side
+        # identity is visible on the tile — for friend and foe alike.
+        if _alliance is not None:
+            tag = _alliance.tag_for(p)
+            if tag:
+                name = f"[{tag}] {name}"
         if pl.get_state(p) == PLAYER_STATE_LINKDEAD:
             name = f"{name} |x(linkdead)|n"
         others.append(name)

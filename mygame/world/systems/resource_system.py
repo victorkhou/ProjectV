@@ -17,6 +17,7 @@ from world.definitions import BalanceConfig
 from world.event_bus import RESOURCE_GATHERED, EventBus
 from world.systems.base_system import BaseSystem
 from world.utils import get_building_attr as _get_building_attr_shared
+from world.utils import set_building_attr as _set_building_attr_shared
 
 
 def _current_balance() -> BalanceConfig:
@@ -252,6 +253,11 @@ class ResourceSystem(BaseSystem):
                 level = self._get_building_level(extractor)
                 amount = int(amount * bal.extractor_harvest_multiplier
                              * (1 + bal.extractor_level_bonus * (level - 1)))
+                # Alliance harvest_boost perk: an OWN multiplier applied ON TOP
+                # of the base extractor factor (never reusing that key), read
+                # LIVE from the harvesting player's alliance membership. 1.0
+                # (no change) for a non-member or an alliance without the perk.
+                amount = int(amount * self._alliance_harvest_multiplier(player))
 
             # Determine drop location and coordinates
             if hasattr(tile, "is_node_depleted") and px is not None and py is not None:
@@ -329,23 +335,12 @@ class ResourceSystem(BaseSystem):
         names to amounts, stored on ``building.db.resource_inventory``
         (or via the Evennia Attribute handler).
         """
-        if hasattr(building, "attributes") and hasattr(building.attributes, "get"):
-            inv = building.attributes.get("resource_inventory", default=None)
-            if inv is not None:
-                return inv
-        if hasattr(building, "db"):
-            inv = getattr(building.db, "resource_inventory", None)
-            if inv is not None:
-                return inv
-        return {}
+        return _get_building_attr_shared(building, "resource_inventory") or {}
 
     @staticmethod
     def _set_extractor_inventory(building: Any, inventory: dict[str, int]) -> None:
         """Write the resource inventory dict back to an Extractor."""
-        if hasattr(building, "attributes") and hasattr(building.attributes, "add"):
-            building.attributes.add("resource_inventory", inventory)
-        elif hasattr(building, "db"):
-            building.db.resource_inventory = inventory
+        _set_building_attr_shared(building, "resource_inventory", inventory)
 
     @classmethod
     def get_extractor_stored_amount(cls, building: Any) -> int:
@@ -576,6 +571,24 @@ class ResourceSystem(BaseSystem):
         return get_building_level(building)
 
     @staticmethod
+    def _alliance_harvest_multiplier(player: Any) -> float:
+        """Return the alliance harvest_boost multiplier for *player* (1.0 if none).
+
+        Read LIVE from the player's alliance membership so leaving the alliance
+        removes the boost immediately. ``1.0`` (no change) when there is no
+        AllianceSystem, the player is not a member, or the alliance has no active
+        harvest_boost perk. Guarded so a lookup never breaks harvesting.
+        """
+        try:
+            from world.utils import get_system
+            system = get_system(player, "alliance_system")
+            if system is None:
+                return 1.0
+            return float(system.perk_multiplier(player, "harvest_boost"))
+        except Exception:  # noqa: BLE001 - a perk lookup never breaks harvest
+            return 1.0
+
+    @staticmethod
     def _player_on_tile(player: Any, tile: Any) -> bool:
         """Return ``True`` if the player is on the given tile.
 
@@ -640,11 +653,7 @@ class ResourceSystem(BaseSystem):
         if building is None:
             return None
 
-        btype = None
-        if hasattr(building, "attributes") and hasattr(building.attributes, "get"):
-            btype = building.attributes.get("building_type", default=None)
-        elif hasattr(building, "db"):
-            btype = getattr(building.db, "building_type", None)
+        btype = self._get_building_attr(building, "building_type")
 
         bdef = self.registry.resolve_building(btype) if btype else None
         if bdef is None or not bdef.has_capability(HARVESTABLE):
@@ -654,12 +663,7 @@ class ResourceSystem(BaseSystem):
             return None
 
         # Not operational while under construction
-        under_construction = False
-        if hasattr(building, "attributes") and hasattr(building.attributes, "get"):
-            under_construction = building.attributes.get("under_construction", default=False)
-        elif hasattr(building, "db"):
-            under_construction = getattr(building.db, "under_construction", False)
-        if under_construction:
+        if self._get_building_attr(building, "under_construction", False):
             return None
 
         return building
@@ -756,23 +760,12 @@ class ResourceSystem(BaseSystem):
     @staticmethod
     def _get_tile_inventory(tile: Any) -> dict[str, int]:
         """Read the resource inventory dict from a tile (ground drops)."""
-        if hasattr(tile, "attributes") and hasattr(tile.attributes, "get"):
-            inv = tile.attributes.get("resource_inventory", default=None)
-            if inv is not None:
-                return inv
-        if hasattr(tile, "db"):
-            inv = getattr(tile.db, "resource_inventory", None)
-            if inv is not None:
-                return inv
-        return {}
+        return _get_building_attr_shared(tile, "resource_inventory") or {}
 
     @staticmethod
     def _set_tile_inventory(tile: Any, inventory: dict[str, int]) -> None:
         """Write the resource inventory dict to a tile."""
-        if hasattr(tile, "attributes") and hasattr(tile.attributes, "add"):
-            tile.attributes.add("resource_inventory", inventory)
-        elif hasattr(tile, "db"):
-            tile.db.resource_inventory = inventory
+        _set_building_attr_shared(tile, "resource_inventory", inventory)
 
     @staticmethod
     def get_tile_inventory(tile: Any) -> dict[str, int]:
