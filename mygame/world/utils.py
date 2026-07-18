@@ -39,6 +39,24 @@ def get_game_systems() -> dict:
         return {}
 
 
+def require_system(caller: Any, name: str, label: str | None = None) -> Any | None:
+    """Return game system ``name``, or msg *caller* and return ``None``.
+
+    The single implementation behind both command-router ``require_system``
+    helpers (the ``SubcommandDispatchMixin`` and ``GameCommand`` methods both
+    delegate here) so the "look up system / msg on failure" boilerplate lives in
+    one place. The failure message is ``"{label} unavailable."`` where *label*
+    defaults to the system name with underscores spaced out and capitalized
+    (``"agent_system"`` → ``"Agent system unavailable."``).
+    """
+    system = get_system(caller, name)
+    if system is None:
+        pretty = label or name.replace("_", " ").capitalize()
+        caller.msg(f"{pretty} unavailable.")
+        return None
+    return system
+
+
 # ------------------------------------------------------------------ #
 #  Agent resting status (single derived authority)
 # ------------------------------------------------------------------ #

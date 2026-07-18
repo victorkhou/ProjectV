@@ -11,25 +11,6 @@ from world.systems.agent_system import BUILDING_ROLE_MAP
 
 
 # ------------------------------------------------------------------ #
-#  Helpers
-# ------------------------------------------------------------------ #
-
-def _get_current_building(caller):
-    """Return the building object the caller is inside, or None."""
-    if not getattr(caller.db, "inside_building", False):
-        return None
-    planet_room = getattr(caller, "location", None)
-    if planet_room is None or not hasattr(planet_room, "get_buildings_at"):
-        return None
-    x = getattr(caller.db, "coord_x", None)
-    y = getattr(caller.db, "coord_y", None)
-    if x is None or y is None:
-        return None
-    buildings = planet_room.get_buildings_at(int(x), int(y))
-    return buildings[0] if buildings else None
-
-
-# ------------------------------------------------------------------ #
 #  CmdAgent  — Game subcommand router
 # ------------------------------------------------------------------ #
 
@@ -179,7 +160,7 @@ class CmdAgent(GameSubcommandRouter):
         if len(parts) >= 2:
             role = parts[1].lower()
         else:
-            building = _get_current_building(caller)
+            building = self._building_at_caller(caller, inside_only=True)
             if building is None:
                 caller.msg(
                     "You must be inside a building to auto-assign, "
@@ -243,7 +224,7 @@ class CmdAgent(GameSubcommandRouter):
         if agent_system is None:
             return
 
-        building = _get_current_building(caller)
+        building = self._building_at_caller(caller, inside_only=True)
         if building is None:
             caller.msg("You must be inside an Academy to train agents.")
             return

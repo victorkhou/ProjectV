@@ -22,7 +22,7 @@ import logging
 from evennia.commands.command import Command as BaseCommand
 
 from commands.game_commands import GameCommand
-from world.utils import get_system
+from world.utils import require_system
 
 logger = logging.getLogger("mygame.admin")
 
@@ -107,7 +107,8 @@ class SubcommandDispatchMixin:
         """Return game system ``name``, or msg the caller and return ``None``.
 
         Collapses the ``system = get_system(...); if system is None: msg;
-        return`` boilerplate that every handler needs.  The generated message
+        return`` boilerplate that every handler needs.  Delegates to the single
+        :func:`world.utils.require_system` implementation; the generated message
         is ``"{label} unavailable."`` where ``label`` defaults to the system
         name with underscores spaced out (``"agent_system"`` → ``"Agent
         system unavailable."``).
@@ -119,12 +120,7 @@ class SubcommandDispatchMixin:
         Returns:
             The system instance, or ``None`` (after messaging the caller).
         """
-        system = get_system(self.caller, name)
-        if system is None:
-            pretty = label or name.replace("_", " ").capitalize()
-            self.caller.msg(f"{pretty} unavailable.")
-            return None
-        return system
+        return require_system(self.caller, name, label)
 
     def parse_int(self, raw, label: str = "Agent ID"):
         """Parse ``raw`` as an int, or msg the caller and return ``None``.

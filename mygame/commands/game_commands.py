@@ -199,13 +199,19 @@ class GameCommand(BaseCommand):
 
         return None, None
 
-    def _building_at_caller(self, caller):
+    def _building_at_caller(self, caller, inside_only: bool = False):
         """Return the Building at the caller's coordinates, or None.
 
         Coordinate-based lookup via the PlanetRoom spatial index — the
         replacement for the removed per-tile ``building`` attribute. Used by
         commands that act on the building the player is standing inside.
+
+        When ``inside_only`` is True, returns None unless the caller is actually
+        *inside* a building (``db.inside_building``), for the agent commands that
+        act only on the building the player has entered.
         """
+        if inside_only and not getattr(caller.db, "inside_building", False):
+            return None
         planet_room = getattr(caller, "location", None)
         if planet_room is None or not hasattr(planet_room, "get_buildings_at"):
             return None
@@ -220,20 +226,18 @@ class GameCommand(BaseCommand):
     #  Shared command helpers (absorb repeated boilerplate)
     # ------------------------------------------------------------------ #
 
-    def require_system(self, name, unavailable_msg=None):
+    def require_system(self, name, label=None):
         """Return the named game system, or message the caller and return None.
 
-        Collapses the ``sys = _get_system(caller, name); if sys is None: msg;
+        Collapses the ``sys = get_system(caller, name); if sys is None: msg;
         return`` block that recurred in almost every command. Callers do:
         ``sys = self.require_system("building_system"); if sys is None: return``.
+        Delegates to the single :func:`world.utils.require_system`; the message
+        is ``"{label} unavailable."`` where *label* defaults to the sentence-cased
+        system name (``"building_system"`` → ``"Building system unavailable."``).
         """
-        system = _get_system(self.caller, name)
-        if system is None:
-            # Sentence-case (e.g. "building_system" -> "Building system") to
-            # match the original per-command wording.
-            pretty = name.replace("_", " ").capitalize()
-            self.caller.msg(unavailable_msg or f"{pretty} unavailable.")
-        return system
+        from world.utils import require_system as _require_system
+        return _require_system(self.caller, name, label)
 
     def require_coords(self):
         """Return the caller's ``(x, y)`` as ints, or message and return None.
@@ -1149,7 +1153,7 @@ class CmdAttack(GameCommand):
             return
 
         combat_engine = self.require_system(
-            "combat_engine", "Combat system unavailable."
+            "combat_engine", label="Combat system"
         )
         if combat_engine is None:
             return
@@ -2356,7 +2360,7 @@ class CmdResearch(GameCommand):
             self.caller.msg("Usage: research <tech_key>")
             return
 
-        tech_system = self.require_system("tech_system", "Tech system unavailable.")
+        tech_system = self.require_system("tech_system", label="Tech system")
         if tech_system is None:
             return
 
@@ -2399,7 +2403,7 @@ class CmdPowerup(GameCommand):
             return
 
         powerup_system = self.require_system(
-            "powerup_system", "Powerup system unavailable."
+            "powerup_system", label="Powerup system"
         )
         if powerup_system is None:
             return
