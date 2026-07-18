@@ -34,14 +34,9 @@ class ChatSystem:
         self._channel_db_class = channel_db_class
 
     def _get_channel_db(self) -> Any:
-        """Get the ChannelDB class, importing lazily if needed."""
-        if self._channel_db_class is not None:
-            return self._channel_db_class
-        try:
-            from evennia.comms.models import ChannelDB
-            return ChannelDB
-        except ImportError:
-            return None
+        """Get the ChannelDB class (or the injected test seam), or None."""
+        from world.channel_utils import get_channel_db
+        return get_channel_db(self._channel_db_class)
 
     def ensure_global_channel(self) -> Any:
         """Ensure the Public channel exists (Evennia creates it by default).
@@ -66,18 +61,13 @@ class ChatSystem:
         if channel_db is None:
             return
 
-        # Isolate the channel/nick writes in a DB savepoint: if the Public
-        # channel is missing (e.g. a minimal test DB) the failing query would
-        # otherwise poison the surrounding transaction and cascade to unrelated
-        # queries. A savepoint rolls back ONLY this block's writes on failure.
+        # Connect the account in a DB savepoint (channel_utils isolates the write
+        # so a missing Public channel can't poison the surrounding transaction),
+        # then add the personal 'chat' nick alias.
+        from world.channel_utils import subscribe_account
+        subscribe_account(account, self.GLOBAL_CHANNEL_KEY, channel_db=channel_db)
         try:
-            from django.db import transaction
-            with transaction.atomic():
-                channel = channel_db.objects.get(db_key=self.GLOBAL_CHANNEL_KEY)
-                if not channel.has_connection(account):
-                    channel.connect(account)
-                # Add 'chat' as a personal nick for the Public channel
-                if hasattr(account, "nicks"):
-                    account.nicks.add("chat", self.GLOBAL_CHANNEL_KEY, category="channel")
+            if hasattr(account, "nicks"):
+                account.nicks.add("chat", self.GLOBAL_CHANNEL_KEY, category="channel")
         except Exception:
-            logger.exception("ChatSystem: Error auto-subscribing account")
+            logger.exception("ChatSystem: Error adding chat nick alias")

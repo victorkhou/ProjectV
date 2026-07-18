@@ -16,6 +16,7 @@ from __future__ import annotations
 import logging
 from typing import Any, Callable
 
+from world.constants import UNIT_KIND_LABELS as _UNIT_LABELS
 from world.event_bus import EventBus, PLAYER_NOTIFICATION
 
 logger = logging.getLogger("evennia.world.presenters.notification")
@@ -91,9 +92,6 @@ def _fmt_building_attacked(d: dict) -> str:
         f"{d['attacker_name']} with {d['weapon_name']} for "
         f"{d['damage']} damage.|n"
     )
-
-
-_UNIT_LABELS = {"turret": "Turret", "agent": "Agent", "building": "Building"}
 
 
 def _fmt_unit_attacked(d: dict) -> str:

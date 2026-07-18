@@ -416,14 +416,6 @@ class AllianceSystem(BaseSystem):
     #  Channel wiring (Account-level, keyed by immutable alliance_<id>)
     # ------------------------------------------------------------------ #
 
-    def _get_channel_db(self):
-        """Return Evennia's ChannelDB class, or None outside a full env."""
-        try:
-            from evennia.comms.models import ChannelDB
-            return ChannelDB
-        except Exception:  # noqa: BLE001
-            return None
-
     def _ensure_channel(self, alliance_id):
         """Create the alliance's channel if missing; return it (or None).
 
@@ -431,21 +423,10 @@ class AllianceSystem(BaseSystem):
         it can never collide with the reserved global Public/chat/pub channel and
         it survives a rename. Best-effort — never raises into a mutation.
         """
-        channel_db = self._get_channel_db()
-        if channel_db is None:
-            return None
-        key = self._channel_key(alliance_id)
-        try:
-            from django.db import transaction
-            with transaction.atomic():
-                existing = channel_db.objects.filter(db_key=key).first()
-                if existing is not None:
-                    return existing
-                from evennia import create_channel
-                return create_channel(key, desc=f"Alliance {alliance_id} chat")
-        except Exception:  # noqa: BLE001
-            logger.debug("Alliance channel ensure failed for %s", alliance_id, exc_info=True)
-            return None
+        from world import channel_utils
+        return channel_utils.ensure_channel(
+            self._channel_key(alliance_id), desc=f"Alliance {alliance_id} chat"
+        )
 
     def _account_of(self, player):
         """Best-effort account behind a character puppet (or None)."""
@@ -453,67 +434,27 @@ class AllianceSystem(BaseSystem):
 
     def _subscribe(self, player, alliance_id) -> None:
         """Subscribe *player*'s account to the alliance channel (best-effort)."""
-        channel_db = self._get_channel_db()
-        account = self._account_of(player)
-        if channel_db is None or account is None:
-            return
-        try:
-            from django.db import transaction
-            with transaction.atomic():
-                channel = channel_db.objects.filter(
-                    db_key=self._channel_key(alliance_id)
-                ).first()
-                if channel is not None and not channel.has_connection(account):
-                    channel.connect(account)
-        except Exception:  # noqa: BLE001
-            logger.debug("Alliance subscribe failed", exc_info=True)
+        from world import channel_utils
+        channel_utils.subscribe_account(
+            self._account_of(player), self._channel_key(alliance_id)
+        )
 
     def _unsubscribe(self, player, alliance_id) -> None:
         """Unsubscribe *player*'s account from the alliance channel."""
-        channel_db = self._get_channel_db()
-        account = self._account_of(player)
-        if channel_db is None or account is None:
-            return
-        try:
-            from django.db import transaction
-            with transaction.atomic():
-                channel = channel_db.objects.filter(
-                    db_key=self._channel_key(alliance_id)
-                ).first()
-                if channel is not None and channel.has_connection(account):
-                    channel.disconnect(account)
-        except Exception:  # noqa: BLE001
-            logger.debug("Alliance unsubscribe failed", exc_info=True)
+        from world import channel_utils
+        channel_utils.unsubscribe_account(
+            self._account_of(player), self._channel_key(alliance_id)
+        )
 
     def _destroy_channel(self, alliance_id) -> None:
         """Delete the alliance channel object (called on disband)."""
-        channel_db = self._get_channel_db()
-        if channel_db is None:
-            return
-        try:
-            from django.db import transaction
-            with transaction.atomic():
-                channel = channel_db.objects.filter(
-                    db_key=self._channel_key(alliance_id)
-                ).first()
-                if channel is not None:
-                    channel.delete()
-        except Exception:  # noqa: BLE001
-            logger.debug("Alliance channel destroy failed", exc_info=True)
+        from world import channel_utils
+        channel_utils.destroy_channel(self._channel_key(alliance_id))
 
     def _broadcast(self, alliance_id, message) -> None:
         """Send a system line to the alliance channel (best-effort)."""
-        channel_db = self._get_channel_db()
-        if channel_db is None:
-            return
-        try:
-            channel = channel_db.objects.filter(
-                db_key=self._channel_key(alliance_id)
-            ).first()
-            if channel is not None:
-                channel.msg(message)
-        except Exception:  # noqa: BLE001
-            logger.debug("Alliance broadcast failed", exc_info=True)
+        from world import channel_utils
+        channel_utils.broadcast(self._channel_key(alliance_id), message)
 
     # ------------------------------------------------------------------ #
     #  Membership — invitations (R3, R18)

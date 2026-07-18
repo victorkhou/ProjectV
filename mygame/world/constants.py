@@ -301,6 +301,11 @@ PLAYER_STATE_LABELS = {
     PLAYER_STATE_LINKDEAD: "Linkdead",
 }
 
+#: Display label per combat-unit kind, shared by the owner-attributed notification
+#: lines (NotificationSystem._unit_suffix and NotificationPresenter's unit-attacked
+#: formatter) so the "Turret"/"Agent"/"Building" wording can't drift between them.
+UNIT_KIND_LABELS = {"turret": "Turret", "agent": "Agent", "building": "Building"}
+
 #: Allowed transitions: state -> set of states reachable from it. Encodes the
 #: spec's transition table (the game-side dwell states only; the socket/auth
 #: phases are Evennia's session FSM and route INTO these). ``None`` (a brand-new

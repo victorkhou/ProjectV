@@ -3077,16 +3077,13 @@ class CmdChat(GameCommand):
             self.caller.msg("Usage: chat <message>")
             return
 
-        try:
-            from evennia.comms.models import ChannelDB
-            channel = ChannelDB.objects.get(db_key="Public")
-        except Exception:
+        from world import channel_utils
+        channel = channel_utils.find_channel("Public")
+        if channel is None:
             self.caller.msg("Public channel not available.")
             return
 
-        if not channel.has_connection(self.caller.account):
-            channel.connect(self.caller.account)
-
+        channel_utils.subscribe_account(self.caller.account, "Public")
         channel.msg(message, senders=self.caller.account)
 
 
