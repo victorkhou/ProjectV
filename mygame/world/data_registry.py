@@ -484,6 +484,36 @@ class DataRegistry:
 
         return BalanceConfig(**kwargs)
 
+    def _read_optional_yaml(self, base_path: str, file_key: str, *,
+                            missing_msg: str) -> dict | None:
+        """Read an optional YAML file into a dict, or return ``None``.
+
+        The shared read-guard prologue for the optional dict-shaped catalogs
+        (NPC-base templates, player classes, alliance perks): resolve
+        ``_OPTIONAL_FILES[file_key]`` under *base_path*; if the file is absent
+        log ``missing_msg`` (an info — the feature is simply disabled) and return
+        ``None``; on a read error log the exception and return ``None``; and
+        return ``None`` for a non-dict payload. Returns the parsed dict on
+        success. Loaders keep only their own per-entry population loop.
+
+        NOTE: not used by ``_load_balance``, which has stricter semantics (raises
+        on read error, warns, installs a default, and empty-checks ``raw is
+        None``).
+        """
+        path = os.path.join(base_path, _OPTIONAL_FILES[file_key])
+        if not os.path.isfile(path):
+            logger.info(missing_msg, path)
+            return None
+        try:
+            with open(path, "r") as f:
+                raw = yaml.safe_load(f)
+        except Exception:
+            logger.exception("Failed to read %s at '%s'.", file_key, path)
+            return None
+        if not isinstance(raw, dict):
+            return None
+        return raw
+
     def _load_base_templates(self, base_path: str) -> None:
         """Load optional NPC-base templates from outposts.yaml.
 
@@ -493,17 +523,11 @@ class DataRegistry:
         buildings, guards, and loot.
         """
         self.base_templates = {}
-        path = os.path.join(base_path, _OPTIONAL_FILES["outposts"])
-        if not os.path.isfile(path):
-            logger.info("No NPC-base templates at '%s' — NPC bases disabled.", path)
-            return
-        try:
-            with open(path, "r") as f:
-                raw = yaml.safe_load(f)
-        except Exception:
-            logger.exception("Failed to read NPC-base templates at '%s'.", path)
-            return
-        if not isinstance(raw, dict):
+        raw = self._read_optional_yaml(
+            base_path, "outposts",
+            missing_msg="No NPC-base templates at '%s' — NPC bases disabled.",
+        )
+        if raw is None:
             return
 
         for tier, spec in raw.items():
@@ -555,17 +579,11 @@ class DataRegistry:
         ``name``, and an optional ``description``.
         """
         self.classes = {}
-        path = os.path.join(base_path, _OPTIONAL_FILES["classes"])
-        if not os.path.isfile(path):
-            logger.info("No player classes at '%s' — using a default.", path)
-            return
-        try:
-            with open(path, "r") as f:
-                raw = yaml.safe_load(f)
-        except Exception:
-            logger.exception("Failed to read player classes at '%s'.", path)
-            return
-        if not isinstance(raw, dict):
+        raw = self._read_optional_yaml(
+            base_path, "classes",
+            missing_msg="No player classes at '%s' — using a default.",
+        )
+        if raw is None:
             return
         for entry in raw.get("classes", []) or []:
             try:
@@ -601,17 +619,11 @@ class DataRegistry:
         Malformed individual perks/levels are skipped, not fatal.
         """
         self.alliance_perks = {}
-        path = os.path.join(base_path, _OPTIONAL_FILES["alliance_perks"])
-        if not os.path.isfile(path):
-            logger.info("No alliance perks at '%s' — alliances offer no perks.", path)
-            return
-        try:
-            with open(path, "r") as f:
-                raw = yaml.safe_load(f)
-        except Exception:
-            logger.exception("Failed to read alliance perks at '%s'.", path)
-            return
-        if not isinstance(raw, dict):
+        raw = self._read_optional_yaml(
+            base_path, "alliance_perks",
+            missing_msg="No alliance perks at '%s' — alliances offer no perks.",
+        )
+        if raw is None:
             return
         for key, spec in (raw.get("perks", {}) or {}).items():
             if not isinstance(key, str) or not isinstance(spec, dict):

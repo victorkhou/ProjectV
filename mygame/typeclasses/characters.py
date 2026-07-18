@@ -32,11 +32,8 @@ _DefaultCharacter = None
 
 def _get_building_type(building) -> str | None:
     """Return the building_type attribute, or None if missing."""
-    if hasattr(building, "attributes") and hasattr(building.attributes, "get"):
-        return building.attributes.get("building_type")
-    if hasattr(building, "db"):
-        return getattr(building.db, "building_type", None)
-    return None
+    from world.utils import get_building_type
+    return get_building_type(building)
 
 
 def _clear_extractor_inventory(building) -> None:

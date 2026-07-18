@@ -25,6 +25,10 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any
 
 from world.coordinate.fog_of_war import _get_planet, _get_coord
+from world.coordinate.tile_render import (
+    building_is_occupied,
+    partition_tile_objects,
+)
 from world.utils import player_is_present
 
 if TYPE_CHECKING:
@@ -336,55 +340,36 @@ class ProceduralMapRenderer:
         8. Unoccupied enemy building -> |R{abbr}|n (dark red)
         9. Terrain symbol
         """
-        looker_id = getattr(looker, "id", None)
+        occ = partition_tile_objects(objects, looker)
 
-        own_agent = None
-        enemy_agent = None
-        neutral_npc = None
-        building_obj = None
+        # Player characters (incl. linkdead — still on the tile during grace).
+        # Self outranks any enemy on the same tile.
+        if occ.looker_present:
+            return "|Y@@|n"
+        if occ.other_players:
+            return "|r**|n"
 
-        for obj in objects:
-            # Player characters (incl. linkdead — still on the tile during grace;
-            # player_is_present, not raw has_account, so sessionless linkdead
-            # players still render).
-            if player_is_present(obj):
-                if obj is looker:
-                    return "|Y@@|n"
-                return "|r**|n"
-
-            # NPC objects with npc_type tag
-            if hasattr(obj, "tags") and obj.tags.get(category="npc_type"):
-                npc_owner = getattr(obj.db, "owner", None) if hasattr(obj, "db") else None
-                npc_owner_id = getattr(npc_owner, "id", None) if npc_owner else None
-                if npc_owner_id is not None and npc_owner_id == looker_id:
-                    if own_agent is None:
-                        own_agent = obj
-                elif npc_owner_id is not None:
-                    if enemy_agent is None:
-                        enemy_agent = obj
-                else:
-                    if neutral_npc is None:
-                        neutral_npc = obj
-                continue
-
-            # Building objects
-            if hasattr(obj, "tags") and obj.tags.get("building", category="object_type"):
-                if building_obj is None:
-                    building_obj = obj
-
-        # Overworld NPCs — priority: own > enemy > neutral
+        # Overworld NPCs — priority: own > enemy > neutral. Agents keep tile
+        # order, so the first own/enemy/neutral matches the old first-seen pick.
+        own_agent = next((a for a in occ.agents if a[1]), None)
+        enemy_agent = next(
+            (a for a in occ.agents
+             if not a[1] and _agent_has_owner(a[0])), None
+        )
+        neutral_npc = next(
+            (a for a in occ.agents
+             if not a[1] and not _agent_has_owner(a[0])), None
+        )
         if own_agent is not None:
-            role = getattr(own_agent.db, "role", "") if hasattr(own_agent, "db") else ""
-            sym = _agent_symbol(role)
-            return f"|g{sym}|n"
+            return f"|g{_agent_symbol(own_agent[2])}|n"
         if enemy_agent is not None:
             return f"|r{_agent_symbol('')}|n"
         if neutral_npc is not None:
             return f"|y{_agent_symbol('')}|n"
 
         # Building
-        if building_obj is not None:
-            bld = building_obj
+        if occ.building is not None:
+            bld = occ.building
             if hasattr(bld, "get_display_abbreviation"):
                 abbr = bld.get_display_abbreviation()
             else:
@@ -394,18 +379,7 @@ class ProceduralMapRenderer:
                     if bt:
                         abbr = str(bt)[:2]
 
-            # Check if building has entities inside (occupied)
-            bld_contents = getattr(bld, "contents", [])
-            has_entity_inside = False
-            for obj in bld_contents:
-                if player_is_present(obj):
-                    has_entity_inside = True
-                    break
-                if hasattr(obj, "tags") and obj.tags.get(category="npc_type"):
-                    has_entity_inside = True
-                    break
-
-            if has_entity_inside:
+            if building_is_occupied(bld):
                 return f"|B{abbr}|n"
 
             owner = None
@@ -437,6 +411,12 @@ _ROLE_SYMBOLS: dict[str, str] = {
 def _agent_symbol(role: str) -> str:
     """Return the 2-char map symbol for an agent role."""
     return _ROLE_SYMBOLS.get(role, "ag")
+
+
+def _agent_has_owner(agent: Any) -> bool:
+    """True if *agent* has an owner (an owned NPC vs a neutral/unowned one)."""
+    owner = getattr(agent.db, "owner", None) if hasattr(agent, "db") else None
+    return getattr(owner, "id", None) is not None if owner else False
 
 
 def _room_display_symbol(room: Any, looker: Any) -> str:
