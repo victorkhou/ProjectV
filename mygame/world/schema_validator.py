@@ -63,24 +63,12 @@ class SchemaValidator:
     def validate_buildings(self, data: list[dict]) -> list[str]:
         """Validate a list of building definition dicts."""
         errors: list[str] = []
-        if not isinstance(data, list):
-            return [f"buildings: expected a list, got {type(data).__name__}"]
-
         required = {
             "name", "abbreviation", "cost", "max_health", "requires_hq", "category",
             "build_time_seconds", "max_level", "rank_requirement", "requires_agent",
             "storage_capacity",
         }
-        for idx, entry in enumerate(data):
-            prefix = f"buildings[{idx}]"
-            if not isinstance(entry, dict):
-                errors.append(f"{prefix}: expected dict, got {type(entry).__name__}")
-                continue
-
-            missing = required - entry.keys()
-            if missing:
-                errors.append(f"{prefix}: missing required fields: {sorted(missing)}")
-
+        for prefix, entry in self._iter_dict_entries(data, "buildings", required, errors):
             # abbreviation must be 2 chars
             abbr = entry.get("abbreviation")
             if isinstance(abbr, str) and len(abbr) != 2:
@@ -89,11 +77,7 @@ class SchemaValidator:
             # cost values must be positive ints
             cost = entry.get("cost")
             if isinstance(cost, dict):
-                for res, val in cost.items():
-                    if not isinstance(val, int) or val <= 0:
-                        errors.append(
-                            f"{prefix}: cost['{res}'] must be a positive integer, got {val!r}"
-                        )
+                self._check_positive_int_map(errors, prefix, "cost", cost)
 
             # max_health > 0
             mh = entry.get("max_health")
@@ -108,34 +92,25 @@ class SchemaValidator:
                 errors.append(f"{prefix}: map_symbol must be 2 characters, got '{ms}'")
 
             # build_time_seconds must be a positive int
-            bts = entry.get("build_time_seconds")
-            if bts is not None:
-                if not isinstance(bts, int) or bts <= 0:
-                    errors.append(
-                        f"{prefix}: build_time_seconds must be a positive integer, got {bts!r}"
-                    )
+            self._check_positive_int(
+                errors, prefix, "build_time_seconds", entry.get("build_time_seconds")
+            )
 
             # max_level must be a positive int within the structural ceiling
             ml = entry.get("max_level")
-            if ml is not None:
+            self._check_positive_int(errors, prefix, "max_level", ml)
+            if isinstance(ml, int) and not isinstance(ml, bool) and ml > 0:
                 from world.constants import MAX_BUILDING_LEVEL
-                if not isinstance(ml, int) or ml <= 0:
-                    errors.append(
-                        f"{prefix}: max_level must be a positive integer, got {ml!r}"
-                    )
-                elif ml > MAX_BUILDING_LEVEL:
+                if ml > MAX_BUILDING_LEVEL:
                     errors.append(
                         f"{prefix}: max_level {ml} exceeds MAX_BUILDING_LEVEL "
                         f"({MAX_BUILDING_LEVEL})"
                     )
 
             # rank_requirement must be a positive int
-            rr = entry.get("rank_requirement")
-            if rr is not None:
-                if not isinstance(rr, int) or rr <= 0:
-                    errors.append(
-                        f"{prefix}: rank_requirement must be a positive integer, got {rr!r}"
-                    )
+            self._check_positive_int(
+                errors, prefix, "rank_requirement", entry.get("rank_requirement")
+            )
 
             # requires_agent must be a bool
             ra = entry.get("requires_agent")
@@ -145,12 +120,10 @@ class SchemaValidator:
                 )
 
             # storage_capacity must be a non-negative int
-            sc = entry.get("storage_capacity")
-            if sc is not None:
-                if not isinstance(sc, int) or sc < 0:
-                    errors.append(
-                        f"{prefix}: storage_capacity must be a non-negative integer, got {sc!r}"
-                    )
+            self._check_positive_int(
+                errors, prefix, "storage_capacity",
+                entry.get("storage_capacity"), allow_zero=True,
+            )
 
             # capabilities (optional) must be a list of known capability flags
             caps = entry.get("capabilities")
@@ -191,16 +164,7 @@ class SchemaValidator:
         required = {"key", "name"}
         item_keys: set[str] = set()
 
-        for idx, entry in enumerate(items_list):
-            prefix = f"items[{idx}]"
-            if not isinstance(entry, dict):
-                errors.append(f"{prefix}: expected dict, got {type(entry).__name__}")
-                continue
-
-            missing = required - entry.keys()
-            if missing:
-                errors.append(f"{prefix}: missing required fields: {sorted(missing)}")
-
+        for prefix, entry in self._iter_dict_entries(items_list, "items", required, errors):
             key = entry.get("key")
             if isinstance(key, str):
                 item_keys.add(key)
@@ -222,33 +186,15 @@ class SchemaValidator:
                             )
 
             # ammo_cost values must be positive ints if present
-            ac = entry.get("ammo_cost")
-            if ac is not None:
-                if not isinstance(ac, dict):
-                    errors.append(
-                        f"{prefix}: ammo_cost must be a dict, got {type(ac).__name__}"
-                    )
-                else:
-                    for res, val in ac.items():
-                        if not isinstance(val, int) or val <= 0:
-                            errors.append(
-                                f"{prefix}: ammo_cost['{res}'] must be a positive integer, got {val!r}"
-                            )
+            self._check_positive_int_map(
+                errors, prefix, "ammo_cost", entry.get("ammo_cost")
+            )
 
             # craft_cost values must be positive ints if present (same shape as
             # ammo_cost) — resources spent per unit via the `craft` command.
-            cc = entry.get("craft_cost")
-            if cc is not None:
-                if not isinstance(cc, dict):
-                    errors.append(
-                        f"{prefix}: craft_cost must be a dict, got {type(cc).__name__}"
-                    )
-                else:
-                    for res, val in cc.items():
-                        if not isinstance(val, int) or val <= 0:
-                            errors.append(
-                                f"{prefix}: craft_cost['{res}'] must be a positive integer, got {val!r}"
-                            )
+            self._check_positive_int_map(
+                errors, prefix, "craft_cost", entry.get("craft_cost")
+            )
 
             # ---- category (Req 3.4) ------------------------------------- #
             # A missing category defaults to "armor" in the populator, so an
@@ -300,20 +246,11 @@ class SchemaValidator:
 
             # ---- ranged-weapon ammo fields must be positive ints (Req 5.1) #
             if effective_category == "weapon" and weapon_type == "ranged":
-                aps = entry.get("ammo_per_shot")
-                if aps is not None and (
-                    not isinstance(aps, int) or isinstance(aps, bool) or aps <= 0
-                ):
-                    errors.append(
-                        f"{prefix}: ammo_per_shot must be a positive integer, got {aps!r}"
-                    )
+                self._check_positive_int(
+                    errors, prefix, "ammo_per_shot", entry.get("ammo_per_shot")
+                )
                 mag = entry.get("magazine_size")
-                if mag is not None and (
-                    not isinstance(mag, int) or isinstance(mag, bool) or mag <= 0
-                ):
-                    errors.append(
-                        f"{prefix}: magazine_size must be a positive integer, got {mag!r}"
-                    )
+                self._check_positive_int(errors, prefix, "magazine_size", mag)
                 # A ranged weapon that consumes counted ammo (declares an
                 # ammo_type) MUST declare a magazine (Req 5.1). Without it the
                 # weapon seeds db.loaded=0 and can never fire — a load-time
@@ -325,15 +262,9 @@ class SchemaValidator:
                     )
 
             # ---- max_stack must be a positive int (Req 10.4) ------------ #
-            max_stack = entry.get("max_stack")
-            if max_stack is not None and (
-                not isinstance(max_stack, int)
-                or isinstance(max_stack, bool)
-                or max_stack <= 0
-            ):
-                errors.append(
-                    f"{prefix}: max_stack must be a positive integer, got {max_stack!r}"
-                )
+            self._check_positive_int(
+                errors, prefix, "max_stack", entry.get("max_stack")
+            )
 
             # ---- weight must be a number >= 0 (Req 15.1) ---------------- #
             weight = entry.get("weight")
@@ -396,9 +327,9 @@ class SchemaValidator:
             v = effect.get(fkey)
             if v is None:
                 continue
-            if not isinstance(v, int) or isinstance(v, bool) or v <= 0:
-                out.append(f"{prefix}: effect.{fkey} must be a positive integer, got {v!r}")
-            else:
+            before = len(out)
+            SchemaValidator._check_positive_int(out, prefix, f"effect.{fkey}", v)
+            if len(out) == before:
                 fuse_vals[fkey] = v
         fmin = fuse_vals.get("fuse_min")
         fmax = fuse_vals.get("fuse_max")
@@ -418,23 +349,11 @@ class SchemaValidator:
     def validate_ranks(self, data: list[dict]) -> list[str]:
         """Validate a list of rank definition dicts."""
         errors: list[str] = []
-        if not isinstance(data, list):
-            return [f"ranks: expected a list, got {type(data).__name__}"]
-
         required = {"name", "level", "xp_threshold", "agent_cap", "planet_access"}
         levels_seen: set[int] = set()
         level_xp: list[tuple[int, int]] = []
 
-        for idx, entry in enumerate(data):
-            prefix = f"ranks[{idx}]"
-            if not isinstance(entry, dict):
-                errors.append(f"{prefix}: expected dict, got {type(entry).__name__}")
-                continue
-
-            missing = required - entry.keys()
-            if missing:
-                errors.append(f"{prefix}: missing required fields: {sorted(missing)}")
-
+        for prefix, entry in self._iter_dict_entries(data, "ranks", required, errors):
             level = entry.get("level")
             if isinstance(level, int):
                 if level <= 0:
@@ -448,12 +367,9 @@ class SchemaValidator:
                     level_xp.append((level, xp))
 
             # agent_cap must be a positive int
-            ac = entry.get("agent_cap")
-            if ac is not None:
-                if not isinstance(ac, int) or ac <= 0:
-                    errors.append(
-                        f"{prefix}: agent_cap must be a positive integer, got {ac!r}"
-                    )
+            self._check_positive_int(
+                errors, prefix, "agent_cap", entry.get("agent_cap")
+            )
 
             # planet_access must be a list of strings
             pa = entry.get("planet_access")
@@ -489,20 +405,8 @@ class SchemaValidator:
     def validate_technologies(self, data: list[dict]) -> list[str]:
         """Validate a list of technology definition dicts."""
         errors: list[str] = []
-        if not isinstance(data, list):
-            return [f"technologies: expected a list, got {type(data).__name__}"]
-
         required = {"name", "key", "required_rank", "resource_cost", "research_ticks"}
-        for idx, entry in enumerate(data):
-            prefix = f"technologies[{idx}]"
-            if not isinstance(entry, dict):
-                errors.append(f"{prefix}: expected dict, got {type(entry).__name__}")
-                continue
-
-            missing = required - entry.keys()
-            if missing:
-                errors.append(f"{prefix}: missing required fields: {sorted(missing)}")
-
+        for prefix, entry in self._iter_dict_entries(data, "technologies", required, errors):
             rt = entry.get("research_ticks")
             if isinstance(rt, int) and rt <= 0:
                 errors.append(f"{prefix}: research_ticks must be > 0, got {rt}")
@@ -519,23 +423,11 @@ class SchemaValidator:
     def validate_powerups(self, data: list[dict]) -> list[str]:
         """Validate a list of powerup definition dicts."""
         errors: list[str] = []
-        if not isinstance(data, list):
-            return [f"powerups: expected a list, got {type(data).__name__}"]
-
         required = {
             "name", "key", "required_rank", "effect_type",
             "effect_value", "duration_ticks", "cooldown_ticks",
         }
-        for idx, entry in enumerate(data):
-            prefix = f"powerups[{idx}]"
-            if not isinstance(entry, dict):
-                errors.append(f"{prefix}: expected dict, got {type(entry).__name__}")
-                continue
-
-            missing = required - entry.keys()
-            if missing:
-                errors.append(f"{prefix}: missing required fields: {sorted(missing)}")
-
+        for prefix, entry in self._iter_dict_entries(data, "powerups", required, errors):
             dt = entry.get("duration_ticks")
             if isinstance(dt, int) and dt <= 0:
                 errors.append(f"{prefix}: duration_ticks must be > 0, got {dt}")
@@ -552,22 +444,10 @@ class SchemaValidator:
     def validate_ability_gates(self, data: list[dict]) -> list[str]:
         """Validate a list of ability-gate definition dicts."""
         errors: list[str] = []
-        if not isinstance(data, list):
-            return [f"ability_gates: expected a list, got {type(data).__name__}"]
-
         required = {"key", "required_level"}
         keys_seen: set[str] = set()
 
-        for idx, entry in enumerate(data):
-            prefix = f"ability_gates[{idx}]"
-            if not isinstance(entry, dict):
-                errors.append(f"{prefix}: expected dict, got {type(entry).__name__}")
-                continue
-
-            missing = required - entry.keys()
-            if missing:
-                errors.append(f"{prefix}: missing required fields: {sorted(missing)}")
-
+        for prefix, entry in self._iter_dict_entries(data, "ability_gates", required, errors):
             # key must be a non-empty string; duplicates reported by name
             key = entry.get("key")
             if "key" in entry:
@@ -616,16 +496,7 @@ class SchemaValidator:
         required = {"terrain_type", "map_symbol"}
         terrain_types: set[str] = set()
 
-        for idx, entry in enumerate(terrain_list):
-            prefix = f"terrain[{idx}]"
-            if not isinstance(entry, dict):
-                errors.append(f"{prefix}: expected dict, got {type(entry).__name__}")
-                continue
-
-            missing = required - entry.keys()
-            if missing:
-                errors.append(f"{prefix}: missing required fields: {sorted(missing)}")
-
+        for prefix, entry in self._iter_dict_entries(terrain_list, "terrain", required, errors):
             ms = entry.get("map_symbol")
             if isinstance(ms, str) and len(ms) != 2:
                 errors.append(f"{prefix}: map_symbol must be 2 characters, got '{ms}'")
@@ -820,6 +691,87 @@ class SchemaValidator:
         return errors
 
     # ------------------------------------------------------------------ #
+    #  Shared field/reference validators
+    # ------------------------------------------------------------------ #
+    @staticmethod
+    def _check_positive_int(errors, prefix, name, value, *, allow_zero=False):
+        """Append an error if *value* is not a positive (or non-negative) int.
+
+        ``bool`` is a subclass of ``int`` but is never a valid count, so it is
+        rejected uniformly here. ``None`` is skipped (the field is optional).
+        With ``allow_zero`` the bound is ``>= 0`` ("non-negative integer");
+        otherwise ``> 0`` ("positive integer"). The message keeps the same
+        ``"{name} must be a (positive|non-negative) integer, got X"`` wording
+        the per-field clauses used, so callers reading errors see no change.
+        """
+        if value is None:
+            return
+        label = "non-negative" if allow_zero else "positive"
+        bound_ok = value >= 0 if allow_zero else value > 0
+        if not isinstance(value, int) or isinstance(value, bool) or not bound_ok:
+            errors.append(
+                f"{prefix}: {name} must be a {label} integer, got {value!r}"
+            )
+
+    @staticmethod
+    def _check_positive_int_map(errors, prefix, name, mapping):
+        """Validate a ``{resource: positive-int}`` map field.
+
+        When *mapping* is not a dict, appends ``"{name} must be a dict"`` and
+        returns. Otherwise every value must be a positive int (``bool`` rejected)
+        with the ``"{name}['{res}'] must be a positive integer, got X"`` wording.
+        """
+        if mapping is None:
+            return
+        if not isinstance(mapping, dict):
+            errors.append(f"{prefix}: {name} must be a dict, got {type(mapping).__name__}")
+            return
+        for res, val in mapping.items():
+            if not isinstance(val, int) or isinstance(val, bool) or val <= 0:
+                errors.append(
+                    f"{prefix}: {name}['{res}'] must be a positive integer, got {val!r}"
+                )
+
+    @staticmethod
+    def _iter_dict_entries(data, label, required, errors):
+        """Yield ``(prefix, entry)`` for each valid dict entry in a list.
+
+        The shared per-file scaffold every list validator repeats: reject a
+        non-list ``data`` (``"{label}: expected a list, got X"``), then for each
+        entry emit ``"{label}[i]: expected dict, got X"`` (and skip it) for a
+        non-dict, and ``"{label}[i]: missing required fields: [...]"`` for any
+        missing *required* keys — before yielding ``(prefix, entry)`` so the
+        caller performs only its own field-specific checks. Errors are appended
+        to the caller's *errors* list; nothing is yielded for a non-list.
+        """
+        if not isinstance(data, list):
+            errors.append(f"{label}: expected a list, got {type(data).__name__}")
+            return
+        for idx, entry in enumerate(data):
+            prefix = f"{label}[{idx}]"
+            if not isinstance(entry, dict):
+                errors.append(f"{prefix}: expected dict, got {type(entry).__name__}")
+                continue
+            missing = required - entry.keys()
+            if missing:
+                errors.append(f"{prefix}: missing required fields: {sorted(missing)}")
+            yield prefix, entry
+
+    @staticmethod
+    def _check_required_rank(errors, label, defs, rank_names):
+        """Append an FK error for each def whose ``required_rank`` is unknown.
+
+        The identical "required_rank must name a loaded rank" check shared by the
+        item / technology / powerup cross-validation loops.
+        """
+        for key, d in defs.items():
+            if d.required_rank and d.required_rank not in rank_names:
+                errors.append(
+                    f"{label} '{key}': required_rank '{d.required_rank}' "
+                    f"not found in rank definitions"
+                )
+
+    # ------------------------------------------------------------------ #
     #  Cross-validation
     # ------------------------------------------------------------------ #
     def cross_validate(self, registry) -> list[str]:
@@ -847,12 +799,7 @@ class SchemaValidator:
                 )
 
         # Item required_rank → valid rank names
-        for key, idef in registry.items.items():
-            if idef.required_rank and idef.required_rank not in rank_names:
-                errors.append(
-                    f"item '{key}': required_rank '{idef.required_rank}' "
-                    f"not found in rank definitions"
-                )
+        self._check_required_rank(errors, "item", registry.items, rank_names)
 
         # Item ammo_type → must reference an existing 'ammo'-category item
         # (Req 5.7); melee weapons must not declare any ammo fields (Req 5.8).
@@ -894,20 +841,12 @@ class SchemaValidator:
                     )
 
         # Technology required_rank → valid rank names
-        for key, tdef in registry.technologies.items():
-            if tdef.required_rank and tdef.required_rank not in rank_names:
-                errors.append(
-                    f"technology '{key}': required_rank '{tdef.required_rank}' "
-                    f"not found in rank definitions"
-                )
+        self._check_required_rank(
+            errors, "technology", registry.technologies, rank_names
+        )
 
         # Powerup required_rank → valid rank names
-        for key, pdef in registry.powerups.items():
-            if pdef.required_rank and pdef.required_rank not in rank_names:
-                errors.append(
-                    f"powerup '{key}': required_rank '{pdef.required_rank}' "
-                    f"not found in rank definitions"
-                )
+        self._check_required_rank(errors, "powerup", registry.powerups, rank_names)
 
         # production_map building abbreviations → valid buildings
         # production_map item keys → valid items
