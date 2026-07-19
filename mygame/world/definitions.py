@@ -37,6 +37,11 @@ class BuildingDef:
     requires_agent: bool = False
     storage_capacity: int = 0
     capabilities: frozenset[str] = field(default_factory=frozenset)
+    #: Optional deed-gate (R9): if set, the player must have this deed in
+    #: db.deeds at or above unlock_deed_count to construct the building.
+    unlock_deed: str | None = None
+    #: Required deed count for the unlock_deed gate (default 1 = boolean).
+    unlock_deed_count: int = 1
 
     def has_capability(self, capability: str) -> bool:
         """Return True if this building declares the given capability flag."""
@@ -206,7 +211,20 @@ class BaseTemplateDef:
     display_name: str
     buildings: list[TemplateBuildingDef] = field(default_factory=list)
     guards: list[TemplateGuardDef] = field(default_factory=list)
-    loot: dict[str, int] = field(default_factory=dict)
+    #: Loot per resource: fixed int or [min, max] range drawn uniformly (R8.1).
+    loot: dict = field(default_factory=dict)
+    #: Per-guard-kill mini-drop chance (R8.2); overrides balance default.
+    guard_loot_chance: float | None = None
+    #: Mini-drop amount: fixed int or [min, max] range.
+    guard_loot_amount: int | list | None = None
+    #: Gear-drop chance on HQ destruction (R8.3); overrides balance default.
+    gear_drop_chance: float | None = None
+    #: Rare gear-drop chance on HQ destruction (R8.4).
+    rare_gear_chance: float | None = None
+    #: Item keys eligible for the gear roll.
+    gear_pool: list[str] = field(default_factory=list)
+    #: Item keys eligible for the rare roll.
+    rare_pool: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -233,15 +251,16 @@ class BalanceConfig:
     not balance.
     """
 
-    production_scaling: dict[int, int] = field(default_factory=lambda: {
-        1: 10, 2: 50, 3: 150, 4: 400, 5: 1000
-    })
     turret_damage: int = 15
     turret_radius: int = 10
     xp_kill: int = 100
     xp_building_destroy: int = 50
-    xp_damage: float = 0.1
     xp_death_loss: int = 50
+    # --- Economy XP (early-game rebalance R1) ---
+    xp_build_complete: int = 30
+    xp_upgrade_complete: int = 30
+    xp_harvest_action: int = 1
+    xp_agent_trained: int = 40
     gather_amount: int = 1
     player_default_health: int = 100
     resource_respawn_ticks: int = 30
@@ -286,8 +305,8 @@ class BalanceConfig:
     base_training_cost: dict[str, int] = field(default_factory=lambda: {
         "Wood": 15, "Stone": 10, "Iron": 5,
     })
-    #: Base training time in ticks (5 minutes at 1 tick/s).
-    base_training_ticks: int = 300
+    #: Base training time in ticks (90s at 1 tick/s — early-game R3.3).
+    base_training_ticks: int = 90
     #: Training time reduction per Academy level (fraction, 0.15 = 15%).
     academy_training_reduction_per_level: float = 0.15
 
@@ -386,7 +405,7 @@ class BalanceConfig:
     # --- NPC base spawner + elimination (PvE NPC bases, Phase 5) ------ #
     #: XP awarded for destroying an NPC base's HQ (the whole base is wiped) —
     #: far more than xp_building_destroy=50, so raiding is decisively rewarding.
-    xp_hq_destroy: int = 500
+    xp_hq_destroy: int = 300
     #: Ticks before a cleared NPC base respawns at a fresh location (~10 min
     #: at 1 tick/s). 0 disables respawning.
     outpost_respawn_ticks: int = 600
@@ -468,3 +487,21 @@ class BalanceConfig:
     alliance_level_thresholds: dict[int, int] = field(default_factory=lambda: {
         0: 1, 40: 2, 100: 3, 180: 4, 280: 5,
     })
+
+    # --- Variable rewards (early-game rebalance R7, R8) --------------- #
+    #: Chance per manual harvest action of a "Rich vein!" critical (×5 yield).
+    harvest_crit_chance: float = 0.05
+    #: Yield multiplier on a harvest crit.
+    harvest_crit_multiplier: int = 5
+    #: Chance per NPC-guard kill of a resource mini-drop.
+    guard_loot_chance: float = 0.4
+    #: Resource units dropped per guard mini-drop.
+    guard_loot_amount: int = 10
+    #: Chance of a gear drop on NPC-HQ destruction (outpost default).
+    gear_drop_chance: float = 0.15
+    #: Chance of a rare gear drop on NPC-HQ destruction (outpost default).
+    rare_gear_chance: float = 0.03
+
+    # --- Agent rebalance (R3, R5) ------------------------------------- #
+    #: Fog-of-war vision radius around patrolling scout agents.
+    scout_vision_radius: int = 5

@@ -196,13 +196,20 @@ class TestCoordinateSpaceDef:
 class TestBalanceConfig:
     def test_defaults(self):
         bc = BalanceConfig()
-        assert bc.production_scaling == {1: 10, 2: 50, 3: 150, 4: 400, 5: 1000}
         assert bc.turret_damage == 15
         assert bc.turret_radius == 10
         assert bc.xp_kill == 100
         assert bc.xp_building_destroy == 50
-        assert bc.xp_damage == 0.1
         assert bc.xp_death_loss == 50
+        # Economy XP (early-game rebalance R1)
+        assert bc.xp_build_complete == 30
+        assert bc.xp_upgrade_complete == 30
+        assert bc.xp_harvest_action == 1
+        assert bc.xp_agent_trained == 40
+        # Variable rewards (R7, R8)
+        assert bc.harvest_crit_chance == 0.05
+        assert bc.harvest_crit_multiplier == 5
+        assert bc.scout_vision_radius == 5
         assert bc.gather_amount == 1
         assert bc.player_default_health == 100
         assert bc.resource_respawn_ticks == 30
@@ -232,7 +239,7 @@ class TestDataclassContracts:
     """Verify all definitions are proper dataclasses with expected field counts."""
 
     def test_building_def_field_count(self):
-        assert len(fields(BuildingDef)) == 16
+        assert len(fields(BuildingDef)) == 18
 
     def test_item_def_field_count(self):
         # 16 after adding craft_cost (resource cost for the `craft` command).
@@ -275,7 +282,7 @@ class TestDataclassContracts:
         #    withdraw cap + window, leaderboard top-N, 4 score weights, 2 decay
         #    knobs, and the alliance_level_thresholds table).
         # Bump this when adding a balance tunable.
-        assert len(fields(BalanceConfig)) == 88
+        assert len(fields(BalanceConfig)) == 97
 
     def test_coordinate_space_def_field_count(self):
         assert len(fields(CoordinateSpaceDef)) == 14

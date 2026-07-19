@@ -10,6 +10,11 @@
 # offset is [dx, dy] relative to the HQ tile (which is always [0, 0]).
 # guard.role is "guard" (melee) or "soldier" (ranged) — GuardCombatSystem reads
 # the role; damage/range come from BalanceConfig (guard_* fields).
+#
+# Loot supports both fixed amounts (N) and ranges ([min, max]) drawn uniformly.
+# gear_pool / rare_pool are item keys from items.yaml; gear_drop_chance and
+# rare_gear_chance override the balance.yaml defaults per template.
+# guard_loot_chance / guard_loot_amount control per-guard-kill mini-drops.
 
 outpost:
   display_name: Outpost
@@ -25,8 +30,18 @@ outpost:
       weapon_type: melee
       count: 2
   loot:
-    Iron: 30
-    Stone: 20
+    Iron: [20, 40]
+    Stone: [10, 25]
+  guard_loot_chance: 0.4
+  guard_loot_amount: [5, 15]
+  gear_drop_chance: 0.15
+  rare_gear_chance: 0.03
+  gear_pool:
+    - combat_knife
+    - combat_helmet
+    - kevlar_vest
+  rare_pool:
+    - sniper_rifle
 
 fortress:
   display_name: Fortress
@@ -54,6 +69,18 @@ fortress:
       weapon_type: ranged
       count: 3
   loot:
-    Iron: 100
-    Stone: 80
-    Energy: 50
+    Iron: [60, 120]
+    Stone: [50, 100]
+    Energy: [30, 60]
+  guard_loot_chance: 0.5
+  guard_loot_amount: [8, 20]
+  gear_drop_chance: 0.30
+  rare_gear_chance: 0.08
+  gear_pool:
+    - assault_rifle
+    - combat_helmet
+    - kevlar_vest
+    - combat_gloves
+  rare_pool:
+    - plasma_rifle
+    - jetpack

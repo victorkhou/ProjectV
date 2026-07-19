@@ -9,15 +9,9 @@
 #   - key:            non-empty, unique string ability identifier
 #     required_level: integer in 1..MAX_LEVEL
 #
-# delivery required_level derivation:
-#   The delivery ability unlocks at the first level of rank 5.
-#   first_level_of_rank(r) = (r - 1) * LEVELS_PER_RANK + 1
-#                          = (5 - 1) * 5 + 1 = 21
-#   (LEVELS_PER_RANK = 5, MAX_LEVEL = NUM_RANKS * LEVELS_PER_RANK = 60,
-#    see mygame/world/constants.py). The value is clamped to MAX_LEVEL; 21
-#    is well below 60, so no clamping applies here. To retune when the
-#    rank/level constants change, recompute (5 - 1) * LEVELS_PER_RANK + 1
-#    and clamp to MAX_LEVEL.
+# delivery required_level: reduced from 21 to 5 (early-game rebalance R3.2).
+# At 5 XP per harvest cycle and 4-tick cycles, a harvester agent reaches
+# effective level 5 within ~15 minutes of assignment — session one.
 
 - key: delivery
-  required_level: 21
+  required_level: 5

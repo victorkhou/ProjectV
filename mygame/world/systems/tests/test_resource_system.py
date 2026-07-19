@@ -152,7 +152,6 @@ def _make_registry() -> DataRegistry:
     registry.balance = BalanceConfig(
         gather_amount=1,
         resource_respawn_ticks=30,
-        production_scaling={1: 10, 2: 50, 3: 150, 4: 400, 5: 1000},
     )
     registry.terrain = {
         "Plains": TerrainDef(terrain_type="Plains", map_symbol="PP", resource_type="Straw"),

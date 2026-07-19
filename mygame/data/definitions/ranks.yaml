@@ -1,6 +1,6 @@
 # Rank definitions for RTS Combat Overworld
 # Phase 1: 12 ranks with strictly increasing XP thresholds
-# Each rank defines agent_cap, planet_access, and unlocks
+# Each rank defines agent_cap and planet_access
 # Planet rank requirements: Terra=1, Forge=5, Tundra=7, Space=7, Inferno=9, Citadel=11
 
 - name: Recruit
@@ -9,9 +9,6 @@
   agent_cap: 2
   planet_access:
     - terra
-  unlocks:
-    - Extractor
-    - Academy
 
 - name: Private
   level: 2
@@ -19,7 +16,6 @@
   agent_cap: 3
   planet_access:
     - terra
-  unlocks: []
 
 - name: Corporal
   level: 3
@@ -27,9 +23,6 @@
   agent_cap: 4
   planet_access:
     - terra
-  unlocks:
-    - Wall
-    - Barracks
 
 - name: Sergeant
   level: 4
@@ -37,7 +30,6 @@
   agent_cap: 6
   planet_access:
     - terra
-  unlocks: []
 
 - name: Staff_Sergeant
   level: 5
@@ -46,8 +38,6 @@
   planet_access:
     - terra
     - forge
-  unlocks:
-    - Armory
 
 - name: Lieutenant
   level: 6
@@ -56,8 +46,6 @@
   planet_access:
     - terra
     - forge
-  unlocks:
-    - Lab
 
 - name: Captain
   level: 7
@@ -68,9 +56,6 @@
     - forge
     - tundra
     - space
-  unlocks:
-    - Turret
-    - Radar
 
 - name: Major
   level: 8
@@ -81,8 +66,6 @@
     - forge
     - tundra
     - space
-  unlocks:
-    - Vault
 
 - name: Colonel
   level: 9
@@ -94,8 +77,6 @@
     - tundra
     - space
     - inferno
-  unlocks:
-    - Relay
 
 - name: Brigadier
   level: 10
@@ -107,8 +88,6 @@
     - tundra
     - space
     - inferno
-  unlocks:
-    - Medbay
 
 - name: General
   level: 11
@@ -121,8 +100,6 @@
     - space
     - inferno
     - citadel
-  unlocks:
-    - Barracks_L2
 
 - name: Marshal
   level: 12
@@ -135,5 +112,3 @@
     - space
     - inferno
     - citadel
-  unlocks:
-    - All

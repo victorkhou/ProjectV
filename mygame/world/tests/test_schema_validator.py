@@ -553,7 +553,6 @@ class TestValidateBalance:
             "turret_damage": 15,
             "tick_interval": 1.0,
             "metrics_enabled": False,
-            "production_scaling": {1: 10, 2: 50, 3: 150, 4: 400, 5: 1000},
         }
         assert self.v.validate_balance(data) == []
 
@@ -572,22 +571,6 @@ class TestValidateBalance:
     def test_bool_field_wrong_type(self):
         errs = self.v.validate_balance({"metrics_enabled": "yes"})
         assert any("expected bool" in e for e in errs)
-
-    def test_production_scaling_invalid_key(self):
-        errs = self.v.validate_balance({"production_scaling": {0: 10}})
-        assert any("key must be 1-5" in e for e in errs)
-
-    def test_production_scaling_key_too_high(self):
-        errs = self.v.validate_balance({"production_scaling": {6: 10}})
-        assert any("key must be 1-5" in e for e in errs)
-
-    def test_production_scaling_value_not_int(self):
-        errs = self.v.validate_balance({"production_scaling": {1: "ten"}})
-        assert any("expected int" in e for e in errs)
-
-    def test_production_scaling_not_dict(self):
-        errs = self.v.validate_balance({"production_scaling": [1, 2, 3]})
-        assert any("expected dict" in e for e in errs)
 
     def test_int_accepts_valid(self):
         """Int fields should accept valid ints without error."""

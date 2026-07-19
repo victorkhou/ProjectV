@@ -1,19 +1,20 @@
 # Game balance configuration for RTS Combat Overworld
 
-production_scaling:
-  1: 10
-  2: 50
-  3: 150
-  4: 400
-  5: 1000
-
 turret_damage: 15
 turret_radius: 7
 
 xp_kill: 100
 xp_building_destroy: 50
-xp_damage: 0.1
 xp_death_loss: 50
+
+# --- Economy XP (early-game rebalance R1) ---
+# One-time / cooldown-bounded XP for the builder loop, so the level bar moves
+# during the primary first-hour activity. Supply shape keeps combat dominant:
+# build/upgrade/train are finite, harvest is cooldown-bounded (~900/hr max).
+xp_build_complete: 30        # per completed construction (both completion paths)
+xp_upgrade_complete: 30      # FLAT per completed upgrade (D6 — no xnew_level)
+xp_harvest_action: 1         # per manual harvest yield (agent harvest excluded)
+xp_agent_trained: 40         # per agent training completion
 
 gather_amount: 1
 player_default_health: 100
@@ -54,8 +55,19 @@ base_training_cost:              # per-resource base cost; agent #N costs base �
   Wood: 15
   Stone: 10
   Iron: 5
-base_training_ticks: 300         # base training time (5 min at 1 tick/s)
+base_training_ticks: 90          # base training time (90s at 1 tick/s — R3.3)
 academy_training_reduction_per_level: 0.15   # training time cut per Academy level
+
+# --- Variable rewards (early-game rebalance R7, R8) ---
+harvest_crit_chance: 0.05        # 5% per manual harvest action
+harvest_crit_multiplier: 5       # ×5 yield on crit ("Rich vein!")
+guard_loot_chance: 0.4           # 40% per NPC-guard kill → mini-drop
+guard_loot_amount: 10            # resource units per mini-drop
+gear_drop_chance: 0.15           # HQ-destroy gear-roll (outpost default)
+rare_gear_chance: 0.03           # HQ-destroy rare-roll (outpost default)
+
+# --- Agent rebalance (R3, R5) ---
+scout_vision_radius: 5           # fog-of-war vision circle around patrolling scouts
 
 # --- Resource harvesting & production (migrated) ---
 harvest_cooldown_ticks: 4        # ticks between harvest yields (active-presence)
@@ -139,7 +151,7 @@ linkdead_grace_seconds: 1800.0
 # NPC outposts/fortresses placed on the map at init; destroying a base's HQ
 # wipes the whole base and awards xp_hq_destroy + loot, then respawns it
 # elsewhere after outpost_respawn_ticks. Loot tables live in outposts.yaml.
-xp_hq_destroy: 500               # XP for destroying an NPC HQ (whole base wiped)
+xp_hq_destroy: 300               # XP for destroying an NPC HQ (down from 500 — R1)
 outpost_respawn_ticks: 600       # ticks before a cleared base respawns (0=never)
 outpost_count: 5                 # outposts per planet at init
 fortress_count: 2                # fortresses per planet at init

@@ -212,14 +212,12 @@ RESOURCE_BUILDING_DEFS = {
 def _make_registry(
     gather_amount: int = 1,
     respawn_ticks: int = 30,
-    production_scaling: dict | None = None,
 ) -> DataRegistry:
     """Create a DataRegistry with test definitions."""
     registry = DataRegistry()
     registry.balance = BalanceConfig(
         gather_amount=gather_amount,
         resource_respawn_ticks=respawn_ticks,
-        production_scaling=production_scaling or dict(PRODUCTION_SCALING),
     )
     registry.terrain = {
         t: TerrainDef(terrain_type=t, map_symbol=t[:2], resource_type=r)

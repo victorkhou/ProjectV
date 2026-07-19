@@ -34,7 +34,7 @@ if TYPE_CHECKING:
 def _balance_fields_by_type():
     """Partition BalanceConfig fields into (int_names, float_names, bool_names).
 
-    Dict-typed fields (production_scaling, resource_weights, etc.) require
+    Dict-typed fields (resource_weights, demolish_refund_rates, etc.) require
     per-field semantic validation and are handled individually — they are
     excluded from the returned sets.
     """
@@ -667,25 +667,6 @@ class SchemaValidator:
                         errors.append(
                             f"balance.alliance_level_thresholds[{key}]: tier must be "
                             f"a positive int, got {tier!r}"
-                        )
-
-        # production_scaling keys must be 1-5
-        ps = data.get("production_scaling")
-        if ps is not None:
-            if not isinstance(ps, dict):
-                errors.append(
-                    f"balance.production_scaling: expected dict, got {type(ps).__name__}"
-                )
-            else:
-                for key, val in ps.items():
-                    k = int(key) if isinstance(key, str) and key.isdigit() else key
-                    if not isinstance(k, int) or k < 1 or k > 5:
-                        errors.append(
-                            f"balance.production_scaling: key must be 1-5, got {key!r}"
-                        )
-                    if not isinstance(val, int):
-                        errors.append(
-                            f"balance.production_scaling[{key}]: expected int, got {type(val).__name__}"
                         )
 
         return errors

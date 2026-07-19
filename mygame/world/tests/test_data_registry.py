@@ -142,16 +142,14 @@ VALID_TERRAIN = {
 }
 
 VALID_ABILITY_GATES = [
-    {"key": "delivery", "required_level": 21},
+    {"key": "delivery", "required_level": 5},
 ]
 
 VALID_BALANCE = {
-    "production_scaling": {1: 10, 2: 50, 3: 150, 4: 400, 5: 1000},
     "turret_damage": 15,
     "turret_radius": 10,
     "xp_kill": 100,
     "xp_building_destroy": 50,
-    "xp_damage": 0.1,
     "xp_death_loss": 50,
     "gather_amount": 1,
     "player_default_health": 100,
@@ -310,7 +308,7 @@ class TestLoadAll:
         reg.load_all(data_dir)
 
         assert reg.balance.turret_damage == 15
-        assert reg.balance.production_scaling[5] == 1000
+        assert reg.balance.xp_build_complete == 30
 
 
 # ------------------------------------------------------------------ #
@@ -330,7 +328,7 @@ class TestMissingFiles:
 
         defaults = reg.balance
         assert defaults.turret_damage == 15
-        assert defaults.production_scaling == {1: 10, 2: 50, 3: 150, 4: 400, 5: 1000}
+        assert defaults.xp_build_complete == 30
 
     def test_missing_balance_logs_warning(self, data_dir_no_balance, caplog):
         import logging
@@ -484,7 +482,7 @@ class TestGetters:
     def test_get_ability_gate(self):
         gate = self.reg.get_ability_gate("delivery")
         assert gate.key == "delivery"
-        assert gate.required_level == 21
+        assert gate.required_level == 5
 
     def test_get_ability_gate_missing_raises(self):
         with pytest.raises(KeyError):
@@ -632,19 +630,15 @@ class TestSingleton:
 # ------------------------------------------------------------------ #
 
 class TestAbilityGateDerivation:
-    """The delivery gate's required level is the first level of rank 5,
-    derived from constants and clamped to MAX_LEVEL (Req 7.1, 7.2, 7.6, 7.7)."""
+    """The delivery gate's required level is 5 (early-game rebalance R3.2):
+    reachable within session one via harvester agent XP."""
 
-    def test_delivery_required_level_is_first_level_of_rank_five(self, data_dir):
+    def test_delivery_required_level_is_five(self, data_dir):
         reg = DataRegistry()
         reg.load_all(data_dir)
 
-        # first level of rank 5 = (5 - 1) * LEVELS_PER_RANK + 1, clamped to MAX_LEVEL
-        expected = min((5 - 1) * LEVELS_PER_RANK + 1, MAX_LEVEL)
-        assert expected == 21  # guards against constant drift breaking the gate value
-
         gate = reg.get_ability_gate("delivery")
-        assert gate.required_level == expected
+        assert gate.required_level == 5
 
     def test_delivery_required_level_within_valid_range(self, data_dir):
         reg = DataRegistry()
@@ -696,7 +690,7 @@ class TestAgentXpSourcedFromBalance:
 # Scalar values chosen to differ from every default so a passing assertion
 # proves the value was sourced from the loaded YAML, not a dataclass default.
 CUSTOM_ECONOMY = {
-    "base_training_ticks": 222,                    # default 300
+    "base_training_ticks": 222,                    # default 90
     "academy_training_reduction_per_level": 0.11,  # default 0.15
     "harvest_cooldown_ticks": 9,                   # default 4
     "harvest_yield_per_action": 2,                 # default 1
@@ -787,7 +781,7 @@ class TestEconomyTunablesSourcedFromBalance:
         reg = DataRegistry()
         reg.load_all(data_dir_no_balance)
 
-        assert reg.balance.base_training_ticks == 300
+        assert reg.balance.base_training_ticks == 90
         assert reg.balance.upgrade_cost_base == 2
         assert reg.balance.base_training_cost == {"Wood": 15, "Stone": 10, "Iron": 5}
         assert reg.balance.demolish_refund_rates[5] == 0.80

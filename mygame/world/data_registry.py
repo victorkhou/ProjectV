@@ -289,6 +289,8 @@ class DataRegistry:
                 requires_agent=entry.get("requires_agent", False),
                 storage_capacity=entry.get("storage_capacity", 0),
                 capabilities=frozenset(entry.get("capabilities", []) or []),
+                unlock_deed=entry.get("unlock_deed"),
+                unlock_deed_count=entry.get("unlock_deed_count", 1),
             )
             self.buildings[bdef.abbreviation] = bdef
 
@@ -424,9 +426,9 @@ class DataRegistry:
 
         Scalar fields are pulled generically from the dataclass field list so
         a newly-added scalar tunable only needs a field on ``BalanceConfig``
-        (plus a validator entry) — no change here.  The two nested-dict fields
-        (``production_scaling`` with int keys, and the balance maps) need
-        light key coercion and are handled explicitly.
+        (plus a validator entry) — no change here.  The nested-dict fields
+        (balance maps with int keys) need light key coercion and are handled
+        explicitly.
         """
         from dataclasses import fields
 
@@ -435,7 +437,7 @@ class DataRegistry:
         # Fields needing custom key/type handling — excluded from the generic
         # scalar copy below and rebuilt explicitly.
         special = {
-            "production_scaling", "demolish_refund_rates", "base_training_cost",
+            "demolish_refund_rates", "base_training_cost",
             "resource_weights", "alliance_level_thresholds",
         }
 
@@ -444,14 +446,6 @@ class DataRegistry:
             if f.name in special:
                 continue
             kwargs[f.name] = raw.get(f.name, getattr(defaults, f.name))
-
-        # production_scaling: YAML keys may be strings → coerce to int levels.
-        ps_raw = raw.get("production_scaling")
-        kwargs["production_scaling"] = (
-            {int(k): v for k, v in ps_raw.items()}
-            if ps_raw is not None
-            else defaults.production_scaling
-        )
 
         # demolish_refund_rates: level keys may be strings → coerce to int.
         dr_raw = raw.get("demolish_refund_rates")
@@ -474,7 +468,7 @@ class DataRegistry:
         )
 
         # alliance_level_thresholds: summed-level keys may be strings → coerce to
-        # int (same reason as production_scaling: int-level lookups would miss).
+        # int (YAML reads "40" as a string key; int-level lookups would miss).
         alt_raw = raw.get("alliance_level_thresholds")
         kwargs["alliance_level_thresholds"] = (
             {int(k): int(v) for k, v in alt_raw.items()}
@@ -553,7 +547,14 @@ class DataRegistry:
                     )
                     for g in spec.get("guards", [])
                 ]
-                loot = {k: int(v) for k, v in (spec.get("loot") or {}).items()}
+                # Loot: keep raw value — int or [min, max] list (R8.1).
+                loot_raw = spec.get("loot") or {}
+                loot = {}
+                for k, v in loot_raw.items():
+                    if isinstance(v, list):
+                        loot[k] = [int(v[0]), int(v[1])]
+                    else:
+                        loot[k] = int(v)
             except (KeyError, TypeError, ValueError):
                 logger.exception("Skipping invalid NPC-base template %r.", tier)
                 continue
@@ -563,6 +564,12 @@ class DataRegistry:
                 buildings=buildings,
                 guards=guards,
                 loot=loot,
+                guard_loot_chance=spec.get("guard_loot_chance"),
+                guard_loot_amount=spec.get("guard_loot_amount"),
+                gear_drop_chance=spec.get("gear_drop_chance"),
+                rare_gear_chance=spec.get("rare_gear_chance"),
+                gear_pool=spec.get("gear_pool") or [],
+                rare_pool=spec.get("rare_pool") or [],
             )
         logger.info("Loaded %d NPC-base template(s).", len(self.base_templates))
 
@@ -615,7 +622,7 @@ class DataRegistry:
         Each top-level perk key maps to ``{category, effect_type, levels}`` where
         ``levels`` is ``{int_level: {tier, cost, <effect payload>}}``. YAML level
         keys may arrive as strings, so they are coerced to int (int-level lookups
-        would otherwise miss — the same class of bug as production_scaling).
+        would otherwise miss — YAML reads numeric keys as strings).
         Malformed individual perks/levels are skipped, not fatal.
         """
         self.alliance_perks = {}

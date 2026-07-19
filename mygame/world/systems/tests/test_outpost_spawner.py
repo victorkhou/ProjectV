@@ -574,7 +574,7 @@ class TestBaseElimination(unittest.TestCase):
         handler, bus, drops = _make_handler(owned={sentinel: [hq]})
         raider = FakePlayer(oid=2, combat_xp=100)
         bus.publish(BUILDING_DESTROYED, building=hq, attacker=raider, tile=room)
-        self.assertEqual(raider.db.combat_xp, 100 + 500)  # xp_hq_destroy=500
+        self.assertEqual(raider.db.combat_xp, 100 + 300)  # xp_hq_destroy=300
 
     def test_loot_dropped_at_hq_tile(self):
         room = FakeRoom()

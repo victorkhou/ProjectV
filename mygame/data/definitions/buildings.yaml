@@ -1,9 +1,8 @@
 # Building definitions for RTS Combat Overworld
-# Phase 1: 12 building types with construction timers, level requirements,
-# agent support, and storage capacities
-#
-# rank_requirement is now a LEVEL requirement (1-60).
-# Rank is cosmetic — derived from level (every 5 levels = 1 rank).
+# Early-game rebalance: rank_requirement is a LEVEL gate (1-100).
+# Unlock cadence targets one new building every 1-3 minutes in the first
+# half hour, then every 5-7 minutes (R2). Deed gates (unlock_deed +
+# unlock_deed_count) layer atop level for world-facing unlocks (R9).
 #
 # Build times are for initial L1 construction.
 # Upgrades use exponential scaling: time = build_time × 3^(level-1),
@@ -28,12 +27,6 @@
   capabilities:
     - headquarters
     - storage
-  unlocks:
-    - EX
-    - AC
-    - WL
-    - LB
-    - VT
   map_symbol: HQ
 
 - name: Extractor
@@ -55,7 +48,6 @@
     - harvestable
     - upgradable
     - requires_resource_terrain
-  unlocks: []
   map_symbol: EX
 
 - name: Academy
@@ -74,27 +66,25 @@
   produces: null
   requires_agent: false
   storage_capacity: 0
-  unlocks: []
   map_symbol: AC
 
-- name: Lab
-  abbreviation: LB
+- name: Wall
+  abbreviation: WL
   cost:
-    Wood: 25
-    Stone: 20
-    Iron: 15
-  build_time_seconds: 38
+    Stone: 5
+  build_time_seconds: 15
   max_level: 5
-  rank_requirement: 26
-  max_health: 250
+  rank_requirement: 2
+  max_health: 600
   requires_hq: true
   required_terrain: null
-  category: research
+  category: defense
   produces: null
-  requires_agent: true
+  requires_agent: false
   storage_capacity: 0
-  unlocks: []
-  map_symbol: LB
+  capabilities:
+    - combat_barrier
+  map_symbol: WL
 
 - name: Armory
   abbreviation: AR
@@ -104,7 +94,7 @@
     Iron: 15
   build_time_seconds: 30
   max_level: 5
-  rank_requirement: 1
+  rank_requirement: 3
   max_health: 250
   requires_hq: true
   required_terrain: null
@@ -112,28 +102,7 @@
   produces: null
   requires_agent: true
   storage_capacity: 0
-  unlocks: []
   map_symbol: AR
-
-- name: Turret
-  abbreviation: TU
-  cost:
-    Stone: 20
-    Iron: 15
-  build_time_seconds: 22
-  max_level: 5
-  rank_requirement: 31
-  max_health: 300
-  requires_hq: true
-  required_terrain: null
-  category: defense
-  produces: null
-  requires_agent: true
-  storage_capacity: 0
-  capabilities:
-    - turret
-  unlocks: []
-  map_symbol: TU
 
 - name: Vault
   abbreviation: VT
@@ -142,7 +111,7 @@
     Iron: 10
   build_time_seconds: 30
   max_level: 5
-  rank_requirement: 36
+  rank_requirement: 4
   max_health: 400
   requires_hq: true
   required_terrain: null
@@ -153,45 +122,26 @@
   capabilities:
     - storage
     - primary_storage
-  unlocks: []
   map_symbol: VT
 
-- name: Radar
-  abbreviation: RD
+- name: Turret
+  abbreviation: TU
   cost:
+    Stone: 20
     Iron: 15
-    Energy: 10
   build_time_seconds: 22
   max_level: 5
-  rank_requirement: 31
-  max_health: 150
-  requires_hq: true
-  required_terrain: null
-  category: intelligence
-  produces: null
-  requires_agent: true
-  storage_capacity: 0
-  unlocks: []
-  map_symbol: RD
-
-- name: Wall
-  abbreviation: WL
-  cost:
-    Stone: 5
-  build_time_seconds: 15
-  max_level: 5
-  rank_requirement: 11
-  max_health: 600
+  rank_requirement: 5
+  max_health: 300
   requires_hq: true
   required_terrain: null
   category: defense
   produces: null
-  requires_agent: false
+  requires_agent: true
   storage_capacity: 0
   capabilities:
-    - combat_barrier
-  unlocks: []
-  map_symbol: WL
+    - turret
+  map_symbol: TU
 
 - name: Barracks
   abbreviation: BK
@@ -201,7 +151,8 @@
     Iron: 10
   build_time_seconds: 30
   max_level: 5
-  rank_requirement: 11
+  rank_requirement: 7
+  unlock_deed: outpost_cleared
   max_health: 350
   requires_hq: true
   required_terrain: null
@@ -209,8 +160,61 @@
   produces: null
   requires_agent: false
   storage_capacity: 0
-  unlocks: []
   map_symbol: BK
+
+- name: Radar
+  abbreviation: RD
+  cost:
+    Iron: 15
+    Energy: 10
+  build_time_seconds: 22
+  max_level: 5
+  rank_requirement: 9
+  max_health: 150
+  requires_hq: true
+  required_terrain: null
+  category: intelligence
+  produces: null
+  requires_agent: true
+  storage_capacity: 0
+  map_symbol: RD
+
+- name: Lab
+  abbreviation: LB
+  cost:
+    Wood: 25
+    Stone: 20
+    Iron: 15
+  build_time_seconds: 38
+  max_level: 5
+  rank_requirement: 11
+  unlock_deed: outpost_cleared
+  unlock_deed_count: 3
+  max_health: 250
+  requires_hq: true
+  required_terrain: null
+  category: research
+  produces: null
+  requires_agent: true
+  storage_capacity: 0
+  map_symbol: LB
+
+- name: Relay
+  abbreviation: RL
+  cost:
+    Iron: 20
+    Energy: 15
+  build_time_seconds: 22
+  max_level: 5
+  rank_requirement: 15
+  max_health: 200
+  requires_hq: true
+  required_terrain: null
+  category: defense
+  produces: null
+  requires_agent: false
+  storage_capacity: 0
+  map_symbol: RL
 
 - name: Medbay
   abbreviation: MB
@@ -221,7 +225,7 @@
     Energy: 5
   build_time_seconds: 30
   max_level: 5
-  rank_requirement: 46
+  rank_requirement: 18
   max_health: 250
   requires_hq: true
   required_terrain: null
@@ -229,23 +233,4 @@
   produces: null
   requires_agent: false
   storage_capacity: 0
-  unlocks: []
   map_symbol: MB
-
-- name: Relay
-  abbreviation: RL
-  cost:
-    Iron: 20
-    Energy: 15
-  build_time_seconds: 22
-  max_level: 5
-  rank_requirement: 41
-  max_health: 200
-  requires_hq: true
-  required_terrain: null
-  category: defense
-  produces: null
-  requires_agent: false
-  storage_capacity: 0
-  unlocks: []
-  map_symbol: RL
