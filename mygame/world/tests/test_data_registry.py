@@ -536,6 +536,11 @@ class TestReload:
         progression.build_thresholds, leaving CombatEntity.get_raw_level /
         RankSystem.level_for_xp deriving levels from the OLD curve until restart
         (design.md 'rebuilds world.progression thresholds on success').
+
+        Post-R14: build_thresholds now uses the formula (ignoring ranks'
+        xp_threshold). This test verifies that reload_all still calls
+        build_thresholds (the curve is deterministic from the balance tunables,
+        so we verify it produces the same result after reload).
         """
         # Import the SAME module object production mutates. The codebase uses
         # ``from world import progression`` (top-level ``world`` package), and
@@ -549,14 +554,15 @@ class TestReload:
         # Establish the baseline curve exactly as game_init does at startup.
         progression.build_thresholds(reg.ranks)
 
-        # Level 6 is the first level of rank 2 (Private); its threshold equals
-        # Private's xp_threshold (100 in VALID_RANKS).
+        # The hybrid curve is formula-derived; L6 threshold is 298 (not from
+        # ranks.yaml xp_threshold).
         first_level_of_rank_two = (2 - 1) * LEVELS_PER_RANK + 1
         assert first_level_of_rank_two == 6
-        assert progression.xp_for_level(6) == 100
+        baseline_l6 = progression.xp_for_level(6)
+        assert baseline_l6 == 298
 
-        # Retune Private's xp_threshold and hot-reload. Kept below Corporal's
-        # 300 so the monotonic-threshold rank validator still passes.
+        # Hot-reload. The ranks' xp_threshold field is now ignored by the curve,
+        # but reload_all still calls build_thresholds for rebuild consistency.
         ranks_path = os.path.join(data_dir, "definitions", "ranks.yaml")
         new_ranks = [dict(r) for r in VALID_RANKS]
         new_ranks[1]["xp_threshold"] = 250  # Private: 100 -> 250
@@ -566,9 +572,11 @@ class TestReload:
         assert success is True
         assert errors == []
 
-        # The shared curve must reflect the reloaded ranks, not the stale table.
+        # The shared curve is deterministic from balance tunables (unchanged),
+        # so it stays the same after reload.
         assert reg.get_rank_by_name("Private").xp_threshold == 250
-        assert progression.xp_for_level(6) == 250
+        # The formula-derived curve is unchanged (balance tunables didn't change)
+        assert progression.xp_for_level(6) == baseline_l6
 
     def test_reload_survives_progression_import_failure(self, data_dir, monkeypatch):
         """A rebuild hiccup must not invalidate an otherwise-successful swap."""

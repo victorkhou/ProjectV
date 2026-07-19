@@ -639,8 +639,8 @@ class TestRankUpPlanetAccess(unittest.TestCase):
         self.assertFalse(rank_sys.can_access_planet(player, "forge"))
 
         # Award enough XP to reach level 11+ (Corporal, rank 3)
-        # Forge requires level 11
-        rank_sys.award_xp(player, 700, reason="combat")
+        # Forge requires level 11; L11 threshold = 1038
+        rank_sys.award_xp(player, 1038, reason="combat")
 
         # Verify promotion happened
         self.assertEqual(player.db.rank_level, 3)
@@ -653,7 +653,8 @@ class TestRankUpPlanetAccess(unittest.TestCase):
         self.assertFalse(rank_sys.can_access_planet(player, "tundra"))
 
         # Award more XP to reach level 16+ (Sergeant, rank 4)
-        rank_sys.award_xp(player, 900, reason="combat")
+        # L16 threshold = 2882; already have 1038, need 2882 - 1038 = 1844 more
+        rank_sys.award_xp(player, 1844, reason="combat")
         self.assertEqual(player.db.rank_level, 4)
         self.assertGreaterEqual(player.db.level, 16)
         self.assertTrue(rank_sys.can_access_planet(player, "tundra"))
@@ -676,8 +677,9 @@ class TestDemotionReserveRestore(unittest.TestCase):
         rank_sys = sys["rank_system"]
 
         # Start at Corporal (rank 3, agent_cap=4) with enough XP
+        # L11 threshold = 1038
         player = FakePlayer(
-            combat_xp=600, rank_level=3, level=11,
+            combat_xp=1038, rank_level=3, level=11,
             next_agent_id=1,
             resources={
                 "Wood": 99999, "Stone": 99999, "Iron": 99999,
@@ -703,9 +705,9 @@ class TestDemotionReserveRestore(unittest.TestCase):
             ok, _ = agent_sys.assign_agent(player, npc.db.agent_id, "guard")
             self.assertTrue(ok)
 
-        # Demote: deduct XP to drop below Corporal (600) to Private (200)
-        # Player has 600 XP, deduct 500 → 100 XP → Recruit (rank 1, cap=2)
-        rank_sys.deduct_xp(player, 500)
+        # Demote: deduct XP to drop below Private (298) into Recruit
+        # Player has 1038 XP, deduct 800 → 238 XP → L5 → Recruit (rank 1, cap=2)
+        rank_sys.deduct_xp(player, 800)
 
         self.assertEqual(player.db.rank_level, 1)
 
@@ -725,7 +727,8 @@ class TestDemotionReserveRestore(unittest.TestCase):
             self.assertFalse(ok)
 
         # Re-rank: award XP back to Corporal (rank 3, cap=4)
-        rank_sys.award_xp(player, 600, reason="combat")
+        # Need to reach L11 (1038 XP); currently at 238, award 800
+        rank_sys.award_xp(player, 800, reason="combat")
         self.assertEqual(player.db.rank_level, 3)
 
         # Agents should be restored (no longer reserved)
@@ -748,7 +751,8 @@ class TestYAMLHotReload(unittest.TestCase):
     def test_hot_reload_preserves_game_state(self):
         """Reload registry data while game objects retain their state."""
         sys = _make_all_systems()
-        player = FakePlayer(combat_xp=120000, rank_level=12, level=56, resources={
+        # 120000 XP -> L57 -> rank 9 (Colonel) under the hybrid curve
+        player = FakePlayer(combat_xp=120000, rank_level=9, level=57, resources={
             "Wood": 9999, "Stone": 9999, "Iron": 9999,
             "Energy": 0, "Circuits": 0, "Nexium": 0,
         })

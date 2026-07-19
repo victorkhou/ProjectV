@@ -5,11 +5,24 @@ Pure-Python module-level helper that holds the precomputed level->XP
 threshold table. This is the single source of truth for the XP curve so
 that both ``CombatEntity`` (``typeclasses/combat_entity.py``) and
 ``RankSystem`` (``world/systems/rank_system.py``) derive levels from one
-place without duplicating the linear-interpolation logic.
+place without duplicating the curve logic.
 
-The table is built from ``DataRegistry.ranks`` and the tuning constants
-(``LEVELS_PER_RANK``, ``MAX_LEVEL``, ``FINAL_RANK_XP_PER_LEVEL``), exactly
-reproducing the curve that ``RankSystem._rebuild_thresholds`` produced.
+**Hybrid curve (early-game rebalance R14/D11).** The per-level XP delta is
+anchored at ``xp_curve_base_delta`` (40) for L1→L2, grows by
+``xp_curve_early_ratio`` (+20%) per level through ``xp_curve_knee_level``
+(L20), then by ``xp_curve_late_ratio`` (+5%) per level to ``MAX_LEVEL``
+(100). This replaces the old ranks.yaml ``xp_threshold`` interpolation and
+the ``FINAL_RANK_XP_PER_LEVEL`` constant: pure +20% compounding to L100 was
+evaluated and rejected (a ×69M growth factor — a mathematical wall around
+L45–50 given roughly flat XP income), while the hybrid lands L100 at ~1.09M
+XP (~360 hours at sustained combat income). The L2 delta of 40 XP is
+deliberately identical to the old curve, so all economy-XP calibration
+carries over unchanged.
+
+``build_thresholds(ranks)`` keeps its historical signature (every composition
+root and hot-reload path calls it with ``DataRegistry.ranks``) but now reads
+curve TUNABLES from the live balance config when available — the *ranks*
+argument only trips a rebuild, it no longer supplies thresholds.
 
 This module must stay free of Evennia imports and must not import
 ``RankSystem`` at module load time. To avoid a circular import
@@ -23,53 +36,93 @@ from __future__ import annotations
 
 from typing import Any
 
-from world.constants import (
-    MAX_LEVEL,
-    LEVELS_PER_RANK,
-    FINAL_RANK_XP_PER_LEVEL,
-)
+from world.constants import MAX_LEVEL
+
+#: Hybrid-curve defaults (mirrored in BalanceConfig / balance.yaml — the
+#: build reads the live balance first and falls back to these).
+DEFAULT_BASE_DELTA = 40
+DEFAULT_EARLY_RATIO = 1.2
+DEFAULT_LATE_RATIO = 1.05
+DEFAULT_KNEE_LEVEL = 20
 
 #: Precomputed level->XP threshold table. Index 0 is unused; valid
 #: indices are 1..MAX_LEVEL. Empty until ``build_thresholds`` runs.
 _level_thresholds: list[int] = []
 
 
-def build_thresholds(ranks: Any) -> list[int]:
-    """Build and cache the level->XP threshold table from registry ranks.
+def _curve_tunables() -> tuple[int, float, float, int]:
+    """Read the hybrid-curve tunables from the live balance, else defaults.
 
-    Reproduces ``RankSystem._rebuild_thresholds`` EXACTLY: for each rank,
-    linearly interpolate ``LEVELS_PER_RANK`` levels between consecutive rank
-    ``xp_threshold`` values; the final rank uses ``FINAL_RANK_XP_PER_LEVEL``
-    per level (no next rank to interpolate against).
+    Reaches the registry via the definitions-provider choke point (the same
+    lazy path ``_ensure_initialized`` uses) so a balance.yaml retune of the
+    curve takes effect on the next ``build_thresholds`` call — no code edit.
+    Falls back to the module defaults in stub/test contexts.
+    """
+    try:
+        from world.adapters.registry_definitions_provider import default_balance
 
-    Idempotent: calling it repeatedly with the same ``ranks`` produces the
-    same table. Call once at server start and again on hot-reload.
+        bal = default_balance()
+        return (
+            int(getattr(bal, "xp_curve_base_delta", DEFAULT_BASE_DELTA)),
+            float(getattr(bal, "xp_curve_early_ratio", DEFAULT_EARLY_RATIO)),
+            float(getattr(bal, "xp_curve_late_ratio", DEFAULT_LATE_RATIO)),
+            int(getattr(bal, "xp_curve_knee_level", DEFAULT_KNEE_LEVEL)),
+        )
+    except Exception:
+        return (DEFAULT_BASE_DELTA, DEFAULT_EARLY_RATIO,
+                DEFAULT_LATE_RATIO, DEFAULT_KNEE_LEVEL)
 
-    Args:
-        ranks: An iterable of rank definitions, each exposing ``level`` and
-            ``xp_threshold`` attributes (e.g. ``DataRegistry.ranks``).
+
+def xp_delta(level: int, *, base_delta: int | None = None,
+             early_ratio: float | None = None,
+             late_ratio: float | None = None,
+             knee_level: int | None = None) -> int:
+    """XP needed to go from ``level - 1`` to ``level`` (hybrid curve, D11).
+
+    ``delta(n) = base × early^(n−2)`` for ``n <= knee``;
+    ``delta(n) = delta(knee) × late^(n−knee)`` beyond it. The L21 delta
+    derives from ``delta(20)`` so there is no discontinuity at the knee.
+    Level 1 costs 0 (the starting level).
+    """
+    if level <= 1:
+        return 0
+    if base_delta is None:
+        base_delta, early_ratio, late_ratio, knee_level = _curve_tunables()
+    if level <= knee_level:
+        return round(base_delta * early_ratio ** (level - 2))
+    knee_delta = base_delta * early_ratio ** (knee_level - 2)
+    return round(knee_delta * late_ratio ** (level - knee_level))
+
+
+def build_thresholds(ranks: Any = None) -> list[int]:
+    """Build and cache the level->XP threshold table from the hybrid formula.
+
+    The *ranks* argument is accepted for backward compatibility with every
+    composition-root / hot-reload call site (``build_thresholds(registry
+    .ranks)``) but no longer supplies threshold data — the curve is the
+    R14/D11 formula, parameterized by the live balance tunables
+    (``xp_curve_base_delta`` / ``early_ratio`` / ``late_ratio`` /
+    ``knee_level``). Rank definitions now carry only names/agent-caps/planet
+    access; rank membership derives from ``RANK_BANDS``.
+
+    Idempotent for fixed tunables. Call once at server start and again on
+    hot-reload (a balance retune of the curve then takes effect).
 
     Returns:
         The newly built threshold table (also cached module-side).
     """
     global _level_thresholds
 
-    sorted_ranks = sorted(ranks, key=lambda r: r.level)
+    base_delta, early_ratio, late_ratio, knee_level = _curve_tunables()
+
     thresholds = [0] * (MAX_LEVEL + 1)  # index 0 unused, 1..MAX_LEVEL
-
-    for i, rank_def in enumerate(sorted_ranks):
-        base_xp = rank_def.xp_threshold
-        if i + 1 < len(sorted_ranks):
-            next_xp = sorted_ranks[i + 1].xp_threshold
-        else:
-            # Final rank: use a fixed interval per level
-            next_xp = base_xp + LEVELS_PER_RANK * FINAL_RANK_XP_PER_LEVEL
-
-        interval = (next_xp - base_xp) / LEVELS_PER_RANK
-        for sub in range(LEVELS_PER_RANK):
-            lvl = (rank_def.level - 1) * LEVELS_PER_RANK + sub + 1
-            if 1 <= lvl <= MAX_LEVEL:
-                thresholds[lvl] = int(base_xp + sub * interval)
+    running = 0
+    for lvl in range(2, MAX_LEVEL + 1):
+        running += xp_delta(
+            lvl, base_delta=base_delta, early_ratio=early_ratio,
+            late_ratio=late_ratio, knee_level=knee_level,
+        )
+        thresholds[lvl] = running
 
     _level_thresholds = thresholds
     return _level_thresholds
@@ -83,24 +136,15 @@ def is_initialized() -> bool:
 def _ensure_initialized() -> bool:
     """Best-effort lazy build of the threshold table.
 
-    If the table is not yet built, attempt to obtain the singleton
-    ``DataRegistry`` and build from its ranks. Used so ``CombatEntity``
-    stays usable in the Evennia-stub test suite and in any uninitialized
-    state. Returns ``True`` if the table is available afterwards.
+    The hybrid curve needs no rank data, so the lazy build always succeeds —
+    it simply uses the balance tunables when a registry is live and the
+    module defaults otherwise (e.g. the fast unit-test suite).
     """
     if _level_thresholds:
         return True
     try:
-        from world.adapters.registry_definitions_provider import (
-            default_definitions_provider,
-        )
-
-        provider = default_definitions_provider()
-        if provider is not None and getattr(provider, "ranks", None):
-            build_thresholds(provider.ranks)
+        build_thresholds()
     except Exception:
-        # Registry unavailable (e.g. fast unit-test suite) — treat as
-        # uninitialized and let callers apply their fallback.
         return False
     return bool(_level_thresholds)
 
@@ -129,7 +173,7 @@ def level_for_xp(xp: int, thresholds: list[int] | None = None) -> int:
         xp = 0
 
     best = 1
-    for lvl in range(1, MAX_LEVEL + 1):
+    for lvl in range(1, min(MAX_LEVEL, len(table) - 1) + 1):
         if table[lvl] <= xp:
             best = lvl
         else:
@@ -154,7 +198,7 @@ def xp_for_level(level: int, thresholds: list[int] | None = None) -> int:
         if not _ensure_initialized():
             return 0
         table = _level_thresholds
-    level = max(1, min(level, MAX_LEVEL))
+    level = max(1, min(level, MAX_LEVEL, len(table) - 1))
     return table[level]
 
 

@@ -27,8 +27,8 @@ from world.event_bus import RANK_PROMOTED, RANK_DEMOTED, LEVEL_CHANGED
 from world.systems.base_system import BaseSystem
 from world.constants import (
     MAX_LEVEL,
-    LEVELS_PER_RANK,
     NUM_RANKS,
+    RANK_BANDS,
 )
 
 if TYPE_CHECKING:
@@ -40,15 +40,25 @@ logger = logging.getLogger("mygame.rank_system")
 
 
 def rank_from_level(level: int) -> int:
-    """Derive rank number (1-NUM_RANKS) from player level (1-MAX_LEVEL)."""
-    return min(NUM_RANKS, max(1, (level - 1) // LEVELS_PER_RANK + 1))
+    """Derive rank number (1-NUM_RANKS) from player level (1-MAX_LEVEL).
+
+    A ``RANK_BANDS`` lookup (R14.5 — widening bands replaced the uniform
+    LEVELS_PER_RANK width). Levels below band 1 clamp to rank 1; levels above
+    the last band clamp to NUM_RANKS.
+    """
+    level = max(1, min(int(level or 1), MAX_LEVEL))
+    for rank, (low, high) in RANK_BANDS.items():
+        if low <= level <= high:
+            return rank
+    return NUM_RANKS if level > RANK_BANDS[NUM_RANKS][1] else 1
 
 
 def level_range_for_rank(rank: int) -> tuple[int, int]:
-    """Return (min_level, max_level) for a rank number (1-12)."""
-    low = (rank - 1) * LEVELS_PER_RANK + 1
-    high = rank * LEVELS_PER_RANK
-    return low, min(high, MAX_LEVEL)
+    """Return (min_level, max_level) for a rank number (1-12) per RANK_BANDS."""
+    band = RANK_BANDS.get(int(rank))
+    if band is None:
+        return 1, MAX_LEVEL
+    return band
 
 
 def player_meets_rank(player_level: int, required_rank_name: str, registry) -> bool:
@@ -192,14 +202,17 @@ class RankSystem(BaseSystem):
             xp_to_next_level = next_threshold - current_xp
 
         # XP to next rank
+        # Next rank begins at the next band's start level (R14 — rank defs no
+        # longer carry authoritative xp_thresholds; the hybrid curve does).
         xp_to_next_rank = None
         next_rank = self._get_next_rank(rank_num)
         if next_rank is not None:
-            xp_to_next_rank = next_rank.xp_threshold - current_xp
+            next_band_start, _ = level_range_for_rank(rank_num + 1)
+            xp_to_next_rank = progression.xp_for_level(next_band_start) - current_xp
 
-        # Sub-level within rank (1-5)
-        _, _ = level_range_for_rank(rank_num)
-        sub_level = ((level - 1) % LEVELS_PER_RANK) + 1
+        # Sub-level within the rank's band (1..band_width)
+        band_low, _ = level_range_for_rank(rank_num)
+        sub_level = level - band_low + 1
 
         return {
             "level": level,
@@ -213,9 +226,10 @@ class RankSystem(BaseSystem):
         }
 
     def get_sub_level(self, player: Any) -> int:
-        """Return the sub-level (1-5) within the current rank."""
+        """Return the sub-level (1..band_width) within the current rank's band."""
         level = self._get_level(player)
-        return ((level - 1) % LEVELS_PER_RANK) + 1
+        band_low, _ = level_range_for_rank(rank_from_level(level))
+        return level - band_low + 1
 
     def can_access_planet(self, player: Any, planet_key: str) -> bool:
         """Check if a player's level allows access to a planet.
@@ -271,7 +285,8 @@ class RankSystem(BaseSystem):
         if new_level != old_level:
             rank_def = self._get_rank_by_level(new_rank_num)
             rank_name = rank_def.name.replace("_", " ") if rank_def else f"Rank {new_rank_num}"
-            sub = ((new_level - 1) % LEVELS_PER_RANK) + 1
+            band_low, _ = level_range_for_rank(new_rank_num)
+            sub = new_level - band_low + 1
             self.notify(player, "rank_level_up", level=new_level, rank_name=rank_name, sub=sub)
 
         # Fire rank events if rank boundary crossed

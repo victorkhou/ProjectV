@@ -555,7 +555,8 @@ class TestRankPromotionFiresEventAndReserveHandling(unittest.TestCase):
         self.assertEqual([a.db.agent_id for a in reserved], [2])
 
         # Award enough XP to cross from Recruit into Private (level 1 → 6).
-        self.rank_system.award_xp(self.player, 100, "kill")
+        # L6 threshold = 298 under the hybrid curve.
+        self.rank_system.award_xp(self.player, 298, "kill")
 
         # The player actually promoted a rank.
         self.assertEqual(self.player.db.rank_level, 2)  # Private

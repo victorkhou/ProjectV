@@ -514,19 +514,20 @@ def _coerce_level(value: Any) -> int | None:
 
 
 def get_player_level(entity: Any, default: int = 1) -> int:
-    """Read an entity's Entity_Level (1-60), with legacy fallback.
+    """Read an entity's Entity_Level (1-100), with legacy fallback.
 
     Prefers ``db.level``. Falls back to the legacy ``db.rank_level`` (a 1-12
-    rank number) by mapping it to the first level of that rank
-    (``(rank - 1) * LEVELS_PER_RANK + 1``); a ``rank_level`` already above the
-    rank range is treated as an actual level. Returns ``default`` when the
-    entity has no ``db`` or neither attribute is set.
+    rank number) by mapping it to the first level of that rank's band via
+    ``RANK_BANDS`` (R14.5: widening bands replaced the uniform LEVELS_PER_RANK
+    width); a ``rank_level`` already above the rank range is treated as an
+    actual level. Returns ``default`` when the entity has no ``db`` or neither
+    attribute is set.
 
     Single source of truth shared by RankSystem, TechLabSystem, PowerupSystem
     and AgentSystem so the "which level is this" rule cannot drift between them.
     Non-numeric stored values are treated as unset rather than raising.
     """
-    from world.constants import NUM_RANKS, LEVELS_PER_RANK
+    from world.constants import NUM_RANKS, RANK_BANDS
 
     db = getattr(entity, "db", None)
     if db is None:
@@ -537,7 +538,8 @@ def get_player_level(entity: Any, default: int = 1) -> int:
     rl = _coerce_level(getattr(db, "rank_level", None))
     if rl is not None:
         if 1 <= rl <= NUM_RANKS:
-            return (rl - 1) * LEVELS_PER_RANK + 1
+            band = RANK_BANDS.get(rl)
+            return band[0] if band else 1
         return rl
     return default
 

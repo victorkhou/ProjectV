@@ -82,12 +82,12 @@ class FakePlayer(CombatEntity):
             researched_techs=researched_techs,
         )
 
-# Test ranks: 5 ranks, so max player level = 25
-# Rank 1 (Recruit): levels 1-5, XP 0-99
-# Rank 2 (Private): levels 6-10, XP 100-299
-# Rank 3 (Corporal): levels 11-15, XP 300-599
-# Rank 4 (Sergeant): levels 16-20, XP 600-999
-# Rank 5 (Captain): levels 21-25, XP 1000+
+# Test ranks: 5 ranks using RANK_BANDS (formula-derived XP curve):
+# Rank 1 (Recruit): levels 1-5, XP 0-297
+# Rank 2 (Private): levels 6-10, XP 298-1037
+# Rank 3 (Corporal): levels 11-15, XP 1038-2881
+# Rank 4 (Sergeant): levels 16-21, XP 2882-8481
+# Rank 5 (Captain): levels 22-28, XP 8482+
 
 def _make_test_ranks():
     return [
@@ -189,23 +189,23 @@ class TestDeductXP(unittest.TestCase):
 
 class TestPromotion(unittest.TestCase):
     def test_promote_on_threshold(self):
-        """At 100 XP, player reaches level 6 = Private (rank 2)."""
+        """At 298 XP, player reaches level 6 = Private (rank 2)."""
         player = FakePlayer(combat_xp=0, level=1)
         system, _ = _make_rank_system()
-        system.award_xp(player, 100, "kill")
+        system.award_xp(player, 298, "kill")
         self.assertEqual(player.db.rank_level, 2)  # Private
         self.assertEqual(player.db.level, 6)
 
     def test_promote_above_threshold(self):
         player = FakePlayer(combat_xp=0, level=1)
         system, _ = _make_rank_system()
-        system.award_xp(player, 150, "kill")
+        system.award_xp(player, 400, "kill")
         self.assertEqual(player.db.rank_level, 2)
 
     def test_multi_rank_promotion(self):
         player = FakePlayer(combat_xp=0, level=1)
         system, _ = _make_rank_system()
-        system.award_xp(player, 1000, "massive kill")
+        system.award_xp(player, 8482, "massive kill")
         self.assertEqual(player.db.rank_level, 5)  # Captain
 
     def test_no_promotion_below_threshold(self):
@@ -222,7 +222,7 @@ class TestPromotion(unittest.TestCase):
         system = RankSystem(registry=_make_registry(), event_bus=event_bus)
         system._rebuild_thresholds()
         player = FakePlayer(combat_xp=0, level=1)
-        system.award_xp(player, 100, "kill")
+        system.award_xp(player, 298, "kill")
         self.assertEqual(len(events), 1)
         self.assertEqual(events[0]["old_rank"].name, "Recruit")
         self.assertEqual(events[0]["new_rank"].name, "Private")
@@ -232,7 +232,7 @@ class TestPromotion(unittest.TestCase):
         is the only acquisition path."""
         player = FakePlayer(combat_xp=0, level=1, researched_techs=set())
         system, _ = _make_rank_system()
-        system.award_xp(player, 300, "kill")
+        system.award_xp(player, 1038, "kill")
         self.assertEqual(player.db.rank_level, 3)
         # techs set stays empty — no auto-grant
         self.assertEqual(player.db.researched_techs, set())
@@ -253,9 +253,9 @@ class TestDemotion(unittest.TestCase):
         self.assertEqual(player.db.rank_level, 1)
 
     def test_no_demotion_above_threshold(self):
-        player = FakePlayer(combat_xp=200, level=8)  # Private
+        player = FakePlayer(combat_xp=500, level=7)  # Private
         system, _ = _make_rank_system()
-        system.deduct_xp(player, 50)  # XP=150, still Private
+        system.deduct_xp(player, 50)  # XP=450, still Private (L7 threshold=398)
         self.assertEqual(player.db.rank_level, 2)
 
     def test_demotion_publishes_event(self):
@@ -294,12 +294,12 @@ class TestGetRankAndStatus(unittest.TestCase):
         self.assertEqual(rank.level, 3)
 
     def test_get_status_shows_xp_to_next(self):
-        player = FakePlayer(combat_xp=150, level=8)  # Private
+        player = FakePlayer(combat_xp=500, level=7)  # Private
         system, _ = _make_rank_system()
         status = system.get_status(player)
         self.assertEqual(status["rank_name"], "Private")
-        self.assertEqual(status["combat_xp"], 150)
-        self.assertEqual(status["xp_to_next_rank"], 150)  # 300 - 150
+        self.assertEqual(status["combat_xp"], 500)
+        self.assertEqual(status["xp_to_next_rank"], 538)  # 1038 - 500
 
     def test_get_status_max_rank_no_next(self):
         player = FakePlayer(combat_xp=2000, level=22)  # Captain
@@ -312,9 +312,12 @@ class TestGetRankAndStatus(unittest.TestCase):
 
 class TestEdgeCases(unittest.TestCase):
     def test_at_max_rank_no_promotion(self):
-        player = FakePlayer(combat_xp=1000, level=21)  # Captain
+        """Captain is the highest rank (5) in this test registry.
+        Award XP within band 5 (L22-28) to stay at rank 5."""
+        player = FakePlayer(combat_xp=8482, level=22)  # Captain
         system, _ = _make_rank_system()
-        system.award_xp(player, 5000, "overkill")
+        # Award enough to reach L28 (top of band 5) but not beyond
+        system.award_xp(player, 8384, "overkill")  # 8482+8384=16866 → L28
         self.assertEqual(player.db.rank_level, 5)
 
     def test_at_min_rank_no_demotion(self):
@@ -325,7 +328,7 @@ class TestEdgeCases(unittest.TestCase):
         self.assertEqual(player.db.combat_xp, 0)
 
     def test_exact_threshold_stays_at_rank(self):
-        player = FakePlayer(combat_xp=300, level=11)  # Corporal
+        player = FakePlayer(combat_xp=1038, level=11)  # Corporal
         system, _ = _make_rank_system()
         system.check_demotion(player)
         self.assertEqual(player.db.rank_level, 3)
@@ -335,17 +338,17 @@ class TestSubLevel(unittest.TestCase):
     """Sub-level = ((level-1) % 5) + 1."""
 
     def test_sub_level_at_rank_start(self):
-        player = FakePlayer(combat_xp=100, level=6)  # Private, sub=1
+        player = FakePlayer(combat_xp=298, level=6)  # Private, sub=1
         system, _ = _make_rank_system()
         self.assertEqual(system.get_sub_level(player), 1)
 
     def test_sub_level_mid_rank(self):
-        player = FakePlayer(combat_xp=180, level=8)  # Private, sub=3
+        player = FakePlayer(combat_xp=517, level=8)  # Private, sub=3
         system, _ = _make_rank_system()
         self.assertEqual(system.get_sub_level(player), 3)
 
     def test_sub_level_just_before_next_rank(self):
-        player = FakePlayer(combat_xp=299, level=10)  # Private, sub=5
+        player = FakePlayer(combat_xp=832, level=10)  # Private, sub=5
         system, _ = _make_rank_system()
         self.assertEqual(system.get_sub_level(player), 5)
 
@@ -355,22 +358,24 @@ class TestSubLevel(unittest.TestCase):
         self.assertEqual(system.get_sub_level(player), 1)
 
     def test_sub_level_first_rank_mid(self):
-        player = FakePlayer(combat_xp=50, level=3)  # Recruit, sub=3
+        player = FakePlayer(combat_xp=88, level=3)  # Recruit, sub=3
         system, _ = _make_rank_system()
         self.assertEqual(system.get_sub_level(player), 3)
 
     def test_sub_level_max_rank_uses_fixed_interval(self):
-        player = FakePlayer(combat_xp=1000, level=21)  # Captain, sub=1
+        """Captain (rank 5) starts at L22 (band_low=22), sub = level - 22 + 1."""
+        player = FakePlayer(combat_xp=8482, level=22)  # Captain, sub=1
         system, _ = _make_rank_system()
         self.assertEqual(system.get_sub_level(player), 1)
 
     def test_sub_level_max_rank_level_2(self):
-        player = FakePlayer(combat_xp=11000, level=22)  # Captain, sub=2
+        player = FakePlayer(combat_xp=9715, level=23)  # Captain, sub=2
         system, _ = _make_rank_system()
         self.assertEqual(system.get_sub_level(player), 2)
 
     def test_sub_level_max_rank_capped_at_5(self):
-        player = FakePlayer(combat_xp=100000, level=25)  # Captain, sub=5
+        """Band 5 is L22-28 (width 7). L26 → sub = 26 - 22 + 1 = 5."""
+        player = FakePlayer(combat_xp=13795, level=26)  # Captain, sub=5
         system, _ = _make_rank_system()
         self.assertEqual(system.get_sub_level(player), 5)
 
@@ -379,20 +384,20 @@ class TestSubLevelNotification(unittest.TestCase):
     def test_notification_on_level_up(self):
         """Award XP to cross a level boundary."""
         messages = []
-        # Level 6 = Private sub 1, XP=100. Level 7 threshold = 100+40=140
-        player = FakePlayer(combat_xp=100, level=6)
+        # Level 6 = Private sub 1, XP=298. Level 7 threshold = 398
+        player = FakePlayer(combat_xp=298, level=6)
         player.msg = lambda m: messages.append(m)
         system, _ = _make_rank_system()
-        system.award_xp(player, 40, "test")  # XP=140, level 7
+        system.award_xp(player, 100, "test")  # XP=398, level 7
         self.assertTrue(len(messages) >= 1)
         self.assertIn("Level 7", messages[0])
 
     def test_no_notification_when_level_unchanged(self):
         messages = []
-        player = FakePlayer(combat_xp=100, level=6)
+        player = FakePlayer(combat_xp=298, level=6)
         player.msg = lambda m: messages.append(m)
         system, _ = _make_rank_system()
-        system.award_xp(player, 5, "small")  # XP=105, still level 6
+        system.award_xp(player, 5, "small")  # XP=303, still level 6
         self.assertEqual(len(messages), 0)
 
     def test_notification_on_deduct(self):
@@ -446,7 +451,7 @@ class TestAgentCapInEvents(unittest.TestCase):
         events = []
         bus.subscribe(RANK_PROMOTED, lambda **kw: events.append(kw))
         player = FakePlayer(combat_xp=0, level=1)
-        system.award_xp(player, 100, "test")  # level 6 = Private
+        system.award_xp(player, 298, "test")  # level 6 = Private
         self.assertEqual(len(events), 1)
         self.assertEqual(events[0]["new_agent_cap"], 3)
         self.assertEqual(events[0]["new_rank"].name, "Private")
@@ -562,7 +567,7 @@ class TestGetStatusWithSubLevel(unittest.TestCase):
         self.assertGreater(status["xp_to_next_level"], 0)
 
     def test_status_max_rank_sub_level(self):
-        player = FakePlayer(combat_xp=1000, level=21)  # Captain sub 1
+        player = FakePlayer(combat_xp=8482, level=22)  # Captain sub 1
         system, _ = _make_rank_system()
         status = system.get_status(player)
         self.assertEqual(status["sub_level"], 1)
@@ -649,7 +654,7 @@ class TestPreservedPlayerBehavior(unittest.TestCase):
     def test_no_message_when_level_unchanged(self):
         """No notification fires when the level does not change (Req 4.5)."""
         messages = []
-        player = FakePlayer(combat_xp=100, level=6)
+        player = FakePlayer(combat_xp=298, level=6)
         player.msg = lambda m: messages.append(m)
         system, _ = _make_rank_system()
         system.award_xp(player, 5, "small")  # stays level 6
@@ -694,7 +699,7 @@ class TestPreservedPlayerBehavior(unittest.TestCase):
         """R13.1: promotion never auto-grants technologies."""
         player = FakePlayer(combat_xp=0, level=1, researched_techs=set())
         system, _ = _make_rank_system()
-        system.award_xp(player, 300, "kill")  # -> Corporal (rank 3)
+        system.award_xp(player, 1038, "kill")  # -> Corporal (rank 3)
         self.assertEqual(player.db.rank_level, 3)
         self.assertEqual(player.db.researched_techs, set())
 
@@ -713,12 +718,12 @@ class TestPreservedPlayerBehavior(unittest.TestCase):
     def test_no_tech_change_when_rank_unchanged(self):
         """A level change within the same rank does not alter techs (Req 4.7)."""
         player = FakePlayer(
-            combat_xp=300, level=11,  # Corporal sub 1
+            combat_xp=1038, level=11,  # Corporal sub 1
             researched_techs={"basic_armor", "improved_weapons"},
         )
         system, _ = _make_rank_system()
         before = set(player.db.researched_techs)
-        system.award_xp(player, 40, "test")  # level 12, still Corporal
+        system.award_xp(player, 248, "test")  # level 12, still Corporal
         self.assertEqual(player.db.rank_level, 3)
         self.assertEqual(set(player.db.researched_techs), before)
 

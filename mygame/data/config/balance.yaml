@@ -16,6 +16,15 @@ xp_upgrade_complete: 30      # FLAT per completed upgrade (D6 — no xnew_level)
 xp_harvest_action: 1         # per manual harvest yield (agent harvest excluded)
 xp_agent_trained: 40         # per agent training completion
 
+# --- Progression curve tunables (R14/D11 — 100-level hybrid curve) ---
+# The per-level XP delta starts at base_delta (L2), grows × early_ratio per
+# level through knee_level (L20), then × late_ratio per level to L100.
+# Changing these reshapes the entire threshold table on next build/reload.
+xp_curve_base_delta: 40
+xp_curve_early_ratio: 1.2
+xp_curve_late_ratio: 1.05
+xp_curve_knee_level: 20
+
 gather_amount: 1
 player_default_health: 100
 

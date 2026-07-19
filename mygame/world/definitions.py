@@ -488,6 +488,16 @@ class BalanceConfig:
         0: 1, 40: 2, 100: 3, 180: 4, 280: 5,
     })
 
+    # --- Progression curve tunables (R14/D11) -------------------------- #
+    #: L1→L2 XP delta anchor.
+    xp_curve_base_delta: int = 40
+    #: Per-level growth factor for levels 2..knee_level (+20%).
+    xp_curve_early_ratio: float = 1.2
+    #: Per-level growth factor for levels above knee_level (+5%).
+    xp_curve_late_ratio: float = 1.05
+    #: Level at which the growth rate transitions from early to late.
+    xp_curve_knee_level: int = 20
+
     # --- Variable rewards (early-game rebalance R7, R8) --------------- #
     #: Chance per manual harvest action of a "Rich vein!" critical (×5 yield).
     harvest_crit_chance: float = 0.05

@@ -223,31 +223,40 @@ class TestProperty9SubLevelXPDistribution(unittest.TestCase):
     )
     @settings(max_examples=100)
     def test_random_xp_within_rank_yields_correct_sub_level(self, pair_idx, fraction):
-        """Random XP within a rank range maps to the correct sub-level per formula."""
+        """Random XP within a rank band maps to the correct sub-level.
+
+        Post-R14: sub-level = level - band_low + 1 (purely level-based, not
+        evenly-spaced XP intervals). Validate that get_sub_level matches this
+        formula for any XP that falls within a rank's level band.
+        """
+        from mygame.world.systems.rank_system import level_range_for_rank, rank_from_level
+        from mygame.world.progression import xp_for_level
+
         rank_low, rank_high = _RANK_PAIRS[pair_idx]
-        t1 = rank_low.xp_threshold
-        t2 = rank_high.xp_threshold
-        interval = (t2 - t1) / 5
+        band_low, band_high = level_range_for_rank(rank_low.level)
 
-        # Generate XP within [T1, T2)
-        xp = int(t1 + fraction * (t2 - t1))
-        assume(t1 <= xp < t2)
+        # Generate XP within [threshold(band_low), threshold(band_high+1))
+        t_start = xp_for_level(band_low)
+        t_end = xp_for_level(band_high + 1) if band_high < 100 else xp_for_level(100) + 1
+        xp = int(t_start + fraction * (t_end - t_start - 1))
+        assume(t_start <= xp < t_end)
 
-        # Expected sub-level from formula
-        xp_into_rank = xp - t1
-        expected_level = min(int(xp_into_rank // interval) + 1, 5)
+        # Compute the player level from XP
+        computed_level = self.rank_system.level_for_xp(xp)
+        assume(rank_from_level(computed_level) == rank_low.level)
+
+        # Expected sub-level from band math
+        expected_sub = computed_level - band_low + 1
 
         player = _make_player(rank_level=rank_low.level, combat_xp=xp)
-        # Compute the actual player level from XP using the rank system
-        computed_level = self.rank_system.level_for_xp(xp)
         player.db.level = computed_level
 
         result = self.rank_system.get_sub_level(player)
 
         self.assertEqual(
-            result, expected_level,
-            f"At XP {xp} (rank {rank_low.name}, T1={t1}, T2={t2}, "
-            f"interval={interval}), expected sub-level {expected_level}, got {result}"
+            result, expected_sub,
+            f"At XP {xp} (rank {rank_low.name}, level {computed_level}, "
+            f"band_low={band_low}), expected sub-level {expected_sub}, got {result}"
         )
 
     @given(pair_idx=rank_pair_index_st)

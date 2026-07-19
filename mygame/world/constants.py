@@ -23,20 +23,38 @@ Grouped by system:
 from enum import StrEnum
 
 # ------------------------------------------------------------------ #
-#  Rank / Level progression
+#  Rank / Level progression (early-game rebalance R14/D11)
 # ------------------------------------------------------------------ #
 
 #: Total number of ranks (Recruit through Marshal)
 NUM_RANKS = 12
 
-#: Player levels per rank
+#: Maximum player level — 100-level hybrid-curve ladder (R14.1).
+MAX_LEVEL = 100
+
+#: Rank number → (min_level, max_level) — WIDENING bands over the 100-level
+#: ladder (R14.5). The first three bands stay 5 levels wide so Corporal still
+#: begins at L11 (preserving the Lab L11 / tech-gate alignment); later bands
+#: widen so late ranks are long-term goals. Marshal is the L100 capstone.
+RANK_BANDS: dict[int, tuple[int, int]] = {
+    1: (1, 5),      # Recruit
+    2: (6, 10),     # Private
+    3: (11, 15),    # Corporal
+    4: (16, 21),    # Sergeant
+    5: (22, 28),    # Staff_Sergeant
+    6: (29, 36),    # Lieutenant
+    7: (37, 45),    # Captain
+    8: (46, 56),    # Major
+    9: (57, 69),    # Colonel
+    10: (70, 84),   # Brigadier
+    11: (85, 99),   # General
+    12: (100, 100), # Marshal (capstone — only maxed players hold it)
+}
+
+#: LEGACY — uniform rank width, retired as progression math by the R14 band
+#: table. Kept ONLY for the pre-band `rank_level → level` fallback mapping in
+#: `world.utils.get_player_level` migration paths; do NOT use in new code.
 LEVELS_PER_RANK = 5
-
-#: Maximum player level (NUM_RANKS × LEVELS_PER_RANK)
-MAX_LEVEL = NUM_RANKS * LEVELS_PER_RANK
-
-#: XP interval per level within the final rank (no next rank to interpolate)
-FINAL_RANK_XP_PER_LEVEL = 10_000
 
 #: Evennia's Limbo room ID (used to detect first-login characters)
 LIMBO_ROOM_ID = 2

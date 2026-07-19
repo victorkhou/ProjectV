@@ -68,10 +68,11 @@ from mygame.typeclasses.combat_entity import CombatEntity  # noqa: E402
 class FakeDB:
     """Simulates Evennia's db attribute handler."""
     def __init__(self, combat_xp=0, rank_level=1, level=None, researched_techs=None):
+        from mygame.world.systems.rank_system import level_range_for_rank
         self.combat_xp = combat_xp
         self.rank_level = rank_level
-        # Compute level from rank: first level of that rank
-        self.level = level if level is not None else ((rank_level - 1) * 5 + 1)
+        # Compute level from rank: first level of that rank's band
+        self.level = level if level is not None else level_range_for_rank(rank_level)[0]
         self.researched_techs = researched_techs if researched_techs is not None else set()
 
 class FakePlayer(CombatEntity):
@@ -221,7 +222,8 @@ class TestProperty17RankAssignmentFromXP(unittest.TestCase):
         system = RankSystem(registry=registry, event_bus=event_bus)
 
         start_rank = data.draw(st.sampled_from(ranks))
-        start_level = (start_rank.level - 1) * 5 + 1
+        from mygame.world.systems.rank_system import level_range_for_rank
+        start_level = level_range_for_rank(start_rank.level)[0]
         player = FakePlayer(
             combat_xp=start_rank.xp_threshold,
             rank_level=start_rank.level,
