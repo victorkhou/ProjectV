@@ -146,10 +146,12 @@ let map_renderer_plugin = (function () {
     };
 
     function loadAllSprites(){
-        // Buildings — keyed <abbr>_<own|enemy>, matching tile.building.type.
-        ["hq","ex","ac","lb","ar","tu","vt","rd","wl","bk","mb","rl"].forEach(function(a){
-            _loadSprite("buildings", a+"_own",   "building_"+a+"_own.png");
-            _loadSprite("buildings", a+"_enemy", "building_"+a+"_enemy.png");
+        // Buildings — one icon per CATEGORY (4 buckets). The specific building is
+        // told apart by its abbreviation, overlaid on the icon at draw time
+        // (drawBuilding). Ownership is a cyan (own) / red (enemy) tint + border,
+        // applied at render time, so no per-owner sprite variants are needed.
+        ["headquarters","defense","technology","utility"].forEach(function(c){
+            _loadSprite("buildings", c, "building_"+c+".png");
         });
         _loadSprite("buildings","occupied_overlay","building_occupied_overlay.png");
         _loadSprite("buildings","unknown","building_unknown.png");
@@ -184,63 +186,53 @@ let map_renderer_plugin = (function () {
     var TILE = TILE_SIZE;
     var HALF = TILE/2;
 
-    // Building icons — clean geometric shapes per type
-    var BUILDING_ICONS = {
-        "HQ": function(ctx,x,y,own){
-            // Shield shape
-            var cx=x+HALF,cy=y+HALF;
-            ctx.beginPath();ctx.moveTo(cx,y+3);ctx.lineTo(x+TILE-3,y+HALF-2);
-            ctx.lineTo(x+TILE-4,y+TILE-5);ctx.lineTo(cx,y+TILE-2);
-            ctx.lineTo(x+4,y+TILE-5);ctx.lineTo(x+3,y+HALF-2);ctx.closePath();
-            ctx.fillStyle=own?"#00cccc":"#cc3333";ctx.fill();
-            ctx.strokeStyle="#fff";ctx.lineWidth=1;ctx.stroke();
-            ctx.fillStyle="#fff";ctx.font="bold 9px sans-serif";
-            ctx.textAlign="center";ctx.textBaseline="middle";ctx.fillText("H",cx,cy);
-        },
-        "EX": function(ctx,x,y,own){
-            // Pickaxe / diamond
-            ctx.fillStyle=own?"#22aa44":"#cc3333";
-            ctx.beginPath();ctx.moveTo(x+HALF,y+3);ctx.lineTo(x+TILE-3,y+HALF);
-            ctx.lineTo(x+HALF,y+TILE-3);ctx.lineTo(x+3,y+HALF);ctx.closePath();ctx.fill();
-            ctx.strokeStyle="#fff";ctx.lineWidth=1;ctx.stroke();
-            ctx.fillStyle="#fff";ctx.font="bold 8px sans-serif";
-            ctx.textAlign="center";ctx.textBaseline="middle";ctx.fillText("E",x+HALF,y+HALF);
-        },
-        "AC": function(ctx,x,y,own){
-            // Book / square with star
-            ctx.fillStyle=own?"#4488cc":"#cc3333";
-            ctx.fillRect(x+3,y+3,TILE-6,TILE-6);
-            ctx.strokeStyle="#fff";ctx.lineWidth=1;ctx.strokeRect(x+3,y+3,TILE-6,TILE-6);
-            ctx.fillStyle="#ffdd00";ctx.font="bold 10px sans-serif";
-            ctx.textAlign="center";ctx.textBaseline="middle";ctx.fillText("★",x+HALF,y+HALF);
-        },
-        "WL": function(ctx,x,y,own){
-            // Wall — thick horizontal bar
-            ctx.fillStyle=own?"#888888":"#993333";
-            ctx.fillRect(x+1,y+HALF-4,TILE-2,8);
-            ctx.strokeStyle="#aaa";ctx.lineWidth=1;ctx.strokeRect(x+1,y+HALF-4,TILE-2,8);
-        },
-        "TU": function(ctx,x,y,own){
-            // Turret — triangle pointing up
-            ctx.fillStyle=own?"#cc6600":"#cc3333";
-            ctx.beginPath();ctx.moveTo(x+HALF,y+3);ctx.lineTo(x+TILE-4,y+TILE-4);
-            ctx.lineTo(x+4,y+TILE-4);ctx.closePath();ctx.fill();
-            ctx.strokeStyle="#fff";ctx.lineWidth=1;ctx.stroke();
-        },
+    // Building abbreviation → category icon bucket. There are only 4 icons; the
+    // specific building is told apart by its abbreviation, overlaid on the icon.
+    // Mirrors the "map by function" grouping of data/definitions/buildings.yaml
+    // categories: headquarters; defense+military → defense; equipment+research+
+    // intelligence → technology; resource+training+storage+medical → utility.
+    var BUILDING_CATEGORY = {
+        "HQ":"headquarters",
+        "WL":"defense", "TU":"defense", "RL":"defense", "BK":"defense",
+        "AR":"technology", "LB":"technology", "RD":"technology",
+        "EX":"utility", "AC":"utility", "VT":"utility", "MB":"utility",
     };
 
+    // Ownership tint — own = cyan, enemy = red. Applied as a translucent wash +
+    // border over the shared category icon so the 4 base icons still read as
+    // yours vs. theirs.
+    var OWN_TINT   = "rgba(0,220,220,0.30)",  OWN_BORDER   = "#00cccc";
+    var ENEMY_TINT = "rgba(220,60,60,0.32)",  ENEMY_BORDER = "#cc3333";
+
+    // Draw the building's abbreviation centered on the icon: bold white fill with
+    // a solid black outline (block outline) so it stays legible on any icon.
+    function drawBuildingLabel(ctx,cx,cy,label){
+        ctx.font="bold 10px sans-serif";
+        ctx.textAlign="center";ctx.textBaseline="middle";
+        ctx.lineJoin="round";
+        ctx.lineWidth=3;ctx.strokeStyle="#000";ctx.strokeText(label,cx,cy);
+        ctx.fillStyle="#fff";ctx.fillText(label,cx,cy);
+    }
+
     function drawBuilding(ctx,x,y,bld,state){
-        var type=(bld.type||"??").substring(0,2);
+        var type=(bld.type||"??").substring(0,2).toUpperCase();
         var own=bld.own;
         var occupied=bld.occupied;
 
-        // Sprite path: <abbr>_<own|enemy>, else the generic 'unknown' building.
-        var key=type.toLowerCase()+(own?"_own":"_enemy");
-        var spr=SPRITES.buildings[key];
+        // One icon per category (headquarters/defense/technology/utility); the
+        // abbreviation overlaid on top differentiates buildings in the bucket.
+        var cat=BUILDING_CATEGORY[type];
+        var spr=cat?SPRITES.buildings[cat]:null;
         if(!_spriteReady(spr)) spr=SPRITES.buildings["unknown"];
         if(_spriteReady(spr)){
             ctx.drawImage(spr,x+2,y+2,TILE-4,TILE-4);
+            // Ownership wash + border over the shared icon.
+            ctx.fillStyle=own?OWN_TINT:ENEMY_TINT;ctx.fillRect(x+2,y+2,TILE-4,TILE-4);
+            ctx.strokeStyle=own?OWN_BORDER:ENEMY_BORDER;ctx.lineWidth=1.5;
+            ctx.strokeRect(x+2.5,y+2.5,TILE-5,TILE-5);
             if(state==="fog"){ctx.fillStyle="rgba(0,0,0,0.55)";ctx.fillRect(x+2,y+2,TILE-4,TILE-4);}
+            // Abbreviation label (white text, black block outline).
+            drawBuildingLabel(ctx,x+HALF,y+HALF,type);
             if(occupied){
                 var ov=SPRITES.buildings["occupied_overlay"];
                 if(_spriteReady(ov)){ ctx.drawImage(ov,x+2,y+2,TILE-4,TILE-4); }
@@ -249,25 +241,14 @@ let map_renderer_plugin = (function () {
             return;
         }
 
-        // ---- Fallback: original canvas shapes (no sprite available). ----
-        if(occupied){
-            // Dark blue background for occupied buildings
-            ctx.fillStyle="#2244aa";ctx.fillRect(x+2,y+2,TILE-4,TILE-4);
-            ctx.strokeStyle="#4466cc";ctx.lineWidth=1;ctx.strokeRect(x+2,y+2,TILE-4,TILE-4);
-            ctx.fillStyle="#fff";ctx.font="bold 10px sans-serif";
-            ctx.textAlign="center";ctx.textBaseline="middle";ctx.fillText(type,x+HALF,y+HALF);
-            return;
-        }
-        var iconFn=BUILDING_ICONS[type];
-        if(iconFn){iconFn(ctx,x,y,own);return;}
-        // Fallback: rounded rect with abbreviation
+        // ---- Fallback: rounded rect + abbreviation (no icon sprite ready). ----
         var color=own?"#00cccc":"#cc3333";
         if(state==="fog") color=dimColor(color,0.5);
         ctx.fillStyle=color;
         roundRect(ctx,x+2,y+2,TILE-4,TILE-4,3);ctx.fill();
         ctx.strokeStyle="#fff";ctx.lineWidth=1;roundRect(ctx,x+2,y+2,TILE-4,TILE-4,3);ctx.stroke();
-        ctx.fillStyle="#fff";ctx.font="bold 9px sans-serif";
-        ctx.textAlign="center";ctx.textBaseline="middle";ctx.fillText(type,x+HALF,y+HALF);
+        if(occupied){ctx.strokeStyle="#4466cc";ctx.lineWidth=2;ctx.strokeRect(x+3,y+3,TILE-6,TILE-6);}
+        drawBuildingLabel(ctx,x+HALF,y+HALF,type);
     }
 
     function drawAgent(ctx,x,y,ag){
