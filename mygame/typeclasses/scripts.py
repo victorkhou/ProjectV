@@ -62,6 +62,7 @@ TICK_STEP_ORDER = (
     ("bomb_fuse", "Tick down live bombs; detonate + AoE those whose fuse hits 0."),
     ("combat_timer_decrement", "Expire combat lockouts."),
     ("hp_regen", "Passive HP regen for players/agents (after combat)."),
+    ("shield_regen", "Regenerate building shields from Shield Generators (after combat)."),
     ("powerup_ticks", "Expire powerups after this tick's combat resolved."),
     ("tech_research", "Decrement research timers."),
     ("resource_respawns", "Decrement depleted-node respawn counters."),
@@ -568,6 +569,19 @@ class GameTickScript(DefaultScript):
                 entities.extend(self._get_all_agents(agent_system))
                 regen_system.process_tick(entities, tick_number)
             registered["hp_regen"] = process_hp_regen
+
+        shield_system = systems.get("shield_system")
+        if shield_system:
+            def process_shield_regen():
+                # Cheap timing gate before touching the building list.
+                if not shield_system.should_regen_this_tick(tick_number):
+                    return
+                # Only the active (chunk-filtered) buildings regen — the same
+                # set turrets/production use. A building far from any online
+                # player isn't being attacked, so deferring its shield regen
+                # until it's active again is harmless.
+                shield_system.process_tick(tick_data["buildings"], tick_number)
+            registered["shield_regen"] = process_shield_regen
 
         if powerup_system:
             registered["powerup_ticks"] = (

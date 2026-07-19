@@ -228,6 +228,15 @@ def _make_registry_with_buildings() -> DataRegistry:
             unlocks=[], map_symbol="AA",
             build_time_seconds=100, rank_requirement=2,
         ),
+        "SG": BuildingDef(
+            name="Shield Generator", abbreviation="SG",
+            cost={"Iron": 40},
+            max_health=200, requires_hq=True, required_terrain=None,
+            category="defense", produces=None,
+            unlocks=[], map_symbol="SG",
+            build_time_seconds=35, rank_requirement=1,
+            capabilities=frozenset({"shield_generator", "upgradable"}),
+        ),
     }
     return registry
 
@@ -298,6 +307,51 @@ class TestConstructHQ(unittest.TestCase):
         self.assertFalse(ok)
         self.assertIn("Insufficient Resources", msg)
         self.assertEqual(len(created), 0)
+
+class TestShieldGeneratorCap(unittest.TestCase):
+    """Per-player, per-planet Shield Generator cap (max 4 per planet)."""
+
+    def _player_with_sgs(self, n, planet="earth"):
+        hq = FakeBuilding(building_type="HQ")
+        sgs = []
+        for i in range(n):
+            sg = FakeBuilding(building_type="SG")
+            sg.attributes.add("coord_planet", planet)
+            sgs.append(sg)
+        return FakePlayer(
+            resources={"Iron": 500},
+            buildings=[hq] + sgs,
+        )
+
+    def test_fifth_generator_on_planet_rejected(self):
+        player = self._player_with_sgs(4, planet="earth")
+        tile = FakeTile(xyz=(5, 5, "earth"))
+        tile.db.planet = "earth"
+        system, created, _ = _make_building_system()
+        ok, msg = system.construct(player, tile, "SG")
+        self.assertFalse(ok)
+        self.assertIn("4 Shield Generators per planet", msg)
+        self.assertEqual(len(created), 0)
+
+    def test_fourth_generator_allowed(self):
+        player = self._player_with_sgs(3, planet="earth")
+        tile = FakeTile(xyz=(5, 5, "earth"))
+        tile.db.planet = "earth"
+        system, created, _ = _make_building_system()
+        ok, msg = system.construct(player, tile, "SG")
+        self.assertTrue(ok, msg)
+        self.assertEqual(len(created), 1)
+
+    def test_generators_on_other_planet_do_not_count(self):
+        # 4 generators on mars must not block a first one on earth.
+        player = self._player_with_sgs(4, planet="mars")
+        tile = FakeTile(xyz=(5, 5, "earth"))
+        tile.db.planet = "earth"
+        system, created, _ = _make_building_system()
+        ok, msg = system.construct(player, tile, "SG")
+        self.assertTrue(ok, msg)
+        self.assertEqual(len(created), 1)
+
 
 class TestConstructRequiresHQ(unittest.TestCase):
     """Test HQ prerequisite enforcement."""

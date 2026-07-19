@@ -124,6 +124,7 @@ class BuildingSystem(BaseSystem):
         for validator in [
             lambda: self._validate_hq_requirement(player, building_def),
             lambda: self._validate_one_hq_per_planet(player, building_def, tile),
+            lambda: self._validate_shield_generator_cap(player, building_def, tile, x=x, y=y),
             lambda: self._validate_rank_requirement(player, building_def),
             lambda: self._validate_deed_requirement(player, building_def),
             lambda: self._validate_terrain(tile, building_def),
@@ -721,6 +722,62 @@ class BuildingSystem(BaseSystem):
             return "You can only have one Headquarters per planet."
 
         return None
+
+    def _validate_shield_generator_cap(
+        self, player: Any, building_def: BuildingDef, tile: Any,
+        x: int | None = None, y: int | None = None,
+    ) -> str | None:
+        """Enforce the per-player, per-planet Shield Generator cap.
+
+        A player may hold at most ``MAX_SHIELD_GENERATORS_PER_PLANET`` buildings
+        with the ``shield_generator`` capability on any one planet (a future
+        tech may raise this). Counts existing generators on the SAME planet as
+        the target tile; generators on other planets don't count. Returns an
+        error message or None.
+        """
+        from world.constants import SHIELD_GENERATOR, MAX_SHIELD_GENERATORS_PER_PLANET
+        if not building_def.has_capability(SHIELD_GENERATOR):
+            return None
+
+        planet = self._tile_planet(tile, x=x, y=y)
+        existing = 0
+        for b in self._get_player_buildings(player):
+            if not self._building_has_capability(b, SHIELD_GENERATOR):
+                continue
+            # Planet-scope the count when we can resolve both planets; if the
+            # target planet is unknown, count all (fail safe — never over-cap).
+            if planet is not None:
+                b_planet = self._get_building_attr(b, "coord_planet", None)
+                if b_planet is not None and b_planet != planet:
+                    continue
+            existing += 1
+        if existing >= MAX_SHIELD_GENERATORS_PER_PLANET:
+            return (
+                f"You can only have {MAX_SHIELD_GENERATORS_PER_PLANET} Shield "
+                f"Generators per planet (you have {existing})."
+            )
+        return None
+
+    def _building_has_capability(self, building: Any, capability: str) -> bool:
+        """Value-based capability check for a live building (hermetic registry)."""
+        from world.utils import building_has_capability
+        return building_has_capability(building, capability, provider=self.registry)
+
+    def _tile_planet(
+        self, tile: Any, x: int | None = None, y: int | None = None
+    ) -> str | None:
+        """Best-effort resolve the planet key for a target tile."""
+        planet = None
+        if hasattr(tile, "tags"):
+            try:
+                planet = tile.tags.get(category="coord_planet", return_list=False)
+            except Exception:  # noqa: BLE001
+                planet = None
+        if not planet and hasattr(tile, "db"):
+            planet = getattr(tile.db, "planet", None) or getattr(tile.db, "coord_planet", None)
+        if not planet:
+            planet = getattr(tile, "planet_name", None)
+        return planet
 
     def _validate_extractor_terrain(
         self, tile: Any, building_def: BuildingDef,

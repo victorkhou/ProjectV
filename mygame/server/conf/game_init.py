@@ -231,6 +231,11 @@ def initialize_game() -> dict:
     tech_system = TechLabSystem(registry, event_bus)
     from world.systems.regen_system import RegenSystem
     regen_system = RegenSystem(registry, event_bus)
+    # Shield Generator system: computes/regenerates building shields. Subscribes
+    # itself to the building lifecycle events at construction so a new/upgraded/
+    # destroyed generator updates neighbour shields immediately.
+    from world.systems.shield_system import ShieldSystem
+    shield_system = ShieldSystem(registry, event_bus)
 
     # Alliance system — the single writer of alliance state. Backed by the
     # persistent AllianceRegistry script (ensured below in start_scripts); wired
@@ -647,6 +652,7 @@ def initialize_game() -> dict:
         "powerup_system": powerup_system,
         "tech_system": tech_system,
         "regen_system": regen_system,
+        "shield_system": shield_system,
         "equipment_system": equipment_system,
         "agent_system": agent_system,
         "guard_combat_system": guard_combat_system,

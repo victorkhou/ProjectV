@@ -515,3 +515,17 @@ class BalanceConfig:
     # --- Agent rebalance (R3, R5) ------------------------------------- #
     #: Fog-of-war vision radius around patrolling scout agents.
     scout_vision_radius: int = 5
+
+    # --- Shield Generator (defensive building) ------------------------ #
+    # A Shield Generator projects a regenerating damage-absorbing shield onto
+    # the owner's buildings within a Chebyshev radius, scaled by its level:
+    #   radius       = shield_base_radius + (level - 1)          (L1 = 2 → 5x5)
+    #   shield_frac  = shield_hp_fraction * level                (L1 = 25% of the
+    #                  covered building's hp_max; L4 = 100%)
+    # Overlapping generators do NOT stack — a building takes the single largest
+    # covering shield (ShieldSystem uses max). Shields regenerate
+    # shield_regen_percent of shield_max every shield_regen_interval_ticks.
+    shield_base_radius: int = 2          # Chebyshev radius at level 1 (5x5 area)
+    shield_hp_fraction: float = 0.25     # shield = frac * level * building hp_max
+    shield_regen_percent: float = 1.0    # % of shield_max restored per interval
+    shield_regen_interval_ticks: int = 5 # ticks between shield-regen ticks

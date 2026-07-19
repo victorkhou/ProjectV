@@ -719,6 +719,55 @@ class LiveBootSmokeTest(EvenniaTest):
             _teardown_game(systems)
 
     # -------------------------------------------------------------- #
+    #  Shield Generator — projects a regenerating shield onto the owner's
+    #  nearby buildings; combat drains the shield before HP. On real objects
+    #  through the real composition root (ShieldSystem wired at boot).
+    # -------------------------------------------------------------- #
+
+    def test_shield_generator_shields_neighbor_and_absorbs_damage(self):
+        from server.conf.game_init import initialize_game
+        from world.systems.combat_engine import _TurretWeapon
+
+        systems = initialize_game()
+        try:
+            shield_system = systems["shield_system"]
+            engine = systems["combat_engine"]
+            self.assertIsNotNone(shield_system, "shield_system must be wired at boot")
+            room = self._make_planet_room("earth")
+
+            owner = self._make_player(x=5, y=5, planet="earth", location=room)
+
+            # A level-1 Shield Generator at (5,5) and a Vault two tiles away
+            # (within the L1 radius of 2), same owner + planet.
+            gen = self._make_building("SG", x=5, y=5, planet="earth", hp=200)
+            gen.db.owner = owner
+            gen.db.building_level = 1
+            vault = self._make_building("VT", x=7, y=5, planet="earth", hp=400)
+            vault.db.owner = owner
+            vault.db.building_level = 1
+
+            # Recompute shields from the live layout.
+            shield_system.refresh([gen, vault])
+            # 25% x level(1) x 400 = 100, powered on charged.
+            self.assertEqual(vault.db.shield_max, 100)
+            self.assertEqual(vault.db.shield, 100)
+
+            # A raider hits the shielded Vault: damage comes off the shield first.
+            raider = self._make_player(x=6, y=5, planet="earth", location=room)
+            raider.db.combat_xp = 100000
+            hp_before = vault.db.hp
+            engine.apply_direct_hit(raider, vault, _TurretWeapon(40, 10),
+                                    current_tick=1)
+            self.assertEqual(vault.db.shield, 60, "shield absorbed the 40 damage")
+            self.assertEqual(vault.db.hp, hp_before, "HP untouched while shield holds")
+
+            # Regen ticks the shield back up (1% of 100 per 5-tick interval).
+            shield_system.process_tick([vault], tick_number=5)
+            self.assertEqual(vault.db.shield, 61)
+        finally:
+            _teardown_game(systems)
+
+    # -------------------------------------------------------------- #
     #  Drop/pickup — a dropped item must be indexed and re-gettable
     # -------------------------------------------------------------- #
 

@@ -1792,10 +1792,68 @@ class CombatEngine(BaseSystem):
             entity.db.combat_lockout_tick = tick
 
     def _apply_damage(self, target: Any, damage: int, attacker: Any) -> None:
-        """Apply damage to a target's HP."""
+        """Apply damage to a target, draining any shield before HP.
+
+        A Shield Generator gives buildings a ``db.shield`` pool (see
+        ShieldSystem) that absorbs damage first — a second HP bar. The single
+        damage choke point (all combat/turret/bomb paths route through here), so
+        absorbing here shields every source uniformly. Damage remaining after
+        the shield is spent hits HP as before; a target with no shield is
+        unchanged.
+        """
+        if damage <= 0:
+            return
+        remaining = self._drain_shield(target, damage)
+        if remaining <= 0:
+            return
         current_hp = self._get_hp(target)
-        new_hp = max(0, current_hp - damage)
+        new_hp = max(0, current_hp - remaining)
         self._set_hp(target, new_hp)
+
+    def _drain_shield(self, target: Any, damage: int) -> int:
+        """Spend *target*'s shield against *damage*; return the leftover damage.
+
+        Reads/writes the ``shield`` attribute (value-based; unset → 0 → no
+        absorption), via the same db/attributes duality as ``_get_hp``/
+        ``_set_hp`` so it works on real buildings and attribute-based test
+        doubles alike. When the shield fully absorbs the hit it returns 0 (HP
+        untouched); otherwise it returns the overflow that hits HP. Resets the
+        shield-regen accumulator on any drain so regen re-banks cleanly.
+        """
+        shield = int(self._get_attr(target, "shield", 0) or 0)
+        if shield <= 0:
+            return damage
+        absorbed = min(shield, damage)
+        self._set_attr(target, "shield", shield - absorbed)
+        self._set_attr(target, "shield_regen_accumulator", 0.0)
+        return damage - absorbed
+
+    @staticmethod
+    def _get_attr(entity: Any, key: str, default: Any = 0) -> Any:
+        """Read *key* from an entity's db or attributes store (value-based)."""
+        db = getattr(entity, "db", None)
+        if db is not None:
+            val = getattr(db, key, None)
+            if val is not None:
+                return val
+        attrs = getattr(entity, "attributes", None)
+        if attrs is not None and hasattr(attrs, "get"):
+            return attrs.get(key, default=default)
+        return default
+
+    @staticmethod
+    def _set_attr(entity: Any, key: str, value: Any) -> None:
+        """Write *key* to an entity's db or attributes store."""
+        db = getattr(entity, "db", None)
+        if db is not None and hasattr(db, key):
+            setattr(db, key, value)
+            return
+        attrs = getattr(entity, "attributes", None)
+        if attrs is not None and hasattr(attrs, "add"):
+            attrs.add(key, value)
+            return
+        if db is not None:
+            setattr(db, key, value)
 
 
 def get_loaded(weapon: Any) -> int:

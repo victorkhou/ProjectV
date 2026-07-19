@@ -186,6 +186,15 @@ class MapDataProvider:
             # Check if building has entities inside (occupied flag)
             tile["building"]["occupied"] = building_is_occupied(bld)
 
+            # Shield state (Shield Generator feature): a building under a shield
+            # carries a second HP bar. Emit shield/shield_max so the client can
+            # draw a shield gauge; omitted (0) for unshielded buildings.
+            if hasattr(bld, "attributes") and hasattr(bld.attributes, "get"):
+                shield_max = int(bld.attributes.get("shield_max", default=0) or 0)
+                if shield_max > 0:
+                    tile["building"]["shield"] = int(bld.attributes.get("shield", default=0) or 0)
+                    tile["building"]["shield_max"] = shield_max
+
         if players_here:
             tile["players"] = players_here
         if agents_here:

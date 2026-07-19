@@ -371,6 +371,8 @@ PLAYER_STATE_TRANSITIONS = {
 #:     the owner has an active combat timer.
 #:   - ``turret``: a defensive building that auto-fires at nearby non-owner
 #:     players each tick (see ``CombatEngine.process_turrets``).
+#:   - ``shield_generator``: projects a regenerating damage-absorbing shield onto
+#:     the owner's buildings within a level-scaled radius (see ``ShieldSystem``).
 HARVESTABLE = "harvestable"
 UPGRADABLE = "upgradable"
 REQUIRES_RESOURCE_TERRAIN = "requires_resource_terrain"
@@ -379,6 +381,7 @@ PRIMARY_STORAGE = "primary_storage"
 HEADQUARTERS = "headquarters"
 COMBAT_BARRIER = "combat_barrier"
 TURRET = "turret"
+SHIELD_GENERATOR = "shield_generator"
 
 BUILDING_CAPABILITIES: frozenset[str] = frozenset({
     HARVESTABLE,
@@ -389,7 +392,12 @@ BUILDING_CAPABILITIES: frozenset[str] = frozenset({
     HEADQUARTERS,
     COMBAT_BARRIER,
     TURRET,
+    SHIELD_GENERATOR,
 })
+
+#: Max Shield Generators a player may build per planet (R: max 4 per planet,
+#: per player). Tech research may raise this later.
+MAX_SHIELD_GENERATORS_PER_PLANET = 4
 
 # ------------------------------------------------------------------ #
 #  Alliances

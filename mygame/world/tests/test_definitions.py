@@ -283,8 +283,10 @@ class TestDataclassContracts:
         #    knobs, and the alliance_level_thresholds table).
         #  + 4 hybrid XP curve tunables (xp_curve_base_delta, xp_curve_early_ratio,
         #    xp_curve_late_ratio, xp_curve_knee_level) — Phase 6.
+        #  + 4 Shield Generator (shield_base_radius, shield_hp_fraction,
+        #    shield_regen_percent, shield_regen_interval_ticks).
         # Bump this when adding a balance tunable.
-        assert len(fields(BalanceConfig)) == 101
+        assert len(fields(BalanceConfig)) == 105
 
     def test_coordinate_space_def_field_count(self):
         assert len(fields(CoordinateSpaceDef)) == 14

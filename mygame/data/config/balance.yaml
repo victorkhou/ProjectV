@@ -78,6 +78,21 @@ rare_gear_chance: 0.03           # HQ-destroy rare-roll (outpost default)
 # --- Agent rebalance (R3, R5) ---
 scout_vision_radius: 5           # fog-of-war vision circle around patrolling scouts
 
+# --- Shield Generator (defensive building) ---
+# Projects a regenerating damage-absorbing shield onto the OWNER's buildings
+# within a level-scaled Chebyshev radius. Per level L:
+#   radius      = shield_base_radius + (L - 1)   (L1=2 → 5x5 area, +1 tile/level)
+#   shield      = shield_hp_fraction * L * (covered building's hp_max)
+#                 (L1=25%, L2=50%, L4=100%, L5=125% of each building's max HP)
+# Overlapping generators do NOT stack — a building takes the single largest
+# covering shield. Shield behaves like a second HP bar (absorbed before HP) and
+# regenerates shield_regen_percent of its max every shield_regen_interval_ticks.
+# Max 4 per player per planet (world.constants.MAX_SHIELD_GENERATORS_PER_PLANET).
+shield_base_radius: 2            # Chebyshev radius at level 1 (5x5 coverage)
+shield_hp_fraction: 0.25         # shield = frac * level * building hp_max
+shield_regen_percent: 1.0        # % of shield_max restored per regen interval
+shield_regen_interval_ticks: 5   # ticks between shield regen ticks (1%/5 ticks)
+
 # --- Resource harvesting & production (migrated) ---
 harvest_cooldown_ticks: 4        # ticks between harvest yields (active-presence)
 harvest_yield_per_action: 1      # units per harvest action on raw terrain

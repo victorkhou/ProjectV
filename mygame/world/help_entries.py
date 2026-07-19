@@ -371,13 +371,14 @@ HELP_ENTRY_DICTS = [
             |wTU|n |cTurret|n — auto-attacks enemies in range while your HQ stands. (L5)
             |wVT|n |cVault|n — high-capacity resource storage, protected while you're offline; harvesters prefer to deliver here. (L4)
             |wRL|n |cRelay|n — boosts nearby Turret damage. (L15)
+            |wSG|n |cShield Generator|n — projects a regenerating shield onto nearby buildings. (L15, max 4 per planet)
             |wMB|n |cMedbay|n — crafts medkits and stims; reduces respawn time. (L18)
 
             Higher-tier buildings unlock as you gain |clevels|n; a few also require a |cdeed|n (Barracks needs one destroyed outpost, Lab needs three). Check |wscore|n for your current level, |wbuild|n to see what's available now, and |whelp level|n for the full progression picture.
 
             # Per-Building Guides
 
-            Every building has its own help topic with costs, level, dependencies, and examples: |whelp hq|n · |whelp extractor|n · |whelp academy|n · |whelp armory|n · |whelp wall|n · |whelp barracks|n · |whelp lab|n · |whelp radar|n · |whelp turret|n · |whelp vault|n · |whelp relay|n · |whelp medbay|n.
+            Every building has its own help topic with costs, level, dependencies, and examples: |whelp hq|n · |whelp extractor|n · |whelp academy|n · |whelp armory|n · |whelp wall|n · |whelp barracks|n · |whelp lab|n · |whelp radar|n · |whelp turret|n · |whelp vault|n · |whelp relay|n · |whelp shield|n · |whelp medbay|n.
 
             # See Also
 
@@ -474,7 +475,7 @@ HELP_ENTRY_DICTS = [
 
             # Armor & Defense
 
-            Every armor piece you |wequip|n reduces incoming damage, and they stack across all slots. |cTurrets|n auto-attack intruders; |cWalls|n block movement. A |cVault|n protects your stored resources while you're offline. You and your agents heal over time, but |cbuildings do not|n — repair a damaged building with |wrepair|n (see |whelp buildings|n).
+            Every armor piece you |wequip|n reduces incoming damage, and they stack across all slots. |cTurrets|n auto-attack intruders; |cWalls|n block movement. A |cVault|n protects your stored resources while you're offline. A |cShield Generator|n wraps nearby buildings in a regenerating |cshield|n that soaks damage before their HP (|whelp shield|n). You and your agents heal over time, but |cbuildings do not|n — repair a damaged building with |wrepair|n (see |whelp buildings|n).
 
             # Buildings as Cover
 
@@ -978,6 +979,41 @@ HELP_ENTRY_DICTS = [
             # See Also
 
             |whelp turret|n · |whelp combat|n · |whelp buildings|n
+        """,
+    },
+    {
+        "key": "shield",
+        "aliases": ["sg", "shield generator", "shield building", "shields"],
+        "category": "Buildings",
+        "text": """
+            |wShield Generator (SG)|n
+
+            A defensive structure that wraps your nearby buildings in a regenerating energy |cshield|n — a second health bar that soaks damage before the building's own HP takes any.
+
+            # Build Requirements
+
+            Cost: |c40 Iron|n, |c30 Energy|n, |c20 Circuits|n. Level: |c15|n. Dependencies: an |cHQ|n. Limit: |c4 per planet|n.
+
+            # What It Does
+
+            Every building you own within its radius gains a shield equal to a share of that building's max HP. Both the radius and the shield strength scale with the generator's |clevel|n:
+
+            |cLevel 1|n — radius 2 (a 5x5 area around the generator), shield = |c25%|n of each covered building's HP.
+            Each level adds |c+1|n to the radius and |c+25%|n to the shield: at |cLevel 4|n a covered building has a shield equal to |c100%|n of its HP (effectively doubling its durability).
+
+            The shield absorbs incoming damage first — from players, turrets, guards, and bombs alike — and only overflow hits the building. A drained shield |cregenerates|n on its own (about 1% of its capacity every few seconds), so between attacks your base heals its shields back up even though buildings never heal their own HP.
+
+            # Overlap & Limits
+
+            If several generators cover the same building, it takes the |csingle strongest|n shield — they don't stack, so spreading generators out to cover more ground beats piling them up. You may build at most |c4 per planet|n. (Future tech research will raise these limits.)
+
+            # Using It
+
+            |wbuild SG|n central to the buildings you want to protect — your |cHQ|n, |cVault|n, and |cTurret|n line are prime candidates. Upgrade it to widen the radius and thicken the shield. No agent required.
+
+            # See Also
+
+            |whelp combat|n · |whelp turret|n · |whelp wall|n · |whelp buildings|n
         """,
     },
     {

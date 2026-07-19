@@ -193,7 +193,7 @@ let map_renderer_plugin = (function () {
     // intelligence → technology; resource+training+storage+medical → utility.
     var BUILDING_CATEGORY = {
         "HQ":"headquarters",
-        "WL":"defense", "TU":"defense", "RL":"defense", "BK":"defense",
+        "WL":"defense", "TU":"defense", "RL":"defense", "BK":"defense", "SG":"defense",
         "AR":"technology", "LB":"technology", "RD":"technology",
         "EX":"utility", "AC":"utility", "VT":"utility", "MB":"utility",
     };
@@ -212,6 +212,19 @@ let map_renderer_plugin = (function () {
         ctx.lineJoin="round";
         ctx.lineWidth=3;ctx.strokeStyle="#000";ctx.strokeText(label,cx,cy);
         ctx.fillStyle="#fff";ctx.fillText(label,cx,cy);
+    }
+
+    // Shield gauge — a thin cyan bar across the top of a shielded building tile,
+    // filled by shield/shield_max. Drawn only when the building carries a live
+    // shield (a Shield Generator covers it), so unshielded buildings are unchanged.
+    function drawShieldBar(ctx,x,y,bld){
+        var smax=bld.shield_max||0;
+        if(smax<=0) return;
+        var s=bld.shield||0; if(s<0) s=0; if(s>smax) s=smax;
+        var bx=x+3, by=y+2, bw=TILE-6, bh=3;
+        ctx.fillStyle="rgba(0,0,0,0.55)";ctx.fillRect(bx,by,bw,bh);       // backing
+        ctx.fillStyle="#33ddff";ctx.fillRect(bx,by,Math.round(bw*(s/smax)),bh); // fill
+        ctx.strokeStyle="#0a3a44";ctx.lineWidth=0.5;ctx.strokeRect(bx+0.25,by+0.25,bw-0.5,bh-0.5);
     }
 
     function drawBuilding(ctx,x,y,bld,state){
@@ -233,6 +246,9 @@ let map_renderer_plugin = (function () {
             if(state==="fog"){ctx.fillStyle="rgba(0,0,0,0.55)";ctx.fillRect(x+2,y+2,TILE-4,TILE-4);}
             // Abbreviation label (white text, black block outline).
             drawBuildingLabel(ctx,x+HALF,y+HALF,type);
+            // Shield gauge: a thin cyan bar along the top edge when the building
+            // carries a Shield Generator shield (shield/shield_max in the payload).
+            drawShieldBar(ctx,x,y,bld);
             if(occupied){
                 var ov=SPRITES.buildings["occupied_overlay"];
                 if(_spriteReady(ov)){ ctx.drawImage(ov,x+2,y+2,TILE-4,TILE-4); }
@@ -249,6 +265,7 @@ let map_renderer_plugin = (function () {
         ctx.strokeStyle="#fff";ctx.lineWidth=1;roundRect(ctx,x+2,y+2,TILE-4,TILE-4,3);ctx.stroke();
         if(occupied){ctx.strokeStyle="#4466cc";ctx.lineWidth=2;ctx.strokeRect(x+3,y+3,TILE-6,TILE-6);}
         drawBuildingLabel(ctx,x+HALF,y+HALF,type);
+        drawShieldBar(ctx,x,y,bld);
     }
 
     function drawAgent(ctx,x,y,ag){

@@ -121,6 +121,22 @@ def test_progression_topic_color_tags_balanced():
         )
 
 
+def test_shield_generator_topic_exists_and_is_discoverable():
+    """The Shield Generator building topic exists under Buildings, covers its
+    key mechanics, and is reachable from the buildings overview."""
+    assert "shield" in _BY_KEY
+    entry = _BY_KEY["shield"]
+    assert entry["category"] == "Buildings"
+    text = entry["text"].lower()
+    for concept in ("shield", "radius", "regenerate", "4 per planet", "level"):
+        assert concept in text, f"shield topic missing '{concept}'"
+    # Overview + combat cross-link it.
+    assert "shield" in _BY_KEY["buildings"]["text"].lower()
+    assert "shield" in _BY_KEY["combat"]["text"].lower()
+    # Color tags balanced.
+    assert len(_OPEN.findall(entry["text"])) <= len(_CLOSE.findall(entry["text"]))
+
+
 def test_progression_topic_names_do_not_collide():
     """level + directives keys/aliases must not clash with any OTHER topic."""
     for this_key in ("level", "directives"):

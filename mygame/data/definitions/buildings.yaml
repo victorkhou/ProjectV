@@ -234,3 +234,30 @@
   requires_agent: false
   storage_capacity: 0
   map_symbol: MB
+
+# Shield Generator — projects a regenerating damage-absorbing shield onto the
+# owner's buildings within a level-scaled radius (L1 = 2-tile/5x5 radius, 25% of
+# each covered building's HP; +1 radius and +25% shield per level). Shield
+# absorbs damage before HP and regenerates (1%/5 ticks). Max 4 per player per
+# planet (world.constants.MAX_SHIELD_GENERATORS_PER_PLANET). Tuning of the
+# radius/fraction/regen lives in balance.yaml (shield_*).
+- name: Shield Generator
+  abbreviation: SG
+  cost:
+    Iron: 40
+    Energy: 30
+    Circuits: 20
+  build_time_seconds: 35
+  max_level: 5
+  rank_requirement: 15
+  max_health: 200
+  requires_hq: true
+  required_terrain: null
+  category: defense
+  produces: null
+  requires_agent: false
+  storage_capacity: 0
+  capabilities:
+    - shield_generator
+    - upgradable
+  map_symbol: SG

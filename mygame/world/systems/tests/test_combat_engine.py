@@ -1137,6 +1137,41 @@ class TestBuildingDamage(unittest.TestCase):
         # Buildings have no armor, so full 25 damage
         self.assertEqual(building.attributes.get("hp"), 175)
 
+    def test_shield_absorbs_before_hp(self):
+        """A building's shield soaks damage first; HP is untouched until the
+        shield is spent (Shield Generator feature)."""
+        weapon = FakeWeapon(damage=25, weapon_range=5)
+        engine, _ = _make_engine()
+        attacker = FakePlayer(name="Attacker", weapon=weapon,
+                              location=FakeTile(xyz=(0, 0, "earth")))
+        owner = FakePlayer(name="Owner")
+        building = FakeBuilding(building_type="MM", owner=owner,
+                                hp=200, hp_max=200, open=True,
+                                location=FakeTile(xyz=(1, 0, "earth")))
+        building.attributes.add("shield", 100)
+        engine.queue_attack(attacker, building)
+        engine.resolve_tick()
+        # 25 damage came entirely off the 100 shield; HP unchanged.
+        self.assertEqual(building.attributes.get("shield"), 75)
+        self.assertEqual(building.attributes.get("hp"), 200)
+
+    def test_shield_overflow_hits_hp(self):
+        """Damage beyond the remaining shield spills onto HP."""
+        weapon = FakeWeapon(damage=25, weapon_range=5)
+        engine, _ = _make_engine()
+        attacker = FakePlayer(name="Attacker", weapon=weapon,
+                              location=FakeTile(xyz=(0, 0, "earth")))
+        owner = FakePlayer(name="Owner")
+        building = FakeBuilding(building_type="MM", owner=owner,
+                                hp=200, hp_max=200, open=True,
+                                location=FakeTile(xyz=(1, 0, "earth")))
+        building.attributes.add("shield", 10)  # only 10 shield vs 25 damage
+        engine.queue_attack(attacker, building)
+        engine.resolve_tick()
+        # 10 absorbed, 15 overflow to HP.
+        self.assertEqual(building.attributes.get("shield"), 0)
+        self.assertEqual(building.attributes.get("hp"), 185)
+
     def test_building_owner_notified(self):
         weapon = FakeWeapon(damage=25, weapon_range=5)
         engine, _ = _make_engine()
