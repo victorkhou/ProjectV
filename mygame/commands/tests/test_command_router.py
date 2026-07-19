@@ -617,6 +617,10 @@ def _setup_default_cmds_stubs():
     building_mod.CmdTeleport = type("CmdTeleport", (), {"key": "@teleport"})
     sys.modules["evennia.commands.default.building"] = building_mod
 
+    admin_mod = types.ModuleType("evennia.commands.default.admin")
+    admin_mod.CmdWall = type("CmdWall", (), {"key": "wall"})
+    sys.modules["evennia.commands.default.admin"] = admin_mod
+
 
 _setup_default_cmds_stubs()
 
@@ -717,6 +721,12 @@ class TestCharacterCmdSetRegistration(unittest.TestCase):
         )
         for cmd in (CmdPose, CmdSetDesc, CmdGive):
             self.assertIn(cmd, self.cmdset._removed)
+
+    def test_admin_wall_removed(self):
+        """Stock admin 'wall' (broadcast) removed so 'wall'/'help wall' resolve
+        to the Wall building topic, not the admin broadcast command."""
+        from evennia.commands.default.admin import CmdWall
+        self.assertIn(CmdWall, self.cmdset._removed)
 
     # --- Requirement 7.3: Unchanged standalone commands still registered ---
 

@@ -79,6 +79,7 @@ class CharacterCmdSet(default_cmds.CharacterCmdSet):
             CmdOpen, CmdDig, CmdTunnel, CmdLink, CmdUnLink, CmdSetHome,
             CmdCreate, CmdSpawn, CmdCopy, CmdTeleport as CmdBuiltinTeleport,
         )
+        from evennia.commands.default.admin import CmdWall
 
         # Replaced by game commands.
         self.remove(CmdWhisper)  # replaced by CmdMessage (page/tell)
@@ -90,6 +91,12 @@ class CharacterCmdSet(default_cmds.CharacterCmdSet):
         # alias as our coordinate CmdTeleport — remove it so ours is the only
         # match (previously it was silently shadowed).
         self.remove(CmdBuiltinTeleport)
+        # Stock admin 'wall' (broadcast-to-all-sessions) has key "wall", which
+        # collides with the Wall building's 'help wall' entry — typing 'wall'
+        # or 'help wall' hit the admin command instead of the building topic.
+        # This game has no all-session broadcast need, so remove it and let
+        # 'wall' resolve cleanly to the building help.
+        self.remove(CmdWall)
 
         # Room-graph builders — meaningless without room-to-room exits.
         self.remove(CmdDig)      # @dig: create a room + exits to it
