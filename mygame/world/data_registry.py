@@ -569,6 +569,18 @@ class DataRegistry:
             except (KeyError, TypeError, ValueError):
                 logger.exception("Skipping invalid NPC-base template %r.", tier)
                 continue
+            # Gear-pool key validation (R11.5): every pool entry must be a
+            # known item key so a drop roll can never silently no-op. Items
+            # are a required file loaded before this optional one, so
+            # self.items is authoritative here. Loud (ERROR log) + filtered
+            # rather than a raise — outposts.yaml is an optional file whose
+            # problems must never block server start.
+            gear_pool = self._validate_gear_pool(
+                tier, "gear_pool", spec.get("gear_pool") or []
+            )
+            rare_pool = self._validate_gear_pool(
+                tier, "rare_pool", spec.get("rare_pool") or []
+            )
             self.base_templates[tier] = BaseTemplateDef(
                 tier=tier,
                 display_name=spec.get("display_name", tier.title()),
@@ -579,10 +591,24 @@ class DataRegistry:
                 guard_loot_amount=spec.get("guard_loot_amount"),
                 gear_drop_chance=spec.get("gear_drop_chance"),
                 rare_gear_chance=spec.get("rare_gear_chance"),
-                gear_pool=spec.get("gear_pool") or [],
-                rare_pool=spec.get("rare_pool") or [],
+                gear_pool=gear_pool,
+                rare_pool=rare_pool,
             )
         logger.info("Loaded %d NPC-base template(s).", len(self.base_templates))
+
+    def _validate_gear_pool(self, tier: str, field: str, pool: list) -> list:
+        """Return *pool* with unknown item keys removed, logging each (R11.5)."""
+        valid = []
+        for key in pool:
+            if key in self.items:
+                valid.append(key)
+            else:
+                logger.error(
+                    "NPC-base template %r: %s entry %r is not a known item "
+                    "key (items.yaml) — removed from the drop pool.",
+                    tier, field, key,
+                )
+        return valid
 
     def get_base_template(self, tier: str) -> "BaseTemplateDef | None":
         """Return the NPC-base template for *tier*, or ``None`` if undefined."""

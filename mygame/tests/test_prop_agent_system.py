@@ -135,11 +135,14 @@ class FakePlayer:
     """Lightweight stand-in for CombatCharacter."""
     def __init__(self, name="TestPlayer", combat_xp=0, rank_level=1,
                  next_agent_id=1, resources=None):
+        from world import progression
         self.id = 1
         self.key = name
+        level = progression.level_for_xp(combat_xp)
         self.db = FakeDB(
             combat_xp=combat_xp,
             rank_level=rank_level,
+            level=level,
             next_agent_id=next_agent_id,
         )
         self._resources = resources or {
@@ -281,7 +284,7 @@ class TestProperty11AgentRosterInvariant:
     def test_roster_invariant_holds(self, num_agents, ops):
         system, created_agents = _make_system()
         # Use Marshal rank (cap=20) so we can train many agents
-        player = FakePlayer(combat_xp=120000, next_agent_id=1)
+        player = FakePlayer(combat_xp=1_100_000, next_agent_id=1)
 
         # Train num_agents agents
         academy = FakeBuilding(building_type="AC", building_level=1)
@@ -354,7 +357,7 @@ class TestProperty12AgentIDSequentiality:
     @settings(max_examples=200)
     def test_ids_strictly_increasing_and_unique(self, num_agents):
         system, created_agents = _make_system()
-        player = FakePlayer(combat_xp=120000, next_agent_id=1)
+        player = FakePlayer(combat_xp=1_100_000, next_agent_id=1)
 
         academy = FakeBuilding(building_type="AC", building_level=1)
         ids_assigned = []
@@ -404,7 +407,7 @@ class TestProperty13IncapacitatedReservedCannotAssign:
         assume(incapacitated or reserved)
 
         system, created_agents = _make_system()
-        player = FakePlayer(combat_xp=120000, next_agent_id=1)
+        player = FakePlayer(combat_xp=1_100_000, next_agent_id=1)
 
         npc = _train_and_complete(system, player)
 
@@ -469,7 +472,7 @@ class TestProperty14DemotionReservesHighestID:
     @settings(max_examples=200)
     def test_demotion_reserves_highest_ids(self, num_agents, data):
         system, created_agents = _make_system()
-        player = FakePlayer(combat_xp=120000, next_agent_id=1)
+        player = FakePlayer(combat_xp=1_100_000, next_agent_id=1)
 
         academy = FakeBuilding(building_type="AC", building_level=1)
         for _ in range(num_agents):
@@ -542,7 +545,7 @@ class TestProperty15TrainingCostScaling:
             "Energy": 0, "Circuits": 0, "Nexium": 0,
         }
         player = FakePlayer(
-            combat_xp=120000,
+            combat_xp=1_100_000,
             next_agent_id=n,
             resources=dict(initial_resources),
         )

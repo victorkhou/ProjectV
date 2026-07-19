@@ -1,8 +1,10 @@
 # Technology definitions for RTS Combat Overworld
+# required_rank gates align to the R13.4 ladder: the earliest tech is
+# researchable at the new Lab gate (Corporal, L11); the rest space upward.
 
 - name: Reinforced Walls
   key: reinforced_walls
-  required_rank: Sergeant
+  required_rank: Corporal
   resource_cost:
     Stone: 100
     Iron: 50
@@ -13,7 +15,7 @@
 
 - name: Advanced Weapons
   key: advanced_weapons
-  required_rank: Captain
+  required_rank: Lieutenant
   resource_cost:
     Iron: 150
     Energy: 50
@@ -24,7 +26,7 @@
 
 - name: Improved Armor
   key: improved_armor
-  required_rank: Staff_Sergeant
+  required_rank: Sergeant
   resource_cost:
     Iron: 80
     Stone: 60
@@ -35,7 +37,7 @@
 
 - name: Extended Range
   key: extended_range
-  required_rank: Lieutenant
+  required_rank: Staff_Sergeant
   resource_cost:
     Iron: 100
     Circuits: 30
@@ -46,7 +48,7 @@
 
 - name: Rapid Production
   key: rapid_production
-  required_rank: Major
+  required_rank: Captain
   resource_cost:
     Iron: 200
     Energy: 100

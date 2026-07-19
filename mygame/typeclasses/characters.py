@@ -275,6 +275,46 @@ class CombatCharacter(CombatEntity, DefaultCharacter):
                         self.attributes.add("level", (old_rank - 1) * LEVELS_PER_RANK + 1)
                         continue
                 self.attributes.add(key, copy.deepcopy(default))
+        self._migrate_level_curve()
+
+    def _migrate_level_curve(self):
+        """Remap stored XP onto the live curve, never demoting (R14.8).
+
+        A curve retune (like the R14 hybrid-curve rebalance) can map a
+        player's stored ``combat_xp`` to a LOWER level than the one they
+        already hold. Recompute the level from XP and keep
+        ``max(stored, recomputed)`` — an upgrade under the new curve applies,
+        a downgrade never does (no visible demotion from a rebalance).
+
+        When the stored level wins, ``combat_xp`` is raised to that level's
+        threshold on the new curve: every XP change recomputes level from XP
+        (``recompute_progression``), so without the XP top-up the kept level
+        would be silently demoted on the player's next kill. ``rank_level``
+        is re-derived from the kept level. Guarded: a progression-module
+        failure must never block login.
+        """
+        try:
+            from world import progression
+            from world.systems.rank_system import rank_from_level
+
+            stored = self.attributes.get("level")
+            if not isinstance(stored, int) or stored < 1:
+                return
+            xp = self.attributes.get("combat_xp") or 0
+            recomputed = progression.level_for_xp(xp)
+            if recomputed > stored:
+                # New curve maps their XP higher — take the upgrade.
+                self.attributes.add("level", recomputed)
+                self.attributes.add("rank_level", rank_from_level(recomputed))
+            elif recomputed < stored:
+                # New curve would demote — keep the level and top XP up to its
+                # threshold so the next recompute-from-XP agrees with it.
+                floor_xp = progression.xp_for_level(stored)
+                if xp < floor_xp:
+                    self.attributes.add("combat_xp", floor_xp)
+                self.attributes.add("rank_level", rank_from_level(stored))
+        except Exception:  # noqa: BLE001 - migration must never block login
+            logger.debug("Level-curve migration skipped", exc_info=True)
 
     # ------------------------------------------------------------------ #
     #  Resource helpers

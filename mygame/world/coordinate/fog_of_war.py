@@ -296,20 +296,25 @@ def _add_chebyshev_circle(
 
 
 def _get_sight_bonus(player: Any) -> int:
-    """Return the player's aggregate ``sight_range`` bonus from equipped gear.
+    """Return the player's aggregate ``sight_range`` bonus.
 
-    Falls back to ``0`` when the player has no equipment handler (e.g.
-    synthetic viewers or tests), so the vision radius stays at the base
-    ``player_vision_radius``. The bonus stat may be a float, so it is
-    coerced to ``int`` to keep the radius integral.
+    Sums the bonus from equipped gear with the researched-tech bonus from
+    ``db.tech_bonuses`` (R13.3 — the FogOfWar consumer read point). Falls back
+    to ``0`` when the player has no equipment handler (e.g. synthetic viewers
+    or tests), so the vision radius stays at the base ``player_vision_radius``.
+    The bonus stats may be floats, so the total is coerced to ``int`` to keep
+    the radius integral.
     """
+    bonus = 0.0
     equipment = getattr(player, "equipment", None)
-    if equipment is None or not hasattr(equipment, "get_stat_total"):
-        return 0
-    try:
-        return int(equipment.get_stat_total("sight_range"))
-    except (TypeError, ValueError):
-        return 0
+    if equipment is not None and hasattr(equipment, "get_stat_total"):
+        try:
+            bonus += float(equipment.get_stat_total("sight_range"))
+        except (TypeError, ValueError):
+            pass
+    from world.utils import get_tech_bonus
+    bonus += get_tech_bonus(player, "sight_range")
+    return int(bonus)
 
 
 def _get_coord(obj: Any, attr: str) -> int:

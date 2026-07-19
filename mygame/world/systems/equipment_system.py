@@ -233,16 +233,24 @@ class EquipmentSystem(CarryWeightMixin, StorageMixin, BaseSystem):
             if not self._has_assigned_agent(building):
                 continue
 
+            # Get owner (needed before the rate gate: the owner's researched
+            # production_multiplier tech shortens the per-item cooldown).
+            owner = getattr(building, "owner", None)
+            if owner is None:
+                continue
+
             # Rate gate: advance this building's production progress and only
             # yield on the cooldown boundary (mirrors ResourceSystem's harvest
             # cooldown). Without this a building creates an object every tick.
+            # The owner's production_multiplier tech (R13.3) divides the
+            # cooldown — ×1.5 research yields items 1.5× as often.
+            from world.utils import get_tech_bonus
+            multiplier = get_tech_bonus(owner, "production_multiplier", default=1.0)
+            effective_cooldown = cooldown
+            if multiplier > 1.0:
+                effective_cooldown = max(1, int(cooldown / multiplier))
             progress = self._advance_production_progress(building)
-            if cooldown > 1 and progress % cooldown != 0:
-                continue
-
-            # Get owner
-            owner = getattr(building, "owner", None)
-            if owner is None:
+            if effective_cooldown > 1 and progress % effective_cooldown != 0:
                 continue
 
             # Deactivation gate: an equipment building stops producing while its

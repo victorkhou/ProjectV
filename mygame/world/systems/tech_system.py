@@ -233,6 +233,24 @@ class TechLabSystem(BaseSystem):
                 bonuses[key] = bonuses.get(key, 0) + value
         db.tech_bonuses = bonuses
 
+    def recompute_tech_bonuses(self, player: Any) -> None:
+        """Rebuild db.tech_bonuses from scratch out of researched_techs (R13.5).
+
+        ``db.tech_bonuses`` is fully derived state, so it can always be
+        recomputed: clear it, then re-apply every researched tech's effect.
+        This is the grandfathering path — players who received techs from the
+        old rank auto-grant (which never wrote bonuses) gain the real effects
+        on their next login recompute. Unknown/stale tech keys are skipped.
+        """
+        db = getattr(player, "db", None)
+        if db is None:
+            return
+        db.tech_bonuses = {}
+        for tech_key in self._get_researched_techs(player):
+            tdef = self.registry.technologies.get(tech_key)
+            if tdef is not None and tdef.effect_value:
+                self._apply_tech_effect(player, tdef)
+
     # ------------------------------------------------------------------ #
     #  Internal helpers
     # ------------------------------------------------------------------ #

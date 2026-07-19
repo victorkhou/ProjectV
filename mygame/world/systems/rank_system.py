@@ -180,7 +180,15 @@ class RankSystem(BaseSystem):
         rank_num = rank_from_level(level)
         rank_def = self._get_rank_by_level(rank_num)
         if rank_def is None:
-            return self.registry.get_rank_for_xp(player.db.combat_xp or 0)
+            # ranks.yaml lacks an entry for this rank number (data gap). Fall
+            # back to the highest defined rank at or below it — NOT to the
+            # legacy get_rank_for_xp, whose ranks.yaml xp_thresholds are stale
+            # display data under the R14 formula-derived curve and would
+            # disagree with the band-derived rank.
+            candidates = [r for r in self.registry.ranks if r.level <= rank_num]
+            if candidates:
+                return max(candidates, key=lambda r: r.level)
+            return self.registry.ranks[0]
         return rank_def
 
     def get_rank_name(self, player: Any) -> str:

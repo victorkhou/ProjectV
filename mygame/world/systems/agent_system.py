@@ -627,10 +627,22 @@ class AgentSystem(AgentProgressionMixin, AgentBehaviorMixin, BaseSystem):
     def get_max_agents(self, player: Any) -> int:
         """Return the max agent slots for the player's current rank.
 
-        agent_cap in YAML includes the commander slot, so the usable
-        agent-only cap is ``agent_cap - 1``.
+        Rank derives from the player's LEVEL via the RANK_BANDS lookup — the
+        R14 rule — not from ranks.yaml ``xp_threshold`` values, which are
+        stale display data under the formula-derived curve. agent_cap in YAML
+        includes the commander slot, so the usable agent-only cap is
+        ``agent_cap - 1``. When ranks.yaml lacks the exact rank number, the
+        highest defined rank at or below it applies.
         """
-        rank_def = self.registry.get_rank_for_xp(player.db.combat_xp)
+        from world.systems.rank_system import rank_from_level
+        from world.utils import get_player_level
+
+        rank_num = rank_from_level(get_player_level(player))
+        rank_def = self.registry.get_rank_by_level(rank_num)
+        if rank_def is None:
+            candidates = [r for r in self.registry.ranks if r.level <= rank_num]
+            rank_def = (max(candidates, key=lambda r: r.level)
+                        if candidates else self.registry.ranks[0])
         return rank_def.agent_cap - 1
 
     # ------------------------------------------------------------------ #

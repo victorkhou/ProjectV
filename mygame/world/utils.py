@@ -544,6 +544,29 @@ def get_player_level(entity: Any, default: int = 1) -> int:
     return default
 
 
+def get_tech_bonus(player: Any, key: str, default: float = 0.0) -> float:
+    """Return *player*'s researched-tech bonus for *key* (R13.3).
+
+    Reads ``db.tech_bonuses`` — the cumulative bonus dict written by
+    ``TechLabSystem._apply_tech_effect`` when research completes. The single
+    reader shared by every consumer path (CombatEngine damage/armor, building
+    hp_max, FogOfWar sight, production), so "how tech bonuses are read" cannot
+    drift between them. Returns *default* when the player has no ``db``, no
+    bonuses, or a non-numeric value; ``production_multiplier`` callers should
+    pass ``default=1.0``.
+    """
+    db = getattr(player, "db", None)
+    if db is None:
+        return default
+    bonuses = getattr(db, "tech_bonuses", None)
+    if bonuses is None or not hasattr(bonuses, "get"):
+        return default
+    try:
+        return float(bonuses.get(key, default))
+    except (TypeError, ValueError):
+        return default
+
+
 def is_building(entity: Any) -> bool:
     """Return True if the entity is a building (has building_type attribute)."""
     return get_building_type(entity) is not None

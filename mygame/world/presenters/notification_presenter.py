@@ -549,6 +549,15 @@ def _fmt_npc_killed(d: dict) -> str:
     )
 
 
+def _fmt_guard_loot(d: dict) -> str:
+    # Per-guard-kill mini-drop (R8.2) — the small variable reward between
+    # HQ payouts.
+    return (
+        f"|g[Loot] The guard dropped {d.get('amount', 0)} "
+        f"{d.get('resource', 'resources')} at ({d.get('x', '?')},{d.get('y', '?')}).|n"
+    )
+
+
 def _fmt_base_eliminated(d: dict) -> str:
     # Fired when a player destroys an NPC base's HQ (the whole base is wiped).
     tier = d.get("tier", "Outpost")
@@ -672,6 +681,7 @@ class NotificationPresenter:
         "tile_full": _fmt_tile_full,
         "combat_started": _fmt_combat_started,
         "npc_killed": _fmt_npc_killed,
+        "guard_loot": _fmt_guard_loot,
         "base_eliminated": _fmt_base_eliminated,
         "base_deactivated": _fmt_base_deactivated,
         "base_reactivated": _fmt_base_reactivated,

@@ -146,7 +146,7 @@ class BuildingSystem(BaseSystem):
         """Call the building factory, forwarding x/y if supported."""
         if x is not None and y is not None:
             try:
-                return self._create_building_func(building_def, tile, owner, x=x, y=y)
+                building = self._create_building_func(building_def, tile, owner, x=x, y=y)
             except TypeError:
                 # Factory doesn't accept x/y — call without and set coords after
                 building = self._create_building_func(building_def, tile, owner)
@@ -154,8 +154,32 @@ class BuildingSystem(BaseSystem):
                 # (at_object_receive missed it during create_object).
                 from world.utils import place_on_tile
                 place_on_tile(building, tile, x, y)
-                return building
-        return self._create_building_func(building_def, tile, owner)
+        else:
+            building = self._create_building_func(building_def, tile, owner)
+        self._apply_building_hp_tech_bonus(owner, building)
+        return building
+
+    def _apply_building_hp_tech_bonus(self, owner: Any, building: Any) -> None:
+        """Raise a new/upgraded building's hp_max by the owner's tech bonus.
+
+        The ``building_hp`` consumer read point (R13.3): a flat addition from
+        ``db.tech_bonuses`` on top of the level-scaled hp_max the factory or
+        upgrade path just set. Applied at creation and upgrade completion —
+        existing buildings gain it on their next upgrade, matching the
+        "new computations read the bonus" model (no retroactive sweep).
+        """
+        from world.utils import get_tech_bonus
+        bonus = int(get_tech_bonus(owner, "building_hp"))
+        if bonus <= 0 or building is None:
+            return
+        hp_max = int(self._get_building_attr(building, "hp_max", 0) or 0)
+        hp = int(self._get_building_attr(building, "hp", 0) or 0)
+        if hp_max <= 0:
+            return
+        self._set_building_attr(building, "hp_max", hp_max + bonus)
+        # A fresh build/upgrade is at full HP; keep it full with the bonus.
+        if hp >= hp_max:
+            self._set_building_attr(building, "hp", hp_max + bonus)
 
     def construct(
         self, player: Any, tile: Any, building_abbr: str,
@@ -964,6 +988,11 @@ class BuildingSystem(BaseSystem):
                 new_max_hp = int(bdef.max_health * (1 + 0.2 * (target_level - 1)))
                 self._set_building_attr(building, "hp_max", new_max_hp)
                 self._set_building_attr(building, "hp", new_max_hp)
+                # Owner's researched building_hp tech (R13.3) tops up the
+                # recomputed hp_max — the upgrade path recalculates from the
+                # base def, so the bonus must be re-applied here.
+                owner = self._get_building_attr(building, "owner") or player
+                self._apply_building_hp_tech_bonus(owner, building)
             except (KeyError, AttributeError):
                 pass
 

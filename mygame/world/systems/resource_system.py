@@ -437,6 +437,13 @@ class ResourceSystem(BaseSystem):
             production = base_rate * (
                 1 + self.registry.balance.extractor_level_bonus * (level - 1)
             )
+            # Owner's researched production_multiplier tech (R13.3) scales
+            # extractor output multiplicatively (1.0 when unresearched).
+            from world.utils import get_tech_bonus
+            tech_owner = self._get_building_attr(building, "owner")
+            production *= get_tech_bonus(
+                tech_owner, "production_multiplier", default=1.0
+            )
             # Round to nearest integer (at least 1 if base_rate > 0)
             production_int = max(1, int(production)) if base_rate > 0 else 0
 

@@ -25,7 +25,12 @@ import logging
 from typing import Any, Callable
 
 from world.data_registry import DataRegistry
-from world.event_bus import BASE_ELIMINATED, BUILDING_DESTROYED, EventBus
+from world.event_bus import (
+    BASE_ELIMINATED,
+    BUILDING_DESTROYED,
+    NPC_ELIMINATED,
+    EventBus,
+)
 from world.systems.base_system import BaseSystem
 from world.utils import get_obj_attr, is_owner, is_player
 
@@ -66,6 +71,65 @@ class BaseEliminationHandler(BaseSystem):
         self._eliminating: set = set()
         if event_bus is not None:
             event_bus.subscribe(BUILDING_DESTROYED, self.on_building_destroyed)
+            # Per-guard mini-drops (R8.2) ride the guard-death event. The
+            # engine publishes NPC_ELIMINATED BEFORE deleting the victim, so
+            # its owner/coords are still readable here.
+            event_bus.subscribe(NPC_ELIMINATED, self.on_npc_eliminated)
+
+    def on_npc_eliminated(
+        self, event_name: str = "", victim: Any = None, attacker: Any = None,
+        tile: Any = None, attacker_owner: Any = None, **kwargs
+    ) -> None:
+        """Roll the per-guard-kill mini-drop (R8.2).
+
+        Each NPC-base guard kill has ``guard_loot_chance`` of dropping
+        ``guard_loot_amount`` of one random resource from the base's loot
+        table at the guard's tile — the instant-gratification beat between
+        HQ payouts. Only guards owned by a Sentinel (outpost/fortress)
+        qualify; template values override the balance defaults.
+        """
+        import random as _rng
+        if victim is None or self._loot_drop_func is None:
+            return
+        owner = get_obj_attr(victim, "owner")
+        if owner is None or not self._is_sentinel(owner):
+            return
+        tier = get_obj_attr(owner, "base_tier", "outpost")
+        template = self.registry.get_base_template(tier)
+        loot_table = dict(getattr(template, "loot", None) or {})
+        if not loot_table:
+            return
+        bal = self.registry.balance
+        chance = getattr(template, "guard_loot_chance", None)
+        if chance is None:
+            chance = getattr(bal, "guard_loot_chance", 0)
+        if _rng.random() >= chance:
+            return
+        spec = getattr(template, "guard_loot_amount", None)
+        if spec is None:
+            spec = getattr(bal, "guard_loot_amount", 0)
+        if isinstance(spec, list) and len(spec) >= 2:
+            amount = _rng.randint(min(spec[0], spec[1]), max(spec[0], spec[1]))
+        else:
+            amount = int(spec) if spec else 0
+        if amount <= 0:
+            return
+        resource = _rng.choice(sorted(loot_table))
+        room = getattr(victim, "location", None) or tile
+        x = get_obj_attr(victim, "coord_x")
+        y = get_obj_attr(victim, "coord_y")
+        if room is None:
+            return
+        try:
+            self._loot_drop_func(room, resource, amount, x, y)
+        except Exception:  # noqa: BLE001 - a bad drop must not break the kill
+            logger.exception("Guard mini-drop failed for %s x%s", resource, amount)
+            return
+        if attacker_owner is not None and is_player(attacker_owner):
+            self.notify(
+                attacker_owner, "guard_loot",
+                resource=resource, amount=amount, x=x, y=y,
+            )
 
     def on_building_destroyed(
         self, event_name: str = "", building: Any = None, attacker: Any = None,

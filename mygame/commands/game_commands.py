@@ -2607,8 +2607,12 @@ class CmdScore(GameCommand):
                 pass
         elif registry:
             try:
-                rdef = registry.get_rank_for_xp(xp)
-                rank_name = rdef.name
+                from world.systems.rank_system import rank_from_level
+                from world.utils import get_player_level
+                rank_num = rank_from_level(get_player_level(caller))
+                rdef = registry.get_rank_by_level(rank_num)
+                if rdef is not None:
+                    rank_name = rdef.name
             except Exception:
                 pass
 
