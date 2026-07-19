@@ -74,6 +74,15 @@ def format_building_interior(looker: Any, building: Any, registry: Any = None) -
     lines.extend([
         f"  Owner: {owner_name}",
         f"  Level: {info['level']} | HP: {info['hp']}/{info['hp_max']}",
+    ])
+    # Shield (Shield Generator feature): a building covered by a shield carries a
+    # second HP bar that soaks damage before HP. Show it only when the building
+    # actually has shield capacity, right under the HP line.
+    shield_max = int(get_building_attr(building, "shield_max", 0) or 0)
+    if shield_max > 0:
+        shield = int(get_building_attr(building, "shield", 0) or 0)
+        lines.append(f"  |cShield: {shield}/{shield_max}|n")
+    lines.extend([
         f"  Category: {category}",
         f"  Produces: {produces}",
     ])

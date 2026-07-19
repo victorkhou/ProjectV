@@ -183,5 +183,32 @@ class TestInteriorListsHostiles(unittest.TestCase):
         self.assertNotIn("Hostiles here:", out)
 
 
+class TestInteriorShowsShield(unittest.TestCase):
+    """A shielded building shows its shield/shield_max while you're inside;
+    an unshielded one shows no shield line (Shield Generator feature)."""
+
+    def test_shielded_building_shows_shield_line(self):
+        looker = _Player("Owner")
+        tile = _Tile({(5, 5): [looker]})
+        building = _Building(tile)
+        building.db.shield = 60
+        building.db.shield_max = 100
+
+        out = format_building_interior(looker, building, registry=None)
+
+        self.assertIn("Shield: 60/100", out)
+        # It reads under the HP line.
+        self.assertLess(out.index("HP:"), out.index("Shield:"))
+
+    def test_unshielded_building_has_no_shield_line(self):
+        looker = _Player("Owner")
+        tile = _Tile({(5, 5): [looker]})
+        building = _Building(tile)  # no shield attrs → default 0
+
+        out = format_building_interior(looker, building, registry=None)
+
+        self.assertNotIn("Shield:", out)
+
+
 if __name__ == "__main__":
     unittest.main()
