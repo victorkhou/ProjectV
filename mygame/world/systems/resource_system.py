@@ -284,6 +284,12 @@ class ResourceSystem(BaseSystem):
 
             self.notify(player, "harvest_drop", amount=amount, resource_type=resource_type)
 
+            # Economy XP trickle — manual harvest only (R1.3).
+            self._award_harvest_xp(player)
+
+            # Harvest crit roll (R7) — manual harvest only.
+            self._try_harvest_crit(player, tile, resource_type, amount, px, py)
+
             self.event_bus.publish(
                 RESOURCE_GATHERED,
                 player=player,
@@ -587,6 +593,43 @@ class ResourceSystem(BaseSystem):
             return float(system.perk_multiplier(player, "harvest_boost"))
         except Exception:  # noqa: BLE001 - a perk lookup never breaks harvest
             return 1.0
+
+    def _award_harvest_xp(self, player: Any) -> None:
+        """Award xp_harvest_action to the player (R1.3).
+
+        Manual-harvest-only — HarvesterScript does NOT call this (R1.6).
+        """
+        amount = getattr(self.registry.balance, "xp_harvest_action", 0) or 0
+        if amount <= 0 or player is None:
+            return
+        try:
+            from world.utils import get_system
+            rank_system = get_system(player, "rank_system")
+            if rank_system is not None:
+                rank_system.award_xp(player, amount, reason="harvest_action")
+        except Exception:
+            pass
+
+    def _try_harvest_crit(self, player: Any, tile: Any, resource_type: str,
+                          base_amount: int, px: Any, py: Any) -> None:
+        """Roll for a harvest crit; spawn bonus drop + notify on hit (R7)."""
+        import random
+        bal = self.registry.balance
+        chance = getattr(bal, "harvest_crit_chance", 0) or 0
+        if chance <= 0:
+            return
+        if random.random() >= chance:
+            return
+        multiplier = getattr(bal, "harvest_crit_multiplier", 5) or 5
+        bonus = base_amount * (multiplier - 1)
+        if bonus <= 0:
+            return
+        # Spawn the bonus drop at the same location.
+        if px is not None and py is not None:
+            self._spawn_resource_drop(tile, resource_type, bonus, x=px, y=py)
+        else:
+            self._spawn_resource_drop(tile, resource_type, bonus)
+        self.notify(player, "harvest_crit", amount=bonus, resource=resource_type)
 
     @staticmethod
     def _player_on_tile(player: Any, tile: Any) -> bool:

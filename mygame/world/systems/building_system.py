@@ -1000,6 +1000,20 @@ class BuildingSystem(BaseSystem):
                 player.db.activity_target = None
                 player.db.activity_progress = 0
 
+        # Economy XP award (R1.1, R1.2 — both player-present and engineer paths).
+        # Distinguish: an upgrade has upgrade_target_level set to None (already
+        # consumed above), but building_level > 1 after the upgrade branch ran.
+        # A new build stays at level 1 with no prior upgrade_target_level.
+        # Simplest: track was_upgrade as a local in the target_level branch above.
+        # Since target_level was already resolved earlier in this method, use it:
+        # this code runs after the branch where target_level was cleared to None
+        # on the building — so re-derive from the building_level: >1 means upgrade.
+        bl = self._get_building_attr(building, "building_level", 1) or 1
+        if bl > 1:
+            self._award_economy_xp(player, "upgrade_complete")
+        else:
+            self._award_economy_xp(player, "build_complete")
+
         # Publish completion event
         tile = getattr(building, "location", None)
         self.event_bus.publish(
@@ -1008,6 +1022,27 @@ class BuildingSystem(BaseSystem):
             building=building,
             tile=tile,
         )
+
+    def _award_economy_xp(self, player: Any, reason: str,
+                           amount: int | None = None) -> None:
+        """Award economy XP to *player* via RankSystem (R1).
+
+        Looks up the amount from ``balance.xp_{reason}`` if not supplied.
+        Silent no-op if player is None, amount is 0, or RankSystem unavailable.
+        """
+        if player is None:
+            return
+        if amount is None:
+            amount = getattr(self.registry.balance, f"xp_{reason}", 0) or 0
+        if amount <= 0:
+            return
+        try:
+            from world.utils import get_system
+            rank_system = get_system(player, "rank_system")
+            if rank_system is not None:
+                rank_system.award_xp(player, amount, reason=reason)
+        except Exception:
+            pass
 
     def _player_on_building_tile(self, player: Any, building: Any) -> bool:
         """Check if the player is on the same tile as the building."""

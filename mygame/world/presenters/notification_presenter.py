@@ -67,6 +67,10 @@ def _fmt_harvest_drop(d: dict) -> str:
     )
 
 
+def _fmt_harvest_crit(d: dict) -> str:
+    return f"|g[Rich vein!] +{d['amount']} {d['resource']} bonus!|n"
+
+
 # Attacks landing on the receiving player (you, your building, or your unit)
 # are rendered in BRIGHT red so an incoming hit stands out from the yellow/green
 # informational lines. In Evennia ANSI, |r is HILITE+RED (bright); |R is
@@ -586,6 +590,7 @@ class NotificationPresenter:
         "agent_training_complete": _fmt_agent_training_complete,
         "agent_training_progress": _fmt_agent_training_progress,
         "harvest_drop": _fmt_harvest_drop,
+        "harvest_crit": _fmt_harvest_crit,
         "attacked": _fmt_attacked,
         "attack_hit": _fmt_attack_hit,
         "building_attacked": _fmt_building_attacked,
