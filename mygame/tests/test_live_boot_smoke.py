@@ -767,6 +767,112 @@ class LiveBootSmokeTest(EvenniaTest):
         finally:
             _teardown_game(systems)
 
+    def test_shield_applied_via_construction_event_not_manual_refresh(self):
+        """The LIVE path: building a Shield Generator must shield the owner's
+        neighbours via the BUILDING event chain alone — no manual refresh().
+
+        Every other shield test calls ``shield_system.refresh([...])`` directly,
+        which masks whether the real wiring (BUILDING_CONSTRUCTED /
+        CONSTRUCTION_COMPLETED → ShieldSystem._on_building_changed →
+        owner.get_buildings() → refresh) actually fires and finds the roster on
+        real Evennia objects. Buildings are created by the REAL
+        ``EvenniaBuildingFactory`` (not the coord_planet-setting test helper), so
+        ``coord_planet`` is unset exactly as in game. This reproduces the
+        in-game report ("SG not shielding nearby buildings") by driving only the
+        event bus.
+        """
+        from server.conf.game_init import initialize_game
+        from world.event_bus import event_bus, CONSTRUCTION_COMPLETED
+        from world.adapters.evennia_building_repository import (
+            EvenniaBuildingFactory,
+        )
+
+        systems = initialize_game()
+        try:
+            registry = systems["registry"]
+            factory = EvenniaBuildingFactory()
+            room = self._make_planet_room("earth")
+            owner = self._make_player(x=5, y=5, planet="earth", location=room)
+
+            # Create both buildings through the SAME factory the game uses — it
+            # stamps coord_x/coord_y (via place_on_tile) but NOT coord_planet.
+            vault = factory.create_building(
+                registry.resolve_building("VT"), room, owner, x=7, y=5,
+            )
+            gen = factory.create_building(
+                registry.resolve_building("SG"), room, owner, x=5, y=5,
+            )
+            # Real factory leaves coord_planet unset — assert that so this test
+            # keeps reproducing the in-game object shape if the factory changes.
+            self.assertIsNone(gen.db.coord_planet)
+            self.assertIsNone(vault.db.coord_planet)
+
+            # Sanity: the owner's live roster (the link refresh() walks) sees
+            # both buildings. If get_buildings() can't find them, the shield
+            # can never be computed on the live path.
+            roster_ids = {getattr(b, "id", None) for b in owner.get_buildings()}
+            self.assertIn(gen.id, roster_ids,
+                          "owner.get_buildings() must include the generator")
+            self.assertIn(vault.id, roster_ids,
+                          "owner.get_buildings() must include the vault")
+
+            event_bus.publish(
+                CONSTRUCTION_COMPLETED, player=owner, building=gen, tile=room,
+            )
+
+            self.assertEqual(
+                vault.db.shield_max, 100,
+                "the vault must be shielded purely via the construction event "
+                "(25% x level 1 x 400 hp = 100)",
+            )
+            self.assertEqual(vault.db.shield, 100, "powers on charged")
+        finally:
+            _teardown_game(systems)
+
+    def test_shield_self_heals_via_periodic_sweep_no_event(self):
+        """The reported bug: a Shield Generator created WITHOUT firing a build
+        event (admin ``@building spawn``, or a building predating the feature)
+        must still shield neighbours — via the tick loop's periodic
+        ``refresh_owners`` sweep, not any event.
+
+        Builds both via the real factory, fires NO event, and calls the sweep
+        the tick loop runs each regen interval. Before the fix the vault stayed
+        unshielded forever; after it, the sweep finds the generator through the
+        owner's full roster and shields the vault.
+        """
+        from server.conf.game_init import initialize_game
+        from world.adapters.evennia_building_repository import (
+            EvenniaBuildingFactory,
+        )
+
+        systems = initialize_game()
+        try:
+            registry = systems["registry"]
+            shield_system = systems["shield_system"]
+            factory = EvenniaBuildingFactory()
+            room = self._make_planet_room("earth")
+            owner = self._make_player(x=5, y=5, planet="earth", location=room)
+
+            gen = factory.create_building(
+                registry.resolve_building("SG"), room, owner, x=5, y=5,
+            )
+            vault = factory.create_building(
+                registry.resolve_building("VT"), room, owner, x=7, y=5,
+            )
+            # No event fired — the vault is unshielded so far.
+            self.assertEqual(vault.db.shield_max or 0, 0)
+
+            # The tick loop's safety-net sweep, seeded with the active buildings.
+            shield_system.refresh_owners([gen, vault])
+
+            self.assertEqual(
+                vault.db.shield_max, 100,
+                "the periodic sweep must shield the vault even with no event",
+            )
+            self.assertEqual(vault.db.shield, 100, "powers on charged")
+        finally:
+            _teardown_game(systems)
+
     # -------------------------------------------------------------- #
     #  Drop/pickup — a dropped item must be indexed and re-gettable
     # -------------------------------------------------------------- #

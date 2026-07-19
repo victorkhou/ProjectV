@@ -376,6 +376,22 @@ class CmdAdminBuilding(AdminSubcommandRouter):
             from world.utils import place_on_tile
             place_on_tile(building, planet_room, cx, cy)
 
+            # Announce the spawn on the event bus exactly as the player build
+            # path does, so subscribers (e.g. the ShieldSystem recomputing
+            # shields from a new generator) react immediately rather than only
+            # on the next periodic sweep. Best-effort — a missing bus or a
+            # subscriber error must never fail the admin spawn.
+            event_bus = _get_system(caller, "event_bus")
+            if event_bus is not None:
+                try:
+                    from world.event_bus import BUILDING_CONSTRUCTED
+                    event_bus.publish(
+                        BUILDING_CONSTRUCTED,
+                        player=owner, building=building, tile=planet_room,
+                    )
+                except Exception:  # noqa: BLE001
+                    pass
+
             owner_name = getattr(owner, "key", "nobody") if owner else "nobody"
             self._log_admin(
                 "spawn",
@@ -422,6 +438,11 @@ class CmdAdminBuilding(AdminSubcommandRouter):
         btype = building.attributes.get("building_type", default="??") if hasattr(building, "attributes") else "??"
         bname = getattr(building, "key", btype)
 
+        # NOTE: deliberately does NOT publish BUILDING_DESTROYED — that event
+        # triggers base-elimination (a full NPC-base wipe on a Sentinel HQ),
+        # which is not what a surgical admin delete intends. Shield capacity on
+        # the survivors self-corrects on the ShieldSystem's next periodic sweep
+        # (refresh_owners, each regen interval).
         building.delete()
 
         self._log_admin("destroy", f"{bname} ({btype}) at ({cx}, {cy})")

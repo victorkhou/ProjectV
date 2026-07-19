@@ -197,6 +197,85 @@ class TestCapacityChanges(unittest.TestCase):
         self.assertEqual(vault.db.shield_max, 100)
 
 
+class _RosterOwner(_Owner):
+    """An owner whose ``get_buildings`` returns a preset roster — models the
+    live link the periodic sweep walks (``owner.get_buildings()``)."""
+    def __init__(self, roster=None):
+        super().__init__()
+        self._roster = list(roster or [])
+
+    def get_buildings(self):
+        return list(self._roster)
+
+
+class TestPeriodicSweep(unittest.TestCase):
+    """refresh_owners — the tick-loop safety net that re-shields from each
+    owner's FULL roster, so a generator created without a build event (admin
+    @building spawn, or predating the feature) still shields its neighbours."""
+
+    def test_sweep_shields_from_full_roster_not_active_subset(self):
+        sys_ = _system()
+        owner = _RosterOwner()
+        gen = _Building("SG", 5, 5, owner, level=1, hp_max=200)
+        vault = _Building("VT", 7, 5, owner, hp_max=400)  # dist 2 → covered
+        owner._roster = [gen, vault]
+
+        # The sweep is seeded ONLY with the vault (as if the generator were
+        # outside the active chunks). It must still find the generator via the
+        # owner's full roster and shield the vault.
+        sys_.refresh_owners([vault])
+        self.assertEqual(vault.db.shield_max, 100)
+        self.assertEqual(vault.db.shield, 100)
+
+    def test_sweep_dedups_owners(self):
+        """Two active buildings sharing an owner refresh that roster once."""
+        sys_ = _system()
+        owner = _RosterOwner()
+        gen = _Building("SG", 5, 5, owner, level=1, hp_max=200)
+        vault = _Building("VT", 7, 5, owner, hp_max=400)
+        calls = {"n": 0}
+        base_roster = [gen, vault]
+
+        def _counting_roster():
+            calls["n"] += 1
+            return list(base_roster)
+        owner.get_buildings = _counting_roster
+
+        sys_.refresh_owners([gen, vault])
+        self.assertEqual(calls["n"], 1, "each owner's roster fetched once")
+        self.assertEqual(vault.db.shield_max, 100)
+
+    def test_sweep_skips_ownerless_and_rosterless(self):
+        """An ownerless building, or an owner with no get_buildings, is skipped
+        without error (best-effort)."""
+        sys_ = _system()
+        ownerless = _Building("VT", 5, 5, None, hp_max=400)
+        # An owner object with no get_buildings method.
+        plain_owner = _Owner()
+        no_roster = _Building("VT", 6, 6, plain_owner, hp_max=400)
+        # Should not raise.
+        sys_.refresh_owners([ownerless, no_roster])
+        self.assertEqual(ownerless.db.shield_max, 0)
+
+    def test_sweep_isolates_one_bad_owner(self):
+        """A roster query that raises for one owner never aborts the sweep."""
+        sys_ = _system()
+        bad = _RosterOwner()
+        def _boom():
+            raise RuntimeError("db down")
+        bad.get_buildings = _boom
+        bad_bld = _Building("VT", 1, 1, bad, hp_max=400)
+
+        good = _RosterOwner()
+        gen = _Building("SG", 5, 5, good, level=1, hp_max=200)
+        vault = _Building("VT", 7, 5, good, hp_max=400)
+        good._roster = [gen, vault]
+
+        sys_.refresh_owners([bad_bld, gen])
+        # The good owner still got shielded despite the bad owner throwing.
+        self.assertEqual(vault.db.shield_max, 100)
+
+
 class TestRegen(unittest.TestCase):
     def test_regen_on_interval_only(self):
         sys_ = _system()

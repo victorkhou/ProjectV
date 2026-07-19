@@ -576,6 +576,15 @@ class GameTickScript(DefaultScript):
                 # Cheap timing gate before touching the building list.
                 if not shield_system.should_regen_this_tick(tick_number):
                     return
+                # Safety-net capacity sweep BEFORE regen: recompute shield_max
+                # for the owners of the active buildings from their full roster.
+                # The build/upgrade/destroy events keep shields current on the
+                # normal paths, but a building created without one of those
+                # events (admin @building spawn, or a building predating the
+                # feature) would otherwise never be shielded. Full-roster per
+                # owner so a generator just outside the active chunks still
+                # counts (see refresh_owners).
+                shield_system.refresh_owners(tick_data["buildings"])
                 # Only the active (chunk-filtered) buildings regen — the same
                 # set turrets/production use. A building far from any online
                 # player isn't being attacked, so deferring its shield regen

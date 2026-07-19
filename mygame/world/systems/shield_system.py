@@ -119,6 +119,41 @@ class ShieldSystem(BaseSystem):
     #  Shield capacity (recompute from covering generators)
     # ------------------------------------------------------------------ #
 
+    def refresh_owners(self, active_buildings: Iterable[Any]) -> None:
+        """Recompute shields for the owners of *active_buildings*, full-roster.
+
+        The tick loop's periodic safety-net sweep. The build/upgrade/destroy
+        event hooks keep shields current on the normal paths, but a building
+        that comes into existence WITHOUT firing one of those events — an admin
+        ``@building spawn``, or a building predating the Shield Generator
+        feature — would otherwise never receive a shield. Running this each
+        regen interval makes shields self-healing regardless of creation path.
+
+        For every distinct owner with at least one building in
+        *active_buildings*, refreshes that owner's ENTIRE roster
+        (``owner.get_buildings()``). It deliberately does NOT refresh from the
+        chunk-active subset: a covered building and the generator shielding it
+        must be considered together, and a generator just outside the active
+        chunks must not be dropped from the pass (which would spuriously clamp a
+        covered building's ``shield_max`` to 0). Best-effort per owner — one
+        failed roster query never aborts the sweep.
+        """
+        seen: set = set()
+        for b in active_buildings or ():
+            owner = get_obj_attr(b, "owner")
+            owner_id = getattr(owner, "id", None) if owner is not None else None
+            if owner_id is None or owner_id in seen:
+                continue
+            seen.add(owner_id)
+            if not hasattr(owner, "get_buildings"):
+                continue
+            try:
+                self.refresh(list(owner.get_buildings() or []))
+            except Exception:  # noqa: BLE001 - one owner never breaks the sweep
+                logger.exception(
+                    "Shield refresh sweep failed for owner %s", owner_id
+                )
+
     def generator_radius(self, level: int) -> int:
         """Chebyshev coverage radius for a generator at *level*."""
         base = int(getattr(self.registry.balance, "shield_base_radius", 2) or 0)
