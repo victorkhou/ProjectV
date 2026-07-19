@@ -156,12 +156,10 @@ VALID_ABILITY_GATES = [
 ]
 
 VALID_BALANCE = {
-    "production_scaling": {1: 10, 2: 50, 3: 150, 4: 400, 5: 1000},
     "turret_damage": 15,
     "turret_radius": 10,
     "xp_kill": 100,
     "xp_building_destroy": 50,
-    "xp_damage": 0.1,
     "xp_death_loss": 50,
     "gather_amount": 1,
     "player_default_health": 100,

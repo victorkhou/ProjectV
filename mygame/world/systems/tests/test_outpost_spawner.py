@@ -652,3 +652,104 @@ class TestBaseElimination(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+# -------------------------------------------------------------- #
+#  Gear-drop resolution (R8.3/R8.4 + R11.5 anti-silent-no-op)
+# -------------------------------------------------------------- #
+
+class TestGearDropResolution(unittest.TestCase):
+    """A won gear roll must produce a real ItemDef-backed drop, never a
+    silent no-op. Regression for the bug where `_spawn_gear_item` passed a
+    raw key string to `spawn_gear_drop` (which expects an ItemDef) and
+    swallowed the resulting AttributeError at debug level — every gear drop
+    vanished silently."""
+
+    def _handler_with_items(self):
+        registry = _make_registry()
+        # Registry item definitions the gear pools resolve against.
+        registry.items = {
+            "combat_knife": types.SimpleNamespace(
+                key="combat_knife", name="Combat Knife"),
+        }
+        handler, bus, drops = _make_handler(registry=registry)
+        return handler, registry
+
+    def test_won_roll_resolves_itemdef_and_spawns(self):
+        """_spawn_gear_item resolves the key to its ItemDef and passes the
+        DEF (not the string) to spawn_gear_drop."""
+        import typeclasses.objects as objects_mod
+        handler, registry = self._handler_with_items()
+        room = FakeRoom()
+        calls = []
+
+        original = getattr(objects_mod, "spawn_gear_drop", None)
+        objects_mod.spawn_gear_drop = (
+            lambda location, item_def, x=None, y=None:
+            calls.append((location, item_def, x, y)) or object()
+        )
+        try:
+            handler._spawn_gear_item(room, "combat_knife", 5, 5)
+        finally:
+            if original is not None:
+                objects_mod.spawn_gear_drop = original
+            else:
+                del objects_mod.spawn_gear_drop
+
+        self.assertEqual(len(calls), 1, "a won roll must spawn exactly once")
+        _, item_def, x, y = calls[0]
+        self.assertIs(item_def, registry.items["combat_knife"],
+                      "spawn_gear_drop must receive the resolved ItemDef, "
+                      "not the key string")
+        self.assertEqual((x, y), (5, 5))
+
+    def test_unknown_key_logs_error_and_never_spawns(self):
+        """An unknown pool key (should be impossible post-R11.5 validation)
+        is an ERROR, not a silent debug line — and nothing spawns."""
+        import typeclasses.objects as objects_mod
+        handler, registry = self._handler_with_items()
+        room = FakeRoom()
+        calls = []
+
+        original = getattr(objects_mod, "spawn_gear_drop", None)
+        objects_mod.spawn_gear_drop = (
+            lambda location, item_def, x=None, y=None:
+            calls.append(item_def) or object()
+        )
+        try:
+            with self.assertLogs(
+                "evennia.world.systems.base_elimination", level="ERROR"
+            ):
+                handler._spawn_gear_item(room, "no_such_item", 5, 5)
+        finally:
+            if original is not None:
+                objects_mod.spawn_gear_drop = original
+            else:
+                del objects_mod.spawn_gear_drop
+
+        self.assertEqual(calls, [], "an unresolved key must never spawn")
+
+    def test_gear_roll_uses_template_chance_and_pool(self):
+        """_try_gear_drops with chance=1.0 always spawns from the pool."""
+        import typeclasses.objects as objects_mod
+        handler, registry = self._handler_with_items()
+        room = FakeRoom()
+        template = types.SimpleNamespace(
+            gear_drop_chance=1.0, gear_pool=["combat_knife"],
+            rare_gear_chance=0.0, rare_pool=[],
+        )
+        calls = []
+        original = getattr(objects_mod, "spawn_gear_drop", None)
+        objects_mod.spawn_gear_drop = (
+            lambda location, item_def, x=None, y=None:
+            calls.append(item_def) or object()
+        )
+        try:
+            handler._try_gear_drops(room, template, 3, 4)
+        finally:
+            if original is not None:
+                objects_mod.spawn_gear_drop = original
+            else:
+                del objects_mod.spawn_gear_drop
+        self.assertEqual(len(calls), 1)
+        self.assertIs(calls[0], registry.items["combat_knife"])

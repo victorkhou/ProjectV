@@ -270,84 +270,69 @@ class TestProperty7DeductionRejectionPreservesState(unittest.TestCase):
 #  Property 8: Rank Resolution Is a Total Function
 #  **Validates: Requirements 4.2, 4.3, 4.4, 4.9, 4.13**
 # ================================================================== #
-
-# The 12 canonical rank thresholds from ranks.yaml
-RANK_THRESHOLDS = [0, 200, 600, 1500, 3500, 7000, 12000, 20000, 35000, 55000, 80000, 120000]
+#
+# Retargeted (early-game rebalance, task 6.5 completion): rank resolution is
+# now the two-step live pipeline XP -> level (world.progression.level_for_xp,
+# hybrid-curve thresholds) -> rank (rank_from_level, RANK_BANDS lookup).
+# DataRegistry.get_rank_for_xp — which scanned ranks.yaml's legacy
+# xp_threshold display data and could disagree with the band-derived rank —
+# was removed along with its tests.
 
 
 class TestProperty8RankResolutionTotalFunction(unittest.TestCase):
     """Property 8: Rank Resolution Is a Total Function.
 
-    For any XP value in [0, 120000], get_rank_for_xp(xp) SHALL return
-    exactly one RankDef where rank.xp_threshold <= xp and either the
-    rank is the highest rank or next_rank.xp_threshold > xp.
+    For any XP value >= 0, the live pipeline
+    ``rank_from_level(level_for_xp(xp))`` SHALL return exactly one rank
+    number in [1, NUM_RANKS], deterministically, and monotonically
+    non-decreasing in XP — with the resolved level always inside the
+    resolved rank's band.
 
-    **Validates: Requirements 4.2, 4.3, 4.4, 4.9, 4.13**
+    **Validates: Requirements 4.2, 4.3, 4.4, 4.9, 4.13 (as restated by R14)**
     """
 
     @classmethod
     def setUpClass(cls):
-        cls.registry = _make_registry_with_ranks()
+        from mygame.world import progression
+        # Build the module curve from defaults (no registry in this test env).
+        progression.build_thresholds()
+        cls.progression = progression
+
+    def _resolve(self, xp):
+        from mygame.world.systems.rank_system import rank_from_level
+        level = self.progression.level_for_xp(xp)
+        return level, rank_from_level(level)
 
     @given(xp=xp_st)
     @settings(max_examples=100)
     def test_rank_resolution_returns_exactly_one_rank(self, xp):
-        """get_rank_for_xp returns exactly one RankDef for any XP in range."""
-        rank = self.registry.get_rank_for_xp(xp)
+        """Any XP resolves to exactly one rank in [1, NUM_RANKS], and the
+        resolved level sits inside that rank's band."""
+        from mygame.world.constants import NUM_RANKS, RANK_BANDS, MAX_LEVEL
 
-        # Must return a RankDef (check by class name to avoid import-path identity issues)
-        self.assertEqual(type(rank).__name__, "RankDef")
-        self.assertTrue(hasattr(rank, "xp_threshold"))
-        self.assertTrue(hasattr(rank, "level"))
-        self.assertTrue(hasattr(rank, "name"))
-
-        # rank.xp_threshold <= xp
-        self.assertLessEqual(
-            rank.xp_threshold, xp,
-            f"Rank {rank.name} threshold {rank.xp_threshold} should be <= xp {xp}"
+        level, rank = self._resolve(xp)
+        self.assertTrue(1 <= rank <= NUM_RANKS)
+        self.assertTrue(1 <= level <= MAX_LEVEL)
+        low, high = RANK_BANDS[rank]
+        self.assertTrue(
+            low <= level <= high,
+            f"Level {level} outside rank {rank}'s band ({low}, {high})",
         )
-
-        # Either this is the highest rank, or the next rank's threshold > xp
-        ranks = self.registry.ranks
-        rank_idx = None
-        for i, r in enumerate(ranks):
-            if r.level == rank.level:
-                rank_idx = i
-                break
-
-        self.assertIsNotNone(rank_idx, f"Rank {rank.name} not found in registry")
-
-        if rank_idx < len(ranks) - 1:
-            next_rank = ranks[rank_idx + 1]
-            self.assertGreater(
-                next_rank.xp_threshold, xp,
-                f"Next rank {next_rank.name} threshold {next_rank.xp_threshold} "
-                f"should be > xp {xp} (current rank: {rank.name})"
-            )
 
     @given(xp=xp_st)
     @settings(max_examples=100)
     def test_rank_resolution_is_deterministic(self, xp):
-        """Calling get_rank_for_xp twice with same XP returns same rank."""
-        rank1 = self.registry.get_rank_for_xp(xp)
-        rank2 = self.registry.get_rank_for_xp(xp)
-        self.assertEqual(rank1.level, rank2.level)
-        self.assertEqual(rank1.name, rank2.name)
+        """Resolving the same XP twice returns the same (level, rank)."""
+        self.assertEqual(self._resolve(xp), self._resolve(xp))
 
-    @given(xp=xp_st)
+    @given(xp=xp_st, bump=st.integers(min_value=0, max_value=10000))
     @settings(max_examples=100)
-    def test_rank_thresholds_are_boundaries(self, xp):
-        """The resolved rank's threshold is the greatest threshold <= xp."""
-        rank = self.registry.get_rank_for_xp(xp)
-
-        # Verify no other rank has a higher threshold that's still <= xp
-        for r in self.registry.ranks:
-            if r.xp_threshold <= xp:
-                self.assertLessEqual(
-                    r.level, rank.level,
-                    f"Rank {r.name} (threshold {r.xp_threshold}) is <= xp {xp} "
-                    f"but has level {r.level} > resolved rank {rank.name} level {rank.level}"
-                )
+    def test_rank_resolution_is_monotone(self, xp, bump):
+        """More XP never resolves to a lower level or rank."""
+        level1, rank1 = self._resolve(xp)
+        level2, rank2 = self._resolve(xp + bump)
+        self.assertGreaterEqual(level2, level1)
+        self.assertGreaterEqual(rank2, rank1)
 
 
 if __name__ == "__main__":

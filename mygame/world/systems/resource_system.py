@@ -605,17 +605,11 @@ class ResourceSystem(BaseSystem):
         """Award xp_harvest_action to the player (R1.3).
 
         Manual-harvest-only — HarvesterScript does NOT call this (R1.6).
+        Routes through the shared :func:`world.utils.award_player_xp`.
         """
         amount = getattr(self.registry.balance, "xp_harvest_action", 0) or 0
-        if amount <= 0 or player is None:
-            return
-        try:
-            from world.utils import get_system
-            rank_system = get_system(player, "rank_system")
-            if rank_system is not None:
-                rank_system.award_xp(player, amount, reason="harvest_action")
-        except Exception:
-            pass
+        from world.utils import award_player_xp
+        award_player_xp(player, amount, reason="harvest_action")
 
     def _try_harvest_crit(self, player: Any, tile: Any, resource_type: str,
                           base_amount: int, px: Any, py: Any) -> None:

@@ -137,8 +137,8 @@ automatically by `evennia --initmissing`.
   combat promotes you; dying can demote you. Rank gates technologies, powerups,
   and planet access.
 - **Agents.** Players train autonomous NPC agents at an Academy and assign them
-  roles: `harvester` (Extractor), `engineer` (Armory/Lab construction), `guard`
-  (Turret), `scout` (Radar), plus army roles `soldier` and `medic`. Agents
+  roles: army roles `guard` (auto-defense) and `scout` (recon/vision), plus
+  building roles `harvester` (Extractor) and `engineer` (Armory/Lab). Agents
   pathfind and act on their own each tick.
 
 ---

@@ -518,10 +518,10 @@ def get_player_level(entity: Any, default: int = 1) -> int:
 
     Prefers ``db.level``. Falls back to the legacy ``db.rank_level`` (a 1-12
     rank number) by mapping it to the first level of that rank's band via
-    ``RANK_BANDS`` (R14.5: widening bands replaced the uniform LEVELS_PER_RANK
-    width); a ``rank_level`` already above the rank range is treated as an
-    actual level. Returns ``default`` when the entity has no ``db`` or neither
-    attribute is set.
+    ``RANK_BANDS`` (R14.5: widening bands replaced the retired uniform
+    5-levels-per-rank width); a ``rank_level`` already above the rank range is
+    treated as an actual level. Returns ``default`` when the entity has no
+    ``db`` or neither attribute is set.
 
     Single source of truth shared by RankSystem, TechLabSystem, PowerupSystem
     and AgentSystem so the "which level is this" rule cannot drift between them.
@@ -542,6 +542,32 @@ def get_player_level(entity: Any, default: int = 1) -> int:
             return band[0] if band else 1
         return rl
     return default
+
+
+def award_player_xp(player: Any, amount: int, reason: str = "") -> bool:
+    """Award *amount* XP to *player* through RankSystem (the single choke point).
+
+    The one shared "give a player XP" path for every economy/directive source
+    (build/upgrade/harvest/train/directive rewards — R1, R10), so the
+    resolve-RankSystem-and-award plumbing cannot drift between systems. Routes
+    through ``RankSystem.award_xp`` (level/rank recompute + LEVEL_CHANGED /
+    RANK_* events); never writes ``db.combat_xp`` directly.
+
+    Silent no-op (returns False) when *player* is None, *amount* <= 0, or the
+    RankSystem is unavailable (isolated tests / partial boots) — economy XP is
+    a reward, never a crash source.
+    """
+    if player is None or not amount or amount <= 0:
+        return False
+    try:
+        rank_system = get_system(player, "rank_system")
+        if rank_system is None:
+            return False
+        rank_system.award_xp(player, amount, reason=reason)
+        return True
+    except Exception:  # noqa: BLE001 - an XP award must never break gameplay
+        logger.exception("XP award failed (%s, +%s)", reason, amount)
+        return False
 
 
 def get_tech_bonus(player: Any, key: str, default: float = 0.0) -> float:

@@ -257,7 +257,7 @@ class TechLabSystem(BaseSystem):
 
     @staticmethod
     def _get_player_level(player: Any) -> int:
-        """Read the player's level (1-60). See ``world.utils.get_player_level``."""
+        """Read the player's level (1-100). See ``world.utils.get_player_level``."""
         from world.utils import get_player_level
         return get_player_level(player, default=0)
 

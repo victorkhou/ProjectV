@@ -51,11 +51,6 @@ RANK_BANDS: dict[int, tuple[int, int]] = {
     12: (100, 100), # Marshal (capstone — only maxed players hold it)
 }
 
-#: LEGACY — uniform rank width, retired as progression math by the R14 band
-#: table. Kept ONLY for the pre-band `rank_level → level` fallback mapping in
-#: `world.utils.get_player_level` migration paths; do NOT use in new code.
-LEVELS_PER_RANK = 5
-
 #: Evennia's Limbo room ID (used to detect first-login characters)
 LIMBO_ROOM_ID = 2
 

@@ -171,23 +171,9 @@ class TestProperty17RankAssignmentFromXP(unittest.TestCase):
     **Validates: Requirements 7.2, 7.3, 7.5**
     """
 
-    @given(
-        ranks=rank_list_strategy(),
-        xp=st.integers(min_value=0, max_value=50000),
-    )
-    @settings(max_examples=200)
-    def test_rank_for_xp_is_highest_qualifying(self, ranks, xp):
-        """get_rank_for_xp returns the highest rank with threshold <= xp."""
-        registry = _make_registry(ranks)
-        result = registry.get_rank_for_xp(xp)
-
-        # The result's threshold must be <= xp
-        self.assertLessEqual(result.xp_threshold, xp)
-
-        # No rank with a higher level should also have threshold <= xp
-        for rank in ranks:
-            if rank.level > result.level:
-                self.assertGreater(rank.xp_threshold, xp)
+    # NOTE: test_rank_for_xp_is_highest_qualifying was removed along with
+    # DataRegistry.get_rank_for_xp (task 6.5 completion) — rank derivation is
+    # now the RANK_BANDS lookup, not a ranks.yaml xp_threshold scan.
 
     @given(
         ranks=rank_list_strategy(),

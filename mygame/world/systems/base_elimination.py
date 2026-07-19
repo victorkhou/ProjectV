@@ -99,19 +99,9 @@ class BaseEliminationHandler(BaseSystem):
         loot_table = dict(getattr(template, "loot", None) or {})
         if not loot_table:
             return
-        bal = self.registry.balance
-        chance = getattr(template, "guard_loot_chance", None)
-        if chance is None:
-            chance = getattr(bal, "guard_loot_chance", 0)
-        if _rng.random() >= chance:
+        if _rng.random() >= self._tunable(template, "guard_loot_chance", 0):
             return
-        spec = getattr(template, "guard_loot_amount", None)
-        if spec is None:
-            spec = getattr(bal, "guard_loot_amount", 0)
-        if isinstance(spec, list) and len(spec) >= 2:
-            amount = _rng.randint(min(spec[0], spec[1]), max(spec[0], spec[1]))
-        else:
-            amount = int(spec) if spec else 0
+        amount = self._roll_amount(self._tunable(template, "guard_loot_amount", 0))
         if amount <= 0:
             return
         resource = _rng.choice(sorted(loot_table))
@@ -245,14 +235,10 @@ class BaseEliminationHandler(BaseSystem):
         Supports both fixed amounts (int) and range syntax ([min, max])
         drawn uniformly (R8.1).
         """
-        import random as _rng
         if not loot or self._loot_drop_func is None or room is None:
             return
         for resource, spec in loot.items():
-            if isinstance(spec, list) and len(spec) >= 2:
-                amount = _rng.randint(min(spec[0], spec[1]), max(spec[0], spec[1]))
-            else:
-                amount = int(spec) if spec else 0
+            amount = self._roll_amount(spec)
             if amount <= 0:
                 continue
             try:
@@ -261,52 +247,77 @@ class BaseEliminationHandler(BaseSystem):
                 logger.exception("Loot drop failed for %s x%s", resource, amount)
 
     def _try_gear_drops(self, room: Any, template: Any, x: Any, y: Any) -> None:
-        """Roll gear and rare gear drops on HQ destruction (R8.3, R8.4)."""
+        """Roll gear and rare gear drops on HQ destruction (R8.3, R8.4).
+
+        Two independent rolls (normal + rare), each: pool non-empty AND
+        ``random() < chance`` → spawn one random item from the pool.
+        """
         import random as _rng
         if self._loot_drop_func is None or room is None:
             return
-        bal = self.registry.balance
-        # Normal gear roll
-        chance = getattr(template, "gear_drop_chance", None)
-        if chance is None:
-            chance = getattr(bal, "gear_drop_chance", 0)
-        pool = getattr(template, "gear_pool", None) or []
-        if pool and _rng.random() < chance:
-            item_key = _rng.choice(pool)
-            try:
-                self._spawn_gear_item(room, item_key, x, y)
-            except Exception:  # noqa: BLE001
-                logger.exception("Gear drop failed for %s", item_key)
-        # Rare gear roll
-        rare_chance = getattr(template, "rare_gear_chance", None)
-        if rare_chance is None:
-            rare_chance = getattr(bal, "rare_gear_chance", 0)
-        rare_pool = getattr(template, "rare_pool", None) or []
-        if rare_pool and _rng.random() < rare_chance:
-            item_key = _rng.choice(rare_pool)
-            try:
-                self._spawn_gear_item(room, item_key, x, y)
-            except Exception:  # noqa: BLE001
-                logger.exception("Rare gear drop failed for %s", item_key)
+        for chance_key, pool_key in (
+            ("gear_drop_chance", "gear_pool"),
+            ("rare_gear_chance", "rare_pool"),
+        ):
+            chance = self._tunable(template, chance_key, 0)
+            pool = getattr(template, pool_key, None) or []
+            if pool and _rng.random() < chance:
+                self._spawn_gear_item(room, _rng.choice(pool), x, y)
+
+    def _tunable(self, template: Any, key: str, default: Any = 0) -> Any:
+        """Read *key* from the base template, falling back to balance.
+
+        The shared template-overrides-balance rule for every variable-reward
+        knob (guard mini-drops, gear/rare chances) — one lookup order, no
+        per-site drift.
+        """
+        value = getattr(template, key, None)
+        if value is None:
+            value = getattr(self.registry.balance, key, default)
+        return value if value is not None else default
+
+    @staticmethod
+    def _roll_amount(spec: Any) -> int:
+        """Resolve a loot amount spec: ``[min, max]`` → uniform roll, int → int.
+
+        The single range-syntax resolver (R8.1) shared by base loot and guard
+        mini-drops. Misordered ranges are clamped (min/max swap); falsy or
+        malformed specs resolve to 0 (caller skips).
+        """
+        import random as _rng
+        if isinstance(spec, list) and len(spec) >= 2:
+            return _rng.randint(min(spec[0], spec[1]), max(spec[0], spec[1]))
+        try:
+            return int(spec) if spec else 0
+        except (TypeError, ValueError):
+            return 0
 
     def _spawn_gear_item(self, room: Any, item_key: str, x: Any, y: Any) -> None:
-        """Spawn a gear item on the ground at (x, y).
+        """Spawn the gear item *item_key* as a ground drop at (x, y).
 
-        Uses the same loot_drop_func as resource drops (spawn_gear_drop is a
-        future enhancement — for now drops a resource_drop tagged with item_key
-        as a placeholder until the item-drop spawner is wired).
+        Resolves the key to its ``ItemDef`` via the registry (pool keys are
+        load-time validated against item definitions — R11.5) and creates a
+        real Gear ``GameItem`` via ``spawn_gear_drop`` (which expects an
+        ItemDef, not a key string). Failures are logged at ERROR — a won gear
+        roll must never vanish silently (the anti-dopamine failure R11.5
+        exists to prevent).
         """
-        # In the current architecture, gear items are spawned via the
-        # equipment_system or objects.py spawn_gear_drop. For now, we delegate
-        # to the loot_drop_func with a special resource name to mark it as gear.
-        # Phase 2 scope: register the drop so the player sees it in notifications;
-        # actual item creation uses the existing Game_Item spawner.
+        item_def = (self.registry.items or {}).get(item_key)
+        if item_def is None:
+            # Should be impossible after load-time pool validation (R11.5).
+            logger.error("Gear drop %r: no such item definition", item_key)
+            return
         try:
             from typeclasses.objects import spawn_gear_drop
-            spawn_gear_drop(room, item_key, x=int(x), y=int(y))
-        except (ImportError, AttributeError, TypeError):
-            # Fallback: log that gear spawning isn't wired yet.
-            logger.debug("Gear drop %s: spawn_gear_drop unavailable", item_key)
+        except ImportError:
+            logger.debug("Gear drop %s: Evennia unavailable (test env)", item_key)
+            return
+        try:
+            if spawn_gear_drop(room, item_def, x=int(x), y=int(y)) is None:
+                logger.warning("Gear drop %s refused (tile full) at (%s, %s)",
+                               item_key, x, y)
+        except Exception:  # noqa: BLE001 - a bad drop must not abort the wipe
+            logger.exception("Gear drop failed for %s", item_key)
 
     # ------------------------------------------------------------------ #
     #  Helpers

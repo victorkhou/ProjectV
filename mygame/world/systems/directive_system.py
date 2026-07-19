@@ -186,13 +186,8 @@ class DirectiveSystem(BaseSystem):
             except Exception:  # noqa: BLE001
                 logger.exception("Directive resource grant failed: %s", resource)
         if xp > 0:
-            try:
-                from world.utils import get_system
-                rank_system = get_system(player, "rank_system")
-                if rank_system is not None:
-                    rank_system.award_xp(player, xp, reason="directive")
-            except Exception:  # noqa: BLE001
-                logger.exception("Directive XP grant failed")
+            from world.utils import award_player_xp
+            award_player_xp(player, xp, reason="directive")
 
     # ------------------------------------------------------------------ #
     #  Payload adapter (D7)

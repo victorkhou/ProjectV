@@ -262,17 +262,23 @@ class CombatCharacter(CombatEntity, DefaultCharacter):
         or None — never overwrites existing valid data.
 
         Special handling: if ``level`` is missing but ``rank_level``
-        exists, derives level from the old rank number (1-12) using
-        ``(rank - 1) * 5 + 1``.
+        exists, derives level from the old rank number (1-12) by mapping it to
+        the first level of that rank's band (``RANK_BANDS`` — the same rule as
+        ``world.utils.get_player_level``, so the two migration paths agree).
         """
         for key, default in PLAYER_DEFAULTS.items():
             if self.attributes.get(key) is None:
                 if key == "level":
-                    # Migrate from old rank_level (1-12) to new level (1-60)
-                    from world.constants import NUM_RANKS, LEVELS_PER_RANK
+                    # Migrate from old rank_level (1-12) to new level (1-100)
+                    # via the band-start mapping (R14.5) — NOT the retired
+                    # uniform (rank-1)*LEVELS_PER_RANK+1 math, which diverges
+                    # from the widened bands for rank >= 5 and would land a
+                    # legacy player one rank below their stored rank.
+                    from world.constants import NUM_RANKS, RANK_BANDS
                     old_rank = self.attributes.get("rank_level")
                     if old_rank is not None and isinstance(old_rank, int) and 1 <= old_rank <= NUM_RANKS:
-                        self.attributes.add("level", (old_rank - 1) * LEVELS_PER_RANK + 1)
+                        band = RANK_BANDS.get(old_rank)
+                        self.attributes.add("level", band[0] if band else 1)
                         continue
                 self.attributes.add(key, copy.deepcopy(default))
         self._migrate_level_curve()

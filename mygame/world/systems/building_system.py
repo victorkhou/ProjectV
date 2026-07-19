@@ -1084,22 +1084,14 @@ class BuildingSystem(BaseSystem):
                            amount: int | None = None) -> None:
         """Award economy XP to *player* via RankSystem (R1).
 
-        Looks up the amount from ``balance.xp_{reason}`` if not supplied.
-        Silent no-op if player is None, amount is 0, or RankSystem unavailable.
+        Looks up the amount from ``balance.xp_{reason}`` if not supplied, then
+        routes through the shared :func:`world.utils.award_player_xp` choke
+        point (silent no-op on None player / zero amount / no RankSystem).
         """
-        if player is None:
-            return
         if amount is None:
             amount = getattr(self.registry.balance, f"xp_{reason}", 0) or 0
-        if amount <= 0:
-            return
-        try:
-            from world.utils import get_system
-            rank_system = get_system(player, "rank_system")
-            if rank_system is not None:
-                rank_system.award_xp(player, amount, reason=reason)
-        except Exception:
-            pass
+        from world.utils import award_player_xp
+        award_player_xp(player, amount, reason=reason)
 
     def _player_on_building_tile(self, player: Any, building: Any) -> bool:
         """Check if the player is on the same tile as the building."""

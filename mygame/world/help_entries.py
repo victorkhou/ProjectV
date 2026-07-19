@@ -81,7 +81,7 @@ HELP_ENTRY_DICTS = [
 
             # What's Next
 
-            With passive income flowing, expand: |wupgrade|n buildings (costs grow fast), stockpile surplus in a |cVault|n (|whelp storage|n), explore, and climb the ranks to unlock new planets and tech.
+            With passive income flowing, expand: |wupgrade|n buildings (costs grow fast), stockpile surplus in a |cVault|n (|whelp storage|n), explore, climb the ranks to unlock new planets, and research techs at a |cLab|n (rank gates which techs you can research).
 
             # See Also
 
@@ -217,10 +217,8 @@ HELP_ENTRY_DICTS = [
 
             |cHarvester|n — at an |cExtractor|n: passive resource income
             |cEngineer|n — at an |cArmory|n or |cLab|n: builds/researches
-            |cGuard|n — at a |cTurret|n: powers auto-defense
-            |cScout|n — at a |cRadar|n: recon patrols
-            |cSoldier|n — army role for raids (in development)
-            |cMedic|n — at a |cMedbay|n: healing (in development)
+            |cGuard|n — army role, assignable anywhere: auto-defense and patrol combat
+            |cScout|n — army role, assignable anywhere: patrols and reveals the map within its vision radius
 
             # Key Commands
 
@@ -269,15 +267,15 @@ HELP_ENTRY_DICTS = [
             |wHQ|n |cHeadquarters|n — home base, respawn point, holds storage. Required before most other buildings. (L1)
             |wEX|n |cExtractor|n — boosts harvesting; must sit on resource terrain. Harvester agents work here. (L1)
             |wAC|n |cAcademy|n — train agents here (|wagent train|n inside). (L1)
-            |wAR|n |cArmory|n — crafts weapons, armor, and ammo. (L1)
-            |wWL|n |cWall|n — a barrier that blocks passage. (L11)
-            |wBK|n |cBarracks|n — army capacity. (L11)
-            |wLB|n |cLab|n — research and craft advanced gear; needs an Engineer to run. (L26)
-            |wRD|n |cRadar|n — extends vision; needs a Scout. (L31)
-            |wTU|n |cTurret|n — auto-attacks enemies; needs a Guard. (L31)
-            |wVT|n |cVault|n — high-capacity resource storage, protected while you're offline; harvesters prefer to deliver here. (L36)
-            |wRL|n |cRelay|n — boosts nearby Turret damage. (L41)
-            |wMB|n |cMedbay|n — crafts medkits and stims; reduces respawn time. (L46)
+            |wAR|n |cArmory|n — crafts weapons, armor, and ammo. (L3)
+            |wWL|n |cWall|n — a barrier that blocks passage. (L2)
+            |wBK|n |cBarracks|n — army capacity. (L7, requires deed: destroy an outpost)
+            |wLB|n |cLab|n — research and craft advanced gear; needs an Engineer to run. (L11, requires deed: destroy 3 outposts)
+            |wRD|n |cRadar|n — extends vision. (L9)
+            |wTU|n |cTurret|n — auto-attacks enemies in range while your HQ stands. (L5)
+            |wVT|n |cVault|n — high-capacity resource storage, protected while you're offline; harvesters prefer to deliver here. (L4)
+            |wRL|n |cRelay|n — boosts nearby Turret damage. (L15)
+            |wMB|n |cMedbay|n — crafts medkits and stims; reduces respawn time. (L18)
 
             Higher-level buildings unlock as you climb ranks. Check |wscore|n for your current level, and |wbuild|n to see what's available now.
 
@@ -689,7 +687,7 @@ HELP_ENTRY_DICTS = [
 
             # Build Requirements
 
-            Cost: |c20 Wood|n, |c15 Stone|n, |c15 Iron|n. Level: |c1|n. Dependencies: an |cHQ|n.
+            Cost: |c20 Wood|n, |c15 Stone|n, |c15 Iron|n. Level: |c3|n. Dependencies: an |cHQ|n.
 
             # What It Does
 
@@ -715,7 +713,7 @@ HELP_ENTRY_DICTS = [
 
             # Build Requirements
 
-            Cost: |c5 Stone|n. Level: |c11|n. Dependencies: an |cHQ|n.
+            Cost: |c5 Stone|n. Level: |c2|n. Dependencies: an |cHQ|n.
 
             # What It Does
 
@@ -741,15 +739,15 @@ HELP_ENTRY_DICTS = [
 
             # Build Requirements
 
-            Cost: |c15 Wood|n, |c15 Stone|n, |c10 Iron|n. Level: |c11|n. Dependencies: an |cHQ|n.
+            Cost: |c15 Wood|n, |c15 Stone|n, |c10 Iron|n. Level: |c7|n. Deed: destroy an |coutpost|n. Dependencies: an |cHQ|n.
 
             # What It Does
 
-            Increases your army capacity (|cSoldier|n / |cMedic|n agents). Army roles are in active development; build one to grow your fighting force as those features land.
+            Increases your army capacity (|cGuard|n / |cScout|n agents). Build one to grow your fighting force.
 
             # Using It
 
-            |wbuild BK|n near your base. Train soldiers at an |cAcademy|n and assign them army roles. See |whelp agents|n.
+            |wbuild BK|n near your base. Train agents at an |cAcademy|n and assign them army roles. See |whelp agents|n.
 
             # See Also
 
@@ -767,7 +765,7 @@ HELP_ENTRY_DICTS = [
 
             # Build Requirements
 
-            Cost: |c25 Wood|n, |c20 Stone|n, |c15 Iron|n. Level: |c26|n. Dependencies: an |cHQ|n, and an |cEngineer|n agent to run research.
+            Cost: |c25 Wood|n, |c20 Stone|n, |c15 Iron|n. Level: |c11|n. Deed: destroy |c3 outposts|n. Dependencies: an |cHQ|n, and an |cEngineer|n agent to run research.
 
             # What It Does
 
@@ -793,15 +791,15 @@ HELP_ENTRY_DICTS = [
 
             # Build Requirements
 
-            Cost: |c15 Iron|n, |c10 Energy|n. Level: |c31|n. Dependencies: an |cHQ|n, and a |cScout|n agent to run it.
+            Cost: |c15 Iron|n, |c10 Energy|n. Level: |c9|n. Dependencies: an |cHQ|n.
 
             # What It Does
 
-            Extends your vision radius with an assigned |cScout|n, revealing more of the map around it — useful for spotting enemies and scouting expansion sites.
+            Extends your vision radius, revealing more of the map around it — useful for spotting enemies and scouting expansion sites. No agent required.
 
             # Using It
 
-            |wbuild RD|n, then assign a |cScout|n (|wagent assign <id>|n inside) and set patrols with |wagent patrol <id> <x,y> ...|n. Check the map with |wmap|n and |wscan|n.
+            |wbuild RD|n where you want coverage. For mobile recon, send a |cScout|n on patrol with |wagent patrol <id> <x,y> ...|n. Check the map with |wmap|n and |wscan|n.
 
             # See Also
 
@@ -819,15 +817,15 @@ HELP_ENTRY_DICTS = [
 
             # Build Requirements
 
-            Cost: |c20 Stone|n, |c15 Iron|n. Level: |c31|n. Dependencies: an |cHQ|n, and a |cGuard|n agent to power it.
+            Cost: |c20 Stone|n, |c15 Iron|n. Level: |c5|n. Dependencies: an |cHQ|n.
 
             # What It Does
 
-            Auto-attacks enemies in range each tick while a |cGuard|n is assigned. Pair with |cWalls|n to hold a line and a |cRelay|n to boost its damage.
+            Auto-attacks enemies in range each tick while your |cHQ|n is active — no agent required. Pair with |cWalls|n to hold a line and a |cRelay|n to boost its damage.
 
             # Using It
 
-            |wbuild TU|n where you want coverage, then assign a |cGuard|n (|wagent assign <id>|n inside). See |whelp combat|n and |whelp relay|n.
+            |wbuild TU|n where you want coverage. It fires on its own as long as your |cHQ|n stands. See |whelp combat|n and |whelp relay|n.
 
             # See Also
 
@@ -845,7 +843,7 @@ HELP_ENTRY_DICTS = [
 
             # Build Requirements
 
-            Cost: |c25 Stone|n, |c10 Iron|n. Level: |c36|n. Dependencies: an |cHQ|n.
+            Cost: |c25 Stone|n, |c10 Iron|n. Level: |c4|n. Dependencies: an |cHQ|n.
 
             # What It Does
 
@@ -871,7 +869,7 @@ HELP_ENTRY_DICTS = [
 
             # Build Requirements
 
-            Cost: |c20 Iron|n, |c15 Energy|n. Level: |c41|n. Dependencies: an |cHQ|n.
+            Cost: |c20 Iron|n, |c15 Energy|n. Level: |c15|n. Dependencies: an |cHQ|n.
 
             # What It Does
 
@@ -897,7 +895,7 @@ HELP_ENTRY_DICTS = [
 
             # Build Requirements
 
-            Cost: |c15 Wood|n, |c10 Stone|n, |c10 Iron|n, |c5 Energy|n. Level: |c46|n. Dependencies: an |cHQ|n.
+            Cost: |c15 Wood|n, |c10 Stone|n, |c10 Iron|n, |c5 Energy|n. Level: |c18|n. Dependencies: an |cHQ|n.
 
             # What It Does
 

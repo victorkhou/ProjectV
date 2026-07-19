@@ -209,16 +209,11 @@ class AgentSystem(AgentProgressionMixin, AgentBehaviorMixin, BaseSystem):
         # Notify the player
         self.notify(player, "agent_training_complete", agent_id=agent_id)
 
-        # Economy XP award for training completion (R1.4)
-        try:
-            amount = getattr(self.registry.balance, "xp_agent_trained", 0) or 0
-            if amount > 0:
-                from world.utils import get_system
-                rank_system = get_system(player, "rank_system")
-                if rank_system is not None:
-                    rank_system.award_xp(player, amount, reason="agent_trained")
-        except Exception:
-            pass
+        # Economy XP award for training completion (R1.4) — via the shared
+        # award_player_xp choke point.
+        from world.utils import award_player_xp
+        amount = getattr(self.registry.balance, "xp_agent_trained", 0) or 0
+        award_player_xp(player, amount, reason="agent_trained")
 
         # Directive trigger (D8)
         try:

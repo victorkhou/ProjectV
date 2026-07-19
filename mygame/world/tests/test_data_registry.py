@@ -7,7 +7,7 @@ import tempfile
 import pytest
 import yaml
 
-from mygame.world.constants import LEVELS_PER_RANK, MAX_LEVEL
+from mygame.world.constants import RANK_BANDS, MAX_LEVEL
 from mygame.world.data_registry import DataRegistry, DataRegistryError
 from mygame.world.definitions import BalanceConfig
 
@@ -419,21 +419,10 @@ class TestGetters:
         items = self.reg.get_items_for_building("ZZ")
         assert items == []
 
-    def test_get_rank_for_xp_lowest(self):
-        rank = self.reg.get_rank_for_xp(0)
-        assert rank.name == "Recruit"
-
-    def test_get_rank_for_xp_exact_threshold(self):
-        rank = self.reg.get_rank_for_xp(100)
-        assert rank.name == "Private"
-
-    def test_get_rank_for_xp_between_thresholds(self):
-        rank = self.reg.get_rank_for_xp(250)
-        assert rank.name == "Private"
-
-    def test_get_rank_for_xp_high(self):
-        rank = self.reg.get_rank_for_xp(9999)
-        assert rank.name == "Sergeant"
+    # NOTE: the test_get_rank_for_xp_* tests were removed along with
+    # DataRegistry.get_rank_for_xp (task 6.5 completion) — rank is derived
+    # from level via RANK_BANDS (rank_from_level), not from ranks.yaml's
+    # legacy xp_threshold display data.
 
     def test_get_rank_by_name(self):
         rank = self.reg.get_rank_by_name("Corporal")
@@ -556,7 +545,7 @@ class TestReload:
 
         # The hybrid curve is formula-derived; L6 threshold is 298 (not from
         # ranks.yaml xp_threshold).
-        first_level_of_rank_two = (2 - 1) * LEVELS_PER_RANK + 1
+        first_level_of_rank_two = RANK_BANDS[2][0]
         assert first_level_of_rank_two == 6
         baseline_l6 = progression.xp_for_level(6)
         assert baseline_l6 == 298

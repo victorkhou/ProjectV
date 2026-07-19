@@ -395,7 +395,7 @@ graph LR
 | **BombSystem** | 10 | Fused explosives: **grenades** (`throw <g> <dir>` — flies to first obstacle/max range, lands) and **mines** (`arm <m>` — placed in‑place); `set <bomb> <sec>` / `set all <sec>` set the fuse (per‑type, consumed on deploy). Each tick decrements every live `LiveBomb`'s fuse and broadcasts the countdown to players on its tile (`get_players_at`); at 0 it detonates an **indiscriminate** Chebyshev‑radius AoE via `CombatEngine.apply_direct_hit` (hits the placer + own units too; closed‑building/sheltered immune) and deletes the bomb. Tracks live bombs in memory; `rebuild_from_world` re‑tracks them after a restart | registry, injected `spawn_bomb` factory + area‑damage applier, EventBus, PlanetRoom |
 | **OutpostSpawnerSystem** | 15 | Spawns NPC bases (outposts/fortresses) at init via templates; respawns cleared bases on cooldown (`process_respawns`, subscribes `BASE_ELIMINATED`); placement (bounds/passable/unoccupied/min‑separation) | registry (templates + balance), NPC/building factories, PlanetRoom, EventBus |
 | **BaseEliminationHandler** | event‑driven | Subscribes `BUILDING_DESTROYED`; on a **sentinel‑owned HQ** destruction wipes the whole base (buildings + guards + sentinel), awards `xp_hq_destroy` + drops loot, publishes `BASE_ELIMINATED`. Player HQ untouched (PvP fork = deactivation, not deletion) | EventBus, PlanetRoom, CombatEngine (XP) |
-| **RankSystem** | event‑driven | Level 1‑60 → rank 1‑12; XP thresholds; tech unlock/revoke; **publishes** `LEVEL_CHANGED`/`RANK_*` | progression, EventBus |
+| **RankSystem** | event‑driven | Level 1‑100 → rank 1‑12 via widening `RANK_BANDS` (`world/constants.py`); XP thresholds from the hybrid formula in `world/progression.py`; no tech unlock/revoke (techs are research‑only); **publishes** `LEVEL_CHANGED`/`RANK_*` | progression, EventBus |
 | **ResourceSystem** | 4, 14 | Manual + presence harvest, Extractor inventory, respawns | Movement, terrain, EventBus |
 | **BuildingSystem** | 4 | Construct/upgrade validation + timers (player‑presence & engineer‑agent) | terrain, EventBus |
 | **EquipmentSystem** | 5 | Per‑tick item production **and** the use‑case mediating equip/unequip/use/reload/deposit/withdraw + carry‑weight/rank/ammo checks (see §12). (Grenades/mines are now deployed via **BombSystem**, not `throw` here) | registry, EquipmentHandler, injected area‑damage applier + PowerupSystem + supply/resource‑drop spawners |
@@ -898,7 +898,7 @@ erDiagram
     RANK_DEF {
         string name PK "registry lookup key"
         int    level UK "unique, strictly ordered 1..12"
-        int    xp_threshold "strictly increasing by level"
+        int    xp_threshold "strictly increasing by level; legacy/display-only — live curve is world/progression.py"
         int    agent_cap
         list   planet_access "soft → COORDINATE_SPACE_DEF.planet_key"
         list   unlocks "soft → BUILDING_DEF.name (NOT abbreviation!)"
@@ -922,7 +922,7 @@ erDiagram
     }
     ABILITY_GATE_DEF {
         string key PK "e.g. 'delivery'"
-        int    required_level "1..MAX_LEVEL (60)"
+        int    required_level "1..MAX_LEVEL (100)"
     }
     ITEM_PRODUCTION_MAP {
         string building_abbr FK "ENFORCED → BUILDING_DEF.abbreviation"
@@ -1023,7 +1023,7 @@ erDiagram
   `RankDef.planet_access → planet_key` and `terrain_weights → terrain_type` are never
   checked against each other at load.
 - **`rank_requirement` is a misnomer** on both `BuildingDef` and `CoordinateSpaceDef`:
-  per the YAML comments it now holds a **level (1–60)**, not a rank (1–12).
+  per the YAML comments it now holds a **level (1–100)**, not a rank (1–12).
 - **NPC‑base templates are optional and lightly checked.** `outposts.yaml` is absent by
   default (→ no NPC bases; `registry.base_templates` empty), and
   `TemplateBuildingDef.building_type` is a **soft** reference to a `BuildingDef`
@@ -1129,7 +1129,7 @@ layering guard stays green.
 ## Appendix — Key Constants (`world/constants.py`)
 
 ```
-NUM_RANKS = 12 · LEVELS_PER_RANK = 5 · MAX_LEVEL = 60 · FINAL_RANK_XP_PER_LEVEL = 10000
+NUM_RANKS = 12 · MAX_LEVEL = 100 · RANK_BANDS = {rank → (min_level, max_level)}   # widening bands; XP curve = hybrid formula in world/progression.py
 DeliveryState = {IDLE, PICKING_UP, DELIVERING, RETURNING}   # StrEnum
 HARVEST_COOLDOWN_TICKS = 4 · EXTRACTOR_HARVEST_MULTIPLIER = 3 · EXTRACTOR_LEVEL_BONUS = 0.25
 DEFAULT_MOVEMENT_DELAY = 1 · HARVESTER_LADEN_DELAY = 2 · HARVESTER_EMPTY_DELAY = 1 · DEFAULT_CARRY_CAPACITY = 50

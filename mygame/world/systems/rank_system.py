@@ -3,17 +3,19 @@ Rank System for the RTS Combat Overworld game.
 
 Level-based progression with cosmetic ranks.
 
-Players have a **level** (1-60).  Rank is derived: every 5 levels
-advances the rank.  Levels 1-5 = Recruit, 6-10 = Private, …,
-56-60 = Marshal.
+Players have a **level** (1-100).  Rank is derived from the widening
+``RANK_BANDS`` mapping in ``world/constants.py`` (Recruit L1-5,
+Private L6-10, …, General L85-99), with Marshal as the L100 capstone.
+Bands are no longer a uniform 5 levels wide.
 
 All feature gates (buildings, planets, agent caps) use the player's
-**level** directly.  Rank is a cosmetic title.
+**level** directly.  Rank is a cosmetic title.  Ranks never grant or
+revoke technologies — techs are acquired only by research at a Lab.
 
-XP thresholds are defined per-level.  The YAML ``ranks.yaml`` defines
-12 ranks with ``xp_threshold`` for the *first* level of each rank.
-The 5 levels within a rank are linearly interpolated between
-consecutive rank thresholds.
+XP thresholds come from the hybrid formula in ``world/progression.py``
+(40 XP at L2, +20%/level to L20, +5%/level to L100).  The YAML
+``ranks.yaml`` carries rank names, agent caps, and planet access; its
+``xp_threshold`` values are legacy display data only.
 
 """
 
@@ -84,11 +86,12 @@ def player_meets_rank(player_level: int, required_rank_name: str, registry) -> b
 class RankSystem(BaseSystem):
     """Manages player level/rank progression based on Combat XP.
 
-    The player's ``db.level`` (1-60) is the authoritative progression
+    The player's ``db.level`` (1-100) is the authoritative progression
     value.  ``db.rank_level`` is kept in sync as ``rank_from_level(level)``
     for backward compatibility and display.
 
-    Promotion/demotion events fire when the *rank* changes (every 5 levels).
+    Promotion/demotion events fire when the *rank* changes (i.e. when the
+    level crosses a ``RANK_BANDS`` boundary).
     """
 
     def __init__(self, registry: "DataRegistry", event_bus: "EventBus",
@@ -105,10 +108,11 @@ class RankSystem(BaseSystem):
         """(Re)build the shared ``world.progression`` threshold table.
 
         Thin wrapper over ``world.progression.build_thresholds``. The curve
-        computation (linear interpolation of 5 levels between consecutive
-        rank thresholds) lives in the shared helper so ``CombatEntity`` and
-        ``RankSystem`` derive levels from one place rather than duplicating
-        it. Calling this rebuilds the table from this system's registry.
+        computation (the hybrid growth formula: 40 XP at L2, +20%/level to
+        L20, +5%/level to L100) lives in the shared helper so
+        ``CombatEntity`` and ``RankSystem`` derive levels from one place
+        rather than duplicating it. Calling this rebuilds the table from
+        this system's registry.
         """
         progression.build_thresholds(self.registry.ranks)
 

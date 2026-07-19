@@ -257,12 +257,13 @@ class DataRegistry:
         self.directives = temp.directives
         self.balance = temp.balance
 
-        # Rebuild the shared level<->XP threshold curve from the newly-swapped
-        # ranks. The module-level table in ``world.progression`` is only built
-        # at server start otherwise, so a ranks.yaml hot-reload that retunes
-        # xp_thresholds would leave the derived-level curve stale until the next
-        # restart. Guarded so a rebuild hiccup never invalidates the successful
-        # data swap above.
+        # Rebuild the shared level<->XP threshold curve. The curve is the
+        # R14 hybrid formula parameterized by balance.yaml tunables
+        # (xp_curve_*) — the *ranks* argument only trips the rebuild; ranks.yaml
+        # xp_threshold values are legacy display data and do NOT feed the curve.
+        # Rebuilding here lets a balance.yaml retune of the curve take effect on
+        # hot-reload. Guarded so a rebuild hiccup never invalidates the
+        # successful data swap above.
         try:
             from world import progression
 
@@ -862,26 +863,11 @@ class DataRegistry:
         self._items_for_building_cache[building_abbr] = result
         return result
 
-    def get_rank_for_xp(self, xp: int) -> RankDef:
-        """Get the highest rank whose xp_threshold <= the given XP.
-
-        Ranks are sorted by level ascending. Returns the last rank
-        whose threshold the XP meets or exceeds.
-
-        Raises:
-            ValueError: If no ranks are loaded.
-        """
-        if not self.ranks:
-            raise ValueError("No ranks loaded in registry")
-        if xp is None:
-            xp = 0
-        result = self.ranks[0]
-        for rank in self.ranks:
-            if rank.xp_threshold <= xp:
-                result = rank
-            else:
-                break
-        return result
+    # NOTE: get_rank_for_xp was removed (early-game rebalance, task 6.5
+    # completion). It ranked players by ranks.yaml xp_threshold values, which
+    # are legacy display data under the R14 formula-derived curve — its answer
+    # could disagree with the authoritative RANK_BANDS lookup
+    # (rank_system.rank_from_level). Zero production callers remained.
 
     def get_rank_by_name(self, name: str) -> RankDef:
         """Get a rank definition by name.

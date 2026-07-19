@@ -49,7 +49,7 @@ def _ensure_evennia_stubs():
 _ensure_evennia_stubs()
 
 from mygame.world.systems.rank_system import RankSystem, rank_from_level  # noqa: E402
-from mygame.world.constants import LEVELS_PER_RANK  # noqa: E402
+from mygame.world.constants import RANK_BANDS  # noqa: E402
 from mygame.world.data_registry import DataRegistry  # noqa: E402
 from mygame.world.definitions import RankDef, TechnologyDef, PowerupDef  # noqa: E402
 from mygame.world.event_bus import EventBus, RANK_PROMOTED, RANK_DEMOTED  # noqa: E402
@@ -669,8 +669,8 @@ class TestPreservedPlayerBehavior(unittest.TestCase):
         player = FakePlayer(level=1)
         player.db.level = None
         player.db.rank_level = 3
-        # First level of rank 3 = (3-1)*LEVELS_PER_RANK + 1
-        expected = (3 - 1) * LEVELS_PER_RANK + 1
+        # First level of rank 3's band (Corporal starts at L11)
+        expected = RANK_BANDS[3][0]
         self.assertEqual(RankSystem._get_level(player), expected)
 
     def test_legacy_rank_level_one_derives_level_one(self):
@@ -689,9 +689,8 @@ class TestPreservedPlayerBehavior(unittest.TestCase):
         player.db.combat_xp = 100
         system, _ = _make_rank_system()
         system.award_xp(player, 0, "noop")  # no-op, but verify derivation
-        # award of 0 is a no-op; derive directly
-        self.assertEqual(RankSystem._get_level(player),
-                         (2 - 1) * LEVELS_PER_RANK + 1)
+        # award of 0 is a no-op; derive directly (rank 2's band starts at L6)
+        self.assertEqual(RankSystem._get_level(player), RANK_BANDS[2][0])
 
     # -- R13.1, R13.2: rank changes never touch techs -------------------- #
 

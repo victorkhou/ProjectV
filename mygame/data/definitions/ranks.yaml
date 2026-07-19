@@ -1,6 +1,14 @@
 # Rank definitions for RTS Combat Overworld
-# Phase 1: 12 ranks with strictly increasing XP thresholds
-# Each rank defines agent_cap and planet_access
+#
+# Each rank defines a NAME, agent_cap, and planet_access. Rank membership is
+# derived from the player's LEVEL via the widening RANK_BANDS table in
+# world/constants.py (R14.5) — NOT from the xp_threshold values below.
+#
+# xp_threshold is LEGACY DISPLAY DATA ONLY (task 6.5): the live XP curve is
+# the hybrid formula in world/progression.py, tuned via balance.yaml
+# (xp_curve_*). These values are kept for schema stability and historical
+# reference; no runtime system derives rank or level from them.
+#
 # Planet rank requirements: Terra=1, Forge=5, Tundra=7, Space=7, Inferno=9, Citadel=11
 
 - name: Recruit

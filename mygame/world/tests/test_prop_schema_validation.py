@@ -185,10 +185,8 @@ def valid_balance_dict():
         "chunk_size": positive_int,
         "save_interval": positive_int,
         "metrics_interval": positive_int,
-        "xp_damage": st.floats(min_value=0.01, max_value=10.0, allow_nan=False),
         "tick_interval": st.floats(min_value=0.1, max_value=10.0, allow_nan=False),
         "metrics_enabled": st.booleans(),
-        "production_scaling": st.just({1: 10, 2: 50, 3: 150, 4: 400, 5: 1000}),
     })
 
 

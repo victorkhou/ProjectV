@@ -1197,9 +1197,10 @@ class TestAgentProgressionProperty14LegacyDefaulting:
 from mygame.world.definitions import AbilityGateDef  # noqa: E402
 from mygame.world.systems.agent_system import ABILITY_SCRIPT_KEYS  # noqa: E402
 
-#: The delivery ability gate level used throughout Property 9. Mirrors the
-#: gate-aware unit tests in ``world/systems/tests/test_agent_system.py``:
-#: delivery unlocks at Effective_Level 21 (the first level of rank 5).
+#: The delivery ability gate level used throughout Property 9. NOTE: the LIVE
+#: game gate is agent level 5 (see ``data/definitions/abilities.yaml``); this
+#: local fixture deliberately uses a higher value (21) purely to exercise the
+#: gating math on both sides of the threshold.
 _DELIVERY_GATE_LEVEL = 21
 
 
@@ -1847,11 +1848,11 @@ class TestAgentProgressionProperty11ReserveStopIndependence:
 #  ``ScriptedHarvesterAgent``, ``NotifyingHarvesterOwner``.
 # ================================================================== #
 
-#: A SECOND data-driven gate keyed ``"courier"`` whose required level mirrors
-#: the first level of rank 3 ((3-1)*LEVELS_PER_RANK + 1 == 11). It is entirely
-#: distinct from ``delivery`` (gate level 21) so the two gates straddle
-#: different points of the generated effective-level range and prove the gate
-#: machinery is generic across keys, not special-cased to ``delivery``.
+#: A SECOND data-driven gate keyed ``"courier"`` at level 11. It is entirely
+#: distinct from ``delivery`` (local fixture gate level 21 — the LIVE game
+#: gate is agent level 5) so the two gates straddle different points of the
+#: generated effective-level range and prove the gate machinery is generic
+#: across keys, not special-cased to ``delivery``.
 _COURIER_GATE_LEVEL = 11
 #: A gate whose key resolves to NO script class (unresolved). Its required
 #: level is low so generated agents comfortably clear it.
