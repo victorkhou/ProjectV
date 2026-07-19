@@ -211,6 +211,45 @@ class TestMapDataProvider:
         # Should not raise
         json.dumps(data)
 
+    def test_building_payload_includes_hp_and_shield(self):
+        """A live building tile carries hp/hp_max (for label health color) and
+        shield/shield_max (for the shield gauge + blue outline)."""
+        provider, _ = self._make_provider()
+        player = _FakePlayer()
+
+        class _Tags:
+            def __init__(self, is_building):
+                self._b = is_building
+            def get(self, key=None, category=None, **kw):
+                if category == "object_type" and (key == "building" or key is None):
+                    return "building" if self._b else None
+                return None
+
+        class _Attrs:
+            def __init__(self, data):
+                self._d = data
+            def get(self, key, default=None):
+                return self._d.get(key, default)
+
+        class _Building:
+            def __init__(self):
+                self.key = "HQ"
+                self.tags = _Tags(True)
+                self.contents = []
+                self.attributes = _Attrs({
+                    "building_type": "HQ", "building_level": 1,
+                    "owner": player, "hp": 120, "hp_max": 400,
+                    "shield": 90, "shield_max": 100,
+                })
+
+        tile = provider._visible_tile_from_objects(
+            5, 5, "Plains", player, [_Building()]
+        )
+        b = tile["building"]
+        assert b["hp"] == 120 and b["hp_max"] == 400
+        assert b["shield"] == 90 and b["shield_max"] == 100
+        assert b["own"] is True
+
     def test_fog_tiles_after_move(self):
         """After moving, previously visible tiles become fog."""
         provider, _ = self._make_provider(pvr=1)

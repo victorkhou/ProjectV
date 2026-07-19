@@ -204,14 +204,36 @@ let map_renderer_plugin = (function () {
     var OWN_TINT   = "rgba(0,220,220,0.30)",  OWN_BORDER   = "#00cccc";
     var ENEMY_TINT = "rgba(220,60,60,0.32)",  ENEMY_BORDER = "#cc3333";
 
-    // Draw the building's abbreviation centered on the icon: bold white fill with
-    // a solid black outline (block outline) so it stays legible on any icon.
-    function drawBuildingLabel(ctx,cx,cy,label){
-        ctx.font="bold 10px sans-serif";
+    // Label fill by building health (fraction of hp_max):
+    //   75-100% white · 40-74% bright yellow · <40% bright red.
+    // Unknown health (no hp_max in the payload, e.g. a remembered fog tile)
+    // stays white.
+    function labelFillForHealth(bld){
+        var hpMax=bld.hp_max||0;
+        if(hpMax<=0) return "#fff";
+        var frac=(bld.hp||0)/hpMax;
+        if(frac<0.40) return "#ff3b30";   // bright red
+        if(frac<0.75) return "#ffe500";   // bright yellow
+        return "#fff";                    // white
+    }
+
+    // Label outline color: blue when the building's active shield is above 25%
+    // of its shield_max; otherwise the default black block outline.
+    function labelOutlineForShield(bld){
+        var sMax=bld.shield_max||0;
+        if(sMax>0 && (bld.shield||0) > 0.25*sMax) return "#1e90ff";  // blue
+        return "#000";
+    }
+
+    // Draw the building's abbreviation centered on the icon: bold fill (colored
+    // by health) with a solid block outline (blue when a strong shield is up,
+    // else black) so it stays legible on any icon.
+    function drawBuildingLabel(ctx,cx,cy,label,fill,outline){
+        ctx.font="bold 12px sans-serif";
         ctx.textAlign="center";ctx.textBaseline="middle";
         ctx.lineJoin="round";
-        ctx.lineWidth=3;ctx.strokeStyle="#000";ctx.strokeText(label,cx,cy);
-        ctx.fillStyle="#fff";ctx.fillText(label,cx,cy);
+        ctx.lineWidth=3;ctx.strokeStyle=outline||"#000";ctx.strokeText(label,cx,cy);
+        ctx.fillStyle=fill||"#fff";ctx.fillText(label,cx,cy);
     }
 
     // Shield gauge — a thin cyan bar across the top of a shielded building tile,
@@ -244,8 +266,9 @@ let map_renderer_plugin = (function () {
             ctx.strokeStyle=own?OWN_BORDER:ENEMY_BORDER;ctx.lineWidth=1.5;
             ctx.strokeRect(x+2.5,y+2.5,TILE-5,TILE-5);
             if(state==="fog"){ctx.fillStyle="rgba(0,0,0,0.55)";ctx.fillRect(x+2,y+2,TILE-4,TILE-4);}
-            // Abbreviation label (white text, black block outline).
-            drawBuildingLabel(ctx,x+HALF,y+HALF,type);
+            // Abbreviation label: fill by health, outline blue on a strong shield.
+            drawBuildingLabel(ctx,x+HALF,y+HALF,type,
+                              labelFillForHealth(bld),labelOutlineForShield(bld));
             // Shield gauge: a thin cyan bar along the top edge when the building
             // carries a Shield Generator shield (shield/shield_max in the payload).
             drawShieldBar(ctx,x,y,bld);
@@ -264,7 +287,8 @@ let map_renderer_plugin = (function () {
         roundRect(ctx,x+2,y+2,TILE-4,TILE-4,3);ctx.fill();
         ctx.strokeStyle="#fff";ctx.lineWidth=1;roundRect(ctx,x+2,y+2,TILE-4,TILE-4,3);ctx.stroke();
         if(occupied){ctx.strokeStyle="#4466cc";ctx.lineWidth=2;ctx.strokeRect(x+3,y+3,TILE-6,TILE-6);}
-        drawBuildingLabel(ctx,x+HALF,y+HALF,type);
+        drawBuildingLabel(ctx,x+HALF,y+HALF,type,
+                          labelFillForHealth(bld),labelOutlineForShield(bld));
         drawShieldBar(ctx,x,y,bld);
     }
 

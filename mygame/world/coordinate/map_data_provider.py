@@ -183,6 +183,15 @@ class MapDataProvider:
                 "name": getattr(bld, "key", "?"),
             }
 
+            # Health (hp / hp_max) so the client can color the label by damage
+            # (white 75-100%, yellow 40-74%, red <40%). Emitted for a live
+            # building tile only; a remembered (fog) building has no live HP.
+            if hasattr(bld, "attributes") and hasattr(bld.attributes, "get"):
+                hp_max = int(bld.attributes.get("hp_max", default=0) or 0)
+                if hp_max > 0:
+                    tile["building"]["hp"] = int(bld.attributes.get("hp", default=hp_max) or 0)
+                    tile["building"]["hp_max"] = hp_max
+
             # Check if building has entities inside (occupied flag)
             tile["building"]["occupied"] = building_is_occupied(bld)
 
