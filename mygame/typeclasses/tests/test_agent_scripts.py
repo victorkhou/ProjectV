@@ -294,6 +294,39 @@ class TestHarvesterScript(unittest.TestCase):
         prod_l3 = spawned3[0]["amount"]
         self.assertGreaterEqual(prod_l3, prod_l1)
 
+    def test_production_multiplier_tech_scales_output(self):
+        """R13.3: owner's production_multiplier tech scales autonomous output.
+
+        Regression guard: the live autonomous producer is HarvesterScript.at_repeat
+        (process_extractor_production was removed from the tick loop). A won
+        'Rapid Production' tech must actually increase Extractor output here, or
+        the extractor half of production_multiplier is a silent no-op.
+        """
+        class _Owner:
+            def __init__(self, mult):
+                self.db = FakeDB(tech_bonuses={"production_multiplier": mult})
+
+        tile_base = FakeTile(resource_type="Iron")
+        tile_tech = FakeTile(resource_type="Iron")
+        building_base = FakeBuilding(
+            building_type="EX", building_level=1, location=tile_base,
+        )
+        building_tech = FakeBuilding(
+            building_type="EX", building_level=1, location=tile_tech,
+        )
+        npc_base = FakeNPC(role="harvester", role_target=building_base)
+        npc_base.db.owner = _Owner(1.0)
+        npc_tech = FakeNPC(role="harvester", role_target=building_tech)
+        npc_tech.db.owner = _Owner(2.0)
+
+        with self._capture_drops() as spawned_base:
+            self._run_until_production(self._make_script(npc_base))
+        with self._capture_drops() as spawned_tech:
+            self._run_until_production(self._make_script(npc_tech))
+
+        # 2x production_multiplier → 2x the un-teched output.
+        self.assertEqual(spawned_tech[0]["amount"], spawned_base[0]["amount"] * 2)
+
     def test_skips_incapacitated_agent(self):
         """Incapacitated agent should not produce."""
         tile = FakeTile(resource_type="Wood")

@@ -282,6 +282,7 @@ class CombatCharacter(CombatEntity, DefaultCharacter):
                         continue
                 self.attributes.add(key, copy.deepcopy(default))
         self._migrate_level_curve()
+        self._migrate_tech_bonuses()
 
     def _migrate_level_curve(self):
         """Remap stored XP onto the live curve, never demoting (R14.8).
@@ -321,6 +322,35 @@ class CombatCharacter(CombatEntity, DefaultCharacter):
                 self.attributes.add("rank_level", rank_from_level(stored))
         except Exception:  # noqa: BLE001 - migration must never block login
             logger.debug("Level-curve migration skipped", exc_info=True)
+
+    def _migrate_tech_bonuses(self):
+        """Grandfather pre-rebalance researched techs into db.tech_bonuses (R13.5).
+
+        Before the tech-repair rebalance, techs were auto-granted on promotion
+        and the old apply-path mutated stats in place — it never populated
+        ``db.tech_bonuses``. Under the new derived-bonus model those techs are
+        silent no-ops until the bonus dict is rebuilt from ``researched_techs``.
+        Re-researching cannot fix it (``start_research`` rejects an already-known
+        tech), so the only recovery is a one-time recompute on login.
+
+        Runs at most once per player: only when they have researched techs but
+        an empty/absent ``tech_bonuses`` (a player who researched post-rebalance
+        already has a populated dict, so this is skipped). Guarded — a missing
+        TechLabSystem or recompute failure must never block login.
+        """
+        try:
+            researched = self.attributes.get("researched_techs")
+            if not researched:
+                return
+            bonuses = self.attributes.get("tech_bonuses")
+            if bonuses:
+                return  # already populated (researched post-rebalance)
+            from world.utils import get_system
+            tech_system = get_system(self, "tech_system")
+            if tech_system is not None and hasattr(tech_system, "recompute_tech_bonuses"):
+                tech_system.recompute_tech_bonuses(self)
+        except Exception:  # noqa: BLE001 - grandfathering must never block login
+            logger.debug("Tech-bonus grandfathering skipped", exc_info=True)
 
     # ------------------------------------------------------------------ #
     #  Resource helpers

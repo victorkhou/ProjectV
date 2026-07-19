@@ -365,5 +365,50 @@ class TestTechLabEffectApplication(unittest.TestCase):
 
         self.assertIn("advanced_weapons", player.db.researched_techs)
 
+
+class TestTechBonusRecompute(unittest.TestCase):
+    """R13.5 grandfathering: rebuild db.tech_bonuses from researched_techs."""
+
+    def test_recompute_rebuilds_bonuses_from_scratch(self):
+        """A pre-rebalance player (techs known, no tech_bonuses) gains effects."""
+        system, _ = _make_system()
+        player = FakePlayer(rank_level=5)
+        # Simulate the old auto-grant: techs in the set, but tech_bonuses never
+        # written (the old apply-path mutated stats in place).
+        player.db.researched_techs = {"reinforced_walls", "basic_armor"}
+        player.db.tech_bonuses = {}
+
+        system.recompute_tech_bonuses(player)
+
+        # building_hp (50, from reinforced_walls) + damage_reduction (20, from
+        # basic_armor) both materialize.
+        self.assertEqual(player.db.tech_bonuses.get("building_hp"), 50)
+        self.assertEqual(player.db.tech_bonuses.get("damage_reduction"), 20)
+
+    def test_recompute_skips_unknown_tech_keys(self):
+        """A stale/removed tech key in the set is ignored, not a crash."""
+        system, _ = _make_system()
+        player = FakePlayer(rank_level=5)
+        player.db.researched_techs = {"reinforced_walls", "deleted_tech"}
+        player.db.tech_bonuses = {}
+
+        system.recompute_tech_bonuses(player)  # must not raise
+
+        self.assertEqual(player.db.tech_bonuses.get("building_hp"), 50)
+
+    def test_recompute_is_idempotent(self):
+        """Recomputing twice yields the same bonuses (no accumulation)."""
+        system, _ = _make_system()
+        player = FakePlayer(rank_level=5)
+        player.db.researched_techs = {"reinforced_walls"}
+        player.db.tech_bonuses = {}
+
+        system.recompute_tech_bonuses(player)
+        first = dict(player.db.tech_bonuses)
+        system.recompute_tech_bonuses(player)
+
+        self.assertEqual(dict(player.db.tech_bonuses), first)
+
+
 if __name__ == "__main__":
     unittest.main()

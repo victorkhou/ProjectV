@@ -168,8 +168,14 @@ class HarvesterScript(DefaultScript):
 
         level = _get_attr(building, "building_level", 1) or 1
         production = bal.harvest_yield_per_action * bal.extractor_harvest_multiplier
-        production = int(production * (1 + bal.extractor_level_bonus * (level - 1)))
-        production = max(1, production)
+        production = production * (1 + bal.extractor_level_bonus * (level - 1))
+        # Owner's researched production_multiplier tech (R13.3) scales
+        # autonomous extractor output multiplicatively (1.0 when unresearched).
+        # This is the LIVE extractor producer — process_extractor_production was
+        # removed from the tick loop, so the multiplier must be read here.
+        from world.utils import get_tech_bonus
+        production *= get_tech_bonus(owner, "production_multiplier", default=1.0)
+        production = max(1, int(production))
 
         # Drop resources at building coordinates in PlanetRoom
         from world.systems.resource_system import ResourceSystem
