@@ -1833,6 +1833,116 @@ class LiveBootSmokeTest(EvenniaTest):
         finally:
             _teardown_game(systems)
 
+    # -------------------------------------------------------------- #
+    #  Early-game rebalance — the new-player economy loop and agent
+    #  purpose, exercised end-to-end on real objects + the real
+    #  composition root (the rebalance's headline behaviours).
+    # -------------------------------------------------------------- #
+
+    def test_build_completion_awards_economy_xp_and_levels_up(self):
+        """R1: completing a construction routes economy XP through the live
+        RankSystem, so a fresh (level-1) player's XP and level actually advance
+        from building alone — the core new-player dopamine loop, on real objects.
+        """
+        from server.conf.game_init import initialize_game
+        from world.progression import xp_for_level
+
+        systems = initialize_game()
+        try:
+            building_system = systems["building_system"]
+            room = self._make_planet_room("earth")
+            player = self._make_player(x=8, y=8, planet="earth",
+                                       combat_xp=0, location=room)
+            player.db.level = 1
+            player.db.rank_level = 1
+            # A brand-new build sitting at level 1 (no upgrade) → build_complete XP.
+            building = self._make_building("EX", x=8, y=8, planet="earth")
+            building.db.building_level = 1
+            building.db.owner = player
+
+            xp_award = systems["registry"].balance.xp_build_complete
+            self.assertGreater(xp_award, 0, "build XP must be configured")
+
+            building_system._complete_construction(player, building)
+
+            # XP was credited through the RankSystem (not a raw db write) and the
+            # level recomputed from the live hybrid curve.
+            self.assertEqual(player.db.combat_xp, xp_award)
+            # xp_build_complete (30) clears the L2 threshold (40? no — L2=40, so
+            # one build may not level; assert the level is at least what the curve
+            # says for the awarded XP, proving recompute ran).
+            from world import progression
+            self.assertEqual(player.db.level,
+                             progression.level_for_xp(xp_award))
+
+            # A few more builds push past L2 — proving the loop advances the bar.
+            for i in range(6):
+                b = self._make_building("EX", x=9 + i, y=8, planet="earth")
+                b.db.building_level = 1
+                b.db.owner = player
+                building_system._complete_construction(player, b)
+            self.assertGreaterEqual(
+                player.db.level, 2,
+                "several builds must advance a fresh player past level 1",
+            )
+            self.assertGreaterEqual(player.db.combat_xp, xp_for_level(2))
+        finally:
+            _teardown_game(systems)
+
+    def test_train_assign_guard_and_patrol_on_real_objects(self):
+        """R3/R4: a fresh player trains an agent, assigns it the army 'guard'
+        role WITHOUT a building (R4.1), and sets a patrol route — the agent
+        flow the rebalance made purposeful, exercised on real objects and the
+        real composition root (agent cap now = owner level, R3.1)."""
+        from server.conf.game_init import initialize_game
+
+        systems = initialize_game()
+        try:
+            agent_system = systems["agent_system"]
+            room = self._make_planet_room("earth")
+            # Level 5 → agent cap = max(1, level) = 5 (R3.1 unfreeze), so a fresh
+            # player can train at least one agent.
+            player = self._make_player(x=4, y=4, planet="earth", location=room)
+            player.db.level = 5
+            player.db.rank_level = 1
+            player.db.next_agent_id = 1
+            for r in ("Wood", "Stone", "Iron"):
+                player.add_resource(r, 500)
+
+            academy = self._make_building("AC", x=4, y=4, planet="earth")
+            academy.db.owner = player
+            # The real building factory always stamps building_level; _make_building
+            # doesn't, and a real db returns None (not the getattr default) for an
+            # unset attr, so set it explicitly for the training-time math.
+            academy.db.building_level = 1
+
+            # Train → complete → a real NPC agent exists and is owned by player.
+            ok, msg = agent_system.train_agent(player, academy)
+            self.assertTrue(ok, f"training must start: {msg}")
+            agent = agent_system.complete_training(academy)
+            self.assertIsNotNone(agent, "training completion must spawn an agent")
+            agent.location = room
+            agent.db.coord_x, agent.db.coord_y = 4, 4
+            agent.db.coord_planet = "earth"
+
+            agent_id = agent.db.agent_id
+            # Assign the army 'guard' role WITHOUT a target building (R4.1).
+            ok, msg = agent_system.assign_agent(player, agent_id, "guard")
+            self.assertTrue(ok, f"guard assignment (no building) must succeed: {msg}")
+            self.assertEqual(agent.db.role, "guard")
+
+            # Set a patrol route — the guard/scout patrol capability (R4).
+            ok, msg = agent_system.set_patrol_route(
+                player, agent_id, [(4, 4), (5, 4), (5, 5)]
+            )
+            self.assertTrue(ok, f"guard must accept a patrol route: {msg}")
+            self.assertTrue(
+                agent.db.patrol_route,
+                "patrol waypoints must persist on the agent",
+            )
+        finally:
+            _teardown_game(systems)
+
 
 def _teardown_game(systems):
     """Best-effort teardown: stop any scripts initialize_game created so they

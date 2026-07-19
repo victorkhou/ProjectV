@@ -81,11 +81,106 @@ HELP_ENTRY_DICTS = [
 
             # What's Next
 
-            With passive income flowing, expand: |wupgrade|n buildings (costs grow fast), stockpile surplus in a |cVault|n (|whelp storage|n), explore, climb the ranks to unlock new planets, and research techs at a |cLab|n (rank gates which techs you can research).
+            With passive income flowing, expand: |wupgrade|n buildings (costs grow fast), stockpile surplus in a |cVault|n (|whelp storage|n), explore, climb the |clevels and ranks|n to unlock new planets and buildings (|whelp level|n), and research techs at a |cLab|n (rank gates which techs you can research).
+
+            # Follow the Directives
+
+            You don't have to remember these steps — your |cdirectives|n checklist guides you through them one at a time and rewards each. Type |wdirectives|n to see your current objective. See |whelp directives|n.
 
             # See Also
 
-            |whelp commands|n · |whelp resources|n · |whelp buildings|n · |whelp agents|n · |whelp equipment|n · |whelp combat|n · |whelp outposts|n · |whelp storage|n
+            |whelp commands|n · |whelp directives|n · |whelp level|n · |whelp resources|n · |whelp buildings|n · |whelp agents|n · |whelp equipment|n · |whelp combat|n · |whelp outposts|n · |whelp storage|n
+        """,
+    },
+    # ----------------------------------------------------------------- #
+    #  Levels, ranks & progression
+    # ----------------------------------------------------------------- #
+    {
+        "key": "level",
+        "aliases": ["rank", "ranks", "levels", "progression", "xp",
+                    "experience", "leveling", "levelling", "promotion"],
+        "category": "Game",
+        "text": """
+            |wLevels, Ranks & Progression|n
+
+            You have a single |cLevel|n from |c1|n to |c100|n. Every bit of XP you earn raises it, and your |cRank|n — your title, from |cRecruit|n up to |cMarshal|n — is decided by which level you've reached. Check both any time with |wscore|n.
+
+            # Earning XP
+
+            XP comes from two kinds of activity, and both feed the same level bar:
+
+            |cBuilding your base|n — the early game. You earn XP for completing a construction (|c+30|n), completing an upgrade (|c+30|n), training an agent (|c+40|n), and each manual |wharvest|n yield (|c+1|n). This is renewable-but-modest income designed to carry a brand-new commander to roughly |clevel 8-9|n through base-building alone.
+            |cCombat|n — the long game. Defeating a player (|c+100|n), destroying a building (|c+50|n), and wrecking an enemy base's |cHeadquarters|n (|c+300|n) are the big earners. Combat is where the levels past the early game come from — raiding |coutposts|n is the reliable source (|whelp outposts|n).
+
+            Losing a fight costs you XP (|c-50|n) and can drop your level — but see Ranks below: your |crank never falls|n even if your level does.
+
+            # The Curve
+
+            Each level costs more XP than the last, so early levels come fast and later ones are long-term goals. Reaching |clevel 2|n takes 40 XP; |clevel 6|n about 300; |clevel 11|n about 1,000; |clevel 20|n about 6,200; |clevel 100|n over a million. |wscore|n shows your current XP and how much remains to the next level.
+
+            # Ranks
+
+            Your rank is a band of levels — climb into a new band and you're promoted:
+
+            |cRecruit|n — levels 1-5
+            |cPrivate|n — 6-10
+            |cCorporal|n — 11-15
+            |cSergeant|n — 16-21
+            |cStaff Sergeant|n — 22-28
+            |cLieutenant|n — 29-36
+            |cCaptain|n — 37-45
+            |cMajor|n — 46-56
+            |cColonel|n — 57-69
+            |cBrigadier|n — 70-84
+            |cGeneral|n — 85-99
+            |cMarshal|n — 100 (the capstone)
+
+            Rank is a |chigh-water mark|n: once earned it sticks, so a bad losing streak that lowers your level never demotes your title.
+
+            # What Levels & Ranks Unlock
+
+            |cBuildings|n gate on level — higher-tier structures (Turret, Barracks, Lab, Relay, Medbay) unlock as you climb. |wbuild|n with no argument always lists what you can build right now, and |whelp buildings|n shows the full tier list. Some buildings also need a |cdeed|n — proof of action, like destroying an outpost — on top of the level (|whelp outposts|n).
+            |cAgent capacity|n rises with rank — a higher rank lets you command more agents (|whelp agents|n). Your agents also can't out-level you: an agent's effective level is capped at your own.
+            |cNew planets|n open at rank thresholds — |cForge|n at Staff Sergeant, |cTundra|n and |cSpace|n at Captain, |cInferno|n at Colonel, the |cCitadel|n at General.
+            |cTechnologies|n gate on rank — a |cLab|n lets you research techs, with the earliest available at Corporal and stronger ones spaced upward (|whelp lab|n).
+
+            # See Also
+
+            |whelp score|n · |whelp directives|n · |whelp buildings|n · |whelp agents|n · |whelp outposts|n · |whelp combat|n
+        """,
+    },
+    # ----------------------------------------------------------------- #
+    #  Directives — the onboarding checklist
+    # ----------------------------------------------------------------- #
+    {
+        "key": "directives",
+        "aliases": ["directive", "objectives", "objective", "checklist",
+                    "quests", "tasks", "goals"],
+        "category": "Game",
+        "text": """
+            |wDirectives|n
+
+            Directives are a guided checklist that walks you through your first hour, one objective at a time, and pays out a reward — XP and sometimes resources — as you complete each. They're the fastest way to learn the game while getting a head start.
+
+            # How They Work
+
+            You always have one |ccurrent objective|n. Do the thing it asks — build your HQ, set up an Extractor, train an agent, and so on — and it completes automatically, rewards you, and advances to the next. There's nothing to "accept" or "turn in"; just play and the checklist keeps up.
+
+            # Commands
+
+            |wdirectives|n — show your current objective and what you've already done
+            |wdirectives off|n — dismiss the checklist (you |rforfeit remaining rewards|n)
+            |wdirectives on|n — turn it back on from where you left off
+
+            Alias: |wobjectives|n.
+
+            # If You Dismiss Them
+
+            Turning directives |woff|n silences the prompts and stops the reward payouts — you still advance in the background, but you won't be paid for objectives completed while off, and there's no back-pay if you turn them on again. Leave them on until you know the ropes.
+
+            # See Also
+
+            |whelp tutorial|n · |whelp level|n · |whelp commands|n
         """,
     },
     # ----------------------------------------------------------------- #
@@ -142,7 +237,8 @@ HELP_ENTRY_DICTS = [
 
             # Progression & Info
 
-            |wscore|n (|wst|n) — full character sheet
+            |wscore|n (|wst|n) — full character sheet: level, rank, XP, combat timer
+            |wdirectives|n — your onboarding checklist and its rewards
             |winventory|n (|wi|n) — resources, gear, supplies, carry weight
             |wtechnology|n / |wresearch <tech>|n — the tech tree
             |wpowerup <key>|n — activate a powerup
@@ -156,7 +252,7 @@ HELP_ENTRY_DICTS = [
 
             # See Also
 
-            |whelp tutorial|n · |whelp buildings|n · |whelp equipment|n
+            |whelp tutorial|n · |whelp level|n · |whelp directives|n · |whelp buildings|n · |whelp equipment|n
         """,
     },
     # ----------------------------------------------------------------- #
@@ -235,11 +331,11 @@ HELP_ENTRY_DICTS = [
 
             # Agent Cap
 
-            Your rank sets how many agents you can command. A demotion puts the excess into reserve — they keep working but can't be reassigned until you rank back up.
+            Your rank sets how many agents you can command, so climbing ranks grows your workforce (|whelp level|n). A demotion puts the excess into reserve — they keep working but can't be reassigned until you rank back up. An agent also can't out-level you: its effective level is capped at your own.
 
             # See Also
 
-            |whelp buildings|n · |whelp resources|n · |whelp tutorial|n
+            |whelp level|n · |whelp buildings|n · |whelp resources|n · |whelp tutorial|n
         """,
     },
     # ----------------------------------------------------------------- #
@@ -277,7 +373,7 @@ HELP_ENTRY_DICTS = [
             |wRL|n |cRelay|n — boosts nearby Turret damage. (L15)
             |wMB|n |cMedbay|n — crafts medkits and stims; reduces respawn time. (L18)
 
-            Higher-level buildings unlock as you climb ranks. Check |wscore|n for your current level, and |wbuild|n to see what's available now.
+            Higher-tier buildings unlock as you gain |clevels|n; a few also require a |cdeed|n (Barracks needs one destroyed outpost, Lab needs three). Check |wscore|n for your current level, |wbuild|n to see what's available now, and |whelp level|n for the full progression picture.
 
             # Per-Building Guides
 
@@ -398,11 +494,11 @@ HELP_ENTRY_DICTS = [
 
             # After a Fight
 
-            Losing costs XP and sends you back to your |cHQ|n. A |cMedbay|n shortens respawn time. Winning awards XP toward your next rank.
+            Losing costs XP and sends you back to your |cHQ|n. A |cMedbay|n shortens respawn time. Winning awards XP toward your next |clevel|n — combat is the main source of levels past the early game (|whelp level|n).
 
             # See Also
 
-            |whelp equipment|n · |whelp bombs|n · |whelp outposts|n · |whelp agents|n · |whelp buildings|n
+            |whelp level|n · |whelp equipment|n · |whelp bombs|n · |whelp outposts|n · |whelp agents|n · |whelp buildings|n
         """,
     },
     # ----------------------------------------------------------------- #
