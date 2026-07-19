@@ -362,11 +362,16 @@ class TestAssignAgent(AgentSystemTestBase):
         ok, _ = self.system.assign_agent(player, npc.db.agent_id, "engineer", building)
         self.assertTrue(ok)
 
-    def test_assign_medic_to_medbay(self):
+    def test_assign_medic_hidden_requires_allow_hidden(self):
+        """Medic is a hidden placeholder role (R6): refused for players,
+        assignable via the admin escape hatch (allow_hidden=True, R6.3)."""
         player = FakePlayer(combat_xp=600, next_agent_id=1)
         npc = self._train_and_complete(player)
-        building = FakeBuilding(building_type="MB")
-        ok, _ = self.system.assign_agent(player, npc.db.agent_id, "medic", building)
+        ok, msg = self.system.assign_agent(player, npc.db.agent_id, "medic")
+        self.assertFalse(ok)
+        self.assertIn("Invalid role", msg)
+        ok, _ = self.system.assign_agent(
+            player, npc.db.agent_id, "medic", allow_hidden=True)
         self.assertTrue(ok)
 
     def test_walk_to_building_sets_transient_moving_status(self):
@@ -417,12 +422,12 @@ class TestAssignAgent(AgentSystemTestBase):
 
         self.assertEqual(agent.db.activity_status, "Working")
 
-    def test_assign_soldier_no_building_needed(self):
+    def test_assign_guard_no_building_needed(self):
         player = FakePlayer(combat_xp=600, next_agent_id=1)
         npc = self._train_and_complete(player)
-        ok, _ = self.system.assign_agent(player, npc.db.agent_id, "soldier")
+        ok, _ = self.system.assign_agent(player, npc.db.agent_id, "guard")
         self.assertTrue(ok)
-        self.assertEqual(npc.db.role, "soldier")
+        self.assertEqual(npc.db.role, "guard")
         self.assertIsNone(npc.db.role_target)
         # Army role with no building derives "Ready" on assignment (not a
         # stale/Idle status from the no-target-building code path).
@@ -434,25 +439,26 @@ class TestAssignAgent(AgentSystemTestBase):
         player = FakePlayer(combat_xp=600, next_agent_id=1)
         npc = self._train_and_complete(player)
         npc.db.activity_status = "Working"  # simulate prior building assignment
-        ok, _ = self.system.assign_agent(player, npc.db.agent_id, "soldier")
+        ok, _ = self.system.assign_agent(player, npc.db.agent_id, "guard")
         self.assertTrue(ok)
         self.assertEqual(npc.db.activity_status, "Ready")
 
-    def test_assign_medic_army_no_building(self):
+    def test_assign_scout_army_no_building(self):
+        """Scout is an army role (R4.1): assignable with no target building."""
         player = FakePlayer(combat_xp=600, next_agent_id=1)
         npc = self._train_and_complete(player)
-        ok, _ = self.system.assign_agent(player, npc.db.agent_id, "medic")
+        ok, _ = self.system.assign_agent(player, npc.db.agent_id, "scout")
         self.assertTrue(ok)
         self.assertEqual(npc.db.activity_status, "Ready")
 
     def test_assign_wrong_role_for_building(self):
-        """Assigning harvester to a Turret should fail."""
+        """Assigning engineer to an Extractor should fail (needs harvester)."""
         player = FakePlayer(combat_xp=600, next_agent_id=1)
         npc = self._train_and_complete(player)
-        building = FakeBuilding(building_type="TU")
-        ok, msg = self.system.assign_agent(player, npc.db.agent_id, "harvester", building)
+        building = FakeBuilding(building_type="EX")
+        ok, msg = self.system.assign_agent(player, npc.db.agent_id, "engineer", building)
         self.assertFalse(ok)
-        self.assertIn("guard", msg.lower())
+        self.assertIn("harvester", msg.lower())
 
     def test_assign_invalid_role(self):
         player = FakePlayer(combat_xp=600, next_agent_id=1)
@@ -463,7 +469,7 @@ class TestAssignAgent(AgentSystemTestBase):
 
     def test_assign_nonexistent_agent(self):
         player = FakePlayer(combat_xp=600, next_agent_id=1)
-        ok, msg = self.system.assign_agent(player, 999, "soldier")
+        ok, msg = self.system.assign_agent(player, 999, "guard")
         self.assertFalse(ok)
         self.assertIn("not found", msg.lower())
 
@@ -471,7 +477,7 @@ class TestAssignAgent(AgentSystemTestBase):
         player = FakePlayer(combat_xp=600, next_agent_id=1)
         npc = self._train_and_complete(player)
         npc.db.incapacitated = True
-        ok, msg = self.system.assign_agent(player, npc.db.agent_id, "soldier")
+        ok, msg = self.system.assign_agent(player, npc.db.agent_id, "guard")
         self.assertFalse(ok)
         self.assertIn("incapacitated", msg.lower())
 
@@ -479,7 +485,7 @@ class TestAssignAgent(AgentSystemTestBase):
         player = FakePlayer(combat_xp=600, next_agent_id=1)
         npc = self._train_and_complete(player)
         npc.db.reserve = True
-        ok, msg = self.system.assign_agent(player, npc.db.agent_id, "soldier")
+        ok, msg = self.system.assign_agent(player, npc.db.agent_id, "guard")
         self.assertFalse(ok)
         self.assertIn("reserve", msg.lower())
 
@@ -491,10 +497,10 @@ class TestAssignAgent(AgentSystemTestBase):
         self.system.assign_agent(player, npc.db.agent_id, "harvester", building_ex)
         self.assertEqual(npc.db.role, "harvester")
 
-        # Reassign to soldier (army role)
-        ok, _ = self.system.assign_agent(player, npc.db.agent_id, "soldier")
+        # Reassign to guard (army role)
+        ok, _ = self.system.assign_agent(player, npc.db.agent_id, "guard")
         self.assertTrue(ok)
-        self.assertEqual(npc.db.role, "soldier")
+        self.assertEqual(npc.db.role, "guard")
 
     def test_assign_non_building_role_requires_building(self):
         """Harvester without a building should fail."""
@@ -648,16 +654,16 @@ class TestDemotionPromotion(AgentSystemTestBase):
         player = FakePlayer(combat_xp=1500, next_agent_id=1)
         self._create_agents(player, 2)  # IDs 1, 2
 
-        # Assign agent 2 as soldier
+        # Assign agent 2 as guard
         agent2 = self.system.get_agent_by_id(player, 2)
-        self.system.assign_agent(player, 2, "soldier")
-        self.assertEqual(agent2.db.role, "soldier")
+        self.system.assign_agent(player, 2, "guard")
+        self.assertEqual(agent2.db.role, "guard")
 
         # Demote to cap=2 → reserves agent 2
         self.system.handle_demotion(player, new_agent_cap=2)
         self.assertTrue(agent2.db.reserve)
         # Role is preserved
-        self.assertEqual(agent2.db.role, "soldier")
+        self.assertEqual(agent2.db.role, "guard")
 
     def test_demotion_derives_reserve_status(self):
         """Benching an agent refreshes its Activity line to 'Reserve' (its
@@ -865,11 +871,13 @@ class TestOwnerCap(AgentSystemTestBase):
         agent = CappedAgent(1, owner=None, raw_level=20)
         self.assertEqual(self.system.get_owner_level(agent), 1)
 
-    def test_get_cap_ceiling_is_owner_level_minus_one(self):
+    def test_get_cap_ceiling_is_owner_level(self):
+        """Ceiling == owner level (early-game rebalance R3.1) — a level-1
+        player's first agent can reach level 1 and earn XP immediately."""
         owner = FakePlayer()
         owner.db.level = 8
         agent = CappedAgent(1, owner=owner, raw_level=3)
-        self.assertEqual(self.system.get_cap_ceiling(agent), 7)
+        self.assertEqual(self.system.get_cap_ceiling(agent), 8)
 
     def test_get_cap_ceiling_floors_at_one(self):
         """Owner level 1 → ceiling 1 (Req 14.3)."""
@@ -878,12 +886,46 @@ class TestOwnerCap(AgentSystemTestBase):
         agent = CappedAgent(1, owner=owner, raw_level=5)
         self.assertEqual(self.system.get_cap_ceiling(agent), 1)
 
-    def test_effective_level_bounded_below_owner(self):
-        """Raw exceeds ceiling → capped strictly below owner (Req 14.2)."""
+    def test_level_one_owner_agent_can_earn_xp(self):
+        """R3.1 regression: a level-1 owner's agent at level 1 has ceiling 1 —
+        but a level-2 owner's agent at level 1 is BELOW its ceiling (2) and
+        earns XP. Under the old owner_level-1 formula a level-2 owner froze
+        agents at level 1 forever."""
+        owner = FakePlayer()
+        owner.db.level = 2
+        agent = CappedAgent(1, owner=owner, raw_level=1)
+        self.assertEqual(self.system.get_cap_ceiling(agent), 2)
+        self.assertLess(agent.db.level or 1, self.system.get_cap_ceiling(agent))
+
+
+class TestHiddenRoles(AgentSystemTestBase):
+    """Hidden placeholder roles are excluded from VALID_ROLES (R6)."""
+
+    def test_valid_roles_excludes_hidden(self):
+        self.assertNotIn("soldier", VALID_ROLES)
+        self.assertNotIn("medic", VALID_ROLES)
+        self.assertIn("guard", VALID_ROLES)
+        self.assertIn("scout", VALID_ROLES)
+        self.assertIn("harvester", VALID_ROLES)
+        self.assertIn("engineer", VALID_ROLES)
+
+    def test_guard_scout_are_army_roles(self):
+        """Guard/scout assign without a building (R4.1)."""
+        from world.systems.agent_constants import ARMY_ROLES
+        self.assertIn("guard", ARMY_ROLES)
+        self.assertIn("scout", ARMY_ROLES)
+
+    def test_building_role_map_no_longer_maps_tu_rd(self):
+        """TU/RD no longer require guard/scout (they're army roles now)."""
+        self.assertNotIn("TU", BUILDING_ROLE_MAP)
+        self.assertNotIn("RD", BUILDING_ROLE_MAP)
+
+    def test_effective_level_bounded_at_owner(self):
+        """Raw exceeds ceiling → capped AT owner level (R3.1)."""
         owner = FakePlayer()
         owner.db.level = 6
         agent = CappedAgent(1, owner=owner, raw_level=20)
-        self.assertEqual(self.system.compute_effective_level(agent), 5)
+        self.assertEqual(self.system.compute_effective_level(agent), 6)
 
     def test_effective_level_uses_raw_when_below_ceiling(self):
         owner = FakePlayer()
@@ -915,9 +957,9 @@ class TestOwnerCap(AgentSystemTestBase):
         owner.db.level = 30
         agent = CappedAgent(1, owner=owner, raw_level=25)
         self.assertEqual(self.system.compute_effective_level(agent), 25)
-        # Owner demoted to level 10 → effective re-derives to ceiling 9
+        # Owner demoted to level 10 → effective re-derives to ceiling 10 (R3.1)
         owner.db.level = 10
-        self.assertEqual(self.system.compute_effective_level(agent), 9)
+        self.assertEqual(self.system.compute_effective_level(agent), 10)
 
     def test_non_numeric_owner_level_treated_as_unset(self):
         """A corrupted non-numeric owner db.level must not raise (falls back)."""
@@ -2160,7 +2202,7 @@ class TestGetAgentProgressionView(AgentSystemTestBase):
     def test_rank_name_derived_from_effective_level(self):
         """rank_name comes from the effective (capped) level, not raw (Req 14.5)."""
         owner = FakePlayer()
-        owner.db.level = 6  # ceiling 5 → effective capped to 5
+        owner.db.level = 5  # ceiling 5 (R3.1) → effective capped to 5
         agent = CappedScriptedAgent(1, owner=owner, raw_level=25)
 
         view = self.system.get_agent_progression_view(agent)
@@ -2172,12 +2214,12 @@ class TestGetAgentProgressionView(AgentSystemTestBase):
     def test_capped_by_commander_true_when_raw_exceeds_effective(self):
         """capped_by_commander is True iff raw_level > effective_level (Req 11.4)."""
         owner = FakePlayer()
-        owner.db.level = 10  # ceiling 9 → effective 9 < raw 25
+        owner.db.level = 10  # ceiling 10 (R3.1) → effective 10 < raw 25
         agent = CappedScriptedAgent(1, owner=owner, raw_level=25)
 
         view = self.system.get_agent_progression_view(agent)
 
-        self.assertEqual(view["effective_level"], 9)
+        self.assertEqual(view["effective_level"], 10)
         self.assertTrue(view["capped_by_commander"])
 
     def test_capped_by_commander_false_when_not_capped(self):

@@ -250,6 +250,69 @@ class TestGetVisibleTiles:
         assert (14, 14) not in tiles
 
 
+class _FakeScout:
+    """Minimal scout agent for vision tests (R5)."""
+    def __init__(self, x=0, y=0, role="scout", incapacitated=False,
+                 reserve=False):
+        self.db = _FakeDB(coord_x=x, coord_y=y, role=role,
+                          incapacitated=incapacitated, reserve=reserve)
+
+
+class TestScoutVision:
+    """Scout agents project vision circles (early-game rebalance R5)."""
+
+    def _fow(self, pvr=1, svr=2):
+        bal = _FakeBalance(pvr=pvr, bvr=1)
+        bal.scout_vision_radius = svr
+        return FogOfWarSystem(bal)
+
+    def test_scout_projects_vision(self):
+        fow = self._fow(pvr=1, svr=2)
+        player = _FakePlayer(x=0, y=0)
+        scout = _FakeScout(x=20, y=20)
+        tiles = fow.get_visible_tiles(player, [], player_scouts=[scout])
+        # Player circle r=1 (9 tiles) + scout circle r=2 (25 tiles), no overlap
+        assert len(tiles) == 34
+        assert (20, 20) in tiles
+        assert (22, 22) in tiles
+        assert (23, 20) not in tiles  # outside scout radius
+
+    def test_incapacitated_scout_projects_nothing(self):
+        fow = self._fow()
+        player = _FakePlayer(x=0, y=0)
+        scout = _FakeScout(x=20, y=20, incapacitated=True)
+        tiles = fow.get_visible_tiles(player, [], player_scouts=[scout])
+        assert (20, 20) not in tiles
+
+    def test_reserved_scout_projects_nothing(self):
+        fow = self._fow()
+        player = _FakePlayer(x=0, y=0)
+        scout = _FakeScout(x=20, y=20, reserve=True)
+        tiles = fow.get_visible_tiles(player, [], player_scouts=[scout])
+        assert (20, 20) not in tiles
+
+    def test_non_scout_role_projects_nothing(self):
+        fow = self._fow()
+        player = _FakePlayer(x=0, y=0)
+        guard = _FakeScout(x=20, y=20, role="guard")
+        tiles = fow.get_visible_tiles(player, [], player_scouts=[guard])
+        assert (20, 20) not in tiles
+
+    def test_zero_radius_disables_scout_vision(self):
+        fow = self._fow(svr=0)
+        player = _FakePlayer(x=0, y=0)
+        scout = _FakeScout(x=20, y=20)
+        tiles = fow.get_visible_tiles(player, [], player_scouts=[scout])
+        assert (20, 20) not in tiles
+
+    def test_no_scouts_kwarg_backward_compatible(self):
+        """The legacy 2-arg call keeps working (no scouts passed)."""
+        fow = self._fow()
+        player = _FakePlayer(x=0, y=0)
+        tiles = fow.get_visible_tiles(player, [])
+        assert (0, 0) in tiles
+
+
 # -------------------------------------------------------------- #
 #  Tests: get_tile_visibility
 # -------------------------------------------------------------- #

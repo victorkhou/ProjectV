@@ -590,7 +590,7 @@ class TestProperty15TrainingCostScaling:
 #
 #  Feature: agent-progression, Property 5: Effective-level formula —
 #  ``compute_effective_level`` returns ``max(1, min(Raw_Level,
-#  owner_level - 1))``, always >= 1, strictly less than ``owner_level``
+#  owner_level))``, always >= 1, capped at ``owner_level``
 #  when ``owner_level > 1``, and equals 1 when ``owner_level == 1``.
 #
 #  **Validates: Requirements 14.1, 14.2, 14.3, 14.10**
@@ -632,14 +632,14 @@ class TestProperty5EffectiveLevelFormula:
     **Validates: Requirements 14.1, 14.2, 14.3, 14.10**
 
     ``compute_effective_level`` returns ``max(1, min(Raw_Level,
-    owner_level - 1))``, always >= 1, strictly below ``owner_level`` when
+    owner_level))``, always >= 1, capped at ``owner_level`` when
     ``owner_level > 1``, and equals 1 when ``owner_level == 1``.
     """
 
     @given(raw_level=_raw_level_st, owner_level=_owner_level_st)
     @settings(max_examples=200)
     def test_matches_formula(self, raw_level, owner_level):
-        """Result equals ``max(1, min(raw_level, owner_level - 1))`` exactly.
+        """Result equals ``max(1, min(raw_level, owner_level))`` exactly (R3.1).
 
         **Validates: Requirements 14.1, 14.2**
         """
@@ -647,7 +647,7 @@ class TestProperty5EffectiveLevelFormula:
         agent = _make_capped_agent(raw_level, owner_level)
 
         result = system.compute_effective_level(agent)
-        expected = max(1, min(raw_level, owner_level - 1))
+        expected = max(1, min(raw_level, owner_level))
         assert result == expected, (
             f"compute_effective_level(raw={raw_level}, owner={owner_level}) "
             f"= {result}, expected {expected}"
@@ -666,16 +666,17 @@ class TestProperty5EffectiveLevelFormula:
         owner_level=st.integers(min_value=2, max_value=60),
     )
     @settings(max_examples=200)
-    def test_strictly_below_owner_when_owner_above_one(self, raw_level, owner_level):
-        """Strictly less than owner_level whenever owner_level > 1.
+    def test_never_exceeds_owner_level(self, raw_level, owner_level):
+        """At most owner_level — the cap EQUALS the owner's level (early-game
+        rebalance R3.1; was strictly-below before the cap unfreeze).
 
-        **Validates: Requirements 14.2**
+        **Validates: Requirements 14.2 (as amended by R3.1)**
         """
         system, _ = _make_system()
         agent = _make_capped_agent(raw_level, owner_level)
         result = system.compute_effective_level(agent)
-        assert result < owner_level, (
-            f"effective {result} must be strictly below owner {owner_level} "
+        assert result <= owner_level, (
+            f"effective {result} must not exceed owner {owner_level} "
             f"(raw={raw_level})"
         )
 
@@ -696,7 +697,7 @@ class TestProperty5EffectiveLevelFormula:
 #
 #  Feature: agent-progression, Property 6: XP award frozen at the cap
 #  ceiling — for any agent at its Cap_Ceiling (``agent.db.level >=
-#  max(1, owner_level - 1)``) and any source, ``award_agent_xp`` leaves
+#  max(1, owner_level)``) and any source, ``award_agent_xp`` leaves
 #  ``combat_xp`` / ``level`` / ``rank_level`` unchanged.
 #
 #  **Validates: Requirements 5.9, 14.4**
@@ -761,7 +762,7 @@ _SOURCE_ST = st.sampled_from([
     "harvest", "delivery", "construction", "combat", "time_served",
 ])
 
-# Owner level drives the cap ceiling = max(1, owner_level - 1).
+# Owner level drives the cap ceiling = max(1, owner_level).
 _OWNER_LEVEL_ST = st.integers(min_value=1, max_value=30)
 
 # How far at/above the ceiling the agent's raw level sits (0 == exactly at it).
@@ -773,7 +774,7 @@ class TestProperty6XpAwardFrozenAtCeiling:
     **Validates: Requirements 5.9, 14.4**
 
     For any agent whose raw level has reached its Cap_Ceiling
-    (``agent.db.level >= max(1, owner_level - 1)``) and any earning source,
+    (``agent.db.level >= max(1, owner_level)``) and any earning source,
     ``award_agent_xp`` is a no-op: ``combat_xp``, ``level`` and ``rank_level``
     remain unchanged.
     """
@@ -790,7 +791,7 @@ class TestProperty6XpAwardFrozenAtCeiling:
         # levels deterministically (the threshold table is process-global).
         progression.build_thresholds(system.registry.ranks)
 
-        cap_ceiling = max(1, owner_level - 1)
+        cap_ceiling = max(1, owner_level)
         # Seed the agent's raw level at/above the ceiling (clamped to MAX_LEVEL).
         target_level = min(MAX_LEVEL, cap_ceiling + over_ceiling)
         seed_xp = progression.xp_for_level(target_level)
@@ -849,7 +850,7 @@ _POSITIVE_SOURCE_ST = st.sampled_from([
     "harvest", "delivery", "construction", "combat",
 ])
 
-# Initial owner level (>= 2 so Cap_Ceiling = owner_level - 1 >= 1 and the agent
+# Initial owner level (>= 2 so Cap_Ceiling = owner_level >= 2 and the agent
 # can be seeded at a level that is genuinely frozen at the ceiling).
 _INITIAL_OWNER_LEVEL_ST = st.integers(min_value=2, max_value=25)
 
@@ -882,7 +883,7 @@ class TestProperty7XpAwardResumesWhenCeilingRises:
         # levels deterministically (the threshold table is process-global).
         progression.build_thresholds(system.registry.ranks)
 
-        cap_ceiling = max(1, owner_level - 1)
+        cap_ceiling = max(1, owner_level)
 
         # Seed the agent's raw level exactly at its ceiling so it is frozen.
         seed_xp = progression.xp_for_level(cap_ceiling)
@@ -911,7 +912,7 @@ class TestProperty7XpAwardResumesWhenCeilingRises:
         frozen_level = agent.db.level
         new_owner_level = min(MAX_LEVEL, frozen_level + 1 + level_rise)
         owner.db.level = new_owner_level
-        new_ceiling = max(1, new_owner_level - 1)
+        new_ceiling = max(1, new_owner_level)
 
         # The ceiling must now strictly exceed the agent's raw level so awards
         # resume; otherwise this example does not exercise the property.
@@ -947,7 +948,7 @@ class TestProperty7XpAwardResumesWhenCeilingRises:
 #
 #  Feature: agent-progression, Property 8: Effective-level clamp on owner
 #  demotion never strips XP — after any owner-level decrease,
-#  ``Effective_Level == max(1, min(Raw_Level, new_owner_level - 1))``
+#  ``Effective_Level == max(1, min(Raw_Level, new_owner_level))``
 #  while ``combat_xp`` / ``level`` / ``rank_level`` remain unchanged.
 #
 #  **Validates: Requirements 10.1, 14.1, 14.7, 15.1**
@@ -965,7 +966,7 @@ class TestProperty8EffectiveLevelClampOnDemotionNeverStripsXP:
     **Validates: Requirements 10.1, 14.1, 14.7, 15.1**
 
     For any owner-level decrease (a demotion or no-change), the agent's
-    Effective_Level re-derives to ``max(1, min(Raw_Level, new_owner_level - 1))``
+    Effective_Level re-derives to ``max(1, min(Raw_Level, new_owner_level))``
     for the NEW (lower) owner level, while the agent's own earned progression —
     ``combat_xp``, ``db.level`` (raw level) and ``db.rank_level`` — is left
     completely UNCHANGED. The owner cap clamps only the derived effective
@@ -1013,7 +1014,7 @@ class TestProperty8EffectiveLevelClampOnDemotionNeverStripsXP:
 
         # (a) Effective_Level re-derives against the NEW owner level.
         effective = system.compute_effective_level(agent)
-        expected = max(1, min(agent_raw_level, new_owner_level - 1))
+        expected = max(1, min(agent_raw_level, new_owner_level))
         assert effective == expected, (
             f"effective level {effective} != expected {expected} "
             f"(raw={agent_raw_level}, new_owner_level={new_owner_level}, "
@@ -1265,7 +1266,7 @@ def _make_harvester_system():
 
 # Raw level and owner level both span 1..40 so the generated Effective_Level
 # straddles both sides of the level-21 delivery gate (owner level also caps the
-# effective level at owner_level - 1, exercising the cap path).
+# effective level at owner_level, exercising the cap path).
 _P9_RAW_LEVEL_ST = st.integers(min_value=1, max_value=40)
 _P9_OWNER_LEVEL_ST = st.integers(min_value=1, max_value=40)
 
@@ -1580,8 +1581,10 @@ class TestAgentProgressionProperty10GateConvergenceAndIdempotence:
 
     @given(
         raw_level=st.integers(min_value=_DELIVERY_GATE_LEVEL, max_value=40),
-        high_owner_level=st.integers(min_value=_DELIVERY_GATE_LEVEL + 1, max_value=40),
-        low_owner_level=st.integers(min_value=1, max_value=_DELIVERY_GATE_LEVEL),
+        # Cap == owner_level (R3.1): to sit AT the gate the owner needs only
+        # gate-level; to drop BELOW it the owner must be below gate-level.
+        high_owner_level=st.integers(min_value=_DELIVERY_GATE_LEVEL, max_value=40),
+        low_owner_level=st.integers(min_value=1, max_value=_DELIVERY_GATE_LEVEL - 1),
     )
     @settings(max_examples=200)
     def test_relock_notice_on_level_drop_detach(
@@ -1890,7 +1893,7 @@ def _patch_script_resolution(system, mapping):
 
 # Raw level and owner level both span 1..40 so the generated Effective_Level
 # straddles both the courier gate (11) and the delivery gate (21); owner level
-# also caps effective level at owner_level - 1, exercising the cap path.
+# also caps effective level at owner_level, exercising the cap path.
 _P15_RAW_LEVEL_ST = st.integers(min_value=1, max_value=40)
 _P15_OWNER_LEVEL_ST = st.integers(min_value=1, max_value=40)
 
@@ -2132,7 +2135,7 @@ class TestAgentProgressionProperty15GateExtensibility:
 
 # Raw level and owner level both span 1..40 so the generated Effective_Level
 # straddles both sides of the level-21 delivery gate (owner level also caps the
-# effective level at owner_level - 1, exercising the cap path).
+# effective level at owner_level, exercising the cap path).
 _P17_RAW_LEVEL_ST = st.integers(min_value=1, max_value=40)
 _P17_OWNER_LEVEL_ST = st.integers(min_value=1, max_value=40)
 _P17_AGENT_ID_ST = st.integers(min_value=1, max_value=999)
@@ -2284,14 +2287,14 @@ class TestAgentProgressionProperty17AbilityEnablementCommand:
 
 
 # Raw level is held high (>= the gate) so the OWNER CAP is what crosses the
-# delivery gate in both directions: effective == max(1, min(raw, owner-1)).
+# delivery gate in both directions: effective == max(1, min(raw, owner)) (R3.1).
 _P18_RAW_LEVEL_ST = st.integers(min_value=45, max_value=60)
-# A "high" owner level whose cap ceiling (owner-1) meets/exceeds the gate, so
-# the enabled ability is at/above its gate (effective >= 21).
-_P18_HIGH_OWNER_LEVEL_ST = st.integers(min_value=22, max_value=60)
-# A "low" owner level whose cap ceiling (owner-1 <= 20) forces effective below
+# A "high" owner level whose cap ceiling (== owner, R3.1) meets/exceeds the
+# gate, so the enabled ability is at/above its gate (effective >= 21).
+_P18_HIGH_OWNER_LEVEL_ST = st.integers(min_value=21, max_value=60)
+# A "low" owner level whose cap ceiling (== owner <= 20) forces effective below
 # the gate, triggering the level-driven detach.
-_P18_LOW_OWNER_LEVEL_ST = st.integers(min_value=1, max_value=21)
+_P18_LOW_OWNER_LEVEL_ST = st.integers(min_value=1, max_value=20)
 
 
 class TestAgentProgressionProperty18StickyEnablement:
@@ -2491,7 +2494,7 @@ _P12_COURIER_GATE_LEVEL = 11
 
 # Raw level and owner level span 1..40 so the generated Effective_Level
 # straddles both gates (11 and 21) and exercises the owner-cap path
-# (effective is clamped to owner_level - 1).
+# (effective is clamped to owner_level).
 _P12_RAW_LEVEL_ST = st.integers(min_value=1, max_value=40)
 _P12_OWNER_LEVEL_ST = st.integers(min_value=1, max_value=40)
 #: Which gate keys are in the agent's enabled set (sticky, independent of
@@ -2603,7 +2606,7 @@ class TestAgentProgressionProperty12RosterView:
         """capped_by_commander is True precisely when the owner ceiling bites.
 
         With the enabled set empty and a single delivery gate, the cap is active
-        iff ``raw_level > owner_level - 1`` (the ceiling). **Validates:
+        iff ``raw_level > owner_level`` (the ceiling). **Validates:
         Requirements 11.4, 14.5**
         """
         system, _ = _make_harvester_system()
@@ -2615,7 +2618,7 @@ class TestAgentProgressionProperty12RosterView:
 
         view = system.get_agent_progression_view(agent)
 
-        ceiling = max(1, owner_level - 1)
+        ceiling = max(1, owner_level)
         expected_capped = raw_level > ceiling
         assert view["capped_by_commander"] == expected_capped, (
             f"capped_by_commander {view['capped_by_commander']} != "

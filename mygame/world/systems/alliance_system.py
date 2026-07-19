@@ -1616,7 +1616,8 @@ class AllianceSystem(BaseSystem):
         position circle. Returns the member's own tiles unchanged when the perk
         is inactive.
         """
-        own = set(fog_system.get_visible_tiles(member, member_buildings) or [])
+        from world.utils import _visible_tiles_with_scouts
+        own = _visible_tiles_with_scouts(fog_system, member, member_buildings)
         if not self.has_shared_vision(member):
             return own
         member_planet = getattr(getattr(member, "db", None), "coord_planet", None)

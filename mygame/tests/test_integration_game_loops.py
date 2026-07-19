@@ -698,9 +698,9 @@ class TestDemotionReserveRestore(unittest.TestCase):
         # Verify 3 NPCs trained
         self.assertEqual(agent_sys.get_agent_count(player), 3)
 
-        # Assign all agents to soldier role
+        # Assign all agents to guard role (army role; soldier is hidden — R6)
         for npc in trained_npcs:
-            ok, _ = agent_sys.assign_agent(player, npc.db.agent_id, "soldier")
+            ok, _ = agent_sys.assign_agent(player, npc.db.agent_id, "guard")
             self.assertTrue(ok)
 
         # Demote: deduct XP to drop below Corporal (600) to Private (200)

@@ -218,6 +218,7 @@ def _make_registry(
     registry.balance = BalanceConfig(
         gather_amount=gather_amount,
         resource_respawn_ticks=respawn_ticks,
+        harvest_crit_chance=0.0,  # deterministic drop counts in tests
     )
     registry.terrain = {
         t: TerrainDef(terrain_type=t, map_symbol=t[:2], resource_type=r)

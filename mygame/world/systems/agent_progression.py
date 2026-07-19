@@ -61,13 +61,14 @@ class AgentProgressionMixin:
         return self._level_from_player(owner)
 
     def get_cap_ceiling(self, agent: Any) -> int:
-        """Return the agent's Cap_Ceiling = ``max(1, owner_level - 1)``.
+        """Return the agent's Cap_Ceiling = ``max(1, owner_level)``.
 
-        The maximum Effective_Level the owner cap permits. Floors at
-        1 so an agent owned by a level-1 player (or an orphaned agent) has a
-        ceiling of 1.
+        The maximum Effective_Level the owner cap permits. Equal to the
+        owner's level (early-game rebalance R3.1 — previously owner_level - 1,
+        which froze a level-1 player's first agent at level 1 with no XP gain).
+        Floors at 1 for an orphaned agent.
         """
-        return max(1, self.get_owner_level(agent) - 1)
+        return max(1, self.get_owner_level(agent))
 
     @staticmethod
     def _raw_level(agent: Any) -> int:
@@ -96,14 +97,16 @@ class AgentProgressionMixin:
     def compute_effective_level(self, agent: Any) -> int:
         """Return the agent's Effective_Level under the owner-level cap.
 
-        ``max(1, min(Raw_Level, owner_level - 1))``. The
+        ``max(1, min(Raw_Level, Cap_Ceiling))`` where Cap_Ceiling ==
+        ``max(1, owner_level)`` (early-game rebalance R3.1 — the cap equals the
+        owner's level so a level-1 player's first agent can grow). The
         Raw_Level is derived owner-agnostically from the agent's own Combat_XP
-        via ``agent.get_raw_level()``; the cap bounds it strictly below the
-        owner's level. Handles the owner-demotion edge case where a
-        stored raw level can exceed the new ceiling, and re-derives on XP/owner
-        changes.
+        via ``agent.get_raw_level()``. Handles the owner-demotion edge case
+        where a stored raw level can exceed the new ceiling, and re-derives on
+        XP/owner changes. Delegates the ceiling to :meth:`get_cap_ceiling` so
+        the two can never disagree.
         """
-        return max(1, min(self._raw_level(agent), self.get_owner_level(agent) - 1))
+        return max(1, min(self._raw_level(agent), self.get_cap_ceiling(agent)))
 
     # ------------------------------------------------------------------ #
     #  Ability-status classification  (single source of truth)

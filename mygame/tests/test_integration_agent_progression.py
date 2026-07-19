@@ -284,9 +284,9 @@ class TestFreezeResumeAcrossOwnerLevelUp(unittest.TestCase):
         progression.build_thresholds(self.registry.ranks)
 
     def test_freeze_then_resume(self):
-        # Owner level 3 → cap ceiling = max(1, 3 - 1) = 2.
+        # Owner level 2 → cap ceiling = max(1, 2) = 2 (R3.1: cap == owner level).
         owner = FakePlayer()
-        owner.db.level = 3
+        owner.db.level = 2
         agent = RealAgent(owner=owner)
 
         # Seed the agent's raw level to exactly the ceiling (level 2) via the
@@ -306,8 +306,8 @@ class TestFreezeResumeAcrossOwnerLevelUp(unittest.TestCase):
         self.assertEqual(agent.db.rank_level, pre_rank)
 
         # --- Owner levels up → ceiling rises well above the agent. ---
-        owner.db.level = 30  # ceiling = 29
-        self.assertEqual(self.system.get_cap_ceiling(agent), 29)
+        owner.db.level = 30  # ceiling = 30 (R3.1)
+        self.assertEqual(self.system.get_cap_ceiling(agent), 30)
 
         # The next award resumes and adds EXACTLY the configured harvest
         # amount — no banked surplus from the frozen period.

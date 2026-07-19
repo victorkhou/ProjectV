@@ -42,6 +42,7 @@ from world.constants import (
 from world.systems.agent_constants import (  # noqa: E402
     logger,
     VALID_ROLES,
+    ALL_ROLES,
     BUILDING_ROLE_MAP,
     ARMY_ROLES,
     AGENT_XP_SOURCE_FIELDS,
@@ -231,20 +232,24 @@ class AgentSystem(AgentProgressionMixin, AgentBehaviorMixin, BaseSystem):
         agent_id: int,
         role: str,
         target_building: Any = None,
+        allow_hidden: bool = False,
     ) -> tuple[bool, str]:
         """Assign *agent_id* to *role*, optionally at *target_building*.
 
         Validates:
         - Agent exists and belongs to player.
         - Agent is not incapacitated or reserved.
-        - Role is valid.
+        - Role is valid (hidden roles only when ``allow_hidden`` — R6.3,
+          the admin/test escape hatch for placeholder roles).
         - Building/role match (Extractor→Harvester, etc.).
-        - Army roles (Soldier, Medic) don't need a building.
+        - Army roles (guard, scout — and hidden soldier/medic) don't need a
+          building (R4.1).
 
         Returns ``(success, message)``.
         """
         role = role.lower()
-        if role not in VALID_ROLES:
+        valid = ALL_ROLES if allow_hidden else VALID_ROLES
+        if role not in valid:
             return False, f"Invalid role '{role}'. Valid: {', '.join(VALID_ROLES)}."
 
         agent = self.get_agent_by_id(player, agent_id)

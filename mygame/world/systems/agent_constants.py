@@ -17,8 +17,15 @@ from typeclasses.agent_scripts import AGENT_ABILITIES as _AGENT_ABILITIES
 
 logger = logging.getLogger("mygame.agent_system")
 
-#: Valid role identifiers (assignment order preserved from the table).
-VALID_ROLES: tuple[str, ...] = tuple(_AGENT_ROLES.keys())
+#: Valid role identifiers for PLAYER assignment (order preserved from the
+#: table). Hidden roles — placeholder scripts not yet implemented — are
+#: excluded (early-game rebalance R6); see ALL_ROLES for the unfiltered set.
+VALID_ROLES: tuple[str, ...] = tuple(
+    spec.name for spec in _AGENT_ROLES.values() if not spec.hidden
+)
+
+#: Every role including hidden ones — for admin/test assignment paths (R6.3).
+ALL_ROLES: tuple[str, ...] = tuple(_AGENT_ROLES.keys())
 
 #: Building abbreviation → the agent role that building requires.
 BUILDING_ROLE_MAP: dict[str, str] = {

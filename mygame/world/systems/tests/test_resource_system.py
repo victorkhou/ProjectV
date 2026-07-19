@@ -152,6 +152,7 @@ def _make_registry() -> DataRegistry:
     registry.balance = BalanceConfig(
         gather_amount=1,
         resource_respawn_ticks=30,
+        harvest_crit_chance=0.0,  # deterministic drop counts in tests
     )
     registry.terrain = {
         "Plains": TerrainDef(terrain_type="Plains", map_symbol="PP", resource_type="Straw"),

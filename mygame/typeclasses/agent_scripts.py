@@ -942,6 +942,9 @@ class RoleSpec:
         buildings: Building abbreviations that *require* this role (a building's
             assigned agent must have the matching role). Empty for army roles.
         army: True for army roles, which are assigned without a target building.
+        hidden: True for roles whose behavior scripts are placeholder stubs —
+            excluded from the player-facing VALID_ROLES until implemented
+            (early-game rebalance R6). Admin paths may still assign them.
     """
 
     name: str
@@ -949,6 +952,7 @@ class RoleSpec:
     script_key: str
     buildings: tuple[str, ...] = ()
     army: bool = False
+    hidden: bool = False
 
 
 @dataclass(frozen=True)
@@ -966,13 +970,16 @@ class AbilitySpec:
 
 
 #: Canonical role table. Order defines the user-facing ``VALID_ROLES`` order.
+#: Guard/scout are ARMY roles (no building requirement — R4.1): a new player
+#: can assign + patrol them immediately, without a Turret/Radar. Soldier and
+#: medic are hidden placeholders (pass-stub scripts) until implemented (R6).
 AGENT_ROLES: dict[str, RoleSpec] = {
     "harvester": RoleSpec("harvester", HarvesterScript, "harvester_script", buildings=("EX",)),
     "engineer": RoleSpec("engineer", EngineerScript, "engineer_script", buildings=("AR", "LB")),
-    "soldier": RoleSpec("soldier", SoldierScript, "soldier_script", army=True),
-    "guard": RoleSpec("guard", PatrolBehavior, "patrol_behavior", buildings=("TU",)),
-    "scout": RoleSpec("scout", PatrolBehavior, "patrol_behavior", buildings=("RD",)),
-    "medic": RoleSpec("medic", MedicScript, "medic_script", buildings=("MB",), army=True),
+    "soldier": RoleSpec("soldier", SoldierScript, "soldier_script", army=True, hidden=True),
+    "guard": RoleSpec("guard", PatrolBehavior, "patrol_behavior", army=True),
+    "scout": RoleSpec("scout", PatrolBehavior, "patrol_behavior", army=True),
+    "medic": RoleSpec("medic", MedicScript, "medic_script", army=True, hidden=True),
 }
 
 #: Canonical gated-ability table.

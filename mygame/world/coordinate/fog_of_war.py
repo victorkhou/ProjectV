@@ -45,6 +45,7 @@ class FogOfWarSystem:
     def __init__(self, balance: BalanceConfig) -> None:
         self.player_vision_radius: int = balance.player_vision_radius
         self.building_vision_radius: int = balance.building_vision_radius
+        self.scout_vision_radius: int = getattr(balance, "scout_vision_radius", 0)
         self._map_border: int = getattr(balance, "map_border_tiles", 5)
         #: Injected ``(x, y, planet_key) -> bool`` map-bounds check (the
         #: PlanetRegistry's ``is_valid_coordinate``), wired at the composition
@@ -81,9 +82,14 @@ class FogOfWarSystem:
             return True
 
     def get_visible_tiles(
-        self, player: Any, player_buildings: list[Any]
+        self, player: Any, player_buildings: list[Any],
+        player_scouts: list[Any] | None = None,
     ) -> set[tuple[int, int]]:
         """Compute the union of all vision circles for the player.
+
+        Vision sources: the player circle, each owned building's circle, and —
+        when *player_scouts* is passed — a circle around each active scout
+        agent (early-game rebalance R5: patrol has a visible payoff).
 
         Returns a set of (x, y) tuples that are currently visible.
         """
@@ -99,6 +105,15 @@ class FogOfWarSystem:
         for building in player_buildings:
             bx, by = _get_building_coords(building)
             _add_chebyshev_circle(visible, bx, by, self.building_vision_radius)
+
+        # Scout-agent vision circles (R5) — only active scouts project vision.
+        if player_scouts and self.scout_vision_radius > 0:
+            for scout in player_scouts:
+                if not _is_scout_active(scout):
+                    continue
+                sx = _get_coord(scout, "coord_x")
+                sy = _get_coord(scout, "coord_y")
+                _add_chebyshev_circle(visible, sx, sy, self.scout_vision_radius)
 
         return visible
 
@@ -311,6 +326,24 @@ def _get_planet(player: Any) -> str:
         val = getattr(player.db, "coord_planet", "")
         return val if val is not None else ""
     return getattr(player, "coord_planet", "") or ""
+
+
+def _is_scout_active(agent: Any) -> bool:
+    """Return True if *agent* is an active scout that projects vision (R5.2).
+
+    An active scout has role "scout", is not incapacitated, and is not
+    benched in reserve. Value-based db reads only; never raises.
+    """
+    db = getattr(agent, "db", None)
+    if db is None:
+        return False
+    if (getattr(db, "role", "") or "").lower() != "scout":
+        return False
+    if getattr(db, "incapacitated", False):
+        return False
+    if getattr(db, "reserve", False):
+        return False
+    return True
 
 
 def _get_building_coords(building: Any) -> tuple[int, int]:

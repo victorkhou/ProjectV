@@ -892,6 +892,53 @@ def is_friendly(a: Any, b: Any) -> bool:
     return is_owner(a, b) or are_allied(a, b)
 
 
+def player_scout_agents(player: Any) -> list:
+    """Return *player*'s active scout agents for fog vision projection (R5).
+
+    Resolves the roster via the AgentSystem and filters to role ``"scout"``,
+    same planet as the player, not incapacitated/reserved. Returns ``[]``
+    when the system is unavailable (tests / unwired contexts). Never raises.
+    """
+    try:
+        agent_system = get_system(player, "agent_system")
+        if agent_system is None or not hasattr(agent_system, "get_agents"):
+            return []
+        player_planet = getattr(getattr(player, "db", None), "coord_planet", None)
+        scouts = []
+        for agent in agent_system.get_agents(player) or []:
+            db = getattr(agent, "db", None)
+            if db is None:
+                continue
+            if (getattr(db, "role", "") or "").lower() != "scout":
+                continue
+            if getattr(db, "incapacitated", False) or getattr(db, "reserve", False):
+                continue
+            # Same-planet only — (x, y) tuples carry no planet dimension.
+            if getattr(db, "coord_planet", None) != player_planet:
+                continue
+            scouts.append(agent)
+        return scouts
+    except Exception:  # noqa: BLE001 - scout vision never breaks the base view
+        return []
+
+
+def _visible_tiles_with_scouts(fog_system: Any, player: Any,
+                               player_buildings: Any) -> set:
+    """Call ``fog_system.get_visible_tiles`` including scout vision (R5).
+
+    Passes ``player_scouts`` only when the player has active scouts, so test
+    fakes with the legacy 2-arg ``get_visible_tiles`` signature keep working.
+    """
+    scouts = player_scout_agents(player)
+    if scouts:
+        try:
+            return set(fog_system.get_visible_tiles(
+                player, player_buildings, player_scouts=scouts) or [])
+        except TypeError:
+            pass  # legacy fake without the kwarg — fall through
+    return set(fog_system.get_visible_tiles(player, player_buildings) or [])
+
+
 def shared_visible_tiles(player: Any, player_buildings: Any, fog_system: Any) -> set:
     """Return *player*'s visible tiles, unioned with PLAYING allies' if the
     shared-vision perk is active.
@@ -900,9 +947,8 @@ def shared_visible_tiles(player: Any, player_buildings: Any, fog_system: Any) ->
     map-data provider, and the ``look`` path) use so shared vision cannot drift
     between them. Delegates to ``AllianceSystem.shared_visible_tiles`` (which
     applies the PLAYING-only filter and the per-ally union); falls back to the
-    player's own ``fog_system.get_visible_tiles(player, player_buildings)`` when
-    there is no AllianceSystem or the perk is inactive. Never raises into map
-    building.
+    player's own vision (including scout circles — R5) when there is no
+    AllianceSystem or the perk is inactive. Never raises into map building.
     """
     try:
         system = get_system(player, "alliance_system")
@@ -915,7 +961,7 @@ def shared_visible_tiles(player: Any, player_buildings: Any, fog_system: Any) ->
             )
     except Exception:  # noqa: BLE001 - shared vision never breaks the base view
         logger.debug("shared_visible_tiles failed; using own vision", exc_info=True)
-    return set(fog_system.get_visible_tiles(player, player_buildings) or [])
+    return _visible_tiles_with_scouts(fog_system, player, player_buildings)
 
 
 def is_admin(caller: Any) -> bool:
