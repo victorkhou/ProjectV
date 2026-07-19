@@ -279,7 +279,8 @@ class RankSystem(BaseSystem):
             old_rank_def = self._get_rank_by_level(old_rank_num)
             new_rank_def = self._get_rank_by_level(new_rank_num)
             if new_rank_def:
-                self._unlock_for_rank(player, new_rank_num)
+                # NOTE: promotion no longer auto-grants technologies (R13.1) —
+                # research at a Lab is the only tech-acquisition path.
                 logger.info(
                     "Promoted %s from %s to %s (level %d→%d)",
                     getattr(player, "key", "?"),
@@ -298,7 +299,8 @@ class RankSystem(BaseSystem):
             old_rank_def = self._get_rank_by_level(old_rank_num)
             new_rank_def = self._get_rank_by_level(new_rank_num)
             if new_rank_def:
-                self._revoke_above_rank(player, new_rank_num)
+                # NOTE: demotion no longer revokes researched technologies
+                # (R13.2) — a paid-for tech is never taken away by rank churn.
                 logger.info(
                     "Demoted %s from %s to %s (level %d→%d)",
                     getattr(player, "key", "?"),
@@ -332,27 +334,3 @@ class RankSystem(BaseSystem):
         """Return the next rank above current_rank_num, or None."""
         return self.registry.get_rank_by_level(current_rank_num + 1)
 
-    def _unlock_for_rank(self, player: Any, rank_num: int) -> None:
-        """Unlock techs/powerups available at rank_num and below."""
-        techs = self.registry.get_technologies_for_rank(rank_num)
-        researched = self._get_researched_techs(player)
-        for tech in techs:
-            researched.add(tech.key)
-        self._set_researched_techs(player, researched)
-
-    def _revoke_above_rank(self, player: Any, new_rank_num: int) -> None:
-        """Revoke techs requiring ranks above new_rank_num."""
-        available_techs = self.registry.get_technologies_for_rank(new_rank_num)
-        available_keys = {t.key for t in available_techs}
-        researched = self._get_researched_techs(player)
-        researched = researched & available_keys
-        self._set_researched_techs(player, researched)
-
-    @staticmethod
-    def _get_researched_techs(player: Any) -> set:
-        techs = getattr(getattr(player, "db", None), "researched_techs", None)
-        return set(techs) if techs else set()
-
-    @staticmethod
-    def _set_researched_techs(player: Any, techs: set) -> None:
-        player.db.researched_techs = techs

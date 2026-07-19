@@ -294,41 +294,34 @@ class TestProperty18RankGatedAccess(unittest.TestCase):
 
     @given(data=rank_list_with_techs_strategy())
     @settings(max_examples=200)
-    def test_promotion_unlocks_all_qualifying_techs(self, data):
-        """On promotion, all techs at or below the new rank are unlocked."""
+    def test_promotion_does_not_auto_grant_techs(self, data):
+        """R13.1: promotion never touches researched_techs — research at a Lab
+        is the only tech-acquisition path."""
         ranks, techs, powerups = data
         assume(len(ranks) >= 2)
         registry = _make_registry(ranks, techs, powerups)
         event_bus = EventBus()
         system = RankSystem(registry=registry, event_bus=event_bus)
-        # Activate this registry's curve on the shared progression helper
-        # (the threshold table is process-global since the refactor).
         system._rebuild_thresholds()
 
-        # Start at rank 1, promote to max rank
         max_rank = ranks[-1]
         player = FakePlayer(combat_xp=0, rank_level=1, researched_techs=set())
         system.award_xp(player, max_rank.xp_threshold, "test")
 
-        expected_techs = {
-            t.key for t in registry.get_technologies_for_rank(max_rank.level)
-        }
-        self.assertEqual(player.db.researched_techs, expected_techs)
+        # techs set stays empty — no auto-grant
+        self.assertEqual(player.db.researched_techs, set())
 
     @given(data=rank_list_with_techs_strategy())
     @settings(max_examples=200)
-    def test_demotion_revokes_higher_rank_techs(self, data):
-        """On demotion, techs requiring the lost rank are revoked."""
+    def test_demotion_does_not_revoke_techs(self, data):
+        """R13.2: demotion never revokes researched technologies."""
         ranks, techs, powerups = data
         assume(len(ranks) >= 2)
         registry = _make_registry(ranks, techs, powerups)
         event_bus = EventBus()
         system = RankSystem(registry=registry, event_bus=event_bus)
-        # Activate this registry's curve on the shared progression helper
-        # (the threshold table is process-global since the refactor).
         system._rebuild_thresholds()
 
-        # Start at max rank with all techs unlocked
         max_rank = ranks[-1]
         all_tech_keys = {
             t.key for t in registry.get_technologies_for_rank(max_rank.level)
@@ -339,14 +332,10 @@ class TestProperty18RankGatedAccess(unittest.TestCase):
             researched_techs=set(all_tech_keys),
         )
 
-        # Demote to rank 1
         system.deduct_xp(player, max_rank.xp_threshold)
 
-        # Only techs available at rank 1 should remain
-        expected_techs = {
-            t.key for t in registry.get_technologies_for_rank(ranks[0].level)
-        }
-        self.assertEqual(player.db.researched_techs, expected_techs)
+        # ALL techs survive — demotion never revokes
+        self.assertEqual(player.db.researched_techs, all_tech_keys)
 
 # -------------------------------------------------------------- #
 #  Property 19: Strictly increasing rank thresholds

@@ -227,15 +227,15 @@ class TestPromotion(unittest.TestCase):
         self.assertEqual(events[0]["old_rank"].name, "Recruit")
         self.assertEqual(events[0]["new_rank"].name, "Private")
 
-    def test_promotion_unlocks_techs(self):
-        """Promotion to Corporal (rank 3, level 11+) unlocks techs."""
+    def test_promotion_does_not_auto_grant_techs(self):
+        """R13.1: promotion never touches researched_techs — research at a Lab
+        is the only acquisition path."""
         player = FakePlayer(combat_xp=0, level=1, researched_techs=set())
         system, _ = _make_rank_system()
         system.award_xp(player, 300, "kill")
         self.assertEqual(player.db.rank_level, 3)
-        self.assertIn("basic_armor", player.db.researched_techs)
-        self.assertIn("improved_weapons", player.db.researched_techs)
-        self.assertNotIn("advanced_tactics", player.db.researched_techs)
+        # techs set stays empty — no auto-grant
+        self.assertEqual(player.db.researched_techs, set())
 
 
 class TestDemotion(unittest.TestCase):
@@ -270,7 +270,9 @@ class TestDemotion(unittest.TestCase):
         self.assertEqual(events[0]["old_rank"].name, "Private")
         self.assertEqual(events[0]["new_rank"].name, "Recruit")
 
-    def test_demotion_revokes_techs(self):
+    def test_demotion_does_not_revoke_techs(self):
+        """R13.2: demotion never touches researched_techs — a paid-for tech
+        is never taken away by rank churn."""
         player = FakePlayer(
             combat_xp=350, level=12,  # Corporal
             researched_techs={"basic_armor", "improved_weapons"},
@@ -278,8 +280,9 @@ class TestDemotion(unittest.TestCase):
         system, _ = _make_rank_system()
         system.deduct_xp(player, 300)  # XP=50, Recruit
         self.assertEqual(player.db.rank_level, 1)
+        # Both techs survive the demotion
         self.assertIn("basic_armor", player.db.researched_techs)
-        self.assertNotIn("improved_weapons", player.db.researched_techs)
+        self.assertIn("improved_weapons", player.db.researched_techs)
 
 
 class TestGetRankAndStatus(unittest.TestCase):
@@ -685,21 +688,18 @@ class TestPreservedPlayerBehavior(unittest.TestCase):
         self.assertEqual(RankSystem._get_level(player),
                          (2 - 1) * LEVELS_PER_RANK + 1)
 
-    # -- 4.7: tech unlock/revoke fires on rank change -------------------- #
+    # -- R13.1, R13.2: rank changes never touch techs -------------------- #
 
-    def test_tech_unlock_on_promotion(self):
-        """Crossing into a higher rank unlocks that rank's techs (Req 4.7)."""
+    def test_tech_not_auto_granted_on_promotion(self):
+        """R13.1: promotion never auto-grants technologies."""
         player = FakePlayer(combat_xp=0, level=1, researched_techs=set())
         system, _ = _make_rank_system()
         system.award_xp(player, 300, "kill")  # -> Corporal (rank 3)
         self.assertEqual(player.db.rank_level, 3)
-        self.assertIn("basic_armor", player.db.researched_techs)
-        self.assertIn("improved_weapons", player.db.researched_techs)
-        self.assertNotIn("advanced_tactics", player.db.researched_techs)
+        self.assertEqual(player.db.researched_techs, set())
 
-    def test_tech_revoke_on_demotion(self):
-        """Dropping to a lower rank revokes techs above the new rank
-        while retaining lower-rank techs (Req 4.7)."""
+    def test_tech_not_revoked_on_demotion(self):
+        """R13.2: demotion never revokes researched technologies."""
         player = FakePlayer(
             combat_xp=350, level=12,  # Corporal
             researched_techs={"basic_armor", "improved_weapons"},
@@ -708,7 +708,7 @@ class TestPreservedPlayerBehavior(unittest.TestCase):
         system.deduct_xp(player, 300)  # XP=50 -> Recruit (rank 1)
         self.assertEqual(player.db.rank_level, 1)
         self.assertIn("basic_armor", player.db.researched_techs)
-        self.assertNotIn("improved_weapons", player.db.researched_techs)
+        self.assertIn("improved_weapons", player.db.researched_techs)
 
     def test_no_tech_change_when_rank_unchanged(self):
         """A level change within the same rank does not alter techs (Req 4.7)."""

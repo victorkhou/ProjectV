@@ -190,42 +190,48 @@ class TechLabSystem(BaseSystem):
     # ------------------------------------------------------------------ #
 
     def apply_technology(self, player: Any, tech_def: TechnologyDef) -> None:
-        """Apply a completed technology's effect to the player.
+        """Apply a completed technology's effect to the player (R13.3).
 
-        Supported effect_types:
-            - stat_bonus: Modify a player stat (e.g. max_hp, damage)
-            - building_unlock: Unlock a building type
-            - item_unlock: Unlock an item type
+        Writes the technology's payload into ``player.db.tech_bonuses`` — a
+        cumulative bonus dict read by downstream consumers (CombatEngine,
+        FogOfWar, building-hp, production). Multiplicative effects
+        (``production_multiplier``) compose; all others are additive.
+
+        The five shipped payload keys and their consumers:
+        - ``building_hp``            → building hp_max computation
+        - ``damage``                 → CombatEngine attacker bonus
+        - ``damage_reduction``       → CombatEngine armor path
+        - ``sight_range``            → FogOfWar player vision radius
+        - ``production_multiplier``  → equipment/extractor production path
 
         Args:
             player: The player to apply the effect to.
             tech_def: The technology definition.
         """
-        if tech_def.effect_type == "stat_bonus" and tech_def.effect_value:
-            self._apply_stat_bonus(player, tech_def.effect_value)
-        elif tech_def.effect_type == "building_unlock":
-            # Building unlocks are handled by the rank/tech tree system
-            pass
-        elif tech_def.effect_type == "item_unlock":
-            # Item unlocks are handled by the rank/tech tree system
-            pass
+        if not tech_def.effect_value:
+            return
+        self._apply_tech_effect(player, tech_def)
 
     @staticmethod
-    def _apply_stat_bonus(player: Any, effect_value: Any) -> None:
-        """Apply a stat bonus to the player."""
-        if not isinstance(effect_value, dict):
+    def _apply_tech_effect(player: Any, tech_def: TechnologyDef) -> None:
+        """Write tech effects into db.tech_bonuses (R13.3, D5)."""
+        effect = tech_def.effect_value
+        if not isinstance(effect, dict):
             return
-        stat = effect_value.get("stat", "")
-        bonus = effect_value.get("bonus", 0)
-        if not stat or not bonus:
+        db = getattr(player, "db", None)
+        if db is None:
             return
-
-        if stat == "max_hp" and hasattr(player, "db"):
-            current_max = getattr(player.db, "hp_max", 100) or 100
-            player.db.hp_max = current_max + bonus
-            # Also increase current HP by the bonus
-            current_hp = getattr(player.db, "hp", current_max) or current_max
-            player.db.hp = current_hp + bonus
+        bonuses = dict(getattr(db, "tech_bonuses", None) or {})
+        for key, value in effect.items():
+            try:
+                value = float(value)
+            except (TypeError, ValueError):
+                continue
+            if key == "production_multiplier":
+                bonuses[key] = bonuses.get(key, 1.0) * value
+            else:
+                bonuses[key] = bonuses.get(key, 0) + value
+        db.tech_bonuses = bonuses
 
     # ------------------------------------------------------------------ #
     #  Internal helpers

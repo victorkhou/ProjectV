@@ -216,7 +216,11 @@ PLAYER_DEFAULTS: dict[str, object] = {
     # Invite Ignore_List: a set of blocked inviter ids, or the "all" sentinel.
     # None = accepting invites from everyone.
     "alliance_invite_ignore": None,
-    # --- Early-game rebalance (deeds + directives) --- #
+    # --- Early-game rebalance (tech repair + deeds + directives) --- #
+    # Tech bonus store (R13/D5): accumulated stat bonuses from researched techs.
+    # Derived from researched_techs via TechSystem._apply_tech_effect; consumers
+    # read it directly (building hp_max, combat damage/armor, vision, production).
+    "tech_bonuses": {},
     # Deed store (R9/D9): deed-id -> count. Boolean deeds are count >= 1;
     # counted gates (e.g. Lab requires 3 cleared outposts) read the count.
     "deeds": {},

@@ -117,7 +117,7 @@ SAMPLE_TECHS = {
         resource_cost={"Stone": 200, "Iron": 100},
         research_ticks=5,
         effect_type="stat_bonus",
-        effect_value={"stat": "max_hp", "bonus": 50},
+        effect_value={"building_hp": 50},
     ),
     "basic_armor": TechnologyDef(
         name="Basic Armor", key="basic_armor",
@@ -125,15 +125,15 @@ SAMPLE_TECHS = {
         resource_cost={"Wood": 50},
         research_ticks=3,
         effect_type="stat_bonus",
-        effect_value={"stat": "max_hp", "bonus": 20},
+        effect_value={"damage_reduction": 20},
     ),
     "advanced_weapons": TechnologyDef(
         name="Advanced Weapons", key="advanced_weapons",
         required_rank="Captain",
         resource_cost={"Iron": 500, "Energy": 200},
         research_ticks=10,
-        effect_type="item_unlock",
-        effect_value="plasma_cannon",
+        effect_type="stat_bonus",
+        effect_value={"damage": 15},
     ),
 }
 
@@ -336,19 +336,18 @@ class TestTechLabEffectApplication(unittest.TestCase):
     """
 
     def test_stat_bonus_applied_on_completion(self):
-        """stat_bonus technology increases the player's stat."""
+        """R13.3: stat_bonus technology writes into db.tech_bonuses."""
         system, bus = _make_system()
         player = FakePlayer(rank_level=5, resources={"Wood": 100})
-        player.db.hp = 100
-        player.db.hp_max = 100
+        player.db.tech_bonuses = {}
 
         system.start_research(player, "basic_armor")
         for _ in range(3):
             system.process_tick()
 
-        # basic_armor gives +20 max_hp
-        self.assertEqual(player.db.hp_max, 120)
-        self.assertEqual(player.db.hp, 120)
+        # basic_armor effect_value is {"damage_reduction": 20}
+        bonuses = player.db.tech_bonuses or {}
+        self.assertEqual(bonuses.get("damage_reduction"), 20)
 
     def test_item_unlock_does_not_crash(self):
         """item_unlock effect type completes without error."""
