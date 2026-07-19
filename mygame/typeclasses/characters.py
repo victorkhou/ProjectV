@@ -216,6 +216,14 @@ PLAYER_DEFAULTS: dict[str, object] = {
     # Invite Ignore_List: a set of blocked inviter ids, or the "all" sentinel.
     # None = accepting invites from everyone.
     "alliance_invite_ignore": None,
+    # --- Early-game rebalance (deeds + directives) --- #
+    # Deed store (R9/D9): deed-id -> count. Boolean deeds are count >= 1;
+    # counted gates (e.g. Lab requires 3 cleared outposts) read the count.
+    "deeds": {},
+    # Directive-chain progress: index into the ordered directives sequence.
+    "directives_progress": 0,
+    # Dismiss-all flag (R10.7/D2): True = advance silently, no rewards.
+    "directives_muted": False,
 }
 
 

@@ -58,6 +58,9 @@ _OPTIONAL_FILES = {
     # without it — an absent/empty file just means the alliance feature offers
     # no perks (membership/treasury/leaderboard still work).
     "alliance_perks": "definitions/alliance_perks.yaml",
+    # Onboarding directive chain (early-game rebalance R10). Optional — an
+    # absent/empty file just means no directive checklist runs.
+    "directives": "definitions/directives.yaml",
 }
 
 
@@ -122,6 +125,10 @@ class DataRegistry:
         #: raw nested dicts (not a dataclass) since AllianceSystem interprets the
         #: level/tier/cost/effect payloads directly.
         self.alliance_perks: dict[str, dict] = {}
+        #: Onboarding directive chain (early-game rebalance R10): an ORDERED
+        #: list of directive dicts loaded from the optional
+        #: data/definitions/directives.yaml. Empty when absent (no checklist).
+        self.directives: list[dict] = []
         self.balance: BalanceConfig = BalanceConfig()
         self._base_path: str = "data"
         self._validator = SchemaValidator()
@@ -210,6 +217,9 @@ class DataRegistry:
         # --- Load optional alliance perk catalog ---
         self._load_alliance_perks(base_path)
 
+        # --- Load optional onboarding directives ---
+        self._load_directives(base_path)
+
         logger.info("Data Registry loaded successfully from '%s'", base_path)
 
     def reload_all(self) -> tuple[bool, list[str]]:
@@ -244,6 +254,7 @@ class DataRegistry:
         self.base_templates = temp.base_templates
         self.classes = temp.classes
         self.alliance_perks = temp.alliance_perks
+        self.directives = temp.directives
         self.balance = temp.balance
 
         # Rebuild the shared level<->XP threshold curve from the newly-swapped
@@ -662,6 +673,37 @@ class DataRegistry:
     def get_alliance_perk(self, key: str) -> "dict | None":
         """Return the alliance perk spec for *key*, or ``None`` if undefined."""
         return self.alliance_perks.get(key)
+
+    def _load_directives(self, base_path: str) -> None:
+        """Load the optional onboarding directive chain from directives.yaml.
+
+        Absent, empty, or malformed → an empty chain (no checklist runs), so
+        a directive-content problem never blocks server start. The file is an
+        ORDERED list of directive dicts; entries missing a ``key`` or
+        ``trigger_event`` are skipped (order of the survivors is preserved).
+        NOTE: list-shaped, so it can't share ``_read_optional_yaml`` (dict-only).
+        """
+        self.directives = []
+        path = os.path.join(base_path, _OPTIONAL_FILES["directives"])
+        if not os.path.isfile(path):
+            logger.info("No directives at '%s' — onboarding chain disabled.", path)
+            return
+        try:
+            with open(path, "r") as f:
+                raw = yaml.safe_load(f)
+        except Exception:
+            logger.exception("Failed to read directives at '%s'.", path)
+            return
+        if not isinstance(raw, list):
+            return
+        for entry in raw:
+            if not isinstance(entry, dict):
+                continue
+            if not entry.get("key") or not entry.get("trigger_event"):
+                logger.warning("Skipping malformed directive %r.", entry)
+                continue
+            self.directives.append(dict(entry))
+        logger.info("Loaded %d directive step(s).", len(self.directives))
 
     def get_class(self, key: str) -> "ClassDef | None":
         """Return the player class for *key*, or ``None`` if undefined."""

@@ -250,6 +250,11 @@ def initialize_game() -> dict:
         except Exception:  # noqa: BLE001
             return 1.0
     regen_system.add_modifier_provider(_alliance_regen_provider)
+
+    # Onboarding directive chain + deed awards (early-game rebalance R9/R10).
+    # Subscribes itself to its trigger events at construction.
+    from world.systems.directive_system import DirectiveSystem
+    directive_system = DirectiveSystem(registry, event_bus)
     # Inject the live-GameItem production factory so Gear produced each tick is a
     # real, equippable Evennia object (not the framework-free dict placeholder
     # the use-case defaults to for tests). The ``typeclasses`` import lives here
@@ -654,6 +659,7 @@ def initialize_game() -> dict:
         "chunking": chunking,
         "chat_system": chat_system,
         "alliance_system": alliance_system,
+        "directive_system": directive_system,
         "notification_system": notification_system,
         "metrics": metrics,
         "planet_registry": planet_registry,

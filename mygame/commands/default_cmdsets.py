@@ -23,7 +23,7 @@ from commands.game_commands import (
     CmdSetFuse, CmdArm,
     CmdDeposit, CmdWithdraw,
     CmdResearch, CmdPowerup,
-    CmdScore, CmdEquipment, CmdBuildings, CmdScan, CmdTechnology,
+    CmdScore, CmdDirectives, CmdEquipment, CmdBuildings, CmdScan, CmdTechnology,
     CmdInventory, CmdChat, CmdMessage, CmdSay, CmdLook, CmdMap,
     CmdLeave, CmdEnter, CmdCloseExit, CmdOpenExit, CmdExit, CmdStop, CmdWho, CmdGet,
     CmdDrop, CmdSell, CmdJunk,
@@ -139,6 +139,7 @@ class CharacterCmdSet(default_cmds.CharacterCmdSet):
         self.add(CmdResearch())
         self.add(CmdPowerup())
         self.add(CmdScore())
+        self.add(CmdDirectives())
         self.add(CmdEquipment())
         self.add(CmdBuildings())
         self.add(CmdScan())

@@ -71,6 +71,27 @@ def _fmt_harvest_crit(d: dict) -> str:
     return f"|g[Rich vein!] +{d['amount']} {d['resource']} bonus!|n"
 
 
+def _fmt_directive_complete(d: dict) -> str:
+    reward = d.get("reward") or {}
+    parts = []
+    xp = reward.get("xp", 0)
+    if xp:
+        parts.append(f"+{xp} XP")
+    for res, amt in reward.items():
+        if res != "xp" and amt:
+            parts.append(f"+{amt} {res}")
+    suffix = f" — {', '.join(parts)}" if parts else ""
+    return f"|w[Directive complete]|n {d.get('description', '?')}{suffix}"
+
+
+def _fmt_directive_next(d: dict) -> str:
+    return f"|y[Next objective]|n {d.get('description', '?')}"
+
+
+def _fmt_directives_all_complete(d: dict) -> str:
+    return "|g[Directives] All objectives complete. Your base is established!|n"
+
+
 # Attacks landing on the receiving player (you, your building, or your unit)
 # are rendered in BRIGHT red so an incoming hit stands out from the yellow/green
 # informational lines. In Evennia ANSI, |r is HILITE+RED (bright); |R is
@@ -591,6 +612,9 @@ class NotificationPresenter:
         "agent_training_progress": _fmt_agent_training_progress,
         "harvest_drop": _fmt_harvest_drop,
         "harvest_crit": _fmt_harvest_crit,
+        "directive_complete": _fmt_directive_complete,
+        "directive_next": _fmt_directive_next,
+        "directives_all_complete": _fmt_directives_all_complete,
         "attacked": _fmt_attacked,
         "attack_hit": _fmt_attack_hit,
         "building_attacked": _fmt_building_attacked,

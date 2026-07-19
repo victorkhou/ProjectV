@@ -1,0 +1,94 @@
+# Onboarding directive chain (early-game rebalance R10).
+#
+# An ORDERED list — the player advances one step at a time. Each entry:
+#   key:            unique step identifier
+#   description:    shown in notifications + the `directives` command
+#   trigger_event:  EventBus event name that can complete this step
+#   player_key:     payload key carrying the acting entity (default "player";
+#                   D7 — NPC/turret actors resolve to their owner)
+#   condition:      optional payload filters (all must match)
+#   reward:         xp + resource grants (one-time; forfeited while muted — D2)
+#
+# Non-combat steps total 200 XP; step 8's combat reward is 50 (D6).
+
+- key: build_hq
+  description: "Build your Headquarters"
+  trigger_event: construction_completed
+  condition:
+    building_type: HQ
+  reward:
+    xp: 15
+
+- key: build_extractor
+  description: "Build an Extractor on a resource tile"
+  trigger_event: construction_completed
+  condition:
+    building_type: EX
+  reward:
+    xp: 15
+    Wood: 10
+
+- key: train_agent
+  description: "Train your first agent at an Academy"
+  trigger_event: agent_trained
+  reward:
+    xp: 30
+    Iron: 10
+
+- key: assign_harvester
+  description: "Assign a harvester to your Extractor"
+  trigger_event: agent_assigned
+  condition:
+    role: harvester
+  reward:
+    xp: 15
+
+- key: build_wall
+  description: "Build a Wall to protect your base"
+  trigger_event: construction_completed
+  condition:
+    building_type: WL
+  reward:
+    xp: 20
+    Stone: 15
+
+- key: equip_weapon
+  description: "Equip a weapon from the Armory"
+  trigger_event: item_equipped
+  reward:
+    xp: 20
+
+- key: guard_patrol
+  description: "Assign a guard and set a patrol route"
+  trigger_event: patrol_set
+  condition:
+    role: guard
+  reward:
+    xp: 20
+
+- key: destroy_outpost
+  description: "Destroy an NPC outpost"
+  trigger_event: base_eliminated
+  player_key: attacker
+  condition:
+    base_kind: outpost
+  reward:
+    xp: 50
+    Iron: 30
+
+- key: upgrade_hq
+  description: "Upgrade your HQ to level 2"
+  trigger_event: building_upgraded
+  condition:
+    building_type: HQ
+    new_level: 2
+  reward:
+    xp: 40
+
+- key: scout_patrol
+  description: "Explore with a scout patrol"
+  trigger_event: patrol_set
+  condition:
+    role: scout
+  reward:
+    xp: 25

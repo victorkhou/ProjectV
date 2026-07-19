@@ -773,12 +773,29 @@ class CmdBuild(GameCommand):
         if player_level is None:
             player_level = getattr(getattr(caller, "db", None), "rank_level", 1) or 1
 
+        deeds = getattr(getattr(caller, "db", None), "deeds", None) or {}
+
         lines = ["|wAvailable buildings:|n"]
         for abbr, bdef in sorted(registry.buildings.items(), key=lambda x: x[1].rank_requirement):
             if bdef.rank_requirement > player_level:
                 continue
             cost_str = format_cost_summary(bdef.cost)
-            lines.append(f"  |w{abbr}|n — {bdef.name} ({cost_str}) [{bdef.build_time_seconds}s]")
+            # Deed-gate suffix (R9.5): mark gated buildings the player hasn't
+            # unlocked, so the requirement is visible before a refused build.
+            locked = ""
+            unlock_deed = getattr(bdef, "unlock_deed", None)
+            if unlock_deed:
+                required = getattr(bdef, "unlock_deed_count", 1) or 1
+                have = deeds.get(unlock_deed, 0) if isinstance(deeds, dict) else 0
+                if have < required:
+                    from world.constants import DEED_DESCRIPTIONS
+                    desc = DEED_DESCRIPTIONS.get(unlock_deed, unlock_deed)
+                    need = f" ×{required}" if required > 1 else ""
+                    locked = f" |r[LOCKED: {desc}{need}]|n"
+            lines.append(
+                f"  |w{abbr}|n — {bdef.name} ({cost_str}) "
+                f"[{bdef.build_time_seconds}s]{locked}"
+            )
 
         if len(lines) == 1:
             lines.append("  None available at your level.")
@@ -2690,6 +2707,56 @@ class CmdScore(GameCommand):
         if powerups:
             lines.append(f"  Powerups: {', '.join(powerups.keys())}")
 
+        caller.msg("\n".join(lines))
+
+
+class CmdDirectives(GameCommand):
+    """Show or manage your onboarding directives.
+
+    Directives are a step-by-step checklist guiding you through base setup,
+    agent training, and your first combat, with a small reward at each step.
+
+    Usage:
+        directives          — show current and completed objectives
+        directives off      — dismiss the checklist (forfeits remaining rewards)
+        directives on       — re-enable from your current position
+    """
+
+    key = "directives"
+    aliases = ["objectives"]
+    help_category = "Game"
+    available_out_of_game = True  # check your objectives from the lobby
+
+    def func(self):
+        caller = self.caller
+        system = self.require_system("directive_system", "Directive system")
+        if system is None:
+            return
+
+        arg = (self.args or "").strip().lower()
+        if arg in ("off", "mute"):
+            system.set_muted(caller, True)
+            caller.msg("Directives dismissed. Remaining rewards are forfeited. "
+                       "Use 'directives on' to re-enable.")
+            return
+        if arg in ("on", "unmute"):
+            system.set_muted(caller, False)
+            caller.msg("Directives re-enabled from your current objective.")
+            return
+
+        view = system.get_progress_view(caller)
+        if not view["steps"]:
+            caller.msg("No directives are configured.")
+            return
+        lines = [f"|wDirectives|n ({view['progress']}/{view['total']} complete"
+                 f"{', muted' if view['muted'] else ''}):"]
+        for step in view["steps"]:
+            if step["done"]:
+                lines.append(f"  |g[done]|n {step['description']}")
+            elif step["current"]:
+                lines.append(f"  |y[ -> ]|n {step['description']}")
+            else:
+                lines.append(f"  |x[    ] {step['description']}|n")
         caller.msg("\n".join(lines))
 
 

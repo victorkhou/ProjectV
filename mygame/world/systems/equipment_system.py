@@ -529,6 +529,16 @@ class EquipmentSystem(CarryWeightMixin, StorageMixin, BaseSystem):
                 self.notify(player, "unequipped",
                             item_name=self._item_name(displaced), slot=slot)
             self.notify(player, "equipped", item_name=item_name, slot=slot)
+            # Directive trigger (D8)
+            try:
+                from world.event_bus import ITEM_EQUIPPED
+                self.event_bus.publish(
+                    ITEM_EQUIPPED, player=player,
+                    item_key=self._item_attr(item, "item_key", item_name),
+                    slot=slot,
+                )
+            except Exception:  # noqa: BLE001
+                pass
         return bool(ok)
 
     def equip_all(self, player: Any, loose_items: list) -> int:

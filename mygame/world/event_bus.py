@@ -58,6 +58,12 @@ TICK_COMPLETED = "tick_completed"
 # formatting and delivery. Keeps presentation out of the domain.
 PLAYER_NOTIFICATION = "player_notification"
 
+# --- Early-game directives (D8) --- new events the onboarding chain triggers on.
+AGENT_TRAINED = "agent_trained"        # player, agent_id
+AGENT_ASSIGNED = "agent_assigned"      # player, agent_id, role
+ITEM_EQUIPPED = "item_equipped"        # player, item_key, slot
+PATROL_SET = "patrol_set"              # player, agent_id, role
+
 # --- Alliances --- (all published by world.systems.alliance_system.AllianceSystem)
 # Payload conventions noted per event; publishing is best-effort (swallowed on
 # error) so telemetry never breaks a membership mutation.
@@ -96,6 +102,10 @@ ALL_EVENTS = (
     RESOURCE_GATHERED,
     TICK_COMPLETED,
     PLAYER_NOTIFICATION,
+    AGENT_TRAINED,
+    AGENT_ASSIGNED,
+    ITEM_EQUIPPED,
+    PATROL_SET,
     ALLIANCE_CREATED,
     ALLIANCE_MEMBER_JOINED,
     ALLIANCE_MEMBER_LEFT,

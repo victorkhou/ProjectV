@@ -423,6 +423,21 @@ ALLIANCE_NAME_DENYLIST = ("admin", "system", "staff", "public", "chat", "pub")
 ALLIANCE_IGNORE_ALL = "all"
 
 # ------------------------------------------------------------------ #
+#  Deeds (early-game rebalance R9/D9)
+# ------------------------------------------------------------------ #
+
+#: Deed ids awarded by BASE_ELIMINATED (per NPC-base tier).
+DEED_OUTPOST_CLEARED = "outpost_cleared"
+DEED_FORTRESS_CLEARED = "fortress_cleared"
+
+#: Human-readable descriptions for deed-gate refusal messages and the
+#: [LOCKED: ...] suffix in the building list.
+DEED_DESCRIPTIONS = {
+    DEED_OUTPOST_CLEARED: "destroyed an NPC outpost",
+    DEED_FORTRESS_CLEARED: "destroyed an NPC fortress",
+}
+
+# ------------------------------------------------------------------ #
 #  Disconnect cleanup
 # ------------------------------------------------------------------ #
 

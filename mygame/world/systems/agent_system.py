@@ -220,6 +220,13 @@ class AgentSystem(AgentProgressionMixin, AgentBehaviorMixin, BaseSystem):
         except Exception:
             pass
 
+        # Directive trigger (D8)
+        try:
+            from world.event_bus import AGENT_TRAINED
+            self.event_bus.publish(AGENT_TRAINED, player=player, agent_id=agent_id)
+        except Exception:
+            pass
+
         return npc
 
     # ------------------------------------------------------------------ #
@@ -347,11 +354,21 @@ class AgentSystem(AgentProgressionMixin, AgentBehaviorMixin, BaseSystem):
                 loc = getattr(target_building, "location", target_building)
                 agent.move_to(loc, quiet=True)
         else:
-            # Army role (soldier/medic) — no target building, so the movement
-            # block above (which derives the arrival status) never runs. Derive
-            # the resting status here so the agent reads "Ready" on assignment
-            # instead of a stale "Working"/"Idle" left from a prior role.
+            # Army role (guard/scout, hidden soldier/medic) — no target
+            # building, so the movement block above (which derives the arrival
+            # status) never runs. Derive the resting status here so the agent
+            # reads "Ready" on assignment instead of a stale "Working"/"Idle"
+            # left from a prior role.
             agent.db.activity_status = resting_activity_status(agent)
+
+        # Directive trigger (D8)
+        try:
+            from world.event_bus import AGENT_ASSIGNED
+            self.event_bus.publish(
+                AGENT_ASSIGNED, player=player, agent_id=agent_id, role=role,
+            )
+        except Exception:
+            pass
 
         return True, f"Agent #{agent_id} assigned as {role}."
 
@@ -475,6 +492,16 @@ class AgentSystem(AgentProgressionMixin, AgentBehaviorMixin, BaseSystem):
         # Store patrol route as list of [x, y] pairs (Evennia-safe)
         agent.db.patrol_route = [[int(wp[0]), int(wp[1])] for wp in waypoints]
         agent.db.patrol_waypoint_index = 0
+
+        # Directive trigger (D8) — role in payload so steps 7 (guard) and 10
+        # (scout) can condition on it.
+        try:
+            from world.event_bus import PATROL_SET
+            self.event_bus.publish(
+                PATROL_SET, player=player, agent_id=agent_id, role=role,
+            )
+        except Exception:
+            pass
 
         return True, (
             f"Agent #{agent_id} patrol route set with "

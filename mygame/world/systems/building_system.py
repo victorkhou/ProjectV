@@ -125,6 +125,7 @@ class BuildingSystem(BaseSystem):
             lambda: self._validate_hq_requirement(player, building_def),
             lambda: self._validate_one_hq_per_planet(player, building_def, tile),
             lambda: self._validate_rank_requirement(player, building_def),
+            lambda: self._validate_deed_requirement(player, building_def),
             lambda: self._validate_terrain(tile, building_def),
             lambda: self._validate_extractor_terrain(tile, building_def, x=x, y=y),
             lambda: self._validate_tile_empty(tile, x=x, y=y),
@@ -652,6 +653,33 @@ class BuildingSystem(BaseSystem):
                 f"Level {rank_req} required to build {building_def.name} "
                 f"(current level: {player_level})."
             )
+        return None
+
+    def _validate_deed_requirement(
+        self, player: Any, building_def: BuildingDef
+    ) -> str | None:
+        """Check the player holds the building's deed gate (R9/D9).
+
+        ``unlock_deed`` names a deed the player must have earned at least
+        ``unlock_deed_count`` times (``db.deeds`` is a deed-id → count dict;
+        boolean deeds are count >= 1). No deed gate → no check.
+        Returns error message or None.
+        """
+        unlock_deed = getattr(building_def, "unlock_deed", None)
+        if not unlock_deed:
+            return None
+        required = getattr(building_def, "unlock_deed_count", 1) or 1
+        deeds = getattr(getattr(player, "db", None), "deeds", None) or {}
+        have = deeds.get(unlock_deed, 0) if isinstance(deeds, dict) else 0
+        if have < required:
+            from world.constants import DEED_DESCRIPTIONS
+            desc = DEED_DESCRIPTIONS.get(unlock_deed, unlock_deed)
+            if required > 1:
+                return (
+                    f"Requires: {desc} ×{required} ({have}/{required}) "
+                    f"to build {building_def.name}."
+                )
+            return f"Requires: {desc} to build {building_def.name}."
         return None
 
     def _validate_one_hq_per_planet(
