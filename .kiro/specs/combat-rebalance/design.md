@@ -1,11 +1,12 @@
 # Combat & Defense Rebalance — Steering Doc
 
-> **Status:** LIVING DESIGN DOC — for discussion & refinement, not yet implemented.
+> **Status:** LIVING DESIGN DOC — Phases 0–1 SHIPPED; Phases 2–5 designed & ready.
 > **Goal:** build a balanced strategy game that is fun to play and fun to fight.
-> **Last updated:** 2026-07-20.
-> Nothing here is committed to code. This captures the evaluation and the design
-> proposals generated across four adversarial design passes so we can reference
-> and refine them.
+> **Last updated:** 2026-07-20 (full walkthrough — reconciled stale sections against
+> the settled decisions; re-derived the forward-dep audit against the final ladder).
+> Sections 1–5 capture the evaluation + adversarial design passes; the SHIPPED and
+> SETTLED DECISIONS blocks and the CONSOLIDATED ROADMAP are the authoritative
+> current state — where an older §3–§5 detail conflicts, the top blocks win.
 
 ## The two binding principles (govern every change here)
 
@@ -239,10 +240,15 @@ cosmetic. **Key lessons that must shape implementation:**
 - 🔴 **% mitigation cap must be ≤ 50%, NOT 75%.** A 75% cap = 4× effective HP on
   that axis = a >2× progression violation. Cap each %-resist axis at 50% so no
   single axis exceeds 2× EHP.
-- 🔴 **Multi-axis resist stacking rebuilds the immunity wall.** Adding stat keys
-  alone lets one full armor set carry fire+psychic+blast+DR = a capped full-
-  spectrum turtle. **Required invariant:** resist stats mutually exclusive per
-  slot OR a global resist budget (sum of all %-resists capped), schema-validated.
+- ⚠ **Multi-axis resist stacking (verifier concern; SETTLED lighter).** The
+  verify pass warned that stat keys alone let one set carry fire+psychic+blast+DR
+  = a capped full-spectrum turtle, and proposed a global resist budget / slot
+  exclusivity. **User decision: 50% per-axis cap only, NO global budget** — so a
+  turtle can partially cover several types, but every axis still lets ≥50%
+  through, and the FIRE/PSYCHIC/BLAST types each bypass or ignore physical DR, so
+  the chip-floored physical hit + a type the turtle under-covered always gets
+  through. Baseline resist for all keeps the newbie side fair. (Revisit only if
+  playtesting shows spread-coverage turtles are oppressive.)
 - 🔴 **New players need baseline resist gear at spawn (ungated),** or resists
   become a veteran-only power axis and "progression is physical-only" is false.
 - 🔴 **Type selection must be informed, not blind:** no command currently reveals
@@ -278,78 +284,68 @@ cosmetic. **Key lessons that must shape implementation:**
 
 ---
 
-### 3.5 Planet/resource/rank RE-MAP  *(COMPLETE — derived directly; workflow stalled on API error)*
+### 3.5 Planet/resource/rank RE-MAP  *(FINALIZED 2026-07-20 — decisions locked, audit re-derived)*
 
-> Note: the fan-out workflow for this stalled on an infrastructure API error
-> (no design output). This ladder was derived directly from the rank bands,
-> current recipe costs, and gear gates — it is arithmetic + a dependency audit,
-> fully checked below.
+**The final ladder** (gate = band-low level of the rank; single source of truth =
+planets.yaml LEVEL, ranks.yaml `planet_access` regenerated to match). This is the
+even-spaced ladder from the SETTLED decisions (Terra home L1–20, Citadel L70) —
+it supersedes the earlier draft:
 
-**The re-mapped ladder** (gate = the band-low level of the rank; single source
-of truth = planets.yaml LEVEL, ranks.yaml `planet_access` regenerated to match):
+| # | Planet | Gate | Rank | Resources (▲ = new this rung) | Role |
+|---|--------|------|------|-------------------------------|------|
+| 1 | **Terra** | **L1** (home band 1–20) | Recruit | Wood, Stone, Iron, ▲**Biomass** (exclusive) | Start home |
+| 2 | **Forge** | **L21** | Staff_Sgt | Iron, ▲**Energy**, ▲**Circuits** | Industrial |
+| 3 | **Tundra** | **L33** | Lieutenant | Stone, Iron, ▲**Cryogen** | Frozen |
+| 4 | **Inferno** | **L46** | Major | Iron, Energy, ▲**Magmite** (feeds FIRE gear §3a) | Volcanic |
+| 5 | **Elysium** | **L58** | Colonel | Wood, Stone, Iron, Energy, Circuits, ▲*(signature TBD)* — **NOT Biomass** | **Endgame home** (major bases) |
+| 6 | **Citadel** | **L70** | Brigadier | Iron, Energy, Circuits, ▲**Nexium** | **Battleground** (raid, not staged) |
+| — | **Space** | off-ladder hub | — | *(optional, excluded from progression)* | Travel hub |
 
-| # | Planet | Rank (gate level) | Resources (▲ = new this rung) | Role |
-|---|--------|-------------------|-------------------------------|------|
-| 1 | **Terra** | Recruit **L1** | Wood, Stone, Iron, ▲**Biomass** (Terra-exclusive) | Start home |
-| 2 | **Forge** | Corporal **L11** | Iron, ▲**Energy**, ▲**Circuits** | Industrial |
-| 3 | **Tundra** | Sergeant **L16** | Stone, Iron, ▲**Cryogen** | Frozen |
-| 4 | **Inferno** | Lieutenant **L29** | Iron, Energy, ▲**Pyronite** | Volcanic |
-| 5 | **NEW HOME** *(design: e.g. "Verdant"/"Haven")* | Colonel **L57** | Wood, Stone, Iron, Energy, Circuits, ▲**Aureth** — but **NOT Biomass** | **Endgame home** (major bases) |
-| 6 | **Citadel** | Brigadier **L70** | Iron, Energy, Circuits, ▲**Nexium** | **Battleground** (raid, not staged) |
-| — | **Space** | off-ladder hub (reachable once travel unlocks) | ▲**Voidglass** (optional, excluded from progression) | Travel hub |
-
-Gaps: 10 / 5 / 13 / 28 / 13. The **L29→L57 Inferno→NewHome gap (28)** is the one
-soft spot — it's the mid-game plateau; the graduation *pull* rewards (§4) and
-Space-hub content should live here to keep it engaging. (Alternative if that gap
-feels dead: pull NewHome down to ~Major L46, gap 17/24 — a pacing tuning knob.)
+Even ~12-level gaps (20→21→33→46→58→70): 1 / 12 / 13 / 12 / 12 — **no dead
+stretch** (the old L29→L57 gap is gone). ✅ Honors Terra-home-1–20,
+Citadel=Brigadier L70, Elysium below Citadel.
 
 **New resource types required** (each needs a `RESOURCE_TYPES` entry in
 constants.py + a `resource_weights` value in balance.yaml + a terrain-tile
-re-type). Beyond today's 6 (Wood/Stone/Iron/Energy/Circuits/Nexium), add **4**:
-- **Biomass** (Terra) — the permanently-exclusive resource; re-type a null Terra
-  tile (e.g. Plains/Dirt). Purpose: consumed by an early-and-ongoing sink (e.g.
-  medkits/consumables, or an organic-tech line) so every player — including
-  endgame — keeps a Terra agent-harvest running. **This is the round-trip anchor.**
-- **Cryogen** (Tundra) — re-type Hot_Spring/Frozen_Lake. Gates a cold sidegrade
-  (slow-field / cryo ammo) at ≥ Sergeant.
-- **Pyronite** (Inferno) — re-type Sulfur_Pit/Lava_Flow. Gates the fire damage-type
-  gear (§3a) at ≥ Lieutenant.
-- **Aureth** (New Home) — the endgame-home signature; gates end-tier sidegrade
-  utility at ≥ Colonel.
-- (Space's **Voidglass** is optional side content — NOT counted in the mandatory 4.)
+re-type). Beyond today's 6 (Wood/Stone/Iron/Energy/Circuits/Nexium), add **3**
+(+1 TBD for Elysium):
+- **Biomass** (Terra) — permanently-exclusive; re-type a null Terra tile
+  (Plains/Dirt). **Sink = consumables** (medkits/stims/cleanse) → constant
+  universal demand, the permanent Terra round-trip anchor. Graduation
+  push-throttles MUST exempt it.
+- **Cryogen** (Tundra L33) — re-type Hot_Spring/Frozen_Lake. Gates a cold
+  sidegrade (slow-field / cryo ammo).
+- **Magmite** (Inferno L46) — re-type Sulfur_Pit/Lava_Flow. Gates the FIRE
+  damage-type gear (§3a).
+- **Elysium signature** (L58) — ⚠ name TBD; gates end-tier sidegrade utility.
 
-**Dependency audit — the forward-dependency bug this MUST fix.** Today's biggest
-break: **freely-craftable (`rank=none`) items require Energy/Circuits, which don't
-exist until L21.** A Recruit literally cannot craft these on Terra:
+**Dependency audit — RE-DERIVED against the final ladder** (Energy/Circuits now
+at Forge **L21**, Cryogen L33, Magmite L46, Nexium L70). Only the **Energy/
+Circuits @ L21** boundary breaks anything; Cryogen/Magmite/Nexium gates already
+sit above their planet. 8 broken elements + the LOCKED per-item fix:
 
-| Element | Gate | Needs | Provided at | Fix |
-|---------|------|-------|-------------|-----|
-| medkit, land_mine, frag_grenade, energy_cell | **none (L1)** | Energy | Forge L11 | Move these to a **Biomass/basic** recipe (Terra-craftable) OR gate them to Corporal L11 |
-| combat_stim | none (L1) | Energy+Circuits | Forge L11 | Re-cost to basics, or gate to Corporal |
-| Radar (RD) | L9 | Energy | Forge L11 | Move RD gate → L11, or re-cost to Iron-only |
-| Relay (RL) | L15 | Energy | Forge L11 | OK once Forge=L11 (15≥11) ✓ |
-| Shield Generator (SG) | L15 | Energy+Circuits | Forge L11 | OK once Forge=L11 ✓ |
-| Medbay (MB) | L18 | Energy | Forge L11 | OK ✓ |
-| plasma_rifle/grenade | Sergeant L16 | Energy+Circuits | Forge L11 | OK ✓ |
-| jetpack, proximity_mine | Staff_Sgt L22 | Energy+Circuits | Forge L11 | OK ✓ |
-| power_armor | Captain L37 | Energy+Circuits | Forge L11 | OK ✓ |
-| advanced_weapons tech | Lieutenant L29 | Energy | Forge L11 | OK ✓ |
+| Element | Unlocks | Needs (avail L) | Fix (LOCKED) |
+|---------|---------|-----------------|--------------|
+| **plasma_rifle** | Sergeant L16 | Energy+Circuits (21) | **Gate → L21+** (futuristic = unlocks with Energy) |
+| **plasma_grenade** | Sergeant L16 | Energy+Circuits (21) | **Gate → L21+** |
+| **energy_cell** | none (L1) | Energy (21) | **Gate → L21+** (literally an energy item) |
+| **combat_stim** | none (L1) | Energy+Circuits (21) | **Gate → L21+** |
+| **Shield Generator (SG)** | L15 | Energy+Circuits (21) | **Re-cost to basics** (keep early defense) |
+| **Radar (RD)** | L9 | Energy (21) | **Re-cost to basics** (keep early utility) |
+| **Medbay (MB)** | L18 | Energy (21) | **Nudge gate → L21** (already near) |
+| **Relay (RL)** | L15 | Energy (21) | **Nudge gate → L21** (already near) |
 
-**Key insight:** moving **Forge to L11** (from L21) resolves *most* forward
-dependencies automatically, because Energy/Circuits then arrive before nearly
-everything that needs them. The only remaining fixes are the handful of
-**`rank=none` items that need Energy** — either re-cost them to Terra basics
-(preferred: keeps new players self-sufficient) or gate them to Corporal L11.
+Already-clean (gate ≥ resource): jetpack/proximity_mine (Staff_Sgt L22),
+power_armor (Captain L37), advanced_weapons tech (Lieutenant L29), and everything
+Cryogen/Magmite/Nexium-costed. The Phase-0 shipped fix already handled the
+`rank=none` **medkit/frag/land_mine** (re-costed Energy→Stone).
 
 **Gate-conflict resolution:** planets.yaml `rank_requirement` (level) is the
-single source of truth; regenerate ranks.yaml `planet_access` lists from it, or
-delete them and derive access from the level gate via `can_access_planet`.
+single source of truth; regenerate ranks.yaml `planet_access` from it, or derive
+access from the level gate via `can_access_planet`.
 
-**Open design choices for you:**
-- Names for the new planet + its resources (placeholders above).
-- Which sink consumes **Biomass** (the round-trip anchor) — consumables? an
-  organic-tech line? It must be something *endgame players still need*.
-- The Inferno→NewHome pacing gap (accept + fill with content, or pull NewHome to ~L46).
+**Remaining open:** only **Elysium's signature-resource name** (all other names +
+gates + fixes locked).
 
 > **Original captured intent (pre-remap), retained for reference:**
 
@@ -483,12 +479,16 @@ resource dependency preserves the *reason* to visit.
   via `_get_all_agents`, gated only per-agent — **not** by owner
   presence/planet. A harvester left on Terra keeps working while the owner is on
   Citadel. → This vision is **close to already-supported, not from-scratch.**
-- ⚠ **Caveat to verify:** the tick loop's `_compute_active_data`
-  ([scripts.py:337](../../../mygame/typeclasses/scripts.py)) only activates world
-  chunks on planets where an **online player currently stands**. Confirm whether
-  left-behind-agent planets get chunks activated, or whether agents idle when no
-  player is present on that planet. This is the make-or-break wiring question for
-  the cross-planet agent economy.
+- ✅ **Caveat RESOLVED (verified 2026-07-20).** The concern was that
+  `_compute_active_data` only activates chunks on planets with an online player.
+  But `agent_processing` runs `agent_system.process_tick` over the FULL agent
+  roster (`_get_all_agents`), and each `HarvesterScript.at_repeat` acts on the
+  agent's own building/tile + owner's resource pool with **no online/presence/
+  planet gate anywhere** in agent_behavior/agent_system/agent_scripts. So a
+  harvester left on Terra keeps working while its owner is on Elysium. The
+  cross-planet agent economy is **already supported** — the only missing piece is
+  the `CmdTravel` command to place agents on lower planets (Phase 2). No new
+  per-agent-tick mechanic required.
 
 ---
 
@@ -536,24 +536,26 @@ before any new content.
 Do the re-map as ONE coordinated change (gates + resources + recipe audit move together).
 - **[S] Resolve gate conflict** — planets.yaml level = source of truth; regen
   ranks.yaml `planet_access`.
-- **[M] Apply the re-mapped ladder** (§3.5) — new gates (Forge→L11 fixes most
-  forward-deps), 4 new resources (Biomass/Cryogen/Pyronite/Aureth), Tundra/Space
-  de-duplication, Citadel→L70.
-- **[M] `CmdTravel`** enforcing `can_access_planet` — the missing wiring that
-  makes graduation real. Space = the hub it routes through.
-- **[verify] cross-planet agent economy** — confirm the tick loop activates
-  chunks on planets with no online player (§5 open question) before relying on it.
+- **[M] Apply the final ladder** (§3.5) — gates Terra 1–20 / Forge L21 / Tundra
+  L33 / Inferno L46 / Elysium L58 / Citadel L70; 3 new resources
+  (Biomass/Cryogen/Magmite) + Elysium's TBD signature; Tundra de-duplication,
+  Space → off-ladder hub, Citadel → L70.
+- **[S] Apply the LOCKED forward-dep fixes** (§3.5 audit): gate plasma_rifle/
+  plasma_grenade/energy_cell/combat_stim → L21+; re-cost Shield Generator + Radar
+  to basics; nudge Medbay + Relay gates → L21.
+- **[M] `CmdTravel`** enforcing `can_access_planet` + travel cost/cooldown
+  friction — the missing wiring that makes graduation real. Space = the hub it
+  routes through. ✅ cross-planet agents already tick (§5, verified) — no extra work.
 
 ### Phase 3 — Damage-type system *(medium–large; depends on Phase 0 floor)*
 Ship incrementally, physical-first (default `physical` = zero-risk migration).
 - **[M] Type-aware backbone** — branch `_calculate_damage`, typed
-  `_get_target_resist`, new AGGREGATED_STATS keys. **Enforce the invariants:**
-  ≤50% per-axis cap, a global resist-budget (no full-spectrum turtle), baseline
-  resist gear at spawn, and a loadout-scouting readout (informed counterplay).
-- **[M] Fire + burn DoT** (needs a small EffectSystem tick) — pairs w/ Pyronite.
+  `_get_target_resist`, new AGGREGATED_STATS keys. **Enforce (SETTLED):** 50%
+  per-axis cap (NO global budget), baseline resist for ALL at spawn, and a
+  loadout-scouting readout / on-hit effectiveness so type choice is informed.
+- **[M] Fire + burn DoT** (needs a small EffectSystem tick) — pairs w/ Magmite.
 - **[S] Psychic** (physical-armor bypass) · **[L] Blast** (armor-durability;
-  building SHIELD stays the blast defense). *Drop or redefine `sound` — no crit
-  system exists.*
+  building SHIELD stays the blast defense). *Sound is NOT shipped (no crit system).*
 
 ### Phase 4 — Graduation economy *(medium; depends on Phase 2)*
 - **[S] Signature resource sinks** — make each planet's new resource *pull* the
@@ -571,22 +573,30 @@ sidegrade classes, loseable-gear catalog, QoL techs (Logistics Network ✅), the
 new attack vectors (EMP, smoke, grappling, decoy).
 
 ### Cross-cutting invariants (apply in every phase)
-1. ≤50% per-axis % mitigation; global resist budget (no new immunity wall).
+1. **50% per-axis % mitigation, NO global budget** (SETTLED); baseline resist for
+   all keeps the newbie side fair (no new immunity wall).
 2. Rank-gap / attenuation penalties key off the **owning player**, exempt a
    defender's own base defenses.
-3. Graduation push-throttles key off graduation-eligibility and **exempt the
-   Terra-exclusive resource**.
+3. Graduation push-throttles key off graduation-eligibility and **exempt Biomass**
+   (the Terra round-trip anchor).
 4. New players start self-sufficient (Terra-craftable essentials, baseline resist).
 5. Every new attack ships with its named defense; every permanent bonus stays
    flat + small + under 2×.
 
 ## Open questions (for you)
-- New planet + resource **names** (placeholders: Verdant/Haven; Biomass, Cryogen,
-  Pyronite, Aureth, Voidglass).
-- Which sink consumes **Biomass** (the round-trip anchor)? Must be something
-  endgame players still need.
-- **Inferno→NewHome pacing gap** (L29→L57 = 28 levels): fill with content, or
-  pull NewHome down to ~Major L46?
-- Round-trip **friction**: travel cost / agent-only / cooldown for returning to
-  lower planets to harvest?
-- Permanent tech combat bonuses: cap them, or convert to loseable gear?
+Nearly all resolved. Remaining:
+- ⚠ **Elysium's signature-resource name** (L58 tier) — the only unfilled name.
+- **Permanent tech combat bonuses: cap them, or convert to loseable gear?** — the
+  §2a "cap aggregate flat bonuses" fix (needs-adj) is still unbuilt/undecided.
+  (Low urgency: the chip floor + rank-gap penalty already bound the practical gap.)
+
+### RESOLVED (2026-07-20)
+- ✅ Planet + resource names: **Elysium** (home), **Biomass** (Terra), **Cryogen**
+  (Tundra), **Magmite** (Inferno). Space = off-ladder hub.
+- ✅ **Biomass sink = consumables** (medkits/stims).
+- ✅ **Pacing:** even ~12-level ladder (Terra home 1–20 → Forge 21 → Tundra 33 →
+  Inferno 46 → Elysium 58 → Citadel 70); the old 28-level gap is gone.
+- ✅ **Travel friction = cost/cooldown** (+ shipped rank-gap protection).
+- ✅ **Forward-dep audit** re-derived + per-item fixes LOCKED (§3.5).
+- ✅ **Cross-planet agents** already tick without an online player (§5 verified).
+- ✅ **Resist stacking:** 50% per-axis cap, no global budget.
