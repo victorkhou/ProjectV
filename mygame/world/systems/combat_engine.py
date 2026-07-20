@@ -683,7 +683,8 @@ class CombatEngine(BaseSystem):
                 query. When ``None`` (isolated tests), it falls back to the
                 per-owner :func:`owner_has_active_hq` live query.
         """
-        from world.utils import is_friendly, owner_has_active_hq
+        from world.utils import is_friendly, owner_has_active_hq, get_building_level
+        from world.systems.resource_system import ResourceSystem
 
         turret_radius = self.registry.balance.turret_radius
         turret_damage = self.registry.balance.turret_damage
@@ -768,11 +769,23 @@ class CombatEngine(BaseSystem):
                 nearest_dist = dist
 
             if nearest is not None:
-                # Create a synthetic turret weapon action.
+                # Create a synthetic turret weapon action, scaling damage by the
+                # turret's LEVEL so an upgraded turret actually hits harder —
+                # base defenses must improve with investment or they're trivially
+                # out-scaled by any progressed raider. Reuses the single
+                # ResourceSystem.get_turret_damage formula (base × (1 +
+                # turret_level_bonus × (level−1))), which was previously dead
+                # code — never called from the tick. At the default 0.20/level a
+                # L5 turret deals 15 × 1.8 = 27 (1.8×, under the 2× ceiling), and
+                # is a resource-costed, losable, wall/LOS-counterable building.
+                level = max(1, get_building_level(building))
+                scaled_damage = int(round(
+                    ResourceSystem.get_turret_damage(turret_damage, level)
+                ))
                 turret_action = {
                     "attacker": building,
                     "target": nearest,
-                    "weapon_item": _TurretWeapon(turret_damage, turret_radius),
+                    "weapon_item": _TurretWeapon(scaled_damage, turret_radius),
                 }
                 self.pending_actions.append(turret_action)
 

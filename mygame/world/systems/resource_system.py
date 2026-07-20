@@ -321,7 +321,13 @@ class ResourceSystem(BaseSystem):
     def get_turret_damage(base_damage: int, level: int) -> float:
         """Return the turret damage at *level*.
 
-        Formula: ``base × (1 + turret_level_bonus × (level - 1))``
+        Formula: ``base × (1 + turret_level_bonus × (level - 1))``.
+
+        The single source of truth for turret damage scaling: called live by
+        ``CombatEngine.process_turrets`` when it builds a turret's synthetic
+        weapon, so an upgraded turret actually hits harder. (Kept here rather
+        than inlined in the engine so the scaling stays alongside the other
+        per-level building formulas — extractor/harvester/vault capacity.)
         """
         return base_damage * (1 + _current_balance().turret_level_bonus * (level - 1))
 

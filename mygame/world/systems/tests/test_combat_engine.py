@@ -884,6 +884,35 @@ class TestProcessTurrets(unittest.TestCase):
         self.assertEqual(len(engine.pending_actions), 1)
         self.assertEqual(engine.pending_actions[0]["target"], near_player)
 
+    def test_turret_damage_scales_with_level(self):
+        """A leveled turret hits harder: the previously-dead turret_level_bonus
+        formula is now applied when the synthetic weapon is built. base 15 at
+        L1; 15 × (1 + 0.20×(3-1)) = 21 at L3. (Without the fix every turret
+        dealt a flat 15 regardless of level — base defenses never improved.)"""
+        engine, _ = _make_engine()
+        base = engine.registry.balance.turret_damage  # 15 default
+        bonus = engine.registry.balance.turret_level_bonus  # 0.20 default
+        owner = _hq_owner()
+
+        def _fire_at_level(level):
+            player = FakePlayer(name="T",
+                                location=FakeTile(xyz=(2, 0, "earth")))
+            tile = FakeTile(xyz=(0, 0, "earth"), nearby_players=[player])
+            turret = FakeBuilding(building_type="TU", owner=owner,
+                                  hp=300, hp_max=300, location=tile)
+            turret.attributes.add("building_level", level)
+            engine.pending_actions = []
+            engine.process_turrets([turret])
+            self.assertEqual(len(engine.pending_actions), 1)
+            return engine.pending_actions[0]["weapon_item"].get_stat("damage")
+
+        self.assertEqual(_fire_at_level(1), base)  # L1 = base, unchanged
+        expected_l3 = round(base * (1 + bonus * 2))
+        self.assertEqual(_fire_at_level(3), expected_l3)  # 21 by default
+        # And the scaling stays under the 2x ceiling even at L5.
+        l5 = _fire_at_level(5)
+        self.assertLess(l5, base * 2)
+
     def test_turret_skips_player_sheltered_in_closed_building(self):
         """A player inside a CLOSED building is not a valid turret target."""
         engine, _ = _make_engine()

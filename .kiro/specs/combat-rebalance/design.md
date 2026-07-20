@@ -450,8 +450,12 @@ before any new content.
   balance.yaml + schema validator. Tests: `TestChipFloor` (7 unit) + updated
   Property 2/12 + a live-boot test (real armor via the equipment handler).
   *The single highest-value change — the immunity wall is closed.*
-- **[S] Wire the dead turret damage-scaling** — `turret_level_bonus` is uncalled
-  (resource_system.py:320); turrets never improve. Wire it + cap.
+- **[S] ✅ DONE — Wire the dead turret damage-scaling** — `turret_level_bonus`
+  was declared but `ResourceSystem.get_turret_damage` was never called from the
+  tick, so every turret dealt a flat 15 regardless of level. `process_turrets`
+  now scales the synthetic weapon's damage via that (now-shared) formula: L1=15,
+  L3=21, L5=27 (1.8×, under the 2× ceiling). Base defenses finally improve with
+  investment. Test: `test_turret_damage_scales_with_level`.
 - **[S] Forward-dependency recipe fixes** (§3.5 audit) — the `rank=none` items
   (medkit, land_mine, frag_grenade, energy_cell, combat_stim) require
   Energy/Circuits a Terra newbie can't get. Re-cost to basics or gate to L11.
