@@ -297,7 +297,7 @@ it supersedes the earlier draft:
 | 2 | **Forge** | **L21** | Staff_Sgt | Iron, ▲**Energy**, ▲**Circuits** | Industrial |
 | 3 | **Tundra** | **L33** | Lieutenant | Stone, Iron, ▲**Cryogen** | Frozen |
 | 4 | **Inferno** | **L46** | Major | Iron, Energy, ▲**Magmite** (feeds FIRE gear §3a) | Volcanic |
-| 5 | **Elysium** | **L58** | Colonel | Wood, Stone, Iron, Energy, Circuits, ▲*(signature TBD)* — **NOT Biomass** | **Endgame home** (major bases) |
+| 5 | **Elysium** | **L58** | Colonel | Wood, Stone, Iron, Energy, Circuits, ▲**Aether** — **NOT Biomass** | **Endgame home** (major bases) |
 | 6 | **Citadel** | **L70** | Brigadier | Iron, Energy, Circuits, ▲**Nexium** | **Battleground** (raid, not staged) |
 | — | **Space** | off-ladder hub | — | *(optional, excluded from progression)* | Travel hub |
 
@@ -317,7 +317,8 @@ re-type). Beyond today's 6 (Wood/Stone/Iron/Energy/Circuits/Nexium), add **3**
   sidegrade (slow-field / cryo ammo).
 - **Magmite** (Inferno L46) — re-type Sulfur_Pit/Lava_Flow. Gates the FIRE
   damage-type gear (§3a).
-- **Elysium signature** (L58) — ⚠ name TBD; gates end-tier sidegrade utility.
+- **Aether** (Elysium L58) — the endgame-home signature; gates end-tier
+  **sidegrade utility** (QoL/lateral, never raw power).
 
 **Dependency audit — RE-DERIVED against the final ladder** (Energy/Circuits now
 at Forge **L21**, Cryogen L33, Magmite L46, Nexium L70). Only the **Energy/
@@ -344,8 +345,7 @@ Cryogen/Magmite/Nexium-costed. The Phase-0 shipped fix already handled the
 single source of truth; regenerate ranks.yaml `planet_access` from it, or derive
 access from the level gate via `can_access_planet`.
 
-**Remaining open:** only **Elysium's signature-resource name** (all other names +
-gates + fixes locked).
+**Remaining open:** none — all names, gates, and per-item fixes are locked.
 
 > **Original captured intent (pre-remap), retained for reference:**
 
@@ -584,15 +584,9 @@ new attack vectors (EMP, smoke, grappling, decoy).
    flat + small + under 2×.
 
 ## Open questions (for you)
-Nearly all resolved. Remaining:
-- ⚠ **Elysium's signature-resource name** (L58 tier) — the only unfilled name.
-- **Permanent tech combat bonuses: cap them, or convert to loseable gear?** — the
-  §2a "cap aggregate flat bonuses" fix (needs-adj) is still unbuilt/undecided.
-  (Low urgency: the chip floor + rank-gap penalty already bound the practical gap.)
-
-### RESOLVED (2026-07-20)
+**None — the spec is fully decided.** All resolved (2026-07-20):
 - ✅ Planet + resource names: **Elysium** (home), **Biomass** (Terra), **Cryogen**
-  (Tundra), **Magmite** (Inferno). Space = off-ladder hub.
+  (Tundra), **Magmite** (Inferno), **Aether** (Elysium). Space = off-ladder hub.
 - ✅ **Biomass sink = consumables** (medkits/stims).
 - ✅ **Pacing:** even ~12-level ladder (Terra home 1–20 → Forge 21 → Tundra 33 →
   Inferno 46 → Elysium 58 → Citadel 70); the old 28-level gap is gone.
@@ -600,3 +594,8 @@ Nearly all resolved. Remaining:
 - ✅ **Forward-dep audit** re-derived + per-item fixes LOCKED (§3.5).
 - ✅ **Cross-planet agents** already tick without an online player (§5 verified).
 - ✅ **Resist stacking:** 50% per-axis cap, no global budget.
+- ✅ **Permanent tech/perk bonuses:** LIGHT AGGREGATE CAP (clamp total non-gear
+  flat bonus per axis, e.g. dmg ≤ 6 / DR ≤ 6) — a ~5-line safety rail in
+  `_get_attacker_bonus` / `_get_target_resist`, not a conversion to loseable gear.
+  Belt-and-suspenders behind the shipped chip floor + rank-gap penalty; build it
+  alongside the damage-type backbone (Phase 3, same accessors).
