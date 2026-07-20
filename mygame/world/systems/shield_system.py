@@ -50,6 +50,30 @@ from world.utils import (
 logger = logging.getLogger("mygame.shield_system")
 
 
+def _building_planet(building: Any) -> Any:
+    """Resolve a building's planet for shield grouping.
+
+    Real ``Building`` objects do NOT store ``db.coord_planet`` — ``place_on_tile``
+    only stamps ``coord_x``/``coord_y`` — so reading that attribute alone would
+    return ``None`` for EVERY building, collapsing the per-planet scope and
+    leaking a generator's shield across planets. Fall back to the building's
+    location (the ``PlanetRoom``): its ``db.planet`` / ``planet_name``. Returns
+    the planet key, or ``None`` only when nothing resolves (a truly locationless
+    building — then all such of an owner's buildings still group together, which
+    is harmless since they can't be on different real planets).
+    """
+    planet = get_obj_attr(building, "coord_planet")
+    if planet:
+        return planet
+    loc = getattr(building, "location", None)
+    if loc is not None:
+        db = getattr(loc, "db", None)
+        planet = getattr(db, "planet", None) if db is not None else None
+        if not planet:
+            planet = getattr(loc, "planet_name", None)
+    return planet
+
+
 class ShieldSystem(BaseSystem):
     """Computes and regenerates building shields from Shield Generators.
 
@@ -318,5 +342,4 @@ class ShieldSystem(BaseSystem):
         owner_id = getattr(owner, "id", None) if owner is not None else None
         if owner_id is None:
             return None
-        planet = get_obj_attr(building, "coord_planet")
-        return (owner_id, planet)
+        return (owner_id, _building_planet(building))

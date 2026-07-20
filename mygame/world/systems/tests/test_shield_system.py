@@ -170,6 +170,29 @@ class TestOverlapAndScope(unittest.TestCase):
         sys_.refresh([gen, elsewhere])
         self.assertEqual(elsewhere.db.shield_max, 0)
 
+    def test_planet_scope_uses_location_when_coord_planet_unset(self):
+        """Real buildings never store db.coord_planet (place_on_tile only sets
+        coord_x/coord_y) — the planet must resolve from the building's location
+        (its PlanetRoom). Without that fallback every building groups under
+        (owner, None) and shields leak across planets."""
+        sys_ = _system()
+        owner = _Owner()
+        # Buildings with NO coord_planet, planet only via .location.planet_name —
+        # exactly the real-object shape.
+        earth_room = types.SimpleNamespace(planet_name="earth", db=None)
+        mars_room = types.SimpleNamespace(planet_name="mars", db=None)
+        gen = _Building("SG", 5, 5, owner, planet=None, level=2)
+        gen.location = earth_room
+        on_earth = _Building("VT", 5, 5, owner, planet=None, hp_max=400)
+        on_earth.location = earth_room
+        on_mars = _Building("VT", 5, 5, owner, planet=None, hp_max=400)
+        on_mars.location = mars_room
+        sys_.refresh([gen, on_earth, on_mars])
+        # Same-planet building is shielded (25% × L2 × 400 hp = 200); the other
+        # planet's building is NOT.
+        self.assertEqual(on_earth.db.shield_max, 200)
+        self.assertEqual(on_mars.db.shield_max, 0)
+
 
 class TestCapacityChanges(unittest.TestCase):
     def test_lost_generator_clamps_shield_down(self):

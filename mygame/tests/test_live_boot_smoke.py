@@ -873,6 +873,48 @@ class LiveBootSmokeTest(EvenniaTest):
         finally:
             _teardown_game(systems)
 
+    def test_shield_does_not_leak_across_planets_on_real_objects(self):
+        """Per-planet isolation on REAL buildings (which never store
+        coord_planet): a generator on Earth must NOT shield the same owner's
+        building at the same coords on another planet. The planet has to resolve
+        from the building's location, not db.coord_planet (which is unset)."""
+        from server.conf.game_init import initialize_game
+        from world.adapters.evennia_building_repository import (
+            EvenniaBuildingFactory,
+        )
+
+        systems = initialize_game()
+        try:
+            registry = systems["registry"]
+            shield_system = systems["shield_system"]
+            factory = EvenniaBuildingFactory()
+            earth = self._make_planet_room("earth")
+            mars = self._make_planet_room("mars")
+            owner = self._make_player(x=5, y=5, planet="earth", location=earth)
+
+            gen = factory.create_building(
+                registry.resolve_building("SG"), earth, owner, x=5, y=5,
+            )
+            here = factory.create_building(
+                registry.resolve_building("VT"), earth, owner, x=6, y=5,
+            )
+            # Same owner + same coords, but a DIFFERENT planet (its location).
+            there = factory.create_building(
+                registry.resolve_building("VT"), mars, owner, x=6, y=5,
+            )
+            # Real factory leaves coord_planet unset on all three.
+            self.assertIsNone(gen.db.coord_planet)
+            self.assertIsNone(there.db.coord_planet)
+
+            shield_system.refresh_owners([gen, here, there])
+
+            self.assertEqual(here.db.shield_max, 100,
+                             "the Earth vault must be shielded")
+            self.assertEqual(there.db.shield_max or 0, 0,
+                             "the Mars vault must NOT be shielded (cross-planet)")
+        finally:
+            _teardown_game(systems)
+
     # -------------------------------------------------------------- #
     #  Repair — tick-based, active-presence, on real objects/composition root
     # -------------------------------------------------------------- #
