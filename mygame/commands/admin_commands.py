@@ -807,11 +807,13 @@ class CmdAdminResource(AdminSubcommandRouter):
     """Manage player resources.
 
     Usage:
-        @resource give <type> <amount> [player]
+        @resource give <type|all> <amount> [player]
         @resource reset [player]
 
     Subcommands:
-        give  — Give resources to a player (Builder+)
+        give  — Give resources to a player (Builder+). <type> is a resource
+                name (Wood, Stone, Iron, Energy, Circuits, Nexium) or 'all'
+                for every resource; an unknown name is rejected.
         reset — Reset player(s) to starting resources (Admin+)
 
     """
@@ -835,7 +837,9 @@ class CmdAdminResource(AdminSubcommandRouter):
             caller.msg("Usage: @resource give <type> <amount> [player]")
             return
 
-        resource_type = parts[0]
+        from world.constants import RESOURCE_TYPES
+
+        resource_token = parts[0]
         amount_str = parts[1]
         player_name = parts[2] if len(parts) >= 3 else None
 
@@ -848,6 +852,25 @@ class CmdAdminResource(AdminSubcommandRouter):
         if amount <= 0:
             caller.msg("Amount must be positive.")
             return
+
+        # Resolve which resource(s) to grant. 'all' grants every canonical
+        # resource; otherwise the token must match a known resource type
+        # (case-insensitively) — an unknown name is REJECTED rather than
+        # silently minting a junk resource like a literal "all" (the reported
+        # bug), which would then pollute the player's resource dict forever.
+        canonical = {r.lower(): r for r in RESOURCE_TYPES}
+        if resource_token.lower() == "all":
+            resources = list(RESOURCE_TYPES)
+        else:
+            resolved = canonical.get(resource_token.lower())
+            if resolved is None:
+                valid = ", ".join(RESOURCE_TYPES)
+                caller.msg(
+                    f"Unknown resource '{resource_token}'. "
+                    f"Valid: {valid} (or 'all')."
+                )
+                return
+            resources = [resolved]
 
         # Resolve target: specified player or self
         if player_name:
@@ -866,17 +889,19 @@ class CmdAdminResource(AdminSubcommandRouter):
         # cap (Req 16.7 — admins are exempt). We intentionally do NOT route this
         # through EquipmentSystem.add_resource_capped, keeping it the simplest
         # correct path for an admin grant.
-        target.add_resource(resource_type, amount)
+        for resource_type in resources:
+            target.add_resource(resource_type, amount)
 
         target_name = getattr(target, "key", "?")
-        caller.msg(f"Gave {amount} {resource_type} to {target_name}.")
+        granted = "all resources" if len(resources) > 1 else resources[0]
+        caller.msg(f"Gave {amount} {granted} to {target_name}.")
 
-        self._log_admin("give", f"{amount} {resource_type} to {target_name}")
+        self._log_admin("give", f"{amount} {granted} to {target_name}")
 
         # Notify the target if they have msg and are not the caller
         if hasattr(target, "msg") and target is not caller:
             target.msg(
-                f"|y[Admin] You received {amount} {resource_type} "
+                f"|y[Admin] You received {amount} {granted} "
                 f"from {caller.key}.|n"
             )
 

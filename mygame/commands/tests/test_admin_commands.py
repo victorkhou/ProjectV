@@ -254,6 +254,19 @@ class TestCmdGiveResourceValidation(unittest.TestCase):
         cmd.func()
         self.assertTrue(any("Could not find" in m for m in caller._messages))
 
+    def test_unknown_resource_rejected(self):
+        """An unknown resource name is rejected — NOT minted as a junk resource
+        (the reported 'give all' bug that created a resource called 'all')."""
+        target = FakeTarget(name="Player1")
+        caller = FakeCaller(permissions={"Builder"})
+        caller.check_permstring = lambda perm: True
+        caller._search_results["Player1"] = target
+        cmd = _make_cmd(CmdAdminResource, caller, " give bogus 50 Player1")
+        cmd.func()
+        self.assertTrue(any("Unknown resource" in m for m in caller._messages))
+        self.assertNotIn("bogus", target._resources)
+        self.assertNotIn("Bogus", target._resources)
+
 class TestCmdGiveResourceSuccess(unittest.TestCase):
     def test_adds_resources(self):
         target = FakeTarget(name="Player1")
@@ -273,6 +286,31 @@ class TestCmdGiveResourceSuccess(unittest.TestCase):
         cmd = _make_cmd(CmdAdminResource, caller, " give Iron 25 Player1")
         cmd.func()
         self.assertTrue(any("received" in m.lower() for m in target._messages))
+
+    def test_give_all_grants_every_resource(self):
+        """'give all N' grants N of every canonical resource, not a resource
+        literally named 'all'."""
+        target = FakeTarget(name="Player1")
+        caller = FakeCaller(permissions={"Builder"})
+        caller.check_permstring = lambda perm: True
+        caller._search_results["Player1"] = target
+        cmd = _make_cmd(CmdAdminResource, caller, " give all 100 Player1")
+        cmd.func()
+        for r in RESOURCE_TYPES:
+            self.assertEqual(target._resources[r], 100)
+        self.assertNotIn("all", target._resources)
+        self.assertNotIn("All", target._resources)
+        self.assertTrue(any("all resources" in m for m in caller._messages))
+
+    def test_give_resource_case_insensitive(self):
+        """A lowercase resource name resolves to the canonical form."""
+        target = FakeTarget(name="Player1")
+        caller = FakeCaller(permissions={"Builder"})
+        caller.check_permstring = lambda perm: True
+        caller._search_results["Player1"] = target
+        cmd = _make_cmd(CmdAdminResource, caller, " give iron 30 Player1")
+        cmd.func()
+        self.assertEqual(target._resources["Iron"], 30)
 
 class TestCmdGiveResourceLogging(unittest.TestCase):
     def test_logs_execution(self):
