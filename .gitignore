@@ -73,3 +73,30 @@ docs/build
 
 # Hypothesis test database
 .hypothesis/
+
+# ---------------------------------------------------------------------------
+# Evennia `collectstatic` output (regenerable framework assets, never source).
+# Our local secret_settings.py points STATIC_ROOT at web/static for dev, so
+# `evennia collectstatic` copies Django-admin / DRF / stock-webclient assets
+# into the source tree. Ignore them; our own sprites, map.css, custom plugins
+# and READMEs under web/static/ are already tracked and unaffected by these rules.
+# ---------------------------------------------------------------------------
+mygame/web/static/admin/
+mygame/web/static/rest_framework/
+mygame/web/static/website/css/custom.css
+mygame/web/static/website/css/website.css
+mygame/web/static/website/images/LICENCE
+mygame/web/static/website/images/evennia_logo.png
+mygame/web/static/website/images/evennia_logo_festive.png
+mygame/web/static/website/images/favicon.ico
+mygame/web/static/webclient/css/custom.css
+mygame/web/static/webclient/css/goldenlayout.css
+mygame/web/static/webclient/css/webclient.css
+mygame/web/static/webclient/fonts/
+mygame/web/static/webclient/media/
+mygame/web/static/webclient/js/evennia.js
+mygame/web/static/webclient/js/webclient_gui.js
+# stock webclient plugins (collectstatic) — keep only our own custom ones
+mygame/web/static/webclient/js/plugins/*.js
+!mygame/web/static/webclient/js/plugins/custom_out.js
+!mygame/web/static/webclient/js/plugins/map_renderer.js
