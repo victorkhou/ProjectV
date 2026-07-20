@@ -287,8 +287,9 @@ class TestDataclassContracts:
         #    shield_regen_percent, shield_regen_interval_ticks).
         #  + 3 disarm (bomb_disarm_base_success, bomb_disarm_ticks_min,
         #    bomb_disarm_ticks_max).
+        #  + 1 chip floor (chip_damage_min_fraction).
         # Bump this when adding a balance tunable.
-        assert len(fields(BalanceConfig)) == 108
+        assert len(fields(BalanceConfig)) == 109
 
     def test_coordinate_space_def_field_count(self):
         assert len(fields(CoordinateSpaceDef)) == 14

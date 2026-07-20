@@ -338,10 +338,12 @@ class TestProperty12AttackDamage(unittest.TestCase):
 
     For any attack action where the attacker has a weapon-slot GameItem
     equipped and is within range of the target and has sufficient ammo,
-    the target's HP SHALL decrease by weapon_damage - armor_reduction
-    (min 0), and ammo SHALL be deducted before damage is applied.
+    the target's HP SHALL decrease by the net damage, and ammo SHALL be
+    deducted before damage is applied. Net damage is weapon_damage minus
+    armor_reduction, but FLOORED at the chip fraction of raw output (so armor
+    never grants total immunity): net = max(ceil(raw*frac), raw-armor, 0).
 
-    **Validates: Requirements 6.1, 6.3, 6.4, 6.11, 6.16**
+    **Validates: Requirements 6.1, 6.3, 6.4, 6.11, 6.16 + chip-floor balance fix**
     """
 
     @given(
@@ -350,10 +352,12 @@ class TestProperty12AttackDamage(unittest.TestCase):
         target_hp=st.integers(min_value=1, max_value=1000),
     )
     @settings(max_examples=100)
-    def test_damage_equals_weapon_minus_armor_min_zero(
+    def test_damage_is_weapon_minus_armor_floored_at_chip(
         self, weapon_damage, armor_reduction, target_hp
     ):
-        """Net damage = weapon_damage - armor_reduction, min 0."""
+        """Net damage = max(chip floor, weapon_damage - armor_reduction, 0),
+        where chip = ceil(weapon_damage * chip_damage_min_fraction)."""
+        import math
         weapon = FakeWeapon(damage=weapon_damage, weapon_range=10)
         armor = FakeArmor(damage_reduction=armor_reduction)
         tile = FakeTile(xyz=(0, 0, "earth"))
@@ -363,10 +367,13 @@ class TestProperty12AttackDamage(unittest.TestCase):
                             armor=armor, location=tile)
 
         engine, _ = _make_engine()
+        frac = engine.registry.balance.chip_damage_min_fraction
         engine.queue_attack(attacker, target)
         engine.resolve_tick()
 
-        expected_damage = max(0, weapon_damage - armor_reduction)
+        # raw = weapon_damage (no attacker bonus in this fixture).
+        chip = int(math.ceil(weapon_damage * frac)) if frac > 0 else 0
+        expected_damage = max(chip, weapon_damage - armor_reduction, 0)
         expected_hp = max(0, target_hp - expected_damage)
         # If target was defeated, HP is reset to max
         if target_hp - expected_damage <= 0:
@@ -1025,8 +1032,8 @@ class TestProperty3DamageBonusAggregation(unittest.TestCase):
 class TestProperty2ArmorAggregation(unittest.TestCase):
     """Property 2: Armor aggregation invariance.
 
-    Target ``damage_reduction`` is the sum over all equipped gear, and the
-    damage formula (weapon_damage - reduction, min 0) is unchanged.
+    Target ``damage_reduction`` is the sum over all equipped gear, applied in
+    the damage formula: net = max(chip floor, weapon_damage - sum(reductions), 0).
 
     **Validates: Requirements 2.2, 14.1**
     """
@@ -1052,10 +1059,13 @@ class TestProperty2ArmorAggregation(unittest.TestCase):
         for slot, value in zip(_GEAR_SLOTS, reductions):
             target.equipment.equip(FakeGear(slot, "damage_reduction", value))
 
+        frac = engine.registry.balance.chip_damage_min_fraction
         engine.queue_attack(attacker, target)
         engine.resolve_tick()
 
-        expected_damage = max(0, weapon_damage - sum(reductions))
+        import math
+        chip = int(math.ceil(weapon_damage * frac)) if frac > 0 else 0
+        expected_damage = max(chip, weapon_damage - sum(reductions), 0)
         self.assertEqual(target.db.hp, target_hp - expected_damage)
 
 

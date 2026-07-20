@@ -9,6 +9,7 @@ target's equipped armor-slot GameItem.
 
 from __future__ import annotations
 
+import math
 import random
 from typing import Any, Callable
 
@@ -887,8 +888,30 @@ class CombatEngine(BaseSystem):
     ) -> int:
         """Calculate net damage for an attack.
 
-        Damage = weapon_damage + tech/powerup modifiers - armor_reduction
-        Minimum 0.
+        Damage = weapon_damage + tech/powerup modifiers - armor_reduction, but
+        floored at a fraction of the attack's raw output (the *chip floor*) so
+        armor can never grant TOTAL immunity to a landed hit.
+
+        The chip floor is the balance fix for the flat-DR immunity wall: with a
+        pure ``max(0, …)`` floor and flat-additive armor, any target whose
+        ``damage_reduction`` met or exceeded a weapon's raw damage took ZERO —
+        perfectly immune regardless of the attacker's skill or shot count, and
+        healing between hits. That let a mid-game defender become unkillable by a
+        new player's standard weapon, breaking the "skill beats progression"
+        rule. ``chip_damage_min_fraction`` (default 0.5) guarantees a landed hit
+        always deals at least that fraction of its raw output, so armor caps out
+        at absorbing half — effective HP from armor is bounded at ~2x, never
+        infinite.
+
+        Crucially the floor scales off the ATTACKER's raw output, not a flat
+        constant: against a 0-armor target ``raw - armor == raw`` already exceeds
+        ``ceil(raw * fraction)``, so damage there is UNCHANGED — the chip never
+        raises damage dealt to an unarmored (e.g. new) player. It only ever
+        raises the floor against a heavily-armored target, i.e. it can only
+        WEAKEN the strongest defenders, never buff offense against the weak.
+
+        Setting ``chip_damage_min_fraction`` to 0 restores the old
+        ``max(0, …)`` behaviour (a kill switch).
 
         Args:
             attacker: The attacking entity.
@@ -901,7 +924,8 @@ class CombatEngine(BaseSystem):
                 what the thrower happens to be wearing.
 
         Returns:
-            Net damage as an integer (minimum 0).
+            Net damage as an integer (minimum 0; at least the chip floor on any
+            attack whose raw output is positive).
         """
         base_damage = self._get_stat(weapon_item, "damage", 0)
 
@@ -911,8 +935,33 @@ class CombatEngine(BaseSystem):
         # Armor damage reduction from target
         armor_reduction = self._get_target_armor_reduction(target)
 
-        net_damage = int(base_damage + bonus - armor_reduction)
-        return max(0, net_damage)
+        raw = base_damage + bonus
+        net_damage = int(raw - armor_reduction)
+
+        # Chip floor: a landed hit with positive raw output always deals at least
+        # a fraction of that raw, so stacked armor caps at absorbing the rest
+        # (no total immunity). raw <= 0 (a zero-damage synthetic weapon, e.g. an
+        # EMP-style effect) keeps the plain 0 floor — the chip never manufactures
+        # damage where the weapon has none.
+        floor = 0
+        fraction = self._chip_damage_min_fraction()
+        if fraction > 0 and raw > 0:
+            floor = int(math.ceil(raw * fraction))
+        return max(floor, net_damage, 0)
+
+    def _chip_damage_min_fraction(self) -> float:
+        """The minimum fraction of raw damage a landed hit always deals.
+
+        Read live from balance so it is hot-tunable; clamped to ``[0, 1]``. 0
+        disables the chip floor (reverts to ``max(0, …)``).
+        """
+        bal = getattr(self.registry, "balance", None)
+        frac = float(getattr(bal, "chip_damage_min_fraction", 0.0) or 0.0)
+        if frac < 0.0:
+            return 0.0
+        if frac > 1.0:
+            return 1.0
+        return frac
 
     # ------------------------------------------------------------------ #
     #  Handle player defeat

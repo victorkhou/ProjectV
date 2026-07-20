@@ -512,7 +512,11 @@ class TestResolveTick(unittest.TestCase):
         # 25 - 10 = 15 damage
         self.assertEqual(target.db.hp, 85)
 
-    def test_damage_minimum_zero(self):
+    def test_chip_floor_prevents_total_immunity(self):
+        """Armor that exceeds raw damage no longer grants total immunity: the
+        chip floor guarantees a landed hit deals at least 50% of raw. 5 raw vs
+        20 DR = -15 net, but ceil(5*0.5)=3 chip → 3 damage, not 0.
+        (Old behaviour clamped this to 0, which let a turtle be unkillable.)"""
         weapon = FakeWeapon(damage=5, weapon_range=5)
         armor = FakeArmor(damage_reduction=20)
         engine, _ = _make_engine()
@@ -522,8 +526,7 @@ class TestResolveTick(unittest.TestCase):
                             location=FakeTile(xyz=(1, 0, "earth")))
         engine.queue_attack(attacker, target)
         engine.resolve_tick()
-        # 5 - 20 = -15, clamped to 0
-        self.assertEqual(target.db.hp, 100)
+        self.assertEqual(target.db.hp, 97)
 
     def test_combat_action_event_published(self):
         weapon = FakeWeapon(damage=25, weapon_range=5)
@@ -616,6 +619,73 @@ class TestResolveTick(unittest.TestCase):
         engine.queue_attack(attacker, target)
         engine.resolve_tick()
         self.assertEqual(len(engine.pending_actions), 0)
+
+# -------------------------------------------------------------- #
+#  Chip-floor Tests (flat-DR immunity-wall fix)
+# -------------------------------------------------------------- #
+
+class TestChipFloor(unittest.TestCase):
+    """The chip floor: a landed hit always deals at least
+    ``chip_damage_min_fraction`` of its raw output, so stacked armor can never
+    grant TOTAL immunity — only ever weakens the strongest defender, never
+    buffs damage against an unarmored target."""
+
+    def _dmg(self, weapon_damage, armor_dr, *, fraction=None):
+        """Return net damage of one direct hit for the given weapon/armor."""
+        registry = _make_registry()
+        if fraction is not None:
+            registry.balance.chip_damage_min_fraction = fraction
+        engine, _ = _make_engine(registry=registry)
+        weapon = FakeWeapon(damage=weapon_damage, weapon_range=5)
+        armor = FakeArmor(damage_reduction=armor_dr) if armor_dr else None
+        return engine._calculate_damage(
+            attacker=FakePlayer(name="A"),
+            target=FakePlayer(name="T", armor=armor),
+            weapon_item=weapon,
+        )
+
+    def test_immunity_wall_broken_assault_vs_heavy_armor(self):
+        """The reported violation: 25-damage weapon vs 38 DR. Old model: 0
+        (immune). Now: ceil(25*0.5)=13 chip damage — the turtle is killable."""
+        self.assertEqual(self._dmg(25, 38), 13)
+
+    def test_chip_is_exactly_half_ceiling(self):
+        # 40 raw vs huge DR → ceil(40*0.5) = 20.
+        self.assertEqual(self._dmg(40, 999), 20)
+        # 25 raw → ceil(12.5) = 13 (rounds up, never below the fraction).
+        self.assertEqual(self._dmg(25, 999), 13)
+
+    def test_unarmored_target_damage_unchanged(self):
+        """The floor scales off the attacker's raw output, so vs 0 DR the hit
+        deals full damage — the chip NEVER raises damage against the weak."""
+        self.assertEqual(self._dmg(25, 0), 25)
+
+    def test_partial_armor_below_floor_uses_real_reduction(self):
+        """When armor leaves MORE than the chip floor, the real reduced value
+        wins (chip only bites once reduction would drop below the fraction).
+        25 - 10 = 15 > chip 13 → 15."""
+        self.assertEqual(self._dmg(25, 10), 15)
+
+    def test_armor_caps_effective_hp_at_2x(self):
+        """With a 0.5 floor a target can absorb at most half of any hit, so its
+        effective HP from armor is bounded at 2x — never infinite."""
+        # 100 HP, best case = 50% mitigation → EHP 200 vs a 25-dmg weapon:
+        # 100 / 13 ≈ 7.7 → 8 hits. Finite, ~2x the 4-hit unarmored TTK.
+        per_hit_armored = self._dmg(25, 999)
+        per_hit_bare = self._dmg(25, 0)
+        self.assertGreaterEqual(per_hit_armored * 2, per_hit_bare)
+
+    def test_fraction_zero_restores_old_max0_behaviour(self):
+        """chip_damage_min_fraction=0 is the kill switch: reverts to max(0,…)."""
+        self.assertEqual(self._dmg(25, 38, fraction=0.0), 0)
+        self.assertEqual(self._dmg(5, 20, fraction=0.0), 0)
+
+    def test_zero_raw_weapon_stays_zero(self):
+        """A 0-damage weapon (e.g. a future EMP-style effect) is not given
+        phantom chip damage — the chip only floors a positive raw hit."""
+        self.assertEqual(self._dmg(0, 0), 0)
+        self.assertEqual(self._dmg(0, 10), 0)
+
 
 # -------------------------------------------------------------- #
 #  Player Defeat Tests

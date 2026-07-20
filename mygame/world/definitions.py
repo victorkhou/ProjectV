@@ -265,6 +265,12 @@ class BalanceConfig:
     player_default_health: int = 100
     resource_respawn_ticks: int = 30
     combat_lockout_ticks: int = 5
+    #: Chip-floor fraction: a landed hit always deals at least this fraction of
+    #: its raw output (weapon damage + attacker bonus), so armor can never grant
+    #: total immunity — it caps at absorbing (1 - fraction). Default 0.5 bounds
+    #: effective HP from armor at ~2x. Set to 0 to disable (revert to a plain
+    #: max(0, …) floor). See CombatEngine._calculate_damage.
+    chip_damage_min_fraction: float = 0.5
     tick_interval: float = 1.0
     # --- Passive HP regeneration (players and agents only) ------------ #
     #: HP regenerated per interval, as a PERCENT of the entity's hp_max.

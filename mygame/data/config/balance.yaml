@@ -3,6 +3,16 @@
 turret_damage: 15
 turret_radius: 7
 
+# Chip floor (combat balance): a landed hit always deals at least this fraction
+# of its raw output (weapon damage + attacker bonus), so stacked armor can never
+# grant TOTAL immunity — it caps at absorbing (1 - fraction) of the hit. 0.5
+# bounds effective HP from armor at ~2x. This is the fix for the flat-DR
+# immunity wall (a 26+ DR turtle used to take 0 from a 25-damage assault rifle).
+# The floor scales off the attacker's raw output, so it NEVER raises damage vs
+# an unarmored target — it only weakens the strongest defenders. Set to 0 to
+# disable. See CombatEngine._calculate_damage.
+chip_damage_min_fraction: 0.5
+
 xp_kill: 100
 xp_building_destroy: 50
 xp_death_loss: 50

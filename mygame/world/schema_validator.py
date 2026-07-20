@@ -571,6 +571,7 @@ class SchemaValidator:
             "hp_regen_percent", "hp_regen_interval_ticks",
             "repair_hp_percent_per_tick",
             "attack_cooldown_seconds", "linkdead_grace_seconds",
+            "chip_damage_min_fraction",
         ]
         for field in non_negative_fields:
             val = data.get(field)

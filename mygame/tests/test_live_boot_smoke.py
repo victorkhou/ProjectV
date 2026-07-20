@@ -2301,6 +2301,75 @@ class LiveBootSmokeTest(EvenniaTest):
         finally:
             _teardown_game(systems)
 
+    def test_chip_floor_breaks_armor_immunity_on_real_objects(self):
+        """The flat-DR immunity-wall fix, verified end-to-end on REAL Evennia
+        objects (where armor DR is summed from a real equipped GameItem via the
+        equipment handler, not a test double).
+
+        A real character wearing armor whose damage_reduction EXCEEDS a modest
+        weapon's raw damage used to take ZERO (max(0, dmg-DR)) — perfectly
+        immune. With the chip floor it takes ceil(raw * fraction), so the turtle
+        is killable. A control with no armor takes full, unchanged damage —
+        proving the chip never buffs damage against an unarmored (new) player.
+        """
+        from server.conf.game_init import initialize_game
+        from world.systems.combat_engine import SyntheticWeapon
+        from evennia.utils import create
+
+        systems = initialize_game()
+        try:
+            engine = systems["combat_engine"]
+            frac = engine.registry.balance.chip_damage_min_fraction
+            self.assertGreater(frac, 0, "chip floor must be enabled by default")
+            room = self._make_planet_room("earth")
+
+            # Real weapon: 20 raw damage. Real armor: 30 DR (> 20 → old immunity).
+            weapon = SyntheticWeapon(20, 1, name="Baton")
+            weapon.weapon_type = "melee"
+
+            armor = create.create_object(
+                "typeclasses.objects.GameItem", key="Heavy Plate",
+                location=None, home=self.room1,
+            )
+            armor.db.item_key = "power_armor"
+            armor.db.category = "armor"
+            armor.db.slot = "torso"
+            armor.db.stat_modifiers = {"damage_reduction": 30}
+
+            attacker = self._make_player(x=5, y=5, planet="earth", location=room)
+            attacker.db.combat_xp = 100000
+
+            armored = self._make_player(x=5, y=5, planet="earth", location=room)
+            armored.db.hp = 100
+            armored.db.hp_max = 100
+            armored.equipment.equip(armor)
+            # Sanity: the real equipment path really does aggregate 30 DR.
+            self.assertEqual(
+                armored.equipment.get_stat_total("damage_reduction"), 30
+            )
+
+            import math
+            expected_chip = int(math.ceil(20 * frac))
+            dealt = engine.apply_direct_hit(attacker, armored, weapon,
+                                            current_tick=1)
+            self.assertEqual(
+                dealt, expected_chip,
+                "heavy armor must NOT grant total immunity — the chip lands",
+            )
+            self.assertEqual(armored.db.hp, 100 - expected_chip)
+
+            # Control: same weapon vs an UNARMORED real player deals full 20 —
+            # the chip floor never raises damage against the unarmored.
+            bare = self._make_player(x=5, y=5, planet="earth", location=room)
+            bare.db.hp = 100
+            bare.db.hp_max = 100
+            dealt_bare = engine.apply_direct_hit(attacker, bare, weapon,
+                                                 current_tick=1)
+            self.assertEqual(dealt_bare, 20,
+                             "unarmored target takes full, unchanged damage")
+        finally:
+            _teardown_game(systems)
+
 
 def _teardown_game(systems):
     """Best-effort teardown: stop any scripts initialize_game created so they
