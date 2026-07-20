@@ -12,9 +12,12 @@ Two bomb families, both a fused AoE explosive placed on a tile:
 
 Both require the player to have SET a fuse first with ``set <bomb> <seconds>``
 (or ``set all <seconds>`` for the whole inventory). A bomb thrown/armed without
-a set fuse is rejected. The fuse is stored per-bomb-type on the player
-(``db.bomb_fuses = {item_key: seconds}``) and consumed when the bomb is deployed
-— matching the "must set each time" rule.
+a set fuse is rejected. Setting a fuse arms EVERY unit of that type the player
+holds: the fuses are stored as a per-type queue on the player
+(``db.bomb_fuses = {item_key: [seconds, ...]}``), one entry per held unit, and
+each throw/arm consumes one — so a single ``set all 3`` lets a stack of 3
+grenades all be thrown. Re-setting a type resets its queue to the current held
+count.
 
 A live bomb is a :class:`~typeclasses.objects.LiveBomb` resting on its tile.
 Each tick the system decrements every live bomb's fuse and shows the countdown
@@ -188,11 +191,13 @@ class BombSystem(BaseSystem):
         return fmin, fmax, fdef
 
     def set_fuse(self, player: Any, item_key: str, seconds: int) -> bool:
-        """Set the fuse (seconds) for one bomb type the player holds.
+        """Set the fuse (seconds) on EVERY unit of one bomb type the player holds.
 
-        Clamps to the bomb's [fuse_min, fuse_max] and stores it on the player's
-        ``db.bomb_fuses`` map, consumed at throw/arm. Rejects a non-bomb item or
-        one the player does not hold. Notifies the outcome via the presenter.
+        Clamps to the bomb's [fuse_min, fuse_max] and arms all of that type at
+        once: a queue of one fuse per held unit is stored on the player's
+        ``db.bomb_fuses`` map, and each throw/arm consumes one — so setting once
+        lets you deploy every bomb you carry of that type. Rejects a non-bomb
+        item or one the player does not hold. Notifies the outcome.
         """
         item_def = self._bomb_item_def(item_key)
         item_name = getattr(item_def, "name", None) or item_key
@@ -200,59 +205,101 @@ class BombSystem(BaseSystem):
             self.notify(player, "not_a_bomb", item_name=item_name)
             return False
         handler = getattr(player, "equipment", None)
-        if handler is None or handler.get_supply(item_key) <= 0:
+        held = handler.get_supply(item_key) if handler is not None else 0
+        if handler is None or held <= 0:
             self.notify(player, "bomb_not_held", item_name=item_name)
             return False
         fmin, fmax, _ = self._fuse_bounds(item_def)
         clamped = max(fmin, min(fmax, int(seconds)))
-        self._store_fuse(player, item_key, clamped)
+        self._arm_fuses(player, item_key, clamped, held)
         self.notify(player, "fuse_set", item_name=item_name, seconds=clamped,
-                    clamped=(clamped != int(seconds)), fuse_min=fmin, fuse_max=fmax)
+                    clamped=(clamped != int(seconds)), fuse_min=fmin, fuse_max=fmax,
+                    count=held)
         return True
 
     def set_all(self, player: Any, seconds: int) -> int:
-        """Set the fuse for EVERY bomb type in the player's inventory.
+        """Arm the fuse on EVERY unit of EVERY bomb type in the inventory.
 
         Each bomb type is clamped to its own [fuse_min, fuse_max] (they may
-        differ), so 'set all 20' gives a grenade its max 10 and a mine 20.
-        Returns the number of bomb types set; notifies a summary.
+        differ), so 'set all 20' gives a grenade its max 10 and a mine 20. Every
+        unit held is armed (a queue of one fuse per unit), so a stack of 3
+        grenades can all be thrown from a single 'set all'. Returns the number
+        of individual bombs armed; notifies a summary.
         """
         handler = getattr(player, "equipment", None)
         if handler is None:
-            self.notify(player, "fuse_all_set", count=0, seconds=int(seconds))
+            self.notify(player, "fuse_all_set", count=0, types=0,
+                        seconds=int(seconds))
             return 0
-        count = 0
-        for item_key in list(handler.get_supplies().keys()):
+        armed = 0
+        types = 0
+        for item_key, held in list(handler.get_supplies().items()):
             item_def = self._bomb_item_def(item_key)
-            if item_def is None:
+            if item_def is None or held <= 0:
                 continue
             fmin, fmax, _ = self._fuse_bounds(item_def)
             clamped = max(fmin, min(fmax, int(seconds)))
-            self._store_fuse(player, item_key, clamped)
-            count += 1
-        self.notify(player, "fuse_all_set", count=count, seconds=int(seconds))
-        return count
+            self._arm_fuses(player, item_key, clamped, held)
+            armed += held
+            types += 1
+        self.notify(player, "fuse_all_set", count=armed, types=types,
+                    seconds=int(seconds))
+        return armed
 
     @staticmethod
-    def _store_fuse(player: Any, item_key: str, seconds: int) -> None:
+    def _arm_fuses(player: Any, item_key: str, seconds: int, count: int) -> None:
+        """Store a fuse for each of *count* held units of *item_key*.
+
+        Replaces (does not append to) any existing queue for this type, so
+        re-setting a type resets its pending fuses to the current held count
+        rather than stacking stale entries.
+        """
         fuses = dict(getattr(player.db, "bomb_fuses", None) or {})
-        fuses[item_key] = int(seconds)
+        fuses[item_key] = [int(seconds)] * max(0, int(count))
         player.db.bomb_fuses = fuses
 
     @staticmethod
     def _pending_fuse(player: Any, item_key: str):
-        """Return the fuse the player has SET for *item_key*, or None if unset."""
+        """Return the NEXT queued fuse for *item_key*, or None if none pending.
+
+        Peeks the head of the per-type fuse queue (does not consume it — the
+        deploy path calls :meth:`_consume_fuse` only after a successful place).
+        Tolerates a legacy scalar value (pre-queue saves stored one int). The
+        queue reads back from a real DB as an Evennia ``_SaverList`` (NOT a
+        ``list`` subclass), so we detect the legacy SCALAR form explicitly and
+        treat everything else as a sequence.
+        """
         fuses = getattr(player.db, "bomb_fuses", None) or {}
         val = fuses.get(item_key)
-        return int(val) if val is not None else None
+        if val is None:
+            return None
+        if isinstance(val, (int, float)):
+            return int(val)  # legacy scalar
+        queue = list(val)  # list / tuple / _SaverList
+        return int(queue[0]) if queue else None
 
     @staticmethod
-    def _clear_fuse(player: Any, item_key: str) -> None:
-        """Consume the set fuse after a bomb is deployed (must set each time)."""
+    def _consume_fuse(player: Any, item_key: str) -> None:
+        """Consume ONE queued fuse after a bomb is deployed.
+
+        Pops the head of the per-type queue; removes the key entirely when the
+        queue empties. Tolerates the legacy scalar form (clears it outright).
+        The stored value may be an Evennia ``_SaverList`` on a real DB, so the
+        legacy scalar is detected explicitly and anything else is a sequence.
+        """
         fuses = dict(getattr(player.db, "bomb_fuses", None) or {})
-        if item_key in fuses:
-            del fuses[item_key]
-            player.db.bomb_fuses = fuses
+        val = fuses.get(item_key)
+        if val is None:
+            return
+        if isinstance(val, (int, float)):
+            del fuses[item_key]  # legacy scalar: one-shot
+        else:
+            remaining = list(val)[1:]  # list / tuple / _SaverList
+            if remaining:
+                fuses[item_key] = remaining
+            else:
+                del fuses[item_key]
+        player.db.bomb_fuses = fuses
 
     # ------------------------------------------------------------------ #
     #  Grenade throw (directional) + mine arm
@@ -329,7 +376,7 @@ class BombSystem(BaseSystem):
                         reason="no_position")
             return False
         handler.remove_supply(item_key, 1)
-        self._clear_fuse(player, item_key)
+        self._consume_fuse(player, item_key)
         # Tell the thrower it's away, and everyone on the landing tile.
         self.notify(player, "grenade_thrown", item_name=item_name,
                     x=lx, y=ly, seconds=fuse)
@@ -383,7 +430,7 @@ class BombSystem(BaseSystem):
                         reason="no_position")
             return False
         handler.remove_supply(item_key, 1)
-        self._clear_fuse(player, item_key)
+        self._consume_fuse(player, item_key)
         self.notify(player, "mine_armed", item_name=item_name, seconds=fuse)
         # Everyone else on the tile sees it arm (the placer got 'mine_armed').
         self._broadcast_tile(location, ax, ay, "bomb_armed",

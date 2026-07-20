@@ -557,7 +557,7 @@ HELP_ENTRY_DICTS = [
 
             # Set the Fuse First
 
-            You must set a fuse before every throw or arm — |wset <bomb> <seconds>|n. The fuse is clamped to that bomb's min/max (grenades short, mines longer). |wset all <seconds>|n sets every bomb type in your inventory at once (each clamped to its own limits). The set fuse is |cconsumed|n when you deploy — set it again for the next one.
+            You must set a fuse before you throw or arm — |wset <bomb> <seconds>|n. This arms |cevery unit|n of that bomb you carry, so |wset frag_grenade 3|n with 3 grenades lets you throw all 3 at a 3s fuse. The fuse is clamped to that bomb's min/max (grenades short, mines longer). |wset all <seconds>|n arms every bomb in your inventory at once (each clamped to its own limits). Each throw/arm |cconsumes one|n armed fuse — re-set once you've deployed them all, or to change the timer.
 
             # Grenades — throw in a direction
 

@@ -299,21 +299,26 @@ def _fmt_bomb_not_held(d: dict) -> str:
 def _fmt_fuse_set(d: dict) -> str:
     item = d.get("item_name", "bomb")
     secs = d.get("seconds", 0)
+    count = d.get("count", 1) or 1
+    # "on all 3" only when more than one unit is armed; a single bomb reads plain.
+    scope = f" on all {count}" if count > 1 else ""
     if d.get("clamped"):
         return (
-            f"|y[Bomb] Fuse for {item} set to {secs}s "
+            f"|y[Bomb] Fuse for {item} set to {secs}s{scope} "
             f"(clamped to {d.get('fuse_min', '?')}–{d.get('fuse_max', '?')}s).|n"
         )
-    return f"|y[Bomb] Fuse for {item} set to {secs}s.|n"
+    return f"|y[Bomb] Fuse for {item} set to {secs}s{scope}.|n"
 
 
 def _fmt_fuse_all_set(d: dict) -> str:
-    count = d.get("count", 0)
+    count = d.get("count", 0)  # individual bombs armed
+    types = d.get("types", 0)  # distinct bomb types
     if not count:
         return "|y[Bomb] No bombs in your inventory to set.|n"
+    type_note = f" across {types} type(s)" if types > 1 else ""
     return (
-        f"|y[Bomb] Fuse set to {d.get('seconds', 0)}s on {count} bomb type(s) "
-        f"(clamped per bomb).|n"
+        f"|y[Bomb] Fuse set to {d.get('seconds', 0)}s on {count} bomb(s)"
+        f"{type_note} (clamped per bomb).|n"
     )
 
 

@@ -223,18 +223,27 @@ def _make(items=None, engine=None, placed=None, ranks=None, in_bounds=None):
 # -------------------------------------------------------------- #
 
 class TestSetFuse(unittest.TestCase):
-    def test_set_fuse_stores_on_player(self):
+    def test_set_fuse_arms_every_held_unit(self):
         sys, sink, _ = _make(items=[_grenade_def()])
-        p = _Player(supplies={"frag_grenade": 2})
+        p = _Player(supplies={"frag_grenade": 3})
         self.assertTrue(sys.set_fuse(p, "frag_grenade", 4))
-        self.assertEqual(p.db.bomb_fuses["frag_grenade"], 4)
+        # One queued fuse per held grenade — all 3 can be thrown.
+        self.assertEqual(p.db.bomb_fuses["frag_grenade"], [4, 4, 4])
         self.assertIn("fuse_set", sink.kinds_for(p))
 
     def test_set_fuse_clamps_to_bounds(self):
         sys, sink, _ = _make(items=[_grenade_def(fmin=1, fmax=10)])
         p = _Player(supplies={"frag_grenade": 1})
         sys.set_fuse(p, "frag_grenade", 99)  # over max
-        self.assertEqual(p.db.bomb_fuses["frag_grenade"], 10)
+        self.assertEqual(p.db.bomb_fuses["frag_grenade"], [10])
+
+    def test_set_fuse_resets_queue_to_current_held(self):
+        """Re-setting a type replaces its queue (doesn't stack stale entries)."""
+        sys, _, _ = _make(items=[_grenade_def()])
+        p = _Player(supplies={"frag_grenade": 2})
+        sys.set_fuse(p, "frag_grenade", 5)
+        sys.set_fuse(p, "frag_grenade", 3)  # re-set
+        self.assertEqual(p.db.bomb_fuses["frag_grenade"], [3, 3])
 
     def test_set_fuse_rejects_non_bomb(self):
         sys, sink, _ = _make(items=[
@@ -249,16 +258,16 @@ class TestSetFuse(unittest.TestCase):
         self.assertFalse(sys.set_fuse(p, "frag_grenade", 5))
         self.assertIn("bomb_not_held", sink.kinds_for(p))
 
-    def test_set_all_sets_every_held_bomb_clamped_per_type(self):
+    def test_set_all_arms_every_unit_of_every_type_clamped_per_type(self):
         sys, sink, _ = _make(items=[
             _grenade_def(fmax=10), _mine_def(fmax=30),
             ItemDef(key="medkit", name="Medkit", category="consumable"),
         ])
         p = _Player(supplies={"frag_grenade": 1, "land_mine": 2, "medkit": 5})
         count = sys.set_all(p, 20)
-        self.assertEqual(count, 2)  # only the two bombs, not the medkit
-        self.assertEqual(p.db.bomb_fuses["frag_grenade"], 10)  # clamped to its max
-        self.assertEqual(p.db.bomb_fuses["land_mine"], 20)     # within its max
+        self.assertEqual(count, 3)  # 1 grenade + 2 mines armed (not the medkit)
+        self.assertEqual(p.db.bomb_fuses["frag_grenade"], [10])       # clamped to max
+        self.assertEqual(p.db.bomb_fuses["land_mine"], [20, 20])      # both units
         self.assertNotIn("medkit", p.db.bomb_fuses)
         self.assertIn("fuse_all_set", sink.kinds_for(p))
 
@@ -325,15 +334,39 @@ class TestThrowGrenade(unittest.TestCase):
         _, _, lx, ly, *_ = placed[0]
         self.assertEqual((lx, ly), (0, 0))  # thrower's own tile
 
-    def test_consumes_grenade_and_fuse(self):
+    def test_consumes_grenade_and_one_queued_fuse(self):
         sys, sink, placed = _make(items=[_grenade_def()])
         room = _Room()
         p = _Player(x=0, y=0, supplies={"frag_grenade": 2}, location=room)
         sys.set_fuse(p, "frag_grenade", 3)
         sys.throw_grenade(p, "frag_grenade", "e")
         self.assertEqual(p.equipment.get_supply("frag_grenade"), 1)  # one used
-        self.assertNotIn("frag_grenade", (p.db.bomb_fuses or {}))    # fuse consumed
+        # One queued fuse consumed; the second grenade is still armed.
+        self.assertEqual(p.db.bomb_fuses.get("frag_grenade"), [3])
         self.assertIn("grenade_thrown", sink.kinds_for(p))
+
+    def test_set_all_then_throw_every_grenade(self):
+        """The reported bug: 'set all 3' with 3 grenades must let all 3 throw
+        without re-setting between throws."""
+        sys, sink, placed = _make(items=[_grenade_def(rng=3)])
+        room = _Room()
+        p = _Player(x=5, y=5, supplies={"frag_grenade": 3}, location=room)
+        sys.set_all(p, 3)
+        self.assertTrue(sys.throw_grenade(p, "frag_grenade", "e"))
+        self.assertTrue(sys.throw_grenade(p, "frag_grenade", "w"))
+        self.assertTrue(sys.throw_grenade(p, "frag_grenade", "n"))
+        self.assertEqual(p.equipment.get_supply("frag_grenade"), 0)  # all thrown
+        self.assertEqual(len(placed), 3)                              # all placed
+        self.assertNotIn("frag_grenade", (p.db.bomb_fuses or {}))     # queue drained
+
+    def test_last_queued_fuse_removes_key(self):
+        sys, _, _ = _make(items=[_grenade_def()])
+        room = _Room()
+        p = _Player(x=0, y=0, supplies={"frag_grenade": 1}, location=room)
+        sys.set_fuse(p, "frag_grenade", 3)
+        sys.throw_grenade(p, "frag_grenade", "e")
+        # A single-unit queue empties → key removed, so 'need fuse' gates again.
+        self.assertNotIn("frag_grenade", (p.db.bomb_fuses or {}))
 
     def test_players_on_landing_tile_are_notified(self):
         sys, sink, placed = _make(items=[_grenade_def(rng=5)])
@@ -369,9 +402,9 @@ class TestArmMine(unittest.TestCase):
         self.assertEqual((ax, ay), (4, 7))
         self.assertEqual(btype, "mine")
         self.assertIn("mine_armed", sink.kinds_for(p))
-        # The mine + its set fuse are CONSUMED on a successful arm.
+        # The mine + ONE queued fuse are consumed; the second mine stays armed.
         self.assertEqual(p.equipment.get_supply("land_mine"), 1)
-        self.assertNotIn("land_mine", (p.db.bomb_fuses or {}))
+        self.assertEqual(p.db.bomb_fuses.get("land_mine"), [5])
 
     def test_arm_needs_fuse(self):
         sys, sink, placed = _make(items=[_mine_def()])

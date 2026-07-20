@@ -1943,8 +1943,10 @@ class CmdSetFuse(GameCommand):
       set all 5
 
     Notes:
-      You must set a fuse before every throw/arm — it is consumed when the bomb
-      is deployed. See 'help bombs'.
+      Setting a fuse arms EVERY unit of that bomb you carry — 'set frag_grenade 3'
+      (or 'set all 3') with 3 grenades lets you throw all 3 at that fuse. Each
+      throw/arm consumes one; re-set once you've deployed them all (or to change
+      the timer). See 'help bombs'.
     """
 
     key = "set"

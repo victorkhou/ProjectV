@@ -915,6 +915,46 @@ class LiveBootSmokeTest(EvenniaTest):
             _teardown_game(systems)
 
     # -------------------------------------------------------------- #
+    #  Bombs — 'set all' arms every held unit; the per-type fuse queue
+    #  must round-trip through the real Character DB (list Attribute).
+    # -------------------------------------------------------------- #
+
+    def test_set_all_lets_every_grenade_be_thrown(self):
+        """The reported bug on real objects: with 3 grenades, one 'set all'
+        must let all 3 throw without re-setting. Exercises the per-type fuse
+        QUEUE persisting on a real CombatCharacter (an Evennia list Attribute),
+        through the real BombSystem + equipment handler."""
+        from server.conf.game_init import initialize_game
+
+        systems = initialize_game()
+        try:
+            bomb_system = systems["bomb_system"]
+            self.assertIsNotNone(bomb_system, "bomb_system must be wired at boot")
+            room = self._make_planet_room("earth")
+            player = self._make_player(x=8, y=8, planet="earth", location=room)
+            player.db.combat_xp = 100000  # rank high enough to deploy
+
+            # Stock 3 real grenades in the supply bag.
+            player.equipment.add_supply("frag_grenade", 3)
+
+            # One 'set all' arms all three (queue of 3 persisted on the DB).
+            armed = bomb_system.set_all(player, 3)
+            self.assertEqual(armed, 3, "set all must arm every held grenade")
+            self.assertEqual(list(player.db.bomb_fuses["frag_grenade"]), [3, 3, 3])
+
+            # All three throw with no re-set between them.
+            for direction in ("n", "e", "w"):
+                self.assertTrue(
+                    bomb_system.throw_grenade(player, "frag_grenade", direction),
+                    f"grenade throw {direction} must succeed after one 'set all'",
+                )
+            self.assertEqual(player.equipment.get_supply("frag_grenade"), 0)
+            # Queue fully drained → key removed.
+            self.assertNotIn("frag_grenade", (player.db.bomb_fuses or {}))
+        finally:
+            _teardown_game(systems)
+
+    # -------------------------------------------------------------- #
     #  Drop/pickup — a dropped item must be indexed and re-gettable
     # -------------------------------------------------------------- #
 
