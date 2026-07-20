@@ -2415,6 +2415,52 @@ class LiveBootSmokeTest(EvenniaTest):
         finally:
             _teardown_game(systems)
 
+    def test_death_loss_and_recovery_on_real_objects(self):
+        """Full-loss-on-death + Respawn Beacon recovery, end-to-end on REAL
+        Evennia objects: the character is stripped, the recovered fraction
+        round-trips through the beacon's db.recovery_stash (a dict attribute),
+        and collect_recovery returns it. Guards the 'fakes higher-fidelity-than-
+        real' trap for the stash write + resource strip on a live character."""
+        from server.conf.game_init import initialize_game
+
+        systems = initialize_game()
+        try:
+            equipment_system = systems["equipment_system"]
+            # A max-level (L5) beacon → 95% recovery. Build a real RB owned by
+            # the player on their planet.
+            player = self._make_player(x=5, y=5, planet="earth")
+            player.db.resources = {"Iron": 100, "Wood": 40}
+            player.equipment.add_supply("medkit", 6)
+
+            beacon = self._make_building("RB", x=5, y=5, planet="earth")
+            beacon.db.owner = player
+            beacon.db.building_level = 5
+
+            # Force full recovery so the assertion is deterministic.
+            import random as _r
+            equipment_system._rng = _r.Random(0)
+            # (0.95 chance; seed 0's first draws are < 0.95, but to be robust we
+            # assert on resources — deterministic floor — and that the strip ran.)
+            summary = equipment_system.apply_death_loss(player)
+
+            # Character is stripped bare on a real db.
+            self.assertEqual(player.equipment.get_supplies(), {})
+            self.assertEqual(int(player.db.resources.get("Iron", 0)), 0)
+            self.assertIsNotNone(summary["building"],
+                                 "same-planet beacon must be found on real objects")
+
+            # The stash persisted on the real building attribute (dict round-trip).
+            stash = beacon.db.recovery_stash
+            self.assertIsNotNone(stash)
+            self.assertEqual(stash["resources"].get("Iron"), 95)  # floor(100*0.95)
+            self.assertEqual(stash["resources"].get("Wood"), 38)
+
+            # Collect returns resources to the real character.
+            equipment_system.collect_recovery(player, beacon)
+            self.assertGreater(int(player.db.resources.get("Iron", 0)), 0)
+        finally:
+            _teardown_game(systems)
+
 
 def _teardown_game(systems):
     """Best-effort teardown: stop any scripts initialize_game created so they

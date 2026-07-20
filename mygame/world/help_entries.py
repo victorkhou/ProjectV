@@ -493,9 +493,13 @@ HELP_ENTRY_DICTS = [
 
             Bombs are |cfused|n explosives — set a fuse first with |wset <bomb> <seconds>|n (or |wset all <seconds>|n for your whole inventory), then deploy. A |cgrenade|n is |wthrow|n-n in a direction (|wthrow frag_grenade n|n): it flies until it hits the first obstacle or its max range, |clands|n, and ticks down before exploding. A |cmine|n is |warm|n-ed in place (|warm land_mine|n): it ticks down where you stand. Anyone on a bomb's tile sees it |rtick|n. The blast hits everything in radius — enemies, your own units, and |ryou|n if you're too close — so mind the fuse and your distance. See |whelp bombs|n. Bombs come from a |cLab|n.
 
+            # Death & Recovery
+
+            Death is costly: you |rlose everything you're carrying|n — all equipped gear, your supply bag, and the resources on you (resources safely |wdeposit|n-ed in an |cHQ|n or |cVault|n are untouched — death strips |cyou|n, not your base). Your safety net is a |cRespawn Beacon|n (|wbuild RB|n): it salvages a fraction of what you were carrying into a stash — |c55%|n at level 1, rising to |c95%|n at level 5, so |wupgrade|n it to keep more. With |cno beacon on the planet you died on, the loss is total|n. When you respawn at the beacon, |wcollect|n (|wrecover|n) pulls your salvaged gear back into your inventory and your resources up to your carry weight (the rest waits in the beacon). Losing also costs XP.
+
             # After a Fight
 
-            Losing costs XP and sends you back to your |cHQ|n. A |cMedbay|n shortens respawn time. Winning awards XP toward your next |clevel|n — combat is the main source of levels past the early game (|whelp level|n).
+            When you fall you redeploy from the |cstaging area|n — choose your |cRespawn Beacon|n (where your recovered loadout waits), your |cHQ|n, your place of death, or a random tile (|whelp spawning|n). A |cMedbay|n shortens respawn time. Winning awards XP toward your next |clevel|n — combat is the main source of levels past the early game (|whelp level|n).
 
             # See Also
 

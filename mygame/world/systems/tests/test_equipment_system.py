@@ -826,6 +826,161 @@ class TestMaxHpGear(unittest.TestCase):
 
 
 # -------------------------------------------------------------- #
+#  Death loss + respawn-building recovery
+# -------------------------------------------------------------- #
+
+class _FakeRespawnBuilding:
+    """A Respawn building fake: a db bag that supports recovery_stash + level."""
+    def __init__(self, level=1, planet="earth"):
+        self.db = DB(building_type="RB", building_level=level,
+                     coord_planet=planet, recovery_stash=None)
+        self.location = None
+
+
+def _death_registry():
+    """Registry whose RB building def carries the respawn_point capability."""
+    reg = _make_registry()
+    from world.constants import RESPAWN_POINT
+    reg.buildings["RB"] = BuildingDef(
+        name="Respawn Beacon", abbreviation="RB", cost={"Wood": 20},
+        max_health=200, requires_hq=True, required_terrain=None,
+        category="utility", produces=None,
+        capabilities=frozenset({RESPAWN_POINT, "upgradable"}),
+    )
+    return reg
+
+
+class _DeterministicRNG:
+    """rng.random() returns a fixed value, so recovery rolls are predictable."""
+    def __init__(self, value):
+        self._v = value
+    def random(self):
+        return self._v
+
+
+class TestDeathLoss(unittest.TestCase):
+    """apply_death_loss: total strip on death, building-scaled recovery."""
+
+    def _player_with_loadout(self, planet="earth", resources=None):
+        p = FakePlayer(level=10, resources=resources or {"Iron": 100, "Wood": 40})
+        p.db.coord_planet = planet
+        p.equipment.equip(FakeItem("assault_rifle", "weapon", {"damage": 25}))
+        p.equipment.equip(FakeItem("kevlar_vest", "torso", {"damage_reduction": 5}))
+        p.equipment.add_supply("medkit", 4)
+        p._buildings = []
+        p.get_buildings = lambda: list(p._buildings)
+        return p
+
+    def test_total_loss_with_no_respawn_building(self):
+        system, _, _ = _make_system(_death_registry())
+        p = self._player_with_loadout()
+        # rng that would recover everything IF a building existed — but there's none.
+        system._rng = _DeterministicRNG(0.0)
+        summary = system.apply_death_loss(p)
+        self.assertEqual(p.equipment.get_all_equipped(), {})
+        self.assertEqual(p.equipment.get_supplies(), {})
+        self.assertEqual(p.get_resource("Iron"), 0)
+        self.assertEqual(p.get_resource("Wood"), 0)
+        self.assertIsNone(summary["building"])
+        self.assertEqual(summary["recovered"], {})
+
+    def test_full_recovery_at_high_roll(self):
+        system, _, _ = _make_system(_death_registry())
+        p = self._player_with_loadout()
+        b = _FakeRespawnBuilding(level=5, planet="earth")  # 95%
+        p._buildings = [b]
+        system._rng = _DeterministicRNG(0.0)  # 0.0 < 0.95 → everything recovers
+        summary = system.apply_death_loss(p)
+        # Player is stripped bare regardless...
+        self.assertEqual(p.equipment.get_all_equipped(), {})
+        self.assertEqual(p.get_resource("Iron"), 0)
+        # ...but the stash holds the recovered loadout.
+        stash = b.db.recovery_stash
+        self.assertEqual(stash["items"].get("assault_rifle"), 1)
+        self.assertEqual(stash["items"].get("kevlar_vest"), 1)
+        self.assertEqual(stash["items"].get("medkit"), 4)
+        self.assertEqual(stash["resources"].get("Iron"), 95)  # floor(100*0.95)
+        self.assertEqual(stash["resources"].get("Wood"), 38)  # floor(40*0.95)
+
+    def test_no_recovery_at_low_roll_but_resources_floored(self):
+        system, _, _ = _make_system(_death_registry())
+        p = self._player_with_loadout(resources={"Iron": 100})
+        b = _FakeRespawnBuilding(level=1, planet="earth")  # 55%
+        p._buildings = [b]
+        system._rng = _DeterministicRNG(0.99)  # 0.99 >= 0.55 → no ITEM recovers
+        system.apply_death_loss(p)
+        stash = b.db.recovery_stash
+        # Items all rolled fail → none stashed; resources are deterministic floor.
+        self.assertEqual(stash["items"], {})
+        self.assertEqual(stash["resources"].get("Iron"), 55)  # floor(100*0.55)
+
+    def test_recovery_scales_with_building_level(self):
+        system, _, _ = _make_system(_death_registry())
+        # L3 = 75% → floor(100*0.75)=75 Iron recovered.
+        p = self._player_with_loadout(resources={"Iron": 100})
+        b = _FakeRespawnBuilding(level=3, planet="earth")
+        p._buildings = [b]
+        system._rng = _DeterministicRNG(0.99)
+        system.apply_death_loss(p)
+        self.assertEqual(b.db.recovery_stash["resources"].get("Iron"), 75)
+
+    def test_off_planet_building_does_not_recover(self):
+        """Recovery is per-planet: a respawn building on ANOTHER planet does not
+        save a loadout lost on the death planet — the loss is total."""
+        system, _, _ = _make_system(_death_registry())
+        p = self._player_with_loadout(planet="earth", resources={"Iron": 100})
+        mars_b = _FakeRespawnBuilding(level=5, planet="mars")
+        p._buildings = [mars_b]
+        system._rng = _DeterministicRNG(0.0)  # would recover all IF it counted
+        summary = system.apply_death_loss(p)
+        self.assertIsNone(summary["building"], "off-planet building must not count")
+        self.assertEqual(p.get_resource("Iron"), 0)  # still stripped
+        self.assertIsNone(mars_b.db.recovery_stash)  # nothing stashed there
+
+    def test_same_planet_building_recovers_over_off_planet_one(self):
+        """With respawn buildings on multiple planets, the one on the DEATH
+        planet is chosen."""
+        system, _, _ = _make_system(_death_registry())
+        p = self._player_with_loadout(planet="earth", resources={"Iron": 100})
+        p._buildings = [_FakeRespawnBuilding(level=1, planet="mars"),
+                        _FakeRespawnBuilding(level=5, planet="earth")]
+        system._rng = _DeterministicRNG(0.99)
+        system.apply_death_loss(p)
+        earth_b = p._buildings[1]
+        self.assertEqual(earth_b.db.recovery_stash["resources"].get("Iron"), 95)
+
+    def test_collect_round_trip_restores_stash(self):
+        """die → recover into beacon → collect back: supplies rejoin the
+        Supply_Bag, resources rejoin the pool, and the stash empties."""
+        system, _, _ = _make_system(_death_registry())
+        p = self._player_with_loadout(resources={"Iron": 100})
+        b = _FakeRespawnBuilding(level=5, planet="earth")
+        p._buildings = [b]
+        system._rng = _DeterministicRNG(0.0)  # recover everything
+        system.apply_death_loss(p)
+        self.assertEqual(p.equipment.get_supplies(), {})  # stripped
+
+        summary = system.collect_recovery(p, b)
+        # medkit (supply) rejoined the Supply_Bag.
+        self.assertEqual(p.equipment.get_supply("medkit"), 4)
+        self.assertEqual(summary["items"].get("medkit"), 4)
+        # Iron came back to the pool (admin/no-weight fake → unbounded room).
+        self.assertEqual(p.get_resource("Iron"), 95)
+        # Stash emptied of what was collected.
+        stash = b.db.recovery_stash
+        self.assertEqual(stash["resources"].get("Iron", 0), 0)
+        self.assertEqual(stash["items"].get("medkit", 0), 0)
+
+    def test_collect_empty_stash_is_safe(self):
+        system, _, sink = _make_system(_death_registry())
+        p = self._player_with_loadout()
+        b = _FakeRespawnBuilding(level=1, planet="earth")
+        summary = system.collect_recovery(p, b)
+        self.assertEqual(summary["items"], {})
+        self.assertEqual(summary["resources"], {})
+
+
+# -------------------------------------------------------------- #
 #  Weight / storage fakes (task 9.7)
 # -------------------------------------------------------------- #
 

@@ -211,8 +211,9 @@ class TestCmdSpawn(unittest.TestCase):
 
     def test_number_selects_spawn_option(self):
         c = _Caller(state=PLAYER_STATE_SPAWNING)
-        _run(CmdSpawn, c, "1")  # first option = hq
-        self.assertEqual(c.db.pending_spawn_choice, "hq")
+        _run(CmdSpawn, c, "1")  # first option = respawn beacon (where your
+        # recovered loadout waits after death)
+        self.assertEqual(c.db.pending_spawn_choice, "respawn")
 
     def test_out_of_range_number_reprompts(self):
         c = _Caller(state=PLAYER_STATE_SPAWNING)
@@ -257,8 +258,8 @@ class TestCmdSelect(unittest.TestCase):
         _run(CmdSelect, c, args="", cmdstring="1")  # bare '1' -> class[0]
         self.assertEqual(c.db.player_class, "engineer")
         self.assertEqual(c.db.player_state, PLAYER_STATE_SPAWNING)  # spawn still needed
-        _run(CmdSelect, c, args="", cmdstring="1")  # bare '1' -> spawn[0] = hq
-        self.assertEqual(c.db.pending_spawn_choice, "hq")
+        _run(CmdSelect, c, args="", cmdstring="1")  # bare '1' -> spawn[0] = respawn
+        self.assertEqual(c.db.pending_spawn_choice, "respawn")
         self.assertEqual(c.db.player_state, PLAYER_STATE_LOBBY)
 
     def test_select_with_arg_form(self):

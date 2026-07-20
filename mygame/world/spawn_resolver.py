@@ -31,15 +31,19 @@ from typing import Any, Callable
 
 logger = logging.getLogger("mygame.spawn_resolver")
 
-#: The three selectable spawn options (state 3.1).
+#: The selectable spawn options (state 3.1).
 SPAWN_HQ = "hq"
 SPAWN_DEATH = "death"
 SPAWN_RANDOM = "random"
+#: A Respawn Beacon (RESPAWN_POINT building) the player owns on the planet —
+#: also where their death-loss recovery stash waits (see EquipmentSystem).
+SPAWN_RESPAWN = "respawn"
 
-SPAWN_OPTIONS = (SPAWN_HQ, SPAWN_DEATH, SPAWN_RANDOM)
+SPAWN_OPTIONS = (SPAWN_RESPAWN, SPAWN_HQ, SPAWN_DEATH, SPAWN_RANDOM)
 
 #: Human-readable labels for the selection menu.
 SPAWN_OPTION_LABELS = {
+    SPAWN_RESPAWN: "Respawn Beacon",
     SPAWN_HQ: "Headquarters",
     SPAWN_DEATH: "Place of death",
     SPAWN_RANDOM: "Random location",
@@ -82,6 +86,7 @@ class SpawnResolver:
         in_bounds_func: Callable[[int, int, str], bool] | None = None,
         planet_size_func: Callable[[str], tuple[int, int] | None] | None = None,
         buildings_locator_func: Callable[[str], Any] | None = None,
+        respawn_locator_func: Callable[[Any, str], tuple[int, int] | None] | None = None,
         min_building_distance: int | None = None,
         rng: Any = None,
     ) -> None:
@@ -90,6 +95,7 @@ class SpawnResolver:
         self._in_bounds_func = in_bounds_func
         self._planet_size_func = planet_size_func
         self._buildings_locator_func = buildings_locator_func
+        self._respawn_locator_func = respawn_locator_func
         if min_building_distance is None:
             from world.constants import RANDOM_SPAWN_MIN_BUILDING_DISTANCE
             min_building_distance = RANDOM_SPAWN_MIN_BUILDING_DISTANCE
@@ -118,6 +124,9 @@ class SpawnResolver:
     def set_buildings_locator_func(self, fn) -> None:
         self._buildings_locator_func = fn
 
+    def set_respawn_locator_func(self, fn) -> None:
+        self._respawn_locator_func = fn
+
     # ------------------------------------------------------------------ #
     #  Resolution
     # ------------------------------------------------------------------ #
@@ -135,7 +144,12 @@ class SpawnResolver:
         fails. Returns ``None`` only when nothing at all resolves (misconfigured
         planet) — the caller then leaves the player where they are.
         """
-        if choice == SPAWN_HQ:
+        if choice == SPAWN_RESPAWN:
+            beacon = self._respawn_tile(player, planet_key)
+            if beacon is not None:
+                return (planet_key, beacon[0], beacon[1])
+            # No respawn beacon on this planet → fall through to a random tile.
+        elif choice == SPAWN_HQ:
             hq = self._hq_tile(player, planet_key)
             if hq is not None:
                 return (planet_key, hq[0], hq[1])
@@ -168,6 +182,21 @@ class SpawnResolver:
             return None
         try:
             return (int(hq[0]), int(hq[1]))
+        except (TypeError, ValueError, IndexError):
+            return None
+
+    def _respawn_tile(self, player, planet_key) -> tuple[int, int] | None:
+        """The player's owned Respawn Beacon tile on *planet_key*, or None."""
+        if self._respawn_locator_func is None:
+            return None
+        try:
+            tile = self._respawn_locator_func(player, planet_key)
+        except Exception:  # noqa: BLE001 - a lookup failure just falls back
+            return None
+        if tile is None:
+            return None
+        try:
+            return (int(tile[0]), int(tile[1]))
         except (TypeError, ValueError, IndexError):
             return None
 

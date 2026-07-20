@@ -84,6 +84,22 @@ class CombatEngine(BaseSystem):
         # in-place reset). None / returns-False → default instant in-place
         # respawn (agents always use the default; the flow only affects players).
         self._player_respawn_func: Callable[[Any], bool] | None = None
+        # Optional death-loss handler ``(victim) -> summary``: strips the victim's
+        # carried equipment/supplies/resources and recovers a building-scaled
+        # fraction into their Respawn building (EquipmentSystem.apply_death_loss).
+        # Only invoked for real PLAYER victims (agents keep their loadout). None →
+        # no loss (tests / flow disabled).
+        self._death_loss_func: Callable[[Any], Any] | None = None
+
+    def set_death_loss_func(self, func: Callable[[Any], Any] | None) -> None:
+        """Inject the on-death equipment/resource-loss handler.
+
+        *func* is ``(victim) -> summary``: it strips the player's carried gear,
+        Supply_Bag, and resources, depositing a building-level-scaled fraction
+        into their Respawn building. Wired at the composition root to
+        ``EquipmentSystem.apply_death_loss``. Only called for player victims.
+        """
+        self._death_loss_func = func
 
     def set_player_respawn_func(self, func: Callable[[Any], bool] | None) -> None:
         """Inject the player-respawn handler (lobby lifecycle flow).
@@ -1207,6 +1223,19 @@ class CombatEngine(BaseSystem):
             # Player victim: route the death-loss through the progression path so
             # a level/rank drop recomputes and fires LEVEL_CHANGED / RANK_*.
             self._deduct_player_combat_xp(victim, xp_death_loss)
+
+        # Death loss: a real PLAYER victim loses ALL carried equipment/supplies/
+        # resources, recovering a building-level-scaled fraction into their
+        # Respawn building (EquipmentSystem.apply_death_loss). Runs BEFORE respawn
+        # routing so the strip happens at the moment of death. Agents keep their
+        # loadout (never stripped). Best-effort — a loss failure never breaks the
+        # kill resolution.
+        if not self._is_agent(victim) and self._death_loss_func is not None:
+            try:
+                self._death_loss_func(victim)
+            except Exception:  # noqa: BLE001 - death loss must not break combat
+                from world.systems.agent_constants import logger as _log
+                _log.exception("Death-loss handling failed")
 
         # Respawn victim (reset HP)
         hp_max = self._get_hp_max(victim)

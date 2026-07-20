@@ -382,6 +382,11 @@ HEADQUARTERS = "headquarters"
 COMBAT_BARRIER = "combat_barrier"
 TURRET = "turret"
 SHIELD_GENERATOR = "shield_generator"
+#: A building that serves as its owner's respawn point on its planet AND recovers
+#: a building-level-scaled fraction of items/resources the player was carrying
+#: when they died (deposited into the building for collection). See
+#: EquipmentSystem.apply_death_loss + RESPAWN_RECOVERY_BY_LEVEL.
+RESPAWN_POINT = "respawn_point"
 
 BUILDING_CAPABILITIES: frozenset[str] = frozenset({
     HARVESTABLE,
@@ -393,7 +398,21 @@ BUILDING_CAPABILITIES: frozenset[str] = frozenset({
     COMBAT_BARRIER,
     TURRET,
     SHIELD_GENERATOR,
+    RESPAWN_POINT,
 })
+
+#: Fraction of carried items/resources a Respawn building recovers, by BUILDING
+#: level (1-5). Per-item probabilistic (each item recovered with this chance) and
+#: floor(pct x amount) of each resource stack. Reaches 95% at max building level;
+#: a 55% floor at L1 keeps early death from being ruinous. Upgrading the building
+#: is the recovery-upgrade path.
+RESPAWN_RECOVERY_BY_LEVEL: dict[int, float] = {
+    1: 0.55,
+    2: 0.65,
+    3: 0.75,
+    4: 0.85,
+    5: 0.95,
+}
 
 #: Max Shield Generators a player may build per planet (R: max 4 per planet,
 #: per player). Tech research may raise this later.

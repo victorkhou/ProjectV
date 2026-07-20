@@ -261,3 +261,29 @@
     - shield_generator
     - upgradable
   map_symbol: SG
+
+# Respawn Beacon — your respawn point on this planet, and the safety net for
+# death loss. On death you lose ALL carried gear/supplies/resources; this
+# building recovers a building-level-scaled fraction (55% at L1 → 95% at L5) into
+# its stash for collection when you respawn here. Early + cheap (Terra-craftable
+# basics) so a new base can afford protection right away; one per planet.
+- name: Respawn Beacon
+  abbreviation: RB
+  cost:
+    Wood: 20
+    Stone: 15
+    Iron: 10
+  build_time_seconds: 25
+  max_level: 5
+  rank_requirement: 2
+  max_health: 200
+  requires_hq: true
+  required_terrain: null
+  category: utility
+  produces: null
+  requires_agent: false
+  storage_capacity: 0
+  capabilities:
+    - respawn_point
+    - upgradable
+  map_symbol: RB

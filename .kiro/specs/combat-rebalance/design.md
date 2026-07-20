@@ -73,6 +73,66 @@ L70, Elysium below Citadel. **Biomass** = the permanent Terra round-trip anchor
 
 ---
 
+## 6. Full-loss-on-death + Respawn building  *(✅ SHIPPED 2026-07-20)*
+
+**Implemented.** On player defeat, `_handle_player_defeat` calls the injected
+`EquipmentSystem.apply_death_loss`: strips ALL equipped gear + Supply_Bag +
+carried resources; a same-planet **Respawn Beacon** (`RB`, `respawn_point`
+capability, rank 2, cheap Terra basics, upgradable L1–5) recovers a
+building-level fraction into `db.recovery_stash` (55%→95% via
+`RESPAWN_RECOVERY_BY_LEVEL`; per-item probabilistic + floor(pct×resource)). No
+beacon on the death planet = total loss. `collect`/`recover` command
+(`collect_recovery`) pulls the stash back — supplies to the bag, gear to
+inventory, resources up to carry weight (leftover stays). New `SPAWN_RESPAWN`
+option (first/default) redeploys the player at their beacon. Base storage
+(HQ/Vault) is untouched — death strips the character, not the base. Tests:
+`TestDeathLoss` (8 unit) + a live-boot round-trip on real objects; combat help
+"Death & Recovery" section added.
+
+**Original design (locked, for reference):**
+
+**Death now costs everything.** On player defeat, ALL equipped gear, Supply_Bag
+items, and carried resources are lost. A **Respawn building** recovers a
+building-level-scaled fraction of what you were carrying, deposited AT the
+building for you to collect on respawn. This makes power genuinely
+attainable-and-losable (the design's preferred form) and raises the stakes of
+every fight without a permanent-progression penalty.
+
+**Locked decisions:**
+- **Total loss on death** — equipment (all slots) + Supply_Bag + all carried
+  resources are stripped from the victim in `_handle_player_defeat`.
+- **Recovery location = the Respawn building.** The recovered portion is
+  deposited into the building's store; the player collects it when they respawn
+  there. The lost portion is destroyed (no ground drop in v1).
+- **No building = total loss.** The Respawn building IS the safety net; without
+  one you lose 100%. Strong incentive to build one early.
+- **Recovery scales with BUILDING level (not player level):** **L1 55% → L2 65%
+  → L3 75% → L4 85% → L5 95%** (linear +10%/level). Upgrading the building is the
+  recovery-upgrade path.
+- **Recovery method = per-item probabilistic + % of resources:** each held item
+  is recovered with probability = the level %; each resource stack recovers
+  floor(pct × amount). Variance on gear, smooth on resources.
+- **The building:** early + cheap + upgradable L1–5, **one per planet**, sets the
+  player's respawn point on that planet (integrates with `spawn_resolver` —
+  likely a new `SPAWN_RESPAWN_BUILDING` option or making it the HQ-tier default).
+  New capability e.g. `respawn_point` / `item_recovery`.
+
+**Open sub-questions (resolve at build time, not blocking):**
+- Building name/abbreviation (e.g. "Cloning Bay" / "Med-Bay" conflict? use a new
+  abbr like `RB`/`CB`). — pick when authoring buildings.yaml.
+- Does recovery deposit interact with the building's storage cap? (probably a
+  dedicated recovery-stash, not the shared storage pool.)
+- Resource loss vs the existing Vault "protected while offline" rule — Vault
+  resources are base storage, NOT carried; only CARRIED resources are lost. Keep
+  Vault/HQ stored resources safe (death strips the character, not the base).
+
+**Balance-principle fit:** pure loseable-power mechanic; no 2× concern (it
+*removes* power on death, never grants it). Counterplay is symmetric (don't die /
+kill them first). New-player safety: pair with a cheap early building; the
+per-planet respawn + 55% floor at L1 keeps early death from being ruinous.
+
+---
+
 ## 1. Evaluation of the current system
 
 ### How combat works today

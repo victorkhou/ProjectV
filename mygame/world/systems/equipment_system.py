@@ -1278,6 +1278,292 @@ class EquipmentSystem(CarryWeightMixin, StorageMixin, BaseSystem):
             return False
         return True
 
+    # ------------------------------------------------------------------ #
+    #  Death loss + respawn-building recovery
+    # ------------------------------------------------------------------ #
+
+    def apply_death_loss(self, player: Any) -> dict:
+        """Strip everything the *player* was carrying on death, recovering a
+        building-level-scaled fraction into their Respawn building's stash.
+
+        On death a player loses ALL equipped gear, their Supply_Bag, and their
+        CARRIED resources (base storage in an HQ/Vault is untouched — death
+        strips the character, not the base). If the player owns a Respawn
+        building (``RESPAWN_POINT`` capability) on the planet they died on, a
+        fraction of what they held is recovered into that building's
+        ``db.recovery_stash`` for collection when they respawn there; the rest is
+        destroyed. With NO respawn building the loss is total — the building IS
+        the safety net.
+
+        Recovery fraction = ``RESPAWN_RECOVERY_BY_LEVEL[building_level]`` (55% at
+        L1 → 95% at L5). Applied per-item probabilistically (each equipped item
+        and each supply unit is recovered with that chance) and as
+        ``floor(pct × amount)`` of each carried resource stack.
+
+        Returns a summary dict ``{recovered, lost, building}`` for notification;
+        never raises (a recovery failure must not break combat).
+        """
+        from world.constants import RESPAWN_POINT, RESPAWN_RECOVERY_BY_LEVEL
+        from world.utils import (
+            building_has_capability, get_building_level, get_obj_attr,
+        )
+
+        summary = {"recovered": {}, "lost": {}, "building": None, "pct": 0.0}
+        equipment = getattr(player, "equipment", None)
+
+        # Resolve the recovery building: an owned RESPAWN_POINT building on the
+        # planet the player died on. None → total loss.
+        building = self._find_respawn_building(player)
+        pct = 0.0
+        if building is not None:
+            level = max(1, min(int(get_building_level(building) or 1),
+                               max(RESPAWN_RECOVERY_BY_LEVEL)))
+            pct = float(RESPAWN_RECOVERY_BY_LEVEL.get(level, 0.0))
+            summary["building"] = building
+            summary["pct"] = pct
+
+        stash = self._get_recovery_stash(building) if building is not None else None
+        rng = getattr(self, "_rng", random)
+
+        # --- Equipped gear + Supply_Bag: per-item probabilistic recovery ---
+        if equipment is not None:
+            # Equipped Gear (one object per slot).
+            for slot in list(equipment.get_all_equipped().keys()):
+                item = equipment.unequip(slot)
+                if item is None:
+                    continue
+                key = self._item_attr(item, "item_key", None) or getattr(
+                    item, "key", None)
+                if stash is not None and key and rng.random() < pct:
+                    self._stash_add(stash, "items", key, 1)
+                    summary["recovered"][key] = summary["recovered"].get(key, 0) + 1
+                    self._destroy_item(item)  # object destroyed; stash holds the key
+                else:
+                    summary["lost"][key or "?"] = summary["lost"].get(key or "?", 0) + 1
+                    self._destroy_item(item)
+            # Supply_Bag (counted stacks) — roll each unit independently.
+            for key, count in list(equipment.get_supplies().items()):
+                count = int(count or 0)
+                kept = sum(1 for _ in range(count) if rng.random() < pct) if (
+                    stash is not None and pct > 0) else 0
+                equipment.remove_supply(key, count)
+                if kept > 0:
+                    self._stash_add(stash, "items", key, kept)
+                    summary["recovered"][key] = summary["recovered"].get(key, 0) + kept
+                if count - kept > 0:
+                    summary["lost"][key] = summary["lost"].get(key, 0) + (count - kept)
+
+        # --- Carried resources: floor(pct x amount) recovered ---
+        resources = self._read_carried_resources(player)
+        for rtype, amount in resources.items():
+            amount = int(amount or 0)
+            if amount <= 0:
+                continue
+            kept = int(math.floor(amount * pct)) if stash is not None else 0
+            if kept > 0:
+                self._stash_add(stash, "resources", rtype, kept)
+                summary["recovered"][rtype] = summary["recovered"].get(rtype, 0) + kept
+            if amount - kept > 0:
+                summary["lost"][rtype] = summary["lost"].get(rtype, 0) + (amount - kept)
+        self._clear_carried_resources(player)
+
+        if stash is not None:
+            self._set_recovery_stash(building, stash)
+        return summary
+
+    def _find_respawn_building(self, player: Any):
+        """Return the player's owned RESPAWN_POINT building on their death planet.
+
+        Respawn recovery is per-planet: only a respawn building on the SAME
+        planet the player died on recovers their loadout (one per planet is the
+        model). Returns None if the player owns no respawn building on that
+        planet — the loss is then total. If the player's planet can't be resolved
+        (a locationless test double), any owned respawn building qualifies.
+        Best-effort — a lookup failure yields None, never raises.
+        """
+        from world.constants import RESPAWN_POINT
+        from world.utils import building_has_capability, get_obj_attr
+        try:
+            buildings = list(player.get_buildings() or []) if hasattr(
+                player, "get_buildings") else []
+        except Exception:  # noqa: BLE001
+            return None
+        candidates = [
+            b for b in buildings
+            if building_has_capability(b, RESPAWN_POINT, provider=self.registry)
+        ]
+        if not candidates:
+            return None
+        planet = get_obj_attr(player, "coord_planet")
+        if not planet:
+            return candidates[0]  # can't scope by planet (test double) → any
+        same = [b for b in candidates
+                if get_obj_attr(b, "coord_planet") == planet]
+        return same[0] if same else None
+
+    @staticmethod
+    def _get_recovery_stash(building: Any) -> dict:
+        """Return a mutable copy of the building's recovery stash."""
+        from world.utils import get_obj_attr
+        stash = get_obj_attr(building, "recovery_stash") or {}
+        return {
+            "items": dict(stash.get("items", {})),
+            "resources": dict(stash.get("resources", {})),
+        }
+
+    @staticmethod
+    def _set_recovery_stash(building: Any, stash: dict) -> None:
+        """Persist the recovery stash back onto the building (db/attributes)."""
+        db = getattr(building, "db", None)
+        if db is not None and hasattr(db, "recovery_stash"):
+            db.recovery_stash = stash
+            return
+        attrs = getattr(building, "attributes", None)
+        if attrs is not None and hasattr(attrs, "add"):
+            attrs.add("recovery_stash", stash)
+        elif db is not None:
+            db.recovery_stash = stash
+
+    @staticmethod
+    def _stash_add(stash: dict, bucket: str, key: str, amount: int) -> None:
+        b = stash.setdefault(bucket, {})
+        b[key] = int(b.get(key, 0)) + int(amount)
+
+    def _read_carried_resources(self, player: Any) -> dict:
+        """Return a snapshot of the player's CARRIED resources ({type: amount})."""
+        db = getattr(player, "db", None)
+        res = getattr(db, "resources", None) if db is not None else None
+        if isinstance(res, dict):
+            return dict(res)
+        # Fallback for fakes exposing get_resource over RESOURCE_TYPES.
+        from world.constants import RESOURCE_TYPES
+        if hasattr(player, "get_resource"):
+            return {r: int(player.get_resource(r) or 0) for r in RESOURCE_TYPES}
+        return {}
+
+    @staticmethod
+    def _clear_carried_resources(player: Any) -> None:
+        """Zero the player's carried resources (base storage is untouched)."""
+        from world.constants import RESOURCE_TYPES
+        db = getattr(player, "db", None)
+        if db is not None and isinstance(getattr(db, "resources", None), dict):
+            db.resources = {r: 0 for r in RESOURCE_TYPES}
+            return
+        # Fake fallback: deduct everything currently held.
+        if hasattr(player, "get_resource") and hasattr(player, "deduct_resources"):
+            held = {r: int(player.get_resource(r) or 0) for r in RESOURCE_TYPES}
+            player.deduct_resources({r: a for r, a in held.items() if a > 0})
+
+    @staticmethod
+    def _destroy_item(item: Any) -> None:
+        """Destroy a Gear GameItem object (best-effort; dicts/fakes are no-ops)."""
+        delete = getattr(item, "delete", None)
+        if callable(delete):
+            try:
+                delete()
+            except Exception:  # noqa: BLE001 - never break death handling
+                pass
+
+    def collect_recovery(self, player: Any, building: Any) -> dict:
+        """Move a Respawn building's recovery stash back to the *player*.
+
+        The retrieval half of the death-loss loop: when a player stands on their
+        Respawn building after dying, this returns the items and resources that
+        were recovered into ``db.recovery_stash``. Supplies rejoin the Supply_Bag
+        and Gear is created into inventory (the player re-equips manually);
+        resources are added up to the player's remaining carry weight, with the
+        leftover STAYING in the stash (never dropped). Emits a ``recovery_collected``
+        notification. Returns a summary ``{items, resources, left_behind}``.
+        Best-effort — never raises into the command layer.
+        """
+        summary = {"items": {}, "resources": {}, "left_behind": {}}
+        if building is None:
+            return summary
+        stash = self._get_recovery_stash(building)
+        if not stash.get("items") and not stash.get("resources"):
+            self.notify(player, "recovery_empty")
+            return summary
+
+        # Items: supplies → Supply_Bag; gear → inventory via the factory.
+        remaining_items: dict[str, int] = {}
+        for key, count in list(stash.get("items", {}).items()):
+            count = int(count or 0)
+            if count <= 0:
+                continue
+            item_def = None
+            try:
+                item_def = self.registry.resolve_item(key)
+            except Exception:  # noqa: BLE001
+                item_def = None
+            if item_def is None:
+                remaining_items[key] = count  # unknown key stays stashed
+                continue
+            category = getattr(item_def, "category", None)
+            handler = getattr(player, "equipment", None)
+            if category in SUPPLY_CATEGORIES and handler is not None \
+                    and hasattr(handler, "add_supply"):
+                max_stack = int(getattr(item_def, "max_stack", 99) or 99)
+                added = handler.add_supply(key, count, max_stack=max_stack)
+                if added:
+                    summary["items"][key] = summary["items"].get(key, 0) + added
+                if count - added > 0:
+                    remaining_items[key] = count - added  # over stack → keep rest
+            else:
+                # Gear (or a supply with no handler): create one object per unit.
+                made = 0
+                for _ in range(count):
+                    try:
+                        self._create_item_func(item_def, player)
+                        made += 1
+                    except Exception:  # noqa: BLE001
+                        break
+                if made:
+                    summary["items"][key] = summary["items"].get(key, 0) + made
+                if count - made > 0:
+                    remaining_items[key] = count - made
+
+        # Resources: add up to carry room; leftover stays stashed.
+        remaining_res: dict[str, int] = {}
+        for rtype, amount in list(stash.get("resources", {}).items()):
+            amount = int(amount or 0)
+            if amount <= 0:
+                continue
+            room = self._resource_room(player, rtype)
+            take = amount if room is None else min(amount, room)
+            take = max(0, int(take))
+            if take > 0 and hasattr(player, "add_resource"):
+                player.add_resource(rtype, take)
+                summary["resources"][rtype] = take
+            if amount - take > 0:
+                remaining_res[rtype] = amount - take
+                summary["left_behind"][rtype] = amount - take
+
+        # Persist what did not fit; clear the rest.
+        self._set_recovery_stash(
+            building, {"items": remaining_items, "resources": remaining_res}
+        )
+        self.notify(
+            player, "recovery_collected",
+            items=dict(summary["items"]), resources=dict(summary["resources"]),
+            left_behind=dict(summary["left_behind"]),
+        )
+        return summary
+
+    def _resource_room(self, player: Any, resource: str):
+        """Units of *resource* the player can still carry, or None if unbounded.
+
+        Reuses the carry-weight model (``_resource_weight_room`` — admins and
+        non-positive weights are unbounded → ``inf`` → None here). Returns None
+        also when weight can't be evaluated (test double), so a collect never
+        silently drops everything."""
+        try:
+            room = self._resource_weight_room(player, resource)
+        except Exception:  # noqa: BLE001
+            return None
+        if room == float("inf"):
+            return None
+        return int(room)
+
     @staticmethod
     def _apply_heal(player: Any, amount: int) -> int:
         """Heal *player* by *amount* via ``CombatEntity.heal`` (clamped).

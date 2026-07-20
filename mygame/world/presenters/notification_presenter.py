@@ -507,6 +507,29 @@ def _fmt_withdrew(d: dict) -> str:
     )
 
 
+def _fmt_recovery_collected(d: dict) -> str:
+    """Recovered loadout collected from a Respawn building."""
+    items = d.get("items") or {}
+    resources = d.get("resources") or {}
+    left = d.get("left_behind") or {}
+    parts = []
+    for key, n in items.items():
+        parts.append(f"{n}x {key}")
+    for r, n in resources.items():
+        parts.append(f"{n} {r}")
+    body = ", ".join(parts) if parts else "nothing that fit"
+    msg = f"|g[Respawn] Recovered {body}.|n"
+    if left:
+        leftbody = ", ".join(f"{n} {r}" for r, n in left.items())
+        msg += (f" |y{leftbody} stayed in the beacon — over your carry weight; "
+                f"come back for it.|n")
+    return msg
+
+
+def _fmt_recovery_empty(d: dict) -> str:
+    return "|y[Respawn] Nothing to recover here.|n"
+
+
 def _fmt_deposit_failed(d: dict) -> str:
     res = d.get("resource", "resource")
     reason = d.get("reason")
@@ -738,6 +761,8 @@ class NotificationPresenter:
         "storage_full": _fmt_storage_full,
         "deposited": _fmt_deposited,
         "withdrew": _fmt_withdrew,
+        "recovery_collected": _fmt_recovery_collected,
+        "recovery_empty": _fmt_recovery_empty,
         "deposit_failed": _fmt_deposit_failed,
         "withdraw_failed": _fmt_withdraw_failed,
         "unequip_failed": _fmt_unequip_failed,

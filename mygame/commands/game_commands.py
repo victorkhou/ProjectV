@@ -2397,6 +2397,44 @@ class CmdWithdraw(GameCommand):
         equipment_system.withdraw(self.caller, building, resource, amount)
 
 
+class CmdCollect(GameCommand):
+    """Collect the gear and resources your Respawn Beacon recovered on death.
+
+    Usage:
+      collect
+
+    Notes:
+      Alias: recover. Stand on your own Respawn Beacon. When you die you lose
+      everything you were carrying; the beacon salvages a fraction (more the
+      higher its level) into a stash. This retrieves that stash — gear returns
+      to your inventory (re-equip it), resources up to your carry weight (the
+      rest waits in the beacon). See 'help death'.
+    """
+
+    key = "collect"
+    aliases = ["recover"]
+    help_category = "Game"
+
+    def func(self):
+        from world.constants import RESPAWN_POINT
+        from world.utils import building_has_capability, is_owner
+
+        equipment_system = self.require_system("equipment_system")
+        if equipment_system is None:
+            return
+        building = self._building_at_caller(self.caller)
+        if building is None or not building_has_capability(
+            building, RESPAWN_POINT, provider=equipment_system.registry
+        ):
+            self.caller.msg("Stand on your own Respawn Beacon to collect.")
+            return
+        owner = getattr(getattr(building, "db", None), "owner", None)
+        if not is_owner(self.caller, owner) and self.caller is not owner:
+            self.caller.msg("That Respawn Beacon isn't yours.")
+            return
+        equipment_system.collect_recovery(self.caller, building)
+
+
 class CmdResearch(GameCommand):
     """Start researching a technology at your Lab.
 

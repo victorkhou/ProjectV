@@ -85,11 +85,37 @@ def _wire_spawn_resolver(spawn_resolver: Any, planet_registry: Any) -> None:
                 tiles.append(coords)
         return tiles
 
+    def _respawn_tile(player, planet_key):
+        # The player's first operational Respawn Beacon on this planet → its
+        # (x, y), so a slain player can redeploy where their recovery stash
+        # waits. None (no beacon on this planet) → resolver falls back.
+        from world.constants import RESPAWN_POINT
+        from world.utils import (
+            building_has_capability, get_coords, get_obj_attr,
+        )
+        try:
+            buildings = list(player.get_buildings() or []) if hasattr(
+                player, "get_buildings") else []
+        except Exception:  # noqa: BLE001
+            return None
+        for b in buildings:
+            if get_obj_attr(b, "coord_planet") != planet_key:
+                continue
+            if not building_has_capability(b, RESPAWN_POINT):
+                continue
+            if get_obj_attr(b, "under_construction", False):
+                continue
+            coords = get_coords(b)
+            if coords is not None:
+                return coords
+        return None
+
     spawn_resolver.set_planet_spawn_func(_planet_spawn)
     spawn_resolver.set_planet_size_func(_planet_size)
     spawn_resolver.set_in_bounds_func(planet_registry.is_valid_coordinate)
     spawn_resolver.set_hq_locator_func(_hq_tile)
     spawn_resolver.set_buildings_locator_func(_building_tiles)
+    spawn_resolver.set_respawn_locator_func(_respawn_tile)
 
 
 def _route_player_death(victim: Any) -> bool:
@@ -301,6 +327,11 @@ def initialize_game() -> dict:
     # the engine keeps the existing behavior. Agents never take this path (the
     # engine only calls it for real players).
     combat_engine.set_player_respawn_func(_route_player_death)
+    # Player death → equipment/resource loss. A slain player loses ALL carried
+    # gear, Supply_Bag, and resources; a fraction (scaled by their Respawn
+    # building's level) is recovered into that building for collection on
+    # respawn. Only players take this path (agents keep their loadout).
+    combat_engine.set_death_loss_func(equipment_system.apply_death_loss)
     # Guard combat AI: guard/soldier NPCs acquire nearby non-owner players and
     # queue attacks through the CombatEngine each tick (before combat_resolution
     # so they land same-tick). Ownership-generic — defends player bases and NPC
