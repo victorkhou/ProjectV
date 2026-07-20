@@ -273,8 +273,11 @@ fix noted, not a balance failure.
   landmine flagged:* the reader MUST use `get_tech_bonus(..., default=1.0)` — a
   copied `default=0.0` would make all gear free.
 - **Wide-Band Radar** (needs-adj): reveals armed bombs/mines (the real new
-  capability; "reveal enemy players" is already done by fog). Needs a new
-  FogOfWar consumer — `detection_radius` is otherwise a dead no-op.
+  capability; "reveal enemy players" is already done by fog via the live
+  `sight_range` stat, [fog_of_war.py:312](../../../mygame/world/coordinate/fog_of_war.py)).
+  The genuinely-missing piece is that armed bombs/mines are NOT fog-revealed, so
+  this needs a **new** FogOfWar consumer for bomb/mine reveal. (There is no
+  `detection_radius` stat — vision is `sight_range`.)
 - **Automated Repair Bay** (needs-adj): ×1.5 building repair speed; countered by
   DPS/AoE exceeding the repair rate + cutting resource supply.
 - **Munitions Handling** (needs-adj): faster reload (DPS uptime, not per-hit dmg).
@@ -635,8 +638,10 @@ resource dependency preserves the *reason* to visit.
 
 This is the concrete design for Phase-2's `CmdTravel`. It is **wiring + friction +
 arrival logic on proven plumbing**, not new engine work: the cross-coordinate-space
-move already exists (admin teleport's `_relocate_object(caller, room, tx, ty,
-planet)` + `_resolve_planet_room`, [admin_commands.py:1519](../../../mygame/commands/admin_commands.py)),
+move already exists — `_relocate_object(obj, target_room, tx, ty, planet)`
+([admin_commands.py:154](../../../mygame/commands/admin_commands.py)) + the
+`_resolve_planet_room` helper (:129), tied together by the admin `_do_teleport`
+method (:1519) that `CmdLaunch` will mirror —
 the access gate already exists (`can_access_planet`,
 [rank_system.py:246](../../../mygame/world/systems/rank_system.py) — level ≥
 planet `rank_requirement`; **zero callers today**), and player position is just
@@ -647,8 +652,8 @@ planet `rank_requirement`; **zero callers today**), and player position is just
 | Piece | Decision |
 |-------|----------|
 | **Travel model** | **Launch Pad building** (not a bare command). You travel *from* a pad you build. |
-| **Routing** | **Two legs through Space:** surface → Space station → destination surface. |
-| **Space** | **Real contested PvP corridor** — every hop transits an ungated Space station where anyone can collide. |
+| **Routing** | **Two legs through Space:** surface → Space station → destination surface. **Exception:** `recall home` is a deliberate DIRECT hop (does NOT transit Space — it's the anti-strand safety hatch), BOUNDED so it can't dodge the corridor: no recall while in combat, while carrying a loaded manifest, or on cooldown. |
+| **Space** | **Real contested PvP corridor** — every *launch* hop transits an ungated Space station where anyone can collide (recall excepted, see Routing). |
 | **Pad symmetry** | **Launch to leave; Beacon `recall home` to return.** A pad is needed to lift off; first arrival on a virgin planet lands at your Beacon/HQ else public spawn. No strand-lock. |
 | **Fuel** | **Two-tier:** Basic Fuel Cell (Terra basics → single-rung hop) / Premium Fuel Cell (Energy+Circuits → multi-rung jumps). |
 | **Onboarding** | **Announce the unlock** at the gate-crossing level-up + a **teaching `launch`** command when unusable. |
@@ -666,8 +671,9 @@ planet `rank_requirement`; **zero callers today**), and player position is just
                                      corridor)             Beacon/HQ, else public spawn)
 ```
 
-Travel is **never direct** — always Planet → Space → Planet, and Space is a tile
-you *land in*, not a loading screen. `CmdLaunch` = `can_access_planet` gate + fuel
+A **launch** is never direct — always Planet → Space → Planet, and Space is a tile
+you *land in*, not a loading screen. (The one exception is `recall home` — a
+bounded direct hop; see the 7.0 ledger Routing row and §7.6.) `CmdLaunch` = `can_access_planet` gate + fuel
 burn + cooldown + the existing `_relocate_object` move + an arrival look.
 
 ### 7.2 The unlock journey (end-to-end, gap-free)
@@ -695,8 +701,10 @@ Persona: **Rooke** crosses **L20 → L21**; Forge (gate L21) unlocks.
 7. **Payoff.** Energy + Circuits appear (new resources) — the "next planet is
    genuinely different" moment. Rooke can now craft Premium Fuel + all L21
    futuristic gear (plasma_rifle etc.).
-8. **Home, no strand-lock.** `recall home` from Rooke's Terra Beacon (cheap
-   one-way exit), or build a Forge pad for a permanent two-way route + foothold.
+8. **Home, no strand-lock.** `recall home` from Rooke's Terra Beacon — a cheap
+   **direct** one-way exit (the anti-strand hatch; bounded: no recall in combat /
+   carrying cargo / on cooldown, so it can't cheese the corridor) — or build a
+   Forge pad for a permanent two-way route + foothold.
 9. **Steady state.** Harvesters left on Terra (online-gated); cargo loaded via the
    pad; cheap basic-fuel round-trips with reduced cooldown (base on both ends).
    Upward hops later cost Premium Fuel + full cooldown. → "progress upward, keep
@@ -812,7 +820,8 @@ This makes the agent network **load-bearing, not decorative.**
   (Energy/Circuits) — both consumables.
 - **Commands:** `CmdLaunch` (`launch [<planet>]` — leg-aware: no arg = surface→Space,
   `<planet>` = Space→surface), `load` / `unload` (manifest management),
-  `recall` (Beacon one-way home).
+  `recall` (Beacon direct one-way home — gated: not in combat, not carrying a
+  manifest, cooldown).
 - **Systems:** manifest storage on the pad; two-leg routing through Space; arrival
   resolver (Beacon/HQ → else public spawn); fuel-cost-by-distance + load table;
   cooldown (reduced for owned-base round-trips); transit-failure recovery; the §7.6
