@@ -1196,6 +1196,110 @@ def format_cost_summary(costs: dict[str, int]) -> str:
 
 
 # ------------------------------------------------------------------ #
+#  Player-message list formatting (game-wide vocabulary)
+# ------------------------------------------------------------------ #
+#
+# One shared look for every player-facing list, so `build`, `technologies`,
+# `inventory`, notifications, and help entries all read the same way:
+#
+#     |wHeader:|n            <- white bold header, from section_header()
+#       Key - Value         <- 2-space indent, " - " between key and value
+#       Key - Value
+#
+# Use ``format_section`` / ``format_list_block`` to assemble these; the
+# constants below keep the indent and separator identical everywhere so a
+# future change is one edit. Rows without a value (a plain list of names) omit
+# the separator and show just the item.
+
+#: Indent prefixed to every list row under a header.
+LIST_INDENT = "  "
+#: Separator between a row's key and its value (``"Iron - 20"``).
+LIST_KV_SEP = " - "
+
+
+def section_header(title: str) -> str:
+    """Return a white-bold section header line, e.g. ``"|wCost:|n"``.
+
+    The single place the header style is decided, so every list in the game
+    shares one look. ``title`` should NOT include the trailing colon — it is
+    added here. Already-colored titles (containing a ``|`` tag) are passed
+    through with only the colon added, so callers can tint a header specially
+    without fighting the default white.
+    """
+    text = str(title).rstrip(":")
+    if "|" in text:
+        return f"{text}:"
+    return f"|w{text}:|n"
+
+
+def format_list_row(key: Any, value: Any = None) -> str:
+    """Format one indented list row: ``"  Key - Value"`` (or ``"  Item"``).
+
+    With no ``value`` (or an empty one) the row is just the indented key, so the
+    same helper renders both key/value rows (``Iron - 20``) and plain item lists
+    (a technology name). ``value`` of ``0`` is kept (a real quantity); only
+    ``None``/``""`` collapse to a key-only row.
+    """
+    if value is None or value == "":
+        return f"{LIST_INDENT}{key}"
+    return f"{LIST_INDENT}{key}{LIST_KV_SEP}{value}"
+
+
+def format_list_block(items: Any) -> list[str]:
+    """Render *items* as indented list rows (a list of strings).
+
+    Accepts either:
+      * a mapping ``{key: value}`` → ``"  key - value"`` rows, or
+      * an iterable of items, where each item is a string (``"  item"``) or a
+        ``(key, value)`` pair (``"  key - value"``).
+
+    Returns the row strings (no header) so callers can splice them into a
+    larger message. Order is preserved (dicts iterate in insertion order).
+    """
+    rows: list[str] = []
+    if hasattr(items, "items"):
+        for key, value in items.items():
+            rows.append(format_list_row(key, value))
+        return rows
+    for item in items or ():
+        if isinstance(item, (tuple, list)) and len(item) == 2:
+            rows.append(format_list_row(item[0], item[1]))
+        else:
+            rows.append(format_list_row(item))
+    return rows
+
+
+def format_section(title: str, items: Any, empty: str | None = None) -> list[str]:
+    """Return a header line followed by *items* as indented rows.
+
+    The workhorse for player-facing lists: pairs :func:`section_header` with
+    :func:`format_list_block`. When *items* is empty, emits the header with a
+    single ``empty`` row if one is given (e.g. ``"none"``), or just the header
+    when ``empty`` is ``None``. Returns a list of lines the caller joins with
+    the rest of its message.
+    """
+    lines = [section_header(title)]
+    rows = format_list_block(items) if items else []
+    if rows:
+        lines.extend(rows)
+    elif empty is not None:
+        lines.append(format_list_row(empty))
+    return lines
+
+
+def format_cost_block(costs: dict[str, int]) -> list[str]:
+    """Render a resource-cost dict as a ``Cost:`` section (header + rows).
+
+    The multi-line counterpart to :func:`format_cost_summary`, for places that
+    lay a cost out vertically (build requirements, upgrade quotes). Returns
+    ``["|wCost:|n", "  Iron - 20", "  Energy - 15"]``; an empty/zero cost yields
+    a ``Cost:`` header with a ``free`` row.
+    """
+    positive = {res: amt for res, amt in (costs or {}).items() if amt}
+    return format_section("Cost", positive, empty="free")
+
+
+# ------------------------------------------------------------------ #
 #  Chat formatting
 # ------------------------------------------------------------------ #
 

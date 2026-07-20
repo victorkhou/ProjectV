@@ -23,6 +23,9 @@ from world.utils import (
     owner_has_active_hq,
     format_dm_message,
     format_cost_summary,
+    section_header,
+    format_section,
+    format_list_row,
 )
 
 
@@ -945,10 +948,13 @@ class CmdRepair(GameCommand):
 
     Notes:
       Alias: rep. Buildings don't heal on their own (unlike you and your
-      agents) — 'repair' restores one to full HP for resources. The cost
-      scales with how damaged it is, so patching light damage is cheap. A
-      building knocked offline comes back online once repaired. You must own
-      it and be on its tile. See 'help buildings' and 'help combat'.
+      agents) — 'repair' restores HP over time, like construction: stay on
+      the tile for it to progress, or assign an Engineer to do it for you.
+      Each tick restores 5% of max HP and costs 5% of everything invested in
+      the building (its build cost plus any upgrades), so repairing an
+      upgraded building costs more. A building knocked offline comes back
+      online as soon as it starts healing. You must own it and be on its
+      tile to start. See 'help buildings' and 'help combat'.
     """
 
     key = "repair"
@@ -2664,21 +2670,21 @@ class CmdScore(GameCommand):
             if remaining > 0:
                 lines.append(f"  |rCombat: {remaining}s|n")
 
-        # Resources
+        # Resources — one "Name - amount" row per non-zero resource.
         resources = status.get("resources", {})
-        if resources:
-            res_parts = [f"{k}: {v}" for k, v in resources.items() if v]
-            if res_parts:
-                lines.append("  Resources: " + ", ".join(res_parts))
+        res_rows = {k: v for k, v in resources.items() if v}
+        if res_rows:
+            lines.extend(format_section("Resources", res_rows))
 
         # Equipment
         handler = getattr(caller, "equipment", None)
         if handler:
             equipped = handler.get_all_equipped()
             if equipped:
-                eq_parts = [f"{slot}: {getattr(item, 'key', str(item))}"
-                            for slot, item in equipped.items()]
-                lines.append("  Equipment: " + ", ".join(eq_parts))
+                lines.extend(format_section("Equipment", {
+                    slot: getattr(item, "key", str(item))
+                    for slot, item in equipped.items()
+                }))
 
             # Aggregated equipment stat totals (only non-zero, to stay clean).
             totals = [
@@ -2690,10 +2696,9 @@ class CmdScore(GameCommand):
                 ("Sight range", handler.get_stat_total("sight_range")),
                 ("Max HP", handler.get_stat_total("max_hp")),
             ]
-            total_parts = [f"{label}: +{value:.0f}"
-                           for label, value in totals if value]
-            if total_parts:
-                lines.append("  Equipment totals: " + ", ".join(total_parts))
+            total_rows = [(label, f"+{value:.0f}") for label, value in totals if value]
+            if total_rows:
+                lines.extend(format_section("Equipment totals", total_rows))
 
         # Supplies (Supply_Bag counts) + carried weight vs carry limit.
         _append_supplies_section(caller, lines)
@@ -2706,10 +2711,10 @@ class CmdScore(GameCommand):
         techs = status.get("researched_techs", [])
         lines.append(f"  Buildings: {building_count} | Technologies: {len(techs)}")
 
-        # Active powerups
+        # Active powerups — one row per active powerup.
         powerups = status.get("active_powerups", {})
         if powerups:
-            lines.append(f"  Powerups: {', '.join(powerups.keys())}")
+            lines.extend(format_section("Powerups", list(powerups.keys())))
 
         caller.msg("\n".join(lines))
 
@@ -3055,19 +3060,16 @@ class CmdTechnology(GameCommand):
 
         tech_system = _get_system(caller, "tech_system")
 
-        lines = ["|wTechnologies:|n"]
-        if researched:
-            lines.append("  Researched: " + ", ".join(sorted(researched)))
-        else:
-            lines.append("  Researched: none")
+        lines = ["|wTechnologies:|n", ""]
+        lines.extend(format_section(
+            "Researched", sorted(researched), empty="none"
+        ))
 
         if tech_system:
+            lines.append("")
             available = tech_system.list_available(caller)
-            if available:
-                avail_names = [f"{t.name} ({t.key})" for t in available]
-                lines.append("  Available: " + ", ".join(avail_names))
-            else:
-                lines.append("  Available: none")
+            avail_names = [f"{t.name} ({t.key})" for t in available]
+            lines.extend(format_section("Available", avail_names, empty="none"))
 
         self.caller.msg("\n".join(lines))
 

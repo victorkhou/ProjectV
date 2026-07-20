@@ -2513,9 +2513,9 @@ class TestCmdScore(unittest.TestCase):
         cmd.func()
         output = "\n".join(caller._messages)
         self.assertIn("Equipment totals:", output)
-        self.assertIn("Armor: +5", output)
-        self.assertIn("Move speed: +2", output)
-        self.assertIn("Max HP: +40", output)
+        self.assertIn("Armor - +5", output)
+        self.assertIn("Move speed - +2", output)
+        self.assertIn("Max HP - +40", output)
 
     def test_hides_totals_when_no_equipment(self):
         caller = FakeCaller()

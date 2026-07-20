@@ -19,7 +19,7 @@ router's own dispatch:
 from __future__ import annotations
 
 from commands.command_router import GameSubcommandRouter
-from world.utils import get_system
+from world.utils import get_system, format_section
 
 
 # Verbs usable while OOC in the LOBBY (they mutate state, so NOT in SPAWNING).
@@ -411,22 +411,22 @@ class CmdAlliance(GameSubcommandRouter):
         self._render_info(summary)
 
     def _render_info(self, s):
-        lines = [
-            f"|w{s['name']}|n [{s['tag']}]  (level {s['level']})",
-            f"  Leader: {s['leader']}   Members: {s['member_count']}",
-        ]
+        lines = [f"|w{s['name']}|n [{s['tag']}]  (level {s['level']})"]
+        lines.extend(format_section("Overview", [
+            ("Leader", s["leader"]),
+            ("Members", s["member_count"]),
+            ("Open-join", "ON" if s.get("open_join") else "OFF"),
+        ]))
+        # Active perks — one "perk - Ln" row each (only when there are any).
         if s["active_perks"]:
-            perks = ", ".join(f"{k} L{v}" for k, v in s["active_perks"].items())
-            lines.append(f"  Perks: {perks}")
-        if s.get("open_join"):
-            lines.append("  Open-join: ON")
+            lines.append("")
+            lines.extend(format_section("Perks", {
+                k: f"L{v}" for k, v in s["active_perks"].items()
+            }))
+        # Treasury — one "resource - amount" row each.
         if "treasury" in s:
-            if s["treasury"]:
-                from world.utils import format_cost_summary
-                tre = format_cost_summary(s["treasury"])
-                lines.append(f"  Treasury: {tre}")
-            else:
-                lines.append("  Treasury: empty")
+            lines.append("")
+            lines.extend(format_section("Treasury", s["treasury"], empty="empty"))
         self.caller.msg("\n".join(lines))
 
     def sub_board(self, args):

@@ -706,7 +706,16 @@ HELP_ENTRY_DICTS = [
 
             # Build Requirements
 
-            Cost: |c10 Wood|n, |c10 Stone|n, |c10 Iron|n. Level: |c1|n. Dependencies: none — the HQ is the one building you can raise with no prerequisites. One HQ per planet.
+            Cost:
+              Wood - |c10|n
+              Stone - |c10|n
+              Iron - |c10|n
+
+            Requirements:
+              Player - |clevel 1|n
+              Dependencies - none (the HQ is the one building you raise with no prerequisites)
+
+            Limit: |cone HQ per planet|n.
 
             # What It Does
 
@@ -732,7 +741,14 @@ HELP_ENTRY_DICTS = [
 
             # Build Requirements
 
-            Cost: |c15 Wood|n, |c10 Stone|n. Level: |c1|n. Dependencies: an |cHQ|n, and it must sit on |cresource terrain|n (Forest, Rock, Mountain, etc. — |wmap|n shows which tiles yield what).
+            Cost:
+              Wood - |c15|n
+              Stone - |c10|n
+
+            Requirements:
+              Player - |clevel 1|n
+              HQ - |crequired|n
+              Terrain - |cresource tile|n (Forest, Rock, Mountain, etc. — |wmap|n shows which tiles yield what)
 
             # What It Does
 
@@ -758,7 +774,14 @@ HELP_ENTRY_DICTS = [
 
             # Build Requirements
 
-            Cost: |c20 Wood|n, |c15 Stone|n, |c10 Iron|n. Level: |c1|n. Dependencies: an |cHQ|n.
+            Cost:
+              Wood - |c20|n
+              Stone - |c15|n
+              Iron - |c10|n
+
+            Requirements:
+              Player - |clevel 1|n
+              HQ - |crequired|n
 
             # What It Does
 
@@ -784,11 +807,24 @@ HELP_ENTRY_DICTS = [
 
             # Build Requirements
 
-            Cost: |c20 Wood|n, |c15 Stone|n, |c15 Iron|n. Level: |c3|n. Dependencies: an |cHQ|n.
+            Cost:
+              Wood - |c20|n
+              Stone - |c15|n
+              Iron - |c15|n
+
+            Requirements:
+              Player - |clevel 3|n
+              HQ - |crequired|n
 
             # What It Does
 
-            Produces modern gear: |ccombat knife|n, |cassault rifle|n, |csniper rifle|n, |cservice rifle|n, |crifle rounds|n, and the full armor set (helmet, vest, gloves, greaves, boots), plus the |cscope|n and |chauler pack|n accessories. Crafting spends resources per item.
+            Produces modern gear (crafting spends resources per item):
+
+            Crafts:
+              Weapons - |ccombat knife|n, |cassault rifle|n, |csniper rifle|n, |cservice rifle|n
+              Ammo - |crifle rounds|n
+              Armor - helmet, vest, gloves, greaves, boots
+              Accessories - |cscope|n, |chauler pack|n
 
             # Using It
 
@@ -810,7 +846,12 @@ HELP_ENTRY_DICTS = [
 
             # Build Requirements
 
-            Cost: |c5 Stone|n. Level: |c2|n. Dependencies: an |cHQ|n.
+            Cost:
+              Stone - |c5|n
+
+            Requirements:
+              Player - |clevel 2|n
+              HQ - |crequired|n
 
             # What It Does
 
@@ -836,7 +877,15 @@ HELP_ENTRY_DICTS = [
 
             # Build Requirements
 
-            Cost: |c15 Wood|n, |c15 Stone|n, |c10 Iron|n. Level: |c7|n. Deed: destroy an |coutpost|n. Dependencies: an |cHQ|n.
+            Cost:
+              Wood - |c15|n
+              Stone - |c15|n
+              Iron - |c10|n
+
+            Requirements:
+              Player - |clevel 7|n
+              HQ - |crequired|n
+              Deed - destroy an |coutpost|n
 
             # What It Does
 
@@ -862,11 +911,27 @@ HELP_ENTRY_DICTS = [
 
             # Build Requirements
 
-            Cost: |c25 Wood|n, |c20 Stone|n, |c15 Iron|n. Level: |c11|n. Deed: destroy |c3 outposts|n. Dependencies: an |cHQ|n, and an |cEngineer|n agent to run research.
+            Cost:
+              Wood - |c25|n
+              Stone - |c20|n
+              Iron - |c15|n
+
+            Requirements:
+              Player - |clevel 11|n
+              HQ - |crequired|n
+              Deed - destroy |c3 outposts|n
+              Agent - an |cEngineer|n to run research
 
             # What It Does
 
-            Researches |ctechnologies|n (|wresearch <tech>|n) and crafts futuristic gear: |cplasma rifle|n, |cpower armor|n, |cjetpack|n, |cenergy cell|n, and |cfrag grenade|n. An |cEngineer|n drives research progress and passive crafting.
+            Researches |ctechnologies|n (|wresearch <tech>|n) and crafts futuristic gear. An |cEngineer|n drives research progress and passive crafting.
+
+            Crafts:
+              Weapons - |cplasma rifle|n
+              Armor - |cpower armor|n
+              Accessories - |cjetpack|n
+              Ammo - |cenergy cell|n
+              Throwables - |cfrag grenade|n
 
             # Using It
 
@@ -888,7 +953,13 @@ HELP_ENTRY_DICTS = [
 
             # Build Requirements
 
-            Cost: |c15 Iron|n, |c10 Energy|n. Level: |c9|n. Dependencies: an |cHQ|n.
+            Cost:
+              Iron - |c15|n
+              Energy - |c10|n
+
+            Requirements:
+              Player - |clevel 9|n
+              HQ - |crequired|n
 
             # What It Does
 
@@ -914,7 +985,13 @@ HELP_ENTRY_DICTS = [
 
             # Build Requirements
 
-            Cost: |c20 Stone|n, |c15 Iron|n. Level: |c5|n. Dependencies: an |cHQ|n.
+            Cost:
+              Stone - |c20|n
+              Iron - |c15|n
+
+            Requirements:
+              Player - |clevel 5|n
+              HQ - |crequired|n
 
             # What It Does
 
@@ -940,7 +1017,13 @@ HELP_ENTRY_DICTS = [
 
             # Build Requirements
 
-            Cost: |c25 Stone|n, |c10 Iron|n. Level: |c4|n. Dependencies: an |cHQ|n.
+            Cost:
+              Stone - |c25|n
+              Iron - |c10|n
+
+            Requirements:
+              Player - |clevel 4|n
+              HQ - |crequired|n
 
             # What It Does
 
@@ -966,7 +1049,13 @@ HELP_ENTRY_DICTS = [
 
             # Build Requirements
 
-            Cost: |c20 Iron|n, |c15 Energy|n. Level: |c15|n. Dependencies: an |cHQ|n.
+            Cost:
+              Iron - |c20|n
+              Energy - |c15|n
+
+            Requirements:
+              Player - |clevel 15|n
+              HQ - |crequired|n
 
             # What It Does
 
@@ -992,7 +1081,16 @@ HELP_ENTRY_DICTS = [
 
             # Build Requirements
 
-            Cost: |c40 Iron|n, |c30 Energy|n, |c20 Circuits|n. Level: |c15|n. Dependencies: an |cHQ|n. Limit: |c4 per planet|n.
+            Cost:
+              Iron - |c40|n
+              Energy - |c30|n
+              Circuits - |c20|n
+
+            Requirements:
+              Player - |clevel 15|n
+              HQ - |crequired|n
+
+            Limit: |c4 per planet|n.
 
             # What It Does
 
@@ -1027,11 +1125,23 @@ HELP_ENTRY_DICTS = [
 
             # Build Requirements
 
-            Cost: |c15 Wood|n, |c10 Stone|n, |c10 Iron|n, |c5 Energy|n. Level: |c18|n. Dependencies: an |cHQ|n.
+            Cost:
+              Wood - |c15|n
+              Stone - |c10|n
+              Iron - |c10|n
+              Energy - |c5|n
+
+            Requirements:
+              Player - |clevel 18|n
+              HQ - |crequired|n
 
             # What It Does
 
-            Crafts consumables — |cmedkits|n (restore HP with |wuse medkit|n) and |ccombat stims|n (temporary combat buff) — and reduces your respawn time after losing a fight.
+            Crafts consumables and reduces your respawn time after losing a fight.
+
+            Crafts:
+              |cmedkit|n - restore HP with |wuse medkit|n
+              |ccombat stim|n - temporary combat buff
 
             # Using It
 

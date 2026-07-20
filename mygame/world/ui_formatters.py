@@ -21,6 +21,7 @@ def format_building_interior(looker: Any, building: Any, registry: Any = None) -
     """
     from world.utils import (
         get_building_info, get_building_attr, get_closed_exits, get_obj_attr,
+        format_list_block,
     )
 
     info = get_building_info(building)
@@ -132,7 +133,8 @@ def format_building_interior(looker: Any, building: Any, registry: Any = None) -
                 drops.append(f"{amt} {rtype}")
         if drops:
             lines.append("")
-            lines.append(f"  |yResources: {', '.join(drops)}|n")
+            lines.append("  |yResources:|n")
+            lines.extend(format_list_block(drops))
             lines.append(f"  Use |wget|n to pick them up.")
     elif tile is not None:
         # Legacy fallback: iterate contents
@@ -145,7 +147,8 @@ def format_building_interior(looker: Any, building: Any, registry: Any = None) -
                     drops.append(f"{amt} {rtype}")
         if drops:
             lines.append("")
-            lines.append(f"  |yResources: {', '.join(drops)}|n")
+            lines.append("  |yResources:|n")
+            lines.extend(format_list_block(drops))
             lines.append(f"  Use |wget|n to pick them up.")
 
     # Show dropped/produced items (gear + supply GameItems) on the building's
@@ -160,7 +163,8 @@ def format_building_interior(looker: Any, building: Any, registry: Any = None) -
             item_strs.append(f"{name} x{count}" if count else name)
         if item_strs:
             lines.append("")
-            lines.append(f"  |wItems: {', '.join(item_strs)}|n")
+            lines.append("  |wItems:|n")
+            lines.extend(format_list_block(item_strs))
             lines.append(f"  Use |wget|n to pick them up.")
 
     # Show other NPCs at the building's coordinates: the looker's OWN agents by
@@ -194,9 +198,11 @@ def format_building_interior(looker: Any, building: Any, registry: Any = None) -
                 tag = "|R[Enemy]|n " if enemy else ""
                 hostiles.append(f"{tag}{getattr(obj, 'key', 'unit')} ({role})")
         if own_agents:
-            lines.append(f"  Agents here: {', '.join(own_agents)}")
+            lines.append("  Agents here:")
+            lines.extend(format_list_block(own_agents))
         if hostiles:
-            lines.append(f"  |rHostiles here:|n {', '.join(hostiles)}")
+            lines.append("  |rHostiles here:|n")
+            lines.extend(format_list_block(hostiles))
 
     # Show other players at the building's tile (excluding the looker), so
     # entering a building reveals who is inside — matching the overworld
@@ -209,7 +215,8 @@ def format_building_interior(looker: Any, building: Any, registry: Any = None) -
             if p is not looker
         ]
         if others:
-            lines.append(f"  Players here: {', '.join(others)}")
+            lines.append("  Players here:")
+            lines.extend(format_list_block(others))
 
     lines.append("")
     lines.append(f"  Exits: {', '.join(exit_parts)}")

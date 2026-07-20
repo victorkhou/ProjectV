@@ -425,18 +425,19 @@ class CmdAgent(GameSubcommandRouter):
             lines.append(level_line)
 
             from world.systems.agent_system import AgentSystem
+            from world.utils import format_section
             ability_status = view.get("ability_status") or {}
-            ability_parts = []
+            ability_rows = []
             qualifies = False
             for key, wire in ability_status.items():
                 decoded_state, readable = AgentSystem.decode_ability_status(wire)
                 if decoded_state != "locked":
                     qualifies = True
-                ability_parts.append(f"{key}: {readable}")
+                ability_rows.append((key, readable))
             if ability_status and qualifies:
-                lines.append("  Abilities: " + ", ".join(ability_parts))
+                lines.extend(format_section("Abilities", ability_rows))
             else:
-                lines.append("  Abilities: none")
+                lines.extend(format_section("Abilities", [], empty="none"))
         except Exception:
             pass
 

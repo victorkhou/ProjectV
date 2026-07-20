@@ -2106,16 +2106,24 @@ class CmdAdminAlliance(AdminSubcommandRouter):
         if rec is None:
             return
         summary = system.alliance_summary(rec["id"], for_member=True)
+        from world.utils import format_section
         lines = [
             f"|w#{rec['id']} {rec['name']}|n [{rec['tag']}]",
             f"  Leader: {summary['leader']}  Members: {summary['member_count']}"
             f"  Level: {summary['level']}  Open-join: {summary['open_join']}",
             f"  Officers: {rec.get('officer_ids')}  Members: {rec.get('member_ids')}",
-            f"  Treasury: {summary.get('treasury')}",
-            f"  Active perks: {summary.get('active_perks')}",
-            f"  Pending invites: {summary.get('pending_invites')}",
-            f"  Pending requests: {summary.get('pending_requests')}",
         ]
+        # Treasury + active perks render as clean Key - Value rows (they are
+        # mappings — a raw dict repr is unreadable); the raw id/invite lists
+        # above stay as-is (admin diagnostics).
+        lines.extend(format_section("Treasury", summary.get("treasury") or {}, empty="empty"))
+        lines.extend(format_section(
+            "Active perks",
+            {k: f"L{v}" for k, v in (summary.get("active_perks") or {}).items()},
+            empty="none",
+        ))
+        lines.append(f"  Pending invites: {summary.get('pending_invites')}")
+        lines.append(f"  Pending requests: {summary.get('pending_requests')}")
         self.caller.msg("\n".join(lines))
         self._log_admin("inspect", f"#{rec['id']} {rec['tag']}")
 
