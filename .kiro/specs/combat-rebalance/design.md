@@ -1,9 +1,12 @@
 # Combat & Defense Rebalance — Steering Doc
 
-> **Status:** LIVING DESIGN DOC — Phases 0–1 SHIPPED; Phases 2–5 designed & ready.
+> **Status:** LIVING DESIGN DOC — Phase 0 SHIPPED + §6 death-loss SHIPPED; Phase 1
+> PARTIAL (rank-gap done; anti-snowball caps NOT built); Phases 2–5 designed & ready.
 > **Goal:** build a balanced strategy game that is fun to play and fun to fight.
-> **Last updated:** 2026-07-20 (full walkthrough — reconciled stale sections against
-> the settled decisions; re-derived the forward-dep audit against the final ladder).
+> **Last updated:** 2026-07-20 (audit reconciliation — re-grounded every code-claim
+> against the real code; corrected stale §1/§2a present-tense framing of already-
+> shipped fixes; fixed slot-count, AGGREGATED_STATS, planet_access, and Forge-L11
+> claims; locked Elysium = Aether; corrected the §5 agent online-gate).
 > Sections 1–5 capture the evaluation + adversarial design passes; the SHIPPED and
 > SETTLED DECISIONS blocks and the CONSOLIDATED ROADMAP are the authoritative
 > current state — where an older §3–§5 detail conflicts, the top blocks win.
@@ -32,6 +35,13 @@ sound; a number/wiring detail must change — the fix is recorded), **reject**.
 | `e1117df` | Turret damage scales with level (wired dead `turret_level_bonus`) | 0 |
 | `9aa4157` | Freely-craftable essentials are Terra-craftable (forward-dep bug) | 0 |
 | `294ca7a` | Rank-gap PvP protection (anti-ganking, aggressor-aware) | 1 |
+| `b173382` | Full-loss-on-death + Respawn Beacon recovery (§6) | — |
+
+> **Phase 1 is PARTIAL:** the rank-gap penalty (`294ca7a`) shipped, but the
+> anti-snowball caps (DR soft-cap + aggregate permanent-bonus cap, §2a) are **NOT
+> built** — no clamp exists in `_get_attacker_bonus` / `_get_target_armor_reduction`.
+> Those caps are scheduled to land with the Phase-3 damage-type accessors (see the
+> Open-questions light-aggregate-cap note).
 
 ## SETTLED DECISIONS (user, 2026-07-20) — drive the remaining build
 
@@ -60,16 +70,18 @@ sound; a number/wiring detail must change — the fix is recorded), **reject**.
 | Planet | Gate | Rank | Signature resource | Role |
 |--------|------|------|--------------------|------|
 | **Terra** | L1 (home band 1–20) | Recruit | Wood/Stone/Iron + **Biomass** (exclusive) | Start home |
-| **Forge** | L21 | Staff_Sgt | Energy, Circuits | Industrial |
+| **Forge** | L21 | Sergeant | Energy, Circuits | Industrial |
 | **Tundra** | L33 | Lieutenant | **Cryogen** | Frozen |
 | **Inferno** | L46 | Major | **Magmite** (feeds FIRE gear) | Volcanic |
-| **Elysium** | L58 | Colonel | *(signature TBD)* | **Endgame home** (major bases) |
+| **Elysium** | L58 | Colonel | **Aether** | **Endgame home** (major bases) |
 | **Citadel** | L70 | Brigadier | **Nexium** | **Battleground** (raid) |
 | Space | off-ladder hub | — | *(optional, excluded)* | Travel hub |
 
-Even ~12-level gaps, no dead stretch; honors Terra-home-1–20, Citadel=Brigadier
-L70, Elysium below Citadel. **Biomass** = the permanent Terra round-trip anchor
-(feeds consumables/medkits). ⚠ Elysium still needs a signature-resource name.
+Roughly 12-level gaps between the five upper planets (12/13/12/12) plus the
+L20→L21 home-band handoff; no dead stretch; honors Terra-home-1–20,
+Citadel=Brigadier L70, Elysium below Citadel. **Biomass** = the permanent Terra
+round-trip anchor (feeds consumables/medkits). Elysium's signature = **Aether**
+(locked 2026-07-20).
 
 ---
 
@@ -112,7 +124,10 @@ every fight without a permanent-progression penalty.
 - **Recovery method = per-item probabilistic + % of resources:** each held item
   is recovered with probability = the level %; each resource stack recovers
   floor(pct × amount). Variance on gear, smooth on resources.
-- **The building:** early + cheap + upgradable L1–5, **one per planet**, sets the
+- **The building:** early + cheap + upgradable L1–5, **intended one per planet**
+  (⚠ NOT yet enforced — no `MAX_*_PER_PLANET` cap for `respawn_point`;
+  `_find_respawn_building` just returns the first same-planet beacon. Add a cap
+  mirroring `MAX_SHIELD_GENERATORS_PER_PLANET` if the limit must bind), sets the
   player's respawn point on that planet (integrates with `spawn_resolver` —
   likely a new `SPAWN_RESPAWN_BUILDING` option or making it the HQ-tier default).
   New capability e.g. `respawn_point` / `item_recovery`.
@@ -135,11 +150,21 @@ per-planet respawn + 55% floor at L1 keeps early death from being ruinous.
 
 ## 1. Evaluation of the current system
 
+> **⚠ HISTORICAL SNAPSHOT (pre-Phase-0).** This section is the *original diagnosis*
+> that motivated the Phase-0 fixes. The two 🔴 immunity-wall weaknesses and the
+> turret "dead code" weakness have since been **FIXED** (chip floor `5d1522e`,
+> turret scaling `e1117df` — see SHIPPED). The scorecard ratios below are the
+> pre-fix numbers; the "FIXED by" annotations show the current bounded values.
+> Kept for the rationale, not as a description of live behavior.
+
 ### How combat works today
-Single damage formula, single choke point ([combat_engine.py:914](../../../mygame/world/systems/combat_engine.py)):
+Single damage formula, single choke point — `_calculate_damage`
+([combat_engine.py:921-998](../../../mygame/world/systems/combat_engine.py)). The
+**original** floor was a bare `max(0, …)`:
 
 ```
-net_damage = max(0,  weapon_damage  +  attacker_bonus  −  target_damage_reduction)
+# ORIGINAL (pre-5d1522e): net_damage = max(0, weapon_dmg + attacker_bonus − target_DR)
+# CURRENT (shipped):      dealt = max(ceil(raw * chip_fraction), raw − armor, 0)
 ```
 
 Every source — melee, ranged, turret, guard, bomb — routes through
@@ -152,7 +177,7 @@ progression bonuses are **flat-additive** (never multiplicative). HP is a flat
 | Weapon damage | 10 (knife) → 50 (sniper) | grenades/mines 40–90 flat AoE |
 | Max attacker bonus | **+16 permanent** (tech +10, alliance +6) + up to ~13.5 from stacked powerups | flat, additive |
 | Max target DR | **+38** (armor 26 + tech 5 + alliance 7) | flat, additive |
-| Turret / guard | 15 / 10–15 | turret never scales (dead code) |
+| Turret / guard | 15 / 10–15 | *(pre-fix: turret never scaled; FIXED `e1117df` → L1 15 … L5 27)* |
 
 Timing: player `attack`/`shoot` resolve **instantly** (1s wall-clock cooldown);
 turrets fire on the tick *after* combat resolution (a 1-tick dodge window);
@@ -177,32 +202,38 @@ directional shots 0.7. HP regen 0.5/s.
   craftable* and their flat blast punches through even 38 DR.
 - Consistent owner attribution; flat 100 HP avoids a second inflation axis.
 
-### Weaknesses — the imbalance is entirely on the DEFENSE axis
-- 🔴 **The flat-DR immunity wall (THE core violation).** Damage floors at **0**
-  (not 1) and DR is flat-additive, so **any DR ≥ a weapon's raw damage = total
-  invulnerability to that weapon.** A new player's best freely-craftable gun
-  (assault_rifle 25) does **literally zero** damage to a 38-DR defender — no
-  amount of skill changes it. Worse, that defender still regens 0.5 HP/s
-  (unkillable *and* healing).
-- 🔴 **Immunity threshold is mid-game, not endgame.** Kevlar (16) + improved_armor
-  tech (5) + alliance combat_armor L2 (5) = **26 DR** already zeroes the assault
-  rifle — no power armor needed.
-- 🟠 **Base defenses rot.** Turrets (15) and guards (10–15) floored to 0–3 by just
-  +12 DR, and `turret_level_bonus` is **dead code** (resource_system.py:320 never
-  called) so turrets never improve.
-- 🟠 **Buildings get 0 DR**, so high-amount mines breach any wall; short-fuse
-  bombs are structurally undisarmable (fuse decrements before the disarm timer).
+### Weaknesses — the imbalance was entirely on the DEFENSE axis
+- ✅ **FIXED (`5d1522e`) — the flat-DR immunity wall (was THE core violation).**
+  *Pre-fix:* damage floored at **0** and DR is flat-additive, so any DR ≥ a
+  weapon's raw damage = total invulnerability (assault_rifle 25 did **literally
+  zero** to a 38-DR defender, who also regened 0.5 HP/s — unkillable *and*
+  healing). *Now:* the chip floor guarantees ≥ `ceil(raw × 0.5)` always lands, so
+  assault_rifle 25 deals **13** to that defender (EHP ≈ 7.7 hits, finite).
+- ✅ **FIXED (same floor) — the mid-game immunity threshold.** *Pre-fix:* full
+  modern armor set (16 DR) + improved_armor tech (5) + alliance combat_armor L2
+  (5) = **26 DR** already zeroed the assault rifle. *Now:* the chip floor applies
+  regardless of DR, so no armor total grants immunity.
+- ✅ **FIXED (`e1117df`) — turret scaling.** *Pre-fix:* `turret_level_bonus` was
+  dead code (`get_turret_damage` never called), so turrets dealt a flat 15
+  forever. *Now:* `process_turrets` scales the synthetic weapon by level
+  (L1 15 → L5 27). Guards (10–15) still don't scale by design.
+- 🟠 **STILL OPEN — Buildings get 0 DR**, so high-amount mines breach any wall;
+  short-fuse bombs are structurally undisarmable (fuse decrements before the
+  disarm timer). (§3a's decision: building **SHIELD**, not armor, is the blast
+  defense — this is the intended structure, not a bug to floor.)
 
-### Principle scorecard
-| Comparison | Ratio | Verdict |
-|------------|-------|---------|
-| Raw damage: maxed attacker vs newbie's best gun | 2.64× | tolerable (armor counters) |
-| Effective HP: 38-DR target vs 0-DR, vs sniper 50 | **4.16×** | ⚠ violation |
-| Effective HP: 38-DR target vs newbie's assault_rifle 25 | **∞ (immune)** | 🔴 hard violation |
+### Principle scorecard *(pre-chip-floor; see "now" column for shipped values)*
+| Comparison | Pre-fix ratio | Now (chip floor) | Verdict |
+|------------|------|------|---------|
+| Raw damage: maxed attacker vs newbie's best gun | 2.64× | 2.64× (unchanged; offense untouched) | tolerable (armor counters) |
+| Effective HP: 38-DR target vs 0-DR, vs sniper 50 | **4.16×** | **2.0×** (25 vs 50 dmg/hit) | ✅ within 2× |
+| Effective HP: 38-DR target vs newbie's assault_rifle 25 | **∞ (immune)** | **~1.9×** (13 vs 25 dmg/hit) | ✅ no longer immune |
 
-**Bottom line:** the danger of a flat-additive model with a zero floor is exactly
-what the user anticipated — armor stops being an *advantage* and becomes an
-on/off *invulnerability switch*. The fix is structural (below).
+**Bottom line (original):** the danger of a flat-additive model with a zero floor
+is exactly what the user anticipated — armor stopped being an *advantage* and
+became an on/off *invulnerability switch*. **This is now fixed** — the structural
+fix (the chip floor) shipped in `5d1522e`; armor is once again a bounded advantage
+(≤2× EHP), never immunity.
 
 ---
 
@@ -212,18 +243,21 @@ on/off *invulnerability switch*. The fix is structural (below).
 fix noted, not a balance failure.
 
 ### 2a. Anti-snowball / balance-fixes (the keystone)
-- **✅ SOUND — Mitigation Cap + Chip Floor.** Replace `max(0, …)` at
-  combat_engine.py:915 with a floor equal to **50% of the attack's raw output**:
-  `net = max((raw+1)//2, raw − eff_dr)`. Damage reduction can then never grant
-  total immunity — it caps at halving. Scales off the *attacker's* weapon, so it
-  never buffs damage vs a low-DR newbie; only ever *weakens the strongest
-  defender* (∞ EHP → finite). **This single change restores "skill can overcome
-  progression."** *This is the highest-priority fix.*
-- **Diminishing-returns soft cap on stacked DR** (needs-adj): each DR point past
-  12 worth only half, so armor curves instead of hitting the invulnerability
-  breakpoint.
-- **Cap aggregate permanent (tech+perk) flat bonuses** (needs-adj): clamp
-  non-gear flat contribution to a small ceiling on both axes.
+- **✅ SHIPPED (`5d1522e`) — Mitigation Cap + Chip Floor.** The `max(0, …)` in
+  `_calculate_damage` ([combat_engine.py:978-989](../../../mygame/world/systems/combat_engine.py))
+  is now `dealt = max(ceil(raw × chip_fraction), raw − armor, 0)` with a **50%**
+  floor (tunable `chip_damage_min_fraction`, default 0.5; 0 = kill switch).
+  Damage reduction can no longer grant total immunity — it caps at halving. Scales
+  off the *attacker's* weapon, so it never buffs damage vs a low-DR newbie; only
+  ever *weakens the strongest defender* (∞ EHP → finite). **This single change
+  restored "skill can overcome progression"** — it was the highest-priority fix.
+- **Diminishing-returns soft cap on stacked DR** (needs-adj, **NOT built**): each
+  DR point past 12 worth only half, so armor curves instead of hitting the
+  invulnerability breakpoint. *(Largely subsumed by the shipped chip floor; a
+  soft-cap is now belt-and-suspenders, not load-bearing.)*
+- **Cap aggregate permanent (tech+perk) flat bonuses** (needs-adj, **NOT built** —
+  scheduled Phase 3): clamp non-gear flat contribution to a small ceiling on both
+  axes. See the Open-questions light-aggregate-cap note.
 - **PvP gear-drop on death + underdog bounty** (needs-adj): victim drops equipped
   gear on defeat, drop-chance *rises when the victim outranks the killer* →
   attainable-and-losable power, catch-up for underdogs.
@@ -262,14 +296,24 @@ fix noted, not a balance failure.
 - **Grappling Hook** (needs-adj): 3-charge mobility, cross walls. Telegraphed
   arrival tile is the counter.
 - **Incendiary Rounds** (needs-adj): small burn DoT resolved *after* DR, so it
-  lands even through the immunity wall. Countered by medkit/regen.
+  lands independent of the target's armor total (a chip-through-armor vector even
+  vs a high-DR turtle). Countered by medkit/regen.
 - **Holographic Decoy** (needs-adj, large): pulls turret/guard/lock aggro; lets a
   raider peel static defenses. AoE hits real+decoy alike.
 
 ### 2d. Classes — sidegrades (a strength paired with a weakness), never a power tier
-- **✅ SOUND — Ranger, Weak-Point Marksman:** fully-locked shot ignores ~12 flat
-  DR — the **skill-gated** answer to the immunity wall (must hold a lock, stand
-  still). Countered by closing distance / breaking LOS. *Standout.*
+> **⚠ PREREQUISITE — the class layer is cosmetic-only today.** `classes.yaml` +
+> `ClassDef` carry key/name/description with **no `stat_modifiers`**, and
+> `db.player_class` has **zero combat/equipment consumers** (it's a stored label
+> only). So *every* ability below — including the ✅-"standout" Ranger lock-gated
+> DR bypass — is **new engine work** (a class-mechanics system + hooks), not a
+> data/stat tweak. "✅ SOUND" here means *balance-sound*, not *ready-to-wire*.
+> Build the class-mechanics substrate first (Phase 5 dependency).
+
+- **✅ SOUND (balance) — Ranger, Weak-Point Marksman:** fully-locked shot ignores
+  ~12 flat DR — the **skill-gated** turtle-breaker (must hold a lock, stand
+  still). Countered by closing distance / breaking LOS. *Standout — but its core
+  lock-based armor-pen mechanic is entirely unimplemented.*
 - **Vanguard, Line-Breaker** (needs-adj): +15 HP, faster in-combat move; −0.15
   accuracy, −1 range. Bruiser that must close. Countered by kiting.
 - **Engineer, Fortifier** (needs-adj): faster/cheaper build & repair, sees farther;
@@ -292,11 +336,20 @@ cosmetic. **Key lessons that must shape implementation:**
 
 ### Damage-type system — the hard rules the verify pass established
 - **Backbone is sound:** branch `_calculate_damage` on a weapon `damage_type`
-  (default `physical`), refactor `_get_target_armor_reduction` → typed
-  `_get_target_resist`. `get_stat_total` already sums any new stat key across the
-  5 armor slots, so adding `fire_resist`/`psychic_resist`/`blast_plating` to
-  `AGGREGATED_STATS` works for free. Physical keeps today's flat model; the other
-  types read their OWN resist and nothing else.
+  (default `physical`), refactor `_get_target_armor_reduction`
+  ([combat_engine.py](../../../mygame/world/systems/combat_engine.py)) → a typed
+  `_get_target_resist`. **Corrected mechanism:** `get_stat_total`
+  ([equipment_handler.py:209](../../../mygame/world/systems/equipment_handler.py),
+  NOT equipment_system) already sums **any** stat key it's passed across **all
+  equipped gear** (the 9 armor-bearing body slots + weapon + accessory = 11
+  slots, not "5 armor slots"), and the schema applies **no key allowlist** — so a
+  typed resist works with **no `AGGREGATED_STATS` edit**. ⚠ `AGGREGATED_STATS`
+  ([constants.py:110](../../../mygame/world/constants.py)) is **inert
+  documentation** (only a property test reads it) — editing it does nothing
+  functional. The actual work is: (a) a new `get_stat_total('fire_resist')`-style
+  call inside the renamed resist method, and (b) the physical branch keeps today's
+  flat model while other types read their OWN resist and nothing else. (Composite
+  Plating's post-DR % step is likewise NEW engine code, not free aggregation.)
 - 🔴 **% mitigation cap must be ≤ 50%, NOT 75%.** A 75% cap = 4× effective HP on
   that axis = a >2× progression violation. Cap each %-resist axis at 50% so no
   single axis exceeds 2× EHP.
@@ -326,9 +379,14 @@ cosmetic. **Key lessons that must shape implementation:**
   here as *the* actual fix for total immunity — do it regardless of damage types.
 
 ### Planet segregation
-- ✅ Approach: **planets.yaml LEVEL gate = single source of truth; retire
-  ranks.yaml `planet_access`** (or regenerate it from the level gate).
-- `CmdTravel` enforcing `can_access_planet` is the missing wiring.
+- ✅ Approach: **planets.yaml LEVEL gate = single source of truth.** Clarification
+  from the audit: `ranks.yaml planet_access` is **already dead data** — it's
+  loaded into `RankDef` and schema-validated, but has **no runtime consumer**. The
+  only executed gate is `can_access_planet`
+  ([rank_system.py:246](../../../mygame/world/systems/rank_system.py)), which reads
+  solely the planets.yaml level `rank_requirement`. So this is "delete or
+  regenerate stale data," not "resolve a live competing gate."
+- `CmdTravel` enforcing `can_access_planet` is the missing wiring (zero callers today).
 - ⚠ A hard cross-band **attack block** risks a 2× problem / grief vector; prefer
   **intra-band level-gap damage attenuation** (a defense that always leaves the
   newbie able to fight back) over a hard block.
@@ -346,39 +404,44 @@ cosmetic. **Key lessons that must shape implementation:**
 
 ### 3.5 Planet/resource/rank RE-MAP  *(FINALIZED 2026-07-20 — decisions locked, audit re-derived)*
 
-**The final ladder** (gate = band-low level of the rank; single source of truth =
-planets.yaml LEVEL, ranks.yaml `planet_access` regenerated to match). This is the
-even-spaced ladder from the SETTLED decisions (Terra home L1–20, Citadel L70) —
-it supersedes the earlier draft:
+**The final ladder** (single source of truth = planets.yaml LEVEL; ranks.yaml
+`planet_access` is dead data → delete/regenerate). The **Rank** column names the
+rank a player IS at the gate level per `RANK_BANDS`
+([constants.py](../../../mygame/world/constants.py)) — it is a label, NOT a
+"band-low" rule (only Terra/Inferno/Citadel happen to land on a band-low). This is
+the even-spaced ladder from the SETTLED decisions (Terra home L1–20, Citadel L70):
 
-| # | Planet | Gate | Rank | Resources (▲ = new this rung) | Role |
+| # | Planet | Gate | Rank @ gate | Resources (▲ = new this rung) | Role |
 |---|--------|------|------|-------------------------------|------|
 | 1 | **Terra** | **L1** (home band 1–20) | Recruit | Wood, Stone, Iron, ▲**Biomass** (exclusive) | Start home |
-| 2 | **Forge** | **L21** | Staff_Sgt | Iron, ▲**Energy**, ▲**Circuits** | Industrial |
+| 2 | **Forge** | **L21** | Sergeant | Iron, ▲**Energy**, ▲**Circuits** | Industrial |
 | 3 | **Tundra** | **L33** | Lieutenant | Stone, Iron, ▲**Cryogen** | Frozen |
 | 4 | **Inferno** | **L46** | Major | Iron, Energy, ▲**Magmite** (feeds FIRE gear §3a) | Volcanic |
 | 5 | **Elysium** | **L58** | Colonel | Wood, Stone, Iron, Energy, Circuits, ▲**Aether** — **NOT Biomass** | **Endgame home** (major bases) |
 | 6 | **Citadel** | **L70** | Brigadier | Iron, Energy, Circuits, ▲**Nexium** | **Battleground** (raid, not staged) |
 | — | **Space** | off-ladder hub | — | *(optional, excluded from progression)* | Travel hub |
 
-Even ~12-level gaps (20→21→33→46→58→70): 1 / 12 / 13 / 12 / 12 — **no dead
-stretch** (the old L29→L57 gap is gone). ✅ Honors Terra-home-1–20,
-Citadel=Brigadier L70, Elysium below Citadel.
+Gaps 20→21→33→46→58→70 = 1 / 12 / 13 / 12 / 12: **~12-level spacing between the
+five upper planets** plus the L20→L21 home-band handoff — **no dead stretch** (the
+old L29→L57 gap is gone). ✅ Honors Terra-home-1–20, Citadel=Brigadier L70, Elysium
+below Citadel.
 
 **New resource types required** (each needs a `RESOURCE_TYPES` entry in
 constants.py + a `resource_weights` value in balance.yaml + a terrain-tile
-re-type). Beyond today's 6 (Wood/Stone/Iron/Energy/Circuits/Nexium), add **3**
-(+1 TBD for Elysium):
+re-type). Beyond today's 6 (Wood/Stone/Iron/Energy/Circuits/Nexium), add **4**
+(Biomass, Cryogen, Magmite, Aether):
 - **Biomass** (Terra) — permanently-exclusive; re-type a null Terra tile
-  (Plains/Dirt). **Sink = consumables** (medkits/stims/cleanse) → constant
-  universal demand, the permanent Terra round-trip anchor. Graduation
-  push-throttles MUST exempt it.
-- **Cryogen** (Tundra L33) — re-type Hot_Spring/Frozen_Lake. Gates a cold
-  sidegrade (slow-field / cryo ammo).
-- **Magmite** (Inferno L46) — re-type Sulfur_Pit/Lava_Flow. Gates the FIRE
-  damage-type gear (§3a).
+  (Plains/Dirt — both exist and yield nothing today). **Sink = consumables**
+  (medkits/stims/cleanse) → constant universal demand, the permanent Terra
+  round-trip anchor. Graduation push-throttles MUST exempt it.
+- **Cryogen** (Tundra L33) — re-type Hot_Spring/Frozen_Lake (both null today).
+  Gates a cold sidegrade (slow-field / cryo ammo).
+- **Magmite** (Inferno L46) — re-type Sulfur_Pit/Lava_Flow (both null today).
+  Gates the FIRE damage-type gear (§3a). ⚠ inert until the Phase-3 fire gear ships.
 - **Aether** (Elysium L58) — the endgame-home signature; gates end-tier
-  **sidegrade utility** (QoL/lateral, never raw power).
+  **sidegrade utility** (QoL/lateral, never raw power). ⚠ **no existing tile to
+  re-type** — its source terrain must be authored with the net-new Elysium planet
+  (unlike the other 3, which re-type existing null tiles).
 
 **Dependency audit — RE-DERIVED against the final ladder** (Energy/Circuits now
 at Forge **L21**, Cryogen L33, Magmite L46, Nexium L70). Only the **Energy/
@@ -409,7 +472,12 @@ access from the level gate via `can_access_planet`.
 
 > **Original captured intent (pre-remap), retained for reference:**
 
-### 3a. Five damage types (the user's flagship idea — structural fix for the immunity wall)
+### 3a. Damage types (the user's flagship idea — structural fix for the immunity wall)
+> **SETTLED: 4 types ship (Physical/Fire/Psychic/Blast). Sound is CUT** — there
+> is no combat crit system (only harvest_crit), so its "bypass on crit" mechanic
+> has nothing to hook. Do not reference crits. The strikethrough bullet below is
+> retained only to record why it was dropped.
+
 Splitting damage into types with **type-specific resists** means no single armor
 stat grants universal immunity — a slot/weight/cost budget forces every build to
 specialize, always leaving a hole a skilled attacker can exploit (satisfies
@@ -418,8 +486,10 @@ principle 1: every defense has an attack that answers it).
 - **Physical / regular** — reduced by normal armor DR (current model).
 - **Fire** — applies a burn DoT to players; needs fire resist; partially ignores
   physical DR.
-- **Sound / sonic** — high crit/headshot chance; bypasses armor on crit;
-  countered by ear protection.
+- ~~**Sound / sonic** — high crit/headshot chance; bypasses armor on crit;
+  countered by ear protection.~~ **CUT (no crit system).** If ever revived, make
+  it a flat armor-piercing type with a flat `sound_resist` (mirrors Blast), never
+  crit-based.
 - **Psychic** — bypasses physical armor entirely; only psychic-specific armor
   resists it (a pure physical turtle is fully exposed unless they also carry
   psychic gear).
@@ -430,8 +500,10 @@ principle 1: every defense has an attack that answers it).
 ### 3b. Planet segregation (limit seasoned-vs-new contact)
 - `can_access_planet` exists ([rank_system.py:246](../../../mygame/world/systems/rank_system.py))
   but is **UNWIRED** — no travel command, zero callers.
-- **Data conflict to resolve:** planets.yaml gates by LEVEL, ranks.yaml
-  `planet_access` gates by RANK NAME. Pick one source of truth.
+- **Stale data to clean up (not a live conflict):** planets.yaml gates by LEVEL
+  (the only executed gate); ranks.yaml `planet_access` is loaded but **read by
+  nothing**. Delete or regenerate it from the level gate — it competes with
+  nothing at runtime.
 - Design a player-facing `travel`/`warp` command that enforces access; decide
   the segregation model (home-planet band, soft/hard block on returning to farm
   newbies) — but see §4/§5: return trips are *wanted*, just economic not PvP.
@@ -473,10 +545,11 @@ pass demanded it on every push mechanic.
 ### PULL — make the next planet attractive
 - **Signature Resource Ladder** (needs-adj): each planet is the sole source of
   one signature resource gating a **sidegrade** gear/tech family (fixes the flaw
-  that Tundra L31 yields the *same* Wood/Stone/Iron as Terra L1). ⚠ Two
-  corrections: (1) new resource names (Cryonite/Pyronite) MUST be added to
-  `RESOURCE_TYPES` (constants.py) + `resource_weights` (balance.yaml) or schema
-  validation rejects the whole registry; (2) "distinct properties" (shield-
+  that Tundra L33 yields the *same* Wood/Stone/Iron as Terra L1). ⚠ Two
+  corrections: (1) the new resource names (locked: **Biomass/Cryogen/Magmite/
+  Aether**) MUST be added to `RESOURCE_TYPES` (constants.py) + `resource_weights`
+  (balance.yaml) or schema validation rejects the whole registry; (2) "distinct
+  properties" (shield-
   pierce/DoT/slow) are a **combat-engine feature**, not small — ship v1 using
   only stat_modifiers the engine already reads (damage/range/DR/move_speed), and
   treat novel properties as §3a damage-type work with paired defenses.
@@ -486,10 +559,12 @@ pass demanded it on every push mechanic.
 - **Planet-Tier NPC Bases & Rare-Gear Scaling** (needs-adj): tougher bases +
   higher `rare_gear_chance` up top; some rares drop *only* from Citadel-tier
   fortresses. Confined spatially so Terra keeps its gentle 0.03/0.08 rolls.
-- **Nexium Economy Sink — Refinery/Converter** (needs-adj): gives the currently-
-  inert Nexium a real recurring sink (convert bulk lower-tier → scarce higher-
+- **Nexium Economy Sink — Refinery/Converter** (needs-adj): Nexium's **only sink
+  today is one-time alliance-perk activation** (alliance_perks.yaml costs it;
+  `activate_perk` in alliance_system.py deducts it) — so it's not *inert*, it just
+  lacks a **recurring** sink. Add one (convert bulk lower-tier → scarce higher-
   tier, or a Nexium-cost upgradable building). ⚠ Do NOT let it *output* Nexium
-  (no compounding); make it a recurring sink not a one-time build tax.
+  (no compounding); make it a recurring sink, not a one-time build tax.
 
 ### PUSH — make camping the old planet unrewarding (all gated by the ⭐ fix above)
 - **Outgrown-Planet XP Falloff** (needs-adj): XP for all actions scaled by the
@@ -533,22 +608,25 @@ ganking.** Agents run this: harvest **and** defense on lower planets while the
 owner operates up top. The rank-gap penalty (§3c) removes the *reason* to gank;
 resource dependency preserves the *reason* to visit.
 
-**Architectural finding (verified in code):**
-- Agents **already tick cross-planet.** `agent_system.process_tick`
-  (typeclasses/scripts.py `agent_processing` step) is fed the FULL agent roster
-  via `_get_all_agents`, gated only per-agent — **not** by owner
-  presence/planet. A harvester left on Terra keeps working while the owner is on
-  Citadel. → This vision is **close to already-supported, not from-scratch.**
-- ✅ **Caveat RESOLVED (verified 2026-07-20).** The concern was that
-  `_compute_active_data` only activates chunks on planets with an online player.
-  But `agent_processing` runs `agent_system.process_tick` over the FULL agent
-  roster (`_get_all_agents`), and each `HarvesterScript.at_repeat` acts on the
-  agent's own building/tile + owner's resource pool with **no online/presence/
-  planet gate anywhere** in agent_behavior/agent_system/agent_scripts. So a
-  harvester left on Terra keeps working while its owner is on Elysium. The
-  cross-planet agent economy is **already supported** — the only missing piece is
-  the `CmdTravel` command to place agents on lower planets (Phase 2). No new
-  per-agent-tick mechanic required.
+**Architectural finding (verified in code, corrected 2026-07-20):**
+- Agents **already tick cross-planet, with NO planet gate.**
+  `agent_system.process_tick` (typeclasses/scripts.py `agent_processing` step,
+  registered unconditionally) is fed the FULL agent roster via `_get_all_agents`
+  — **not** gated by owner *planet*. A harvester left on Terra keeps working while
+  the owner plays on Elysium. → cross-*planet* is **already supported**.
+- ⚠ **BUT there IS an owner-ONLINE gate** (the earlier "no gate anywhere" claim
+  was wrong). `HarvesterScript.at_repeat`
+  ([agent_scripts.py:156-161](../../../mygame/typeclasses/agent_scripts.py)) checks
+  `owner.has_account` and **returns without producing while the owner is offline**
+  ("resources would just accumulate unprotected and get cleaned on next disconnect
+  anyway"). So the cross-planet economy works **while you're logged in on any
+  planet, NOT while logged off.**
+- ✅ **DECISION (2026-07-20): keep the online gate.** No passive/offline
+  stockpiling — production tracks a live session. This is deliberate (avoids the
+  unprotected-overnight-stockpile problem); revisit only if a passive economy is
+  later wanted (would need an offline-accumulation + raid/protection design).
+- **Only missing piece: `CmdTravel`** to place agents on lower planets (Phase 2).
+  No new per-agent-tick mechanic required.
 
 ---
 
@@ -558,9 +636,9 @@ Ordered by dependency (what unblocks what) and by
 "fix-the-violation-before-adding-content." Each phase is independently shippable
 and testable. Effort tags from the verified proposals.
 
-### Phase 0 — Keystone bug fixes *(small, do first, no dependencies)*
-The combat model is broken *today*; these restore the core principle and can ship
-before any new content.
+### Phase 0 — Keystone bug fixes *(✅ SHIPPED)*
+These restored the core principle (the combat model *was* broken; it no longer is)
+and shipped before any new content.
 - **[S] ✅ DONE — Mitigation Cap + Chip Floor** (§2a) — `max(0,…)` →
   `max(ceil(raw*fraction), raw−armor, 0)` at combat_engine.py `_calculate_damage`.
   Kills the flat-DR immunity wall (∞ EHP → finite ~2×). New tunable
@@ -581,25 +659,38 @@ before any new content.
   (`test_freely_craftable_items_need_only_starter_planet_resources`) enforces
   the invariant going forward, deriving starter resources from the real terrain
   data. **Still pending (resolved by the Phase 2 re-map, not re-costed):**
-  `energy_cell` + `combat_stim` are futuristic-tech supplies — the re-map moving
-  Forge → L11 makes their Energy/Circuits reachable at their tier; re-costing an
-  "energy cell" to wood would be nonsensical. The guard allowlists these two.
+  `energy_cell` (futuristic-classed) + `combat_stim` (modern, Medbay-produced) are
+  Energy/Circuits-costed supplies — the Phase-2 re-map **gates them → L21+** (where
+  Forge first makes Energy/Circuits reachable); re-costing an "energy cell" to wood
+  would be nonsensical. The guard allowlists these two. *(Correction: the ladder
+  puts Forge at **L21**, not the earlier-draft L11; and only `energy_cell` is
+  futuristic — `combat_stim` is a modern consumable.)*
 
-### Phase 1 — New-player protection *(small–medium; depends on Phase 0)*
-- **[S] Rank-gap attack penalty** (§3c) — the ✅-sound owner-attributed version
-  with base-defense exemption; floored (never zero → self-defense preserved).
-- **[S] Kill-XP decay + loot penalty vs down-rank victims** (§2a/§4) — removes
-  newbie-farming as a snowball engine.
-- **[S] Anti-snowball fixes** (§2a) — DR soft-cap + permanent-bonus cap.
+### Phase 1 — New-player protection *(PARTIAL; depends on Phase 0)*
+- **[S] ✅ DONE — Rank-gap attack penalty** (§3c, `294ca7a`) — the owner-attributed
+  version with base-defense exemption; floored (never zero → self-defense
+  preserved).
+- **[S] ✅ DONE (XP only) — Kill-XP decay vs down-rank victims** (§2a/§4) — kill XP
+  scales by `rank_gap_xp_loot_mult`; removes newbie-farming as a snowball engine.
+  ⚠ The **loot** half is NOT wired — the defeat handler transfers no loot to the
+  killer at all (death-loss destroys stripped gear, no ground drop), so the "loot
+  penalty" and the PvP gear-drop-on-death proposal (§2a) remain unshipped despite
+  the `rank_gap_xp_loot_mult` name.
+- **[S] ❌ NOT BUILT — Anti-snowball caps** (§2a) — DR soft-cap + aggregate
+  permanent-bonus cap. No clamp exists in `_get_attacker_bonus` /
+  `_get_target_armor_reduction`. Scheduled to land with the Phase-3 damage-type
+  accessors (see Open-questions light-aggregate-cap). Largely belt-and-suspenders
+  now that the chip floor is shipped.
 
 ### Phase 2 — Planet re-map + travel *(medium; the structural backbone)*
 Do the re-map as ONE coordinated change (gates + resources + recipe audit move together).
 - **[S] Resolve gate conflict** — planets.yaml level = source of truth; regen
   ranks.yaml `planet_access`.
 - **[M] Apply the final ladder** (§3.5) — gates Terra 1–20 / Forge L21 / Tundra
-  L33 / Inferno L46 / Elysium L58 / Citadel L70; 3 new resources
-  (Biomass/Cryogen/Magmite) + Elysium's TBD signature; Tundra de-duplication,
-  Space → off-ladder hub, Citadel → L70.
+  L33 / Inferno L46 / Elysium L58 / Citadel L70; **4 new resources**
+  (Biomass/Cryogen/Magmite/**Aether**); ⚠ **Elysium is a net-new planet** (author
+  its entry + z_level + spawn + 8 terrain tiles, incl. Aether's source tile);
+  Tundra de-duplication, Space → off-ladder hub, Citadel → L51→L70.
 - **[S] Apply the LOCKED forward-dep fixes** (§3.5 audit): gate plasma_rifle/
   plasma_grenade/energy_cell/combat_stim → L21+; re-cost Shield Generator + Radar
   to basics; nudge Medbay + Relay gates → L21.
@@ -610,9 +701,12 @@ Do the re-map as ONE coordinated change (gates + resources + recipe audit move t
 ### Phase 3 — Damage-type system *(medium–large; depends on Phase 0 floor)*
 Ship incrementally, physical-first (default `physical` = zero-risk migration).
 - **[M] Type-aware backbone** — branch `_calculate_damage`, typed
-  `_get_target_resist`, new AGGREGATED_STATS keys. **Enforce (SETTLED):** 50%
-  per-axis cap (NO global budget), baseline resist for ALL at spawn, and a
-  loadout-scouting readout / on-hit effectiveness so type choice is informed.
+  `_get_target_resist` calling `get_stat_total('<type>_resist')` (any key sums
+  across gear for free; **no `AGGREGATED_STATS` edit needed** — that tuple is
+  inert docs). Fold the **aggregate permanent-bonus cap** in here (same accessors;
+  the unbuilt Phase-1 anti-snowball item). **Enforce (SETTLED):** 50% per-axis cap
+  (NO global budget), baseline resist for ALL at spawn, and a loadout-scouting
+  readout / on-hit effectiveness so type choice is informed.
 - **[M] Fire + burn DoT** (needs a small EffectSystem tick) — pairs w/ Magmite.
 - **[S] Psychic** (physical-armor bypass) · **[L] Blast** (armor-durability;
   building SHIELD stays the blast defense). *Sound is NOT shipped (no crit system).*
@@ -628,9 +722,13 @@ Ship incrementally, physical-first (default `physical` = zero-risk migration).
   higher-planet rewards.
 
 ### Phase 5 — Content depth *(as desired; mostly independent)*
-Turtle-breakers (Tungsten AP rounds ✅, Ranger Marksman ✅, AP-rounds tech), the
-sidegrade classes, loseable-gear catalog, QoL techs (Logistics Network ✅), the
-new attack vectors (EMP, smoke, grappling, decoy).
+Turtle-breakers (Tungsten AP rounds, Ranger Marksman, AP-rounds tech), the
+sidegrade classes, loseable-gear catalog, QoL techs (Logistics Network), the
+new attack vectors (EMP, smoke, grappling, decoy). ⚠ **Prerequisite for all
+class abilities:** the class layer is cosmetic-only today (`ClassDef`/classes.yaml
+carry no `stat_modifiers`; `db.player_class` is unread by combat) — build a
+class-mechanics substrate first. The ✅ marks here mean *balance-verified*, not
+*already-wired* (nothing in §2/§5 combat content is shipped yet).
 
 ### Cross-cutting invariants (apply in every phase)
 1. **50% per-axis % mitigation, NO global budget** (SETTLED); baseline resist for
@@ -646,10 +744,12 @@ new attack vectors (EMP, smoke, grappling, decoy).
 ## Open questions (for you)
 **None — the spec is fully decided.** All resolved (2026-07-20):
 - ✅ Planet + resource names: **Elysium** (home), **Biomass** (Terra), **Cryogen**
-  (Tundra), **Magmite** (Inferno), **Aether** (Elysium). Space = off-ladder hub.
+  (Tundra), **Magmite** (Inferno), **Aether** (Elysium — locked). Space = off-ladder hub.
 - ✅ **Biomass sink = consumables** (medkits/stims).
-- ✅ **Pacing:** even ~12-level ladder (Terra home 1–20 → Forge 21 → Tundra 33 →
-  Inferno 46 → Elysium 58 → Citadel 70); the old 28-level gap is gone.
+- ✅ **Pacing:** ~12-level gaps between the five upper planets (12/13/12/12) plus
+  the L20→L21 home-band handoff (Terra home 1–20 → Forge 21 → Tundra 33 → Inferno
+  46 → Elysium 58 → Citadel 70); the old 28-level dead stretch is gone.
+- ✅ **Agent economy: online-gated** (§5) — no offline/passive stockpiling.
 - ✅ **Travel friction = cost/cooldown** (+ shipped rank-gap protection).
 - ✅ **Forward-dep audit** re-derived + per-item fixes LOCKED (§3.5).
 - ✅ **Cross-planet agents** already tick without an online player (§5 verified).
