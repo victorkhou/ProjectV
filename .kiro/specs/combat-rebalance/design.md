@@ -1,7 +1,8 @@
 # Combat & Defense Rebalance — Steering Doc
 
 > **Status:** LIVING DESIGN DOC — Phase 0 SHIPPED + §6 death-loss SHIPPED; Phase 1
-> PARTIAL (rank-gap done; anti-snowball caps NOT built); Phases 2–5 designed & ready.
+> PARTIAL (rank-gap done; anti-snowball caps NOT built); Phases 2–5 designed & ready
+> (§7 travel + transport design locked 2026-07-20).
 > **Goal:** build a balanced strategy game that is fun to play and fun to fight.
 > **Last updated:** 2026-07-20 (audit reconciliation — re-grounded every code-claim
 > against the real code; corrected stale §1/§2a present-tense framing of already-
@@ -630,6 +631,208 @@ resource dependency preserves the *reason* to visit.
 
 ---
 
+## 7. Cross-planet travel + transport  *(DESIGN LOCKED 2026-07-20 — brainstorm)*
+
+This is the concrete design for Phase-2's `CmdTravel`. It is **wiring + friction +
+arrival logic on proven plumbing**, not new engine work: the cross-coordinate-space
+move already exists (admin teleport's `_relocate_object(caller, room, tx, ty,
+planet)` + `_resolve_planet_room`, [admin_commands.py:1519](../../../mygame/commands/admin_commands.py)),
+the access gate already exists (`can_access_planet`,
+[rank_system.py:246](../../../mygame/world/systems/rank_system.py) — level ≥
+planet `rank_requirement`; **zero callers today**), and player position is just
+`db.coord_planet` + `db.coord_x/y`.
+
+### 7.0 Decision ledger (all locked 2026-07-20)
+
+| Piece | Decision |
+|-------|----------|
+| **Travel model** | **Launch Pad building** (not a bare command). You travel *from* a pad you build. |
+| **Routing** | **Two legs through Space:** surface → Space station → destination surface. |
+| **Space** | **Real contested PvP corridor** — every hop transits an ungated Space station where anyone can collide. |
+| **Pad symmetry** | **Launch to leave; Beacon `recall home` to return.** A pad is needed to lift off; first arrival on a virgin planet lands at your Beacon/HQ else public spawn. No strand-lock. |
+| **Fuel** | **Two-tier:** Basic Fuel Cell (Terra basics → single-rung hop) / Premium Fuel Cell (Energy+Circuits → multi-rung jumps). |
+| **Onboarding** | **Announce the unlock** at the gate-crossing level-up + a **teaching `launch`** command when unusable. |
+| **Agent transport** | **Load as pad cargo** — `load agent <id>` → manifest (agent goes `reserve`/inert) → rides launch → arrives unassigned. |
+| **Resource haul** | **Manual `load <n> <resource>` now**; **courier agent role** (auto-route) as Phase-4 depth. |
+| **Reverse-gank** | **Feature + defend-my-property exemption** (see 7.4). |
+| **Presence** | **Single body** (one `coord_planet`); agents = your remote presence; **turrets = offline defense, agents = online defense**. |
+| **Transit failure** | Manifested agents/resources **return to your HQ/Beacon** (mirrors the shipped death-recovery pattern) — no permanent loss, you eat the fuel + time. |
+
+### 7.1 The loop
+
+```
+[Launch Pad on Terra] ──launch──▶ [Space Station] ──launch <planet>──▶ land on far side
+      (build once)                 (ungated PvP           (access-gated; land at your
+                                     corridor)             Beacon/HQ, else public spawn)
+```
+
+Travel is **never direct** — always Planet → Space → Planet, and Space is a tile
+you *land in*, not a loading screen. `CmdLaunch` = `can_access_planet` gate + fuel
+burn + cooldown + the existing `_relocate_object` move + an arrival look.
+
+### 7.2 The unlock journey (end-to-end, gap-free)
+
+Persona: **Rooke** crosses **L20 → L21**; Forge (gate L21) unlocks.
+
+1. **Announce.** The gate-crossing `rank_level_up` notification
+   ([rank_system.py:302](../../../mygame/world/systems/rank_system.py)) appends
+   *"New planet unlocked: Forge (industrial) — build a Launch Pad to travel."* The
+   gate level is known at promotion time, so this is cheap. **Without this, unlock
+   is invisible** (`can_access_planet` has no callers) — this is the keystone
+   onboarding hook.
+2. **Teach.** `launch` with no pad refuses *and explains*: build a Launch Pad
+   (Wood/Stone/Iron), then launch. A teaching refusal is the tutorial.
+3. **Build.** `build launch_pad` on Terra — cheap, Terra-craftable, available
+   pre-L21. One-time infrastructure.
+4. **Fuel (bootstrap solved).** Craft a **Basic Fuel Cell** from Terra basics —
+   powers single-rung hops, so the maiden Terra→Forge voyage runs on fuel Rooke
+   makes *before* leaving. (See 7.3 for why two tiers are mandatory.)
+5. **Leg 1.** `launch` → basic cell consumed → land at the Space station; cooldown
+   starts. Rank-gap penalty (shipped) auto-protects Rooke from any high-rank
+   transiting player.
+6. **Leg 2.** `launch forge` → `can_access_planet` L21 ≥ 21 ✅ → land at Forge
+   public spawn (no Beacon/pad there yet).
+7. **Payoff.** Energy + Circuits appear (new resources) — the "next planet is
+   genuinely different" moment. Rooke can now craft Premium Fuel + all L21
+   futuristic gear (plasma_rifle etc.).
+8. **Home, no strand-lock.** `recall home` from Rooke's Terra Beacon (cheap
+   one-way exit), or build a Forge pad for a permanent two-way route + foothold.
+9. **Steady state.** Harvesters left on Terra (online-gated); cargo loaded via the
+   pad; cheap basic-fuel round-trips with reduced cooldown (base on both ends).
+   Upward hops later cost Premium Fuel + full cooldown. → "progress upward, keep
+   farming down."
+
+### 7.3 Fuel — the two-tier model (and the bootstrap it solves)
+
+🔴 **The chicken-and-egg it fixes:** Energy/Circuits exist ONLY on Forge/Inferno/
+Citadel/Space, **never Terra** (verified: [terrain.yaml](../../../mygame/data/definitions/terrain.yaml)
+— Terra tiles yield only Wood/Stone/Iron). A single Energy-based fuel would make
+the first trip to Forge impossible (need fuel to reach the only planet that makes
+fuel). Two tiers break the loop:
+
+| Fuel | Crafted from | Powers | Role |
+|------|--------------|--------|------|
+| **Basic Fuel Cell** | Wood/Stone/Iron | one **single-rung** hop (via Space) | bootstraps the maiden voyage; keeps the Terra round-trip cheap forever |
+| **Premium Fuel Cell** | Energy + Circuits (Forge economy) | **multi-rung** ladder jumps | the long-haul commitment cost |
+
+"Adjacent cheap / far expensive" now falls out of *which fuel you burn*, and each
+planet's economy powers travel to the next. **No forward-dependency break:** the
+first player who *needs* Premium Fuel (to leave Forge upward) is exactly the one who
+can now craft it. Fuel cost also **scales with load** (see 7.5).
+
+### 7.4 Transport layer — agents & cargo
+
+The graduation economy is *"base up-ladder, harvest down-ladder."* Agent cap is a
+**global** per-player pool (`get_agent_cap`, rank-based) and an agent bound to a
+Terra Extractor is **stuck on Terra** — so every harvester stationed down-ladder is
+one unavailable up-ladder. That finite-allocation tension is a **feature**; the
+transport layer lets you *rebalance* it deliberately, at a cost — it must not erase
+it.
+
+- **Agents — load as cargo.** `load agent <id>` at a pad → the agent enters the
+  pad **manifest** and goes `reserve` (the flag already exists) / inert-for-transit
+  (no harvest, no defense, no cap-dodge) → rides the next `launch` → materializes at
+  the destination pad **unassigned** (`coord_planet = dest`, `role_target = None` —
+  a state the assign system already handles). Re-`assign` to a local building. Fuel
+  per agent. Loading is **selective** (not auto-follow) precisely because you *want*
+  to leave some harvesters behind.
+- **Resources — manual haul (v1).** `load <n> <resource>` → manifest → deposits into
+  the destination pad's store on arrival. Player-driven, deliberate, raidable in
+  transit.
+- **Resources — courier agents (Phase 4 depth).** A new **`courier` role** with a
+  Launch-Pad→courier building-role mapping (exactly parallel to Extractor→Harvester)
+  running a standing auto-route: pickup A → ride → deposit B → return. Turns the
+  round-trip from a chore into automation you *set up* — the payoff that makes
+  endgame basing feel like logistics mastery. Ship manual first; evolve into this.
+
+### 7.5 Friction & failure
+
+- **Manifest cap** — a pad holds a limited manifest (by carry-weight, reusing the
+  existing weight system; scales with pad level). Can't one-shot relocate a whole
+  economy.
+- **Fuel scales with load** — hauling bulk + agents costs more than a solo hop.
+- **Transit is a vulnerability window** — loaded-but-unlaunched cargo sitting in a
+  pad is loot; destroying the pad spills/destroys the manifest. The chokepoint
+  matters.
+- **Transit-failure recovery** — if the pad is destroyed mid-transit or the owner
+  dies, manifested agents survive as `reserve` and resources as a stash, **returned
+  to the owner's HQ/Beacon** (mirrors the shipped death-recovery). No permanent
+  agent loss from a bad haul; the cost is wasted fuel + time.
+
+### 7.6 Reverse-gank & the defend-my-property exemption  🔴
+
+Cross-planet cargo **inverts** the usual power geometry, and the design leans into
+it. Scenario: a **Colonel** parks harvesters + a resource manifest on **Terra**; a
+resident **Recruit** attacks the undefended pad/agents. The shipped rank-gap
+penalty damps the *Colonel's* return fire to ~25% (they outrank the Recruit by ~50
+levels) while the Recruit hits at **full** — the veteran is the vulnerable one on
+the low planet.
+
+**DECISION: this is a feature** — it *is* the "seasoned players' low-planet presence
+is economic, not dominant" principle made real; Terra natives get a genuine tax on
+careless rich visitors. **BUT** it needs a bound so cross-planet farming isn't
+impossible under any grief: the **defend-my-property exemption**. Extend the §3c
+owner-attributed base-defense exemption from "my turret" to **"my guard agent
+defending my pad/harvester/cargo against someone who attacked that property."** So:
+
+- A veteran **cannot roam a low planet ganking** (rank-gap damps them). ✅
+- A veteran **CAN defend their own base/agents/cargo at full power** when that
+  property is attacked (exemption lifts the damp, keyed off the owner-attributed
+  aggressor stamp — the attack on the property IS the aggression). ✅
+
+This is a real wiring task (extend the exemption trigger), not a freebie, but it's
+the natural extension of what shipped in §3c.
+
+### 7.7 Presence model — single body, distributed agents
+
+**DECISION: single body** (matches the one-`coord_planet`-per-player model). You are
+only ever on one planet; every other planet you own is defended by **buildings +
+stationed agents acting autonomously**. Consequence, and the point: **the finite
+agent pool must cover harvesting AND defense across every planet you're absent
+from.** Station a guard to protect your Terra harvesters, or spend that slot
+harvesting faster and accept the raid risk? — a real, recurring strategic choice.
+This makes the agent network **load-bearing, not decorative.**
+
+- **Offline defense = turrets; online defense = agents.** Agents are online-gated
+  (§5), so while you're logged off your down-ladder base is held by **turrets only**
+  (agents idle). Consistent with the existing "resources accumulate unprotected
+  while offline" logic — offline players don't run a live war economy. A clean
+  division worth stating: **turrets are the passive/offline layer, agents the
+  active/online one.**
+- **Future door (not built):** a "remote command" console to view/queue orders on a
+  planet you own but aren't standing on — possible Phase-5 depth. Single-body ships
+  now; multi-presence stays a deliberate later choice.
+
+### 7.8 New content this section requires (build checklist)
+
+- **Buildings:** `launch_pad` (Terra-craftable basics; upgradable → bigger manifest;
+  a `launch`/transport capability). Ties `recall home` onto the existing **Respawn
+  Beacon** (double duty: respawn point + emergency exit).
+- **Items:** `basic_fuel_cell` (Wood/Stone/Iron), `premium_fuel_cell`
+  (Energy/Circuits) — both consumables.
+- **Commands:** `CmdLaunch` (`launch [<planet>]` — leg-aware: no arg = surface→Space,
+  `<planet>` = Space→surface), `load` / `unload` (manifest management),
+  `recall` (Beacon one-way home).
+- **Systems:** manifest storage on the pad; two-leg routing through Space; arrival
+  resolver (Beacon/HQ → else public spawn); fuel-cost-by-distance + load table;
+  cooldown (reduced for owned-base round-trips); transit-failure recovery; the §7.6
+  exemption extension; (Phase 4) the `courier` role + auto-route.
+- **Data cleanup:** none new for gating — Space is already off-ladder in the
+  re-mapped ladder; Space's **signature resource role is still open** (deferred:
+  contested-fuel-source vs high-value-sidegrade — decide at build time).
+
+**Balance-principle fit:** every branch has a counter — travel is gated + fuel-taxed
+(no free repositioning), the corridor is rank-gap-protected (no transit-gank), the
+pad is a raidable chokepoint (no untouchable logistics), and defense-while-absent is
+bounded by your finite agents (no omnipresence). Nothing here grants a ≥2× combat
+edge; it's all logistics, access, and QoL — power stays in gear + skill.
+
+**Remaining open (non-blocking, decide at build time):** Space's signature resource
+role; concrete numbers (fuel costs per rung, cooldown minutes, manifest-cap weights,
+pad build cost/levels).
+
+---
+
 ## CONSOLIDATED IMPLEMENTATION ROADMAP
 
 Ordered by dependency (what unblocks what) and by
@@ -694,9 +897,12 @@ Do the re-map as ONE coordinated change (gates + resources + recipe audit move t
 - **[S] Apply the LOCKED forward-dep fixes** (§3.5 audit): gate plasma_rifle/
   plasma_grenade/energy_cell/combat_stim → L21+; re-cost Shield Generator + Radar
   to basics; nudge Medbay + Relay gates → L21.
-- **[M] `CmdTravel`** enforcing `can_access_planet` + travel cost/cooldown
-  friction — the missing wiring that makes graduation real. Space = the hub it
-  routes through. ✅ cross-planet agents already tick (§5, verified) — no extra work.
+- **[M/L] Travel + transport** — the full design is **§7 (locked)**. Launch Pad
+  building + two-tier Fuel Cells + `CmdLaunch` (two legs through Space, enforcing
+  `can_access_planet`) + `load`/`recall` + arrival-at-Beacon + unlock-announce.
+  Sits on the proven `_relocate_object` move; ✅ cross-planet agents already tick
+  (§5, verified). Courier auto-routing + Space's signature resource are deferred
+  (courier → Phase 4; Space resource → build-time).
 
 ### Phase 3 — Damage-type system *(medium–large; depends on Phase 0 floor)*
 Ship incrementally, physical-first (default `physical` = zero-risk migration).
@@ -720,6 +926,10 @@ Ship incrementally, physical-first (default `physical` = zero-risk migration).
   breaks the round-trip.
 - **[M/L] Planet-tier NPC bases, rare-gear scaling, danger tiers** — earn the
   higher-planet rewards.
+- **[M] Courier agent role** (§7.4) — a `courier` role + Launch-Pad→courier role
+  mapping running a standing auto-route (pickup → ride → deposit → return); turns
+  the manual cross-planet haul into set-up automation. The transport payoff that
+  makes endgame round-tripping hands-off.
 
 ### Phase 5 — Content depth *(as desired; mostly independent)*
 Turtle-breakers (Tungsten AP rounds, Ranger Marksman, AP-rounds tech), the
@@ -742,20 +952,31 @@ class-mechanics substrate first. The ✅ marks here mean *balance-verified*, not
    flat + small + under 2×.
 
 ## Open questions (for you)
-**None — the spec is fully decided.** All resolved (2026-07-20):
+**Direction is fully decided; only build-time NUMBERS/DETAILS remain open** (listed
+at the end). All directional decisions resolved (2026-07-20):
 - ✅ Planet + resource names: **Elysium** (home), **Biomass** (Terra), **Cryogen**
   (Tundra), **Magmite** (Inferno), **Aether** (Elysium — locked). Space = off-ladder hub.
 - ✅ **Biomass sink = consumables** (medkits/stims).
 - ✅ **Pacing:** ~12-level gaps between the five upper planets (12/13/12/12) plus
   the L20→L21 home-band handoff (Terra home 1–20 → Forge 21 → Tundra 33 → Inferno
   46 → Elysium 58 → Citadel 70); the old 28-level dead stretch is gone.
-- ✅ **Agent economy: online-gated** (§5) — no offline/passive stockpiling.
-- ✅ **Travel friction = cost/cooldown** (+ shipped rank-gap protection).
+- ✅ **Agent economy: online-gated** (§5) — agents tick cross-planet but only while
+  the owner is logged in (owner-`has_account` gate); no offline/passive stockpiling.
+- ✅ **Travel + transport:** full model **locked in §7** (Launch Pad, two legs
+  through Space, two-tier fuel, load-as-cargo, single-body presence, defend-my-
+  property exemption) — friction = cost/cooldown + the shipped rank-gap protection.
 - ✅ **Forward-dep audit** re-derived + per-item fixes LOCKED (§3.5).
-- ✅ **Cross-planet agents** already tick without an online player (§5 verified).
 - ✅ **Resist stacking:** 50% per-axis cap, no global budget.
 - ✅ **Permanent tech/perk bonuses:** LIGHT AGGREGATE CAP (clamp total non-gear
   flat bonus per axis, e.g. dmg ≤ 6 / DR ≤ 6) — a ~5-line safety rail in
   `_get_attacker_bonus` / `_get_target_resist`, not a conversion to loseable gear.
   Belt-and-suspenders behind the shipped chip floor + rank-gap penalty; build it
   alongside the damage-type backbone (Phase 3, same accessors).
+
+**Open build-time details (non-blocking — decide when authoring the phase):**
+- **Space's signature resource role** (§7) — contested-fuel-source vs high-value-
+  sidegrade material. Decide when building travel.
+- **§7 numbers** — fuel cost per rung, cooldown minutes (+ owned-base round-trip
+  discount), manifest-cap weights, Launch Pad build cost/level curve.
+- **Phase-3/4 balance numbers** — baseline-resist magnitudes, yield_scale curve,
+  outgrown-factor grace band.
