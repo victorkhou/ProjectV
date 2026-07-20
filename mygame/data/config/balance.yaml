@@ -49,6 +49,17 @@ hp_regen_interval_ticks: 2
 # interrupted repair only charges for the HP actually restored.
 repair_hp_percent_per_tick: 5.0
 
+# Bomb disarm ('disarm' command). Disarming a ticking bomb takes
+# bomb_disarm_ticks_min..max ticks (rolled per attempt); the bomb's own fuse
+# keeps ticking, so it explodes if the fuse runs out first. At the end of the
+# attempt a single roll decides the outcome: with probability
+# bomb_disarm_base_success it is safely removed, otherwise it detonates
+# immediately. Future technology / equipment / class bonuses raise the success
+# chance (clamped to [0,1]) and shorten the tick duration.
+bomb_disarm_base_success: 0.7
+bomb_disarm_ticks_min: 2
+bomb_disarm_ticks_max: 10
+
 tick_interval: 1.0
 chunk_size: 10
 save_interval: 30

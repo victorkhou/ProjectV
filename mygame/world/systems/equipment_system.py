@@ -217,8 +217,10 @@ class EquipmentSystem(CarryWeightMixin, StorageMixin, BaseSystem):
         owner_cap = int(getattr(balance, "equipment_production_owner_cap", 0) or 0)
 
         for building in active_buildings:
-            # Skip offline buildings
-            if getattr(building, "is_offline", False):
+            # Skip buildings that aren't operational (offline, or mid-upgrade —
+            # an upgrading Armory/Medbay/Lab doesn't produce).
+            from world.utils import building_is_operational
+            if not building_is_operational(building):
                 continue
 
             # Get building type
@@ -934,9 +936,14 @@ class EquipmentSystem(CarryWeightMixin, StorageMixin, BaseSystem):
                         item_name=item_name)
             return False
 
-        # 5. Offline gate.
+        # 5. Operational gate — offline OR mid-upgrade can't craft.
         if getattr(building, "is_offline", False):
             self.notify(player, "craft_failed", reason="building_offline",
+                        item_name=item_name)
+            return False
+        from world.utils import get_obj_attr as _get_obj_attr
+        if _get_obj_attr(building, "under_construction", False):
+            self.notify(player, "craft_failed", reason="building_upgrading",
                         item_name=item_name)
             return False
 

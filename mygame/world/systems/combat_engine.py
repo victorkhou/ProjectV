@@ -692,8 +692,10 @@ class CombatEngine(BaseSystem):
             if not self._is_turret(building):
                 continue
 
-            # Skip offline turrets.
-            if getattr(building, "is_offline", False):
+            # Skip turrets that aren't operational (offline, or mid-upgrade —
+            # an upgrading building is inert and doesn't fire).
+            from world.utils import building_is_operational
+            if not building_is_operational(building):
                 continue
 
             owner = self._get_building_owner(building)

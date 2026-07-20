@@ -285,6 +285,15 @@ class BalanceConfig:
     #: Buildings don't passively heal (unlike players/agents) — repair is the
     #: only way to restore building HP.
     repair_hp_percent_per_tick: float = 5.0
+    #: 'disarm' — a multi-tick attempt on a ticking bomb. The bomb's own fuse
+    #: keeps counting down during the attempt (it explodes if the fuse hits 0
+    #: first). After ``bomb_disarm_ticks_min..max`` ticks a single roll decides:
+    #: with probability ``bomb_disarm_base_success`` (default 0.7) the bomb is
+    #: safely removed, else it detonates immediately. Future tech / equipment /
+    #: class bonuses raise the chance (clamped to [0,1]) and shorten the ticks.
+    bomb_disarm_base_success: float = 0.7
+    bomb_disarm_ticks_min: int = 2
+    bomb_disarm_ticks_max: int = 10
     chunk_size: int = 10
     save_interval: int = 30
     metrics_enabled: bool = False

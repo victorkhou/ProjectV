@@ -279,15 +279,32 @@ class BuildingSystem(BaseSystem):
     def start_upgrade(
         self, player: Any, building: Any
     ) -> tuple[bool, str]:
-        """Begin a timed upgrade requiring player active-presence.
+        """Begin (or RESUME) a timed upgrade requiring player active-presence.
 
         Uses the same active-presence mechanic as construction: the
         player must stay on the tile for progress to continue. An
         Engineer agent can also progress the upgrade autonomously.
 
+        If an upgrade is already in progress on this building (paused because
+        the player stepped away), this RESUMES it at its existing progress
+        WITHOUT charging again — resources were spent when the upgrade first
+        started. Only a fresh upgrade validates and charges the cost.
+
         Returns:
             (success, message) tuple.
         """
+        # Resume path: an upgrade already under way (under_construction with a
+        # stored target level) is resumed, never restarted. Charging again here
+        # was the bug — 'upgrade' after a pause re-deducted the full cost and
+        # reset progress to 0.
+        if (self._get_building_attr(building, "under_construction", False)
+                and self._get_building_attr(building, "upgrade_target_level")
+                is not None):
+            owner = self._get_building_attr(building, "owner")
+            if owner is not player:
+                return False, "You do not own this building."
+            return self._resume_upgrade(player, building)
+
         ok, building_def, target_level, upgrade_cost, err = (
             self._validate_upgrade(player, building)
         )
@@ -323,6 +340,85 @@ class BuildingSystem(BaseSystem):
         return True, (
             f"Upgrading {building_def.name} to level {target_level} "
             f"(0/{upgrade_time}s, cost: {cost_str}). Stay on the tile to continue."
+        )
+
+    def _resume_upgrade(self, player: Any, building: Any) -> tuple[bool, str]:
+        """Re-enter the active-presence state for an in-progress upgrade.
+
+        No cost, no progress reset — just put the player back into the
+        ``"building"`` state pointed at this building so the tick loop continues
+        the existing timer. Shared by :meth:`start_upgrade`'s resume path.
+        """
+        btype = self._get_building_attr(building, "building_type", "??")
+        target_level = self._get_building_attr(building, "upgrade_target_level")
+        total = int(self._get_building_attr(building, "construction_total", 0) or 0)
+        progress = int(self._get_building_attr(building, "construction_progress", 0) or 0)
+        remaining = max(0, total - progress)
+        if hasattr(player, "db"):
+            player.db.activity_state = "building"
+            player.db.activity_target = building
+            player.db.activity_progress = 0
+        name = self._building_name(btype)
+        return True, (
+            f"Resuming upgrade of {name} to level {target_level} "
+            f"({progress}/{total}s, {remaining}s remaining). "
+            f"Stay on the tile to continue."
+        )
+
+    def cancel_upgrade(self, player: Any, building: Any) -> tuple[bool, str]:
+        """Cancel an in-progress upgrade, refunding the upgrade cost.
+
+        Only the owner can cancel, and only while an upgrade is actually under
+        way (under_construction with a stored ``upgrade_target_level`` — a
+        first-time CONSTRUCTION has no target level and is not cancellable here,
+        it's demolished instead). Clears the timer, refunds the FULL upgrade
+        cost (the level hasn't changed, so nothing was consumed), and drops the
+        player out of the ``"building"`` state if they were upgrading this one.
+
+        Returns:
+            (success, message) tuple.
+        """
+        owner = self._get_building_attr(building, "owner")
+        if owner is not player:
+            return False, "You do not own this building."
+
+        if not self._get_building_attr(building, "under_construction", False):
+            return False, "This building is not being upgraded."
+        target_level = self._get_building_attr(building, "upgrade_target_level")
+        if target_level is None:
+            # A first-time build in progress, not an upgrade.
+            return False, "This building is still under initial construction."
+
+        building_type = self._get_building_attr(building, "building_type")
+        try:
+            building_def = self.registry.get_building(building_type)
+            refund = self.get_upgrade_cost(building_def, target_level)
+        except (KeyError, AttributeError):
+            refund = {}
+
+        # Clear the upgrade timer/flags.
+        self._set_building_attr(building, "under_construction", False)
+        self._set_building_attr(building, "upgrade_target_level", None)
+        self._set_building_attr(building, "construction_progress", 0)
+        self._set_building_attr(building, "construction_total", 0)
+
+        # Refund the upgrade cost (nothing was consumed — the level never rose).
+        if refund:
+            for res, amt in refund.items():
+                player.add_resource(res, amt)
+
+        # Drop the player out of the building state if they were on this upgrade.
+        db = getattr(player, "db", None)
+        if db is not None and getattr(db, "activity_target", None) is building:
+            db.activity_state = "idle"
+            db.activity_target = None
+            db.activity_progress = 0
+
+        from world.utils import format_cost_summary
+        name = self._building_name(building_type)
+        refund_str = format_cost_summary(refund) if refund else "nothing"
+        return True, (
+            f"Cancelled the upgrade of {name} (refunded {refund_str})."
         )
 
     def upgrade(self, player: Any, building: Any) -> tuple[bool, str]:
@@ -1043,12 +1139,39 @@ class BuildingSystem(BaseSystem):
         self._set_building_attr(building, "hp", new_hp)
 
         # A building that hit 0 HP was set offline; restore it once healing.
-        if bool(self._get_building_attr(building, "offline", False)):
+        was_offline = bool(self._get_building_attr(building, "offline", False))
+        if was_offline:
             self._set_building_attr(building, "offline", False)
 
+        # Tell the OWNER how the repair is going (works for both the
+        # active-presence and Engineer paths — the owner is the interested
+        # party either way). Completion always notifies; interim progress is
+        # throttled to whole 25% HP milestones so a long repair doesn't spam.
+        owner = self._get_building_attr(building, "owner")
+        btype = self._get_building_attr(building, "building_type", "??")
+        name = self._building_name(btype)
         if new_hp >= hp_max:
+            self.notify(owner, "repair_complete", btype=btype, name=name,
+                        hp=new_hp, hp_max=hp_max, was_offline=was_offline)
             return True, "full"
+        if self._crossed_quarter(hp, new_hp, hp_max):
+            self.notify(owner, "repair_progress", btype=btype, name=name,
+                        hp=new_hp, hp_max=hp_max,
+                        pct=int(new_hp * 100 / hp_max))
         return False, "repaired"
+
+    @staticmethod
+    def _crossed_quarter(old_hp: int, new_hp: int, hp_max: int) -> bool:
+        """True when the repair crossed a 25/50/75% HP milestone this tick.
+
+        Throttles interim repair-progress messages to at most a few per repair,
+        instead of one every tick (a 20-tick repair would otherwise be noisy).
+        """
+        if hp_max <= 0:
+            return False
+        old_q = (old_hp * 4) // hp_max
+        new_q = (new_hp * 4) // hp_max
+        return new_q > old_q
 
     def _building_name(self, building_type: str) -> str:
         """Return the display name for a building type, or the type itself."""

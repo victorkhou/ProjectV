@@ -47,6 +47,23 @@ def _fmt_building_complete(d: dict) -> str:
     )
 
 
+def _fmt_repair_progress(d: dict) -> str:
+    name = d.get("name") or d.get("btype", "building")
+    return (
+        f"|y[Repair] {name} at {d.get('hp', '?')}/{d.get('hp_max', '?')} HP "
+        f"({d.get('pct', '?')}%)...|n"
+    )
+
+
+def _fmt_repair_complete(d: dict) -> str:
+    name = d.get("name") or d.get("btype", "building")
+    online = " It is back online." if d.get("was_offline") else ""
+    return (
+        f"|g[Repair] {name} fully repaired to "
+        f"{d.get('hp_max', '?')}/{d.get('hp_max', '?')} HP.{online}|n"
+    )
+
+
 def _fmt_agent_training_complete(d: dict) -> str:
     aid = d["agent_id"]
     return (
@@ -395,6 +412,42 @@ def _fmt_bomb_detonated(d: dict) -> str:
     )
 
 
+def _fmt_disarm_none(d: dict) -> str:
+    return "|y[Disarm] There is no ticking bomb here to disarm.|n"
+
+
+def _fmt_disarm_start(d: dict) -> str:
+    return (
+        f"|y[Disarm] You start working on the {d.get('item_name', 'bomb')}... "
+        f"(~{d.get('ticks', '?')}s). Its fuse is still ticking — stay clear of "
+        f"a short one.|n"
+    )
+
+
+def _fmt_disarm_in_progress(d: dict) -> str:
+    return (
+        f"|y[Disarm] The {d.get('item_name', 'bomb')} is already being "
+        f"disarmed.|n"
+    )
+
+
+def _fmt_disarm_success(d: dict) -> str:
+    return f"|g[Disarm] You safely neutralized the {d.get('item_name', 'bomb')}.|n"
+
+
+def _fmt_disarm_success_tile(d: dict) -> str:
+    # Seen by others on the tile when someone disarms a bomb there.
+    return f"|g[Disarm] The {d.get('item_name', 'bomb')} was disarmed.|n"
+
+
+def _fmt_disarm_failed(d: dict) -> str:
+    # Failure detonates the bomb immediately (bright red).
+    return (
+        f"|r[Disarm] You botched the {d.get('item_name', 'bomb')} — it goes "
+        f"off!|n"
+    )
+
+
 def _fmt_out_of_ammo(d: dict) -> str:
     return (
         f"|r[Combat] {d.get('weapon_name', 'weapon')} is empty — "
@@ -603,6 +656,10 @@ def _fmt_craft_failed(d: dict) -> str:
         ),
         "not_owner": "You can only craft in your own building.",
         "building_offline": "This building is offline — repair it first.",
+        "building_upgrading": (
+            "This building is being upgraded — it can't be used until the "
+            "upgrade finishes (or you 'upgrade cancel')."
+        ),
         "bag_full": (
             f"Your supply bag is full of {item} — use or drop some first."
         ),
@@ -622,6 +679,8 @@ class NotificationPresenter:
         "rank_level_up": _fmt_rank_level_up,
         "building_progress": _fmt_building_progress,
         "building_complete": _fmt_building_complete,
+        "repair_progress": _fmt_repair_progress,
+        "repair_complete": _fmt_repair_complete,
         "agent_training_complete": _fmt_agent_training_complete,
         "agent_training_progress": _fmt_agent_training_progress,
         "harvest_drop": _fmt_harvest_drop,
@@ -666,6 +725,12 @@ class NotificationPresenter:
         "bomb_tick": _fmt_bomb_tick,
         "bomb_exploded": _fmt_bomb_exploded,
         "bomb_detonated": _fmt_bomb_detonated,
+        "disarm_none": _fmt_disarm_none,
+        "disarm_start": _fmt_disarm_start,
+        "disarm_in_progress": _fmt_disarm_in_progress,
+        "disarm_success": _fmt_disarm_success,
+        "disarm_success_tile": _fmt_disarm_success_tile,
+        "disarm_failed": _fmt_disarm_failed,
         "out_of_ammo": _fmt_out_of_ammo,
         "reloaded": _fmt_reloaded,
         "reload_failed": _fmt_reload_failed,

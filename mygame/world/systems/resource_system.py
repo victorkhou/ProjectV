@@ -428,8 +428,9 @@ class ResourceSystem(BaseSystem):
             if not resource_type:
                 continue
 
-            # Skip offline buildings
-            if getattr(building, "is_offline", False):
+            # Skip buildings that aren't operational (offline, or mid-upgrade).
+            from world.utils import building_is_operational
+            if not building_is_operational(building):
                 continue
 
             # Calculate production amount scaled by level

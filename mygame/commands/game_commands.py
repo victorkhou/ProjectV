@@ -23,9 +23,7 @@ from world.utils import (
     owner_has_active_hq,
     format_dm_message,
     format_cost_summary,
-    section_header,
     format_section,
-    format_list_row,
 )
 
 
@@ -813,10 +811,16 @@ class CmdUpgrade(GameCommand):
 
     Usage:
         upgrade
+        upgrade cancel
 
     Must be on a tile with a building you own. Uses active-presence:
     stay on the tile for the timer to progress. Cost and time scale
     exponentially with level (cost × 2^L, time × 3^L).
+
+    A building being upgraded is |woffline|n and does not function until the
+    upgrade finishes. If you step away the upgrade PAUSES — typing 'upgrade'
+    again RESUMES it at its saved progress with no extra cost. 'upgrade cancel'
+    aborts an in-progress upgrade and refunds its cost.
     """
 
     key = "upgrade"
@@ -841,7 +845,10 @@ class CmdUpgrade(GameCommand):
             return
 
         building = buildings[0]
-        success, msg = building_system.start_upgrade(caller, building)
+        if self.args.strip().lower() == "cancel":
+            success, msg = building_system.cancel_upgrade(caller, building)
+        else:
+            success, msg = building_system.start_upgrade(caller, building)
         caller.msg(msg)
 
 
@@ -2028,6 +2035,38 @@ class CmdArm(GameCommand):
         # The system verifies it's a held mine with a set fuse, places the live
         # bomb, and emits the notifications (mine_armed / need_fuse / …).
         bomb_system.arm_mine(caller, item_key)
+
+
+class CmdDisarm(GameCommand):
+    """Try to neutralize a ticking bomb on your current tile.
+
+    Usage:
+      disarm
+
+    Notes:
+      Alias: dis. Starts working on a live grenade or mine on your tile. It
+      takes a few ticks (2-10) and the bomb's fuse KEEPS TICKING while you
+      work — a short-fuse bomb can go off before you finish. When the attempt
+      resolves it's a base 70% chance to succeed (removed, no blast); on
+      failure it detonates immediately. Technology, equipment, and your class
+      improve the odds and speed later. See 'help bombs'.
+    """
+
+    key = "disarm"
+    aliases = ["dis"]
+    help_category = "Game"
+
+    def func(self):
+        caller = self.caller
+        bomb_system = self.require_system("bomb_system")
+        if bomb_system is None:
+            return
+        if self.require_coords() is None:
+            return
+        # The system finds the ticking bomb on the tile, rolls the success
+        # chance, and emits the notifications (disarm_success / disarm_failed /
+        # disarm_none).
+        bomb_system.disarm(caller)
 
 
 class CmdThrow(GameCommand):

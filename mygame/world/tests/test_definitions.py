@@ -285,8 +285,10 @@ class TestDataclassContracts:
         #    xp_curve_late_ratio, xp_curve_knee_level) — Phase 6.
         #  + 4 Shield Generator (shield_base_radius, shield_hp_fraction,
         #    shield_regen_percent, shield_regen_interval_ticks).
+        #  + 3 disarm (bomb_disarm_base_success, bomb_disarm_ticks_min,
+        #    bomb_disarm_ticks_max).
         # Bump this when adding a balance tunable.
-        assert len(fields(BalanceConfig)) == 105
+        assert len(fields(BalanceConfig)) == 108
 
     def test_coordinate_space_def_field_count(self):
         assert len(fields(CoordinateSpaceDef)) == 14

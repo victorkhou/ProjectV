@@ -720,6 +720,29 @@ def building_has_capability(building: Any, capability: str, provider: Any = None
     return bdef is not None and bdef.has_capability(capability)
 
 
+def building_is_operational(building: Any) -> bool:
+    """Return True if *building* is currently functioning.
+
+    A building does NOT function while it is:
+      * ``offline`` (owner logged out, or knocked offline at 0 HP), or
+      * ``under_construction`` — this covers a first-time build in progress AND
+        an in-progress UPGRADE (an upgrading building is inert until it
+        completes, so its turret won't fire, its Armory won't craft, its
+        Extractor won't harvest, etc.).
+
+    The single "is this building doing its job right now" gate, so every system
+    (combat/turrets, production, harvesting, shields) agrees on when a building
+    is live. Value-based (unset attrs read False), never raises.
+    """
+    if getattr(building, "is_offline", False):
+        return False
+    if get_obj_attr(building, "offline", False):
+        return False
+    if get_obj_attr(building, "under_construction", False):
+        return False
+    return True
+
+
 # ------------------------------------------------------------------ #
 #  Player / building location helpers
 # ------------------------------------------------------------------ #

@@ -163,13 +163,17 @@ def _mine_def(key="land_mine", amount=60, radius=1, fmin=1, fmax=30, fdef=5):
     )
 
 
-def _make(items=None, engine=None, placed=None, ranks=None, in_bounds=None):
+def _make(items=None, engine=None, placed=None, ranks=None, in_bounds=None,
+          rng=None, randint=None):
     """Build a BombSystem with a registry stub + notification sink.
 
     *placed* collects (location, item_def, x, y, owner, bomb_type, fuse, amount,
     radius) for each spawned bomb; the spawner returns a _Bomb tracking those.
     *ranks* is a list of RankDef for the rank gate; *in_bounds* is an optional
-    (x,y,planet)->bool bounds check for the throw-ray clamp.
+    (x,y,planet)->bool bounds check for the throw-ray clamp. *rng* is an
+    optional zero-arg float source for the disarm success roll, *randint* an
+    optional (a,b)->int source for the disarm duration (force success/failure
+    and a deterministic tick count).
     """
     registry = DataRegistry()
     registry.balance = BalanceConfig()
@@ -214,6 +218,8 @@ def _make(items=None, engine=None, placed=None, ranks=None, in_bounds=None):
         spawn_bomb_func=_spawn,
         area_damage_applier=(lambda: engine) if engine else None,
         in_bounds_func=in_bounds,
+        rng_func=rng,
+        randint_func=randint,
     )
     return system, sink, placed
 
@@ -647,6 +653,124 @@ class TestRebuildFromWorld(unittest.TestCase):
         self.assertEqual(n, 1)
         self.assertIn(live, sys._live_bombs)
         self.assertNotIn(spent, sys._live_bombs)
+
+
+# -------------------------------------------------------------- #
+#  Disarm — multi-tick attempt; fuse keeps racing; end-roll on resolve;
+#  failure detonates immediately.
+# -------------------------------------------------------------- #
+
+class TestDisarm(unittest.TestCase):
+    def _setup(self, rng=None, randint=None, x=5, y=5, fuse=8):
+        sys, sink, _ = _make(items=[_grenade_def()], rng=rng, randint=randint)
+        room = _Room()
+        bomb = _Bomb(room, x, y, fuse=fuse)
+        room.place_obj(bomb, x, y)
+        sys._live_bombs.append(bomb)
+        return sys, sink, room, bomb
+
+    def test_disarm_starts_a_timed_attempt(self):
+        # randint forces a 3-tick disarm; disarm() only STARTS it (no instant kill).
+        sys, sink, room, bomb = self._setup(randint=lambda a, b: 3)
+        p = _Player(x=5, y=5, location=room)
+        self.assertTrue(sys.disarm(p))
+        self.assertEqual(bomb.db.disarm_ticks_remaining, 3)
+        self.assertIs(bomb.db.disarm_by, p)
+        self.assertFalse(bomb.deleted)  # not resolved yet
+        self.assertIn("disarm_start", sink.kinds_for(p))
+
+    def test_disarm_succeeds_after_timer_elapses(self):
+        # 2-tick disarm, fuse long enough; success roll (0.0 < 0.7).
+        sys, sink, room, bomb = self._setup(rng=lambda: 0.0,
+                                            randint=lambda a, b: 2, fuse=8)
+        p = _Player(x=5, y=5, location=room)
+        sys.disarm(p)
+        sys.process_tick(1)   # fuse 8->7, disarm 2->1
+        self.assertFalse(bomb.deleted)
+        sys.process_tick(2)   # fuse 7->6, disarm 1->0 -> resolve success
+        self.assertTrue(bomb.deleted)
+        self.assertNotIn(bomb, sys._live_bombs)
+        self.assertIn("disarm_success", sink.kinds_for(p))
+
+    def test_disarm_failure_detonates_immediately(self):
+        # 2-tick disarm; failure roll (0.99 >= 0.7) → detonate on resolve.
+        detonated = {"n": 0}
+        sys, sink, room, bomb = self._setup(rng=lambda: 0.99,
+                                            randint=lambda a, b: 2, fuse=8)
+        orig = sys._detonate
+        sys._detonate = lambda b: (detonated.__setitem__("n", detonated["n"] + 1), orig(b))[1]
+        p = _Player(x=5, y=5, location=room)
+        sys.disarm(p)
+        sys.process_tick(1)
+        sys.process_tick(2)   # disarm resolves → failure → detonate
+        self.assertEqual(detonated["n"], 1)
+        self.assertTrue(bomb.deleted)
+        self.assertIn("disarm_failed", sink.kinds_for(p))
+
+    def test_fuse_wins_the_race_if_it_expires_first(self):
+        # Short fuse (2) vs a long 5-tick disarm: the bomb explodes on the fuse,
+        # never reaching a disarm resolution.
+        detonated = {"n": 0}
+        sys, sink, room, bomb = self._setup(rng=lambda: 0.0,
+                                            randint=lambda a, b: 5, fuse=2)
+        orig = sys._detonate
+        sys._detonate = lambda b: (detonated.__setitem__("n", detonated["n"] + 1), orig(b))[1]
+        p = _Player(x=5, y=5, location=room)
+        sys.disarm(p)
+        sys.process_tick(1)   # fuse 2->1, disarm 5->4
+        sys.process_tick(2)   # fuse 1->0 -> detonate (disarm never resolves)
+        self.assertEqual(detonated["n"], 1)
+        self.assertTrue(bomb.deleted)
+        # No success — it blew up mid-attempt.
+        self.assertNotIn("disarm_success", sink.kinds_for(p))
+
+    def test_cannot_restart_an_in_progress_disarm(self):
+        sys, sink, room, bomb = self._setup(randint=lambda a, b: 4)
+        p = _Player(x=5, y=5, location=room)
+        self.assertTrue(sys.disarm(p))
+        # A second attempt while one is running is rejected (timer not reset).
+        p2 = _Player(x=5, y=5, location=room, oid=88)
+        self.assertFalse(sys.disarm(p2))
+        self.assertEqual(bomb.db.disarm_ticks_remaining, 4)
+        self.assertIn("disarm_in_progress", sink.kinds_for(p2))
+
+    def test_no_bomb_on_tile(self):
+        sys, sink, room, bomb = self._setup(x=1, y=1)
+        p = _Player(x=9, y=9, location=room)  # far from the bomb
+        self.assertFalse(sys.disarm(p))
+        self.assertFalse(bomb.deleted)
+        self.assertIn("disarm_none", sink.kinds_for(p))
+
+    def test_success_notifies_others_on_tile(self):
+        sys, sink, room, bomb = self._setup(rng=lambda: 0.0,
+                                            randint=lambda a, b: 1, fuse=8)
+        p = _Player(x=5, y=5, location=room)
+        bystander = _Player(x=5, y=5, oid=77)
+        room.place_player(bystander, 5, 5)
+        sys.disarm(p)
+        sys.process_tick(1)   # disarm resolves (1 tick) → success
+        self.assertIn("disarm_success_tile", sink.kinds_for(bystander))
+
+    def test_disarm_duration_clamped_to_at_least_one(self):
+        sys, _, _ = _make(items=[_grenade_def()])
+        sys.registry.balance.bomb_disarm_ticks_min = 0
+        sys.registry.balance.bomb_disarm_ticks_max = 0
+        # randint would be called with (1, 1) after clamping; force it to echo lo.
+        sys._randint_func = lambda a, b: a
+        self.assertGreaterEqual(sys._roll_disarm_ticks(), 1)
+
+    def test_chance_uses_balance_base(self):
+        sys, _, _ = _make(items=[_grenade_def()])
+        sys.registry.balance.bomb_disarm_base_success = 0.7
+        p = _Player(x=0, y=0)
+        self.assertAlmostEqual(sys._disarm_success_chance(p), 0.7)
+
+    def test_chance_adds_player_bonus_clamped(self):
+        sys, _, _ = _make(items=[_grenade_def()])
+        sys.registry.balance.bomb_disarm_base_success = 0.5
+        p = _Player(x=0, y=0)
+        p.db.disarm_bonus = 0.8  # 0.5 + 0.8 = 1.3 → clamped to 1.0
+        self.assertAlmostEqual(sys._disarm_success_chance(p), 1.0)
 
 
 if __name__ == "__main__":

@@ -954,6 +954,86 @@ class LiveBootSmokeTest(EvenniaTest):
         finally:
             _teardown_game(systems)
 
+    def test_disarm_multi_tick_resolves_on_real_bomb(self):
+        """A multi-tick disarm attempt runs on a real LiveBomb through the real
+        fuse tick loop: the disarm timer + who's-disarming persist on the bomb's
+        db, and it resolves (success) when the timer elapses before the fuse."""
+        from server.conf.game_init import initialize_game
+
+        systems = initialize_game()
+        try:
+            bomb_system = systems["bomb_system"]
+            # Force a 2-tick disarm and a guaranteed success roll.
+            bomb_system._randint_func = lambda a, b: 2
+            bomb_system._rng_func = lambda: 0.0
+            room = self._make_planet_room("earth")
+            player = self._make_player(x=4, y=4, planet="earth", location=room)
+            player.db.combat_xp = 100000
+            player.equipment.add_supply("frag_grenade", 1)
+
+            # Throw a grenade with a long fuse so the disarm wins the race,
+            # then stand on wherever it landed so disarm() finds it.
+            bomb_system.set_fuse(player, "frag_grenade", 10)
+            self.assertTrue(bomb_system.throw_grenade(player, "frag_grenade", "n"))
+            self.assertTrue(bomb_system._live_bombs, "a live bomb should exist")
+            bomb = bomb_system._live_bombs[0]
+            player.db.coord_x = int(bomb.db.coord_x)
+            player.db.coord_y = int(bomb.db.coord_y)
+
+            self.assertTrue(bomb_system.disarm(player))
+            self.assertEqual(int(bomb.db.disarm_ticks_remaining), 2)
+            bomb_system.process_tick(1)   # fuse 10->9, disarm 2->1
+            bomb_system.process_tick(2)   # disarm 1->0 → resolve success
+            self.assertIsNone(getattr(bomb, "pk", None), "bomb removed on success")
+        finally:
+            _teardown_game(systems)
+
+    # -------------------------------------------------------------- #
+    #  Upgrade — resume (no re-charge) + cancel refund on real objects
+    # -------------------------------------------------------------- #
+
+    def test_upgrade_resume_does_not_recharge_on_real_building(self):
+        """start_upgrade RESUMES a paused upgrade on a real Building without
+        re-deducting the cost or resetting progress (the reported bug)."""
+        from server.conf.game_init import initialize_game
+
+        systems = initialize_game()
+        try:
+            building_system = systems["building_system"]
+            room = self._make_planet_room("earth")
+            player = self._make_player(x=6, y=6, planet="earth", location=room)
+            player.db.level = 30
+            player.db.rank_level = 30
+            player.db.resources = {"Wood": 999, "Stone": 999, "Iron": 999,
+                                   "Energy": 999, "Circuits": 999, "Nexium": 999}
+
+            vault = self._make_building("VT", x=6, y=6, planet="earth", hp=400)
+            vault.db.owner = player
+            vault.db.building_level = 1
+
+            ok, _ = building_system.start_upgrade(player, vault)
+            self.assertTrue(ok)
+            self.assertTrue(vault.db.under_construction)
+            spent = {r: 999 - v for r, v in player.db.resources.items()}
+            # Progress a bit, then resume.
+            vault.db.construction_progress = 2
+            ok, msg = building_system.start_upgrade(player, vault)  # resume
+            self.assertTrue(ok)
+            self.assertIn("Resuming", msg)
+            # No further spend and progress preserved.
+            for r, v in player.db.resources.items():
+                self.assertEqual(999 - v, spent[r], f"{r} must not be re-charged")
+            self.assertEqual(vault.db.construction_progress, 2)
+
+            # Cancel refunds fully.
+            ok, _ = building_system.cancel_upgrade(player, vault)
+            self.assertTrue(ok)
+            for r, v in player.db.resources.items():
+                self.assertEqual(v, 999, f"{r} fully refunded on cancel")
+            self.assertFalse(vault.db.under_construction)
+        finally:
+            _teardown_game(systems)
+
     # -------------------------------------------------------------- #
     #  Drop/pickup — a dropped item must be indexed and re-gettable
     # -------------------------------------------------------------- #

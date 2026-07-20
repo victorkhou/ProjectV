@@ -85,12 +85,20 @@ class BombSystem(BaseSystem):
         area_damage_applier: Callable[[], Any] | None = None,
         current_tick_func: Callable[[], int] | None = None,
         in_bounds_func: Callable[[int, int, str], bool] | None = None,
+        rng_func: Callable[[], float] | None = None,
+        randint_func: Callable[[int, int], int] | None = None,
     ) -> None:
         super().__init__(registry, event_bus)
         self._spawn_bomb_func = spawn_bomb_func
         self._area_damage_applier = area_damage_applier
         self._current_tick_func = current_tick_func or (lambda: 0)
         self._in_bounds_func = in_bounds_func
+        #: Returns a float in [0, 1) for the disarm success roll, and an int in
+        #: [a, b] for the disarm-duration roll; injectable so tests can force a
+        #: deterministic outcome/duration. Default to the stdlib random.
+        import random as _random
+        self._rng_func = rng_func or _random.random
+        self._randint_func = randint_func or _random.randint
         #: Live bombs currently counting down. An in-memory list so the per-tick
         #: countdown does not DB-scan every second; rebuilt from the world on
         #: restart via :meth:`rebuild_from_world` (fuse state persists on the
@@ -437,6 +445,127 @@ class BombSystem(BaseSystem):
                              exclude=player, item_name=item_name, seconds=fuse)
         return True
 
+    # ------------------------------------------------------------------ #
+    #  Disarm ('disarm' — neutralize a ticking bomb on your tile)
+    # ------------------------------------------------------------------ #
+
+    def disarm(self, player: Any) -> bool:
+        """Begin a multi-tick attempt to disarm a ticking bomb on your tile.
+
+        Disarming is NOT instant: it takes ``bomb_disarm_ticks_min..max`` ticks
+        (rolled now), during which the bomb's own fuse KEEPS TICKING — so if the
+        fuse runs out first, it explodes mid-attempt (a short-fuse bomb may be
+        undisarmable). When the disarm timer elapses, a single roll of
+        ``bomb_disarm_base_success`` (default 0.7, +bonuses) decides the outcome
+        in :meth:`_resolve_disarm`: success removes the bomb; FAILURE detonates
+        it immediately. The countdown is driven by the fuse tick loop (see
+        :meth:`_tick_one`).
+
+        Starts the attempt and returns True; returns False (with a notice) when
+        there is no bomb here or one is already being disarmed. No live bomb on
+        the tile → 'nothing to disarm'.
+        """
+        from world.utils import get_coords
+        coords = get_coords(player)
+        if coords is None:
+            self.notify(player, "disarm_none")
+            return False
+        px, py = coords
+
+        bomb = self._live_bomb_at(px, py)
+        if bomb is None:
+            self.notify(player, "disarm_none")
+            return False
+
+        db = getattr(bomb, "db", None)
+        item_name = getattr(bomb, "key", "bomb")
+        # Already being disarmed (by anyone)? Don't restart the timer.
+        if db is not None and int(getattr(db, "disarm_ticks_remaining", 0) or 0) > 0:
+            self.notify(player, "disarm_in_progress", item_name=item_name)
+            return False
+
+        ticks = self._roll_disarm_ticks()
+        if db is not None:
+            db.disarm_ticks_remaining = ticks
+            # Remember who is disarming so the resolution notifies them (they may
+            # step off the tile before it finishes). Store the player ref.
+            db.disarm_by = player
+        self.notify(player, "disarm_start", item_name=item_name, ticks=ticks)
+        return True
+
+    def _roll_disarm_ticks(self) -> int:
+        """Roll the disarm duration in ``[ticks_min, ticks_max]`` (>= 1)."""
+        bal = getattr(self.registry, "balance", None)
+        lo = int(getattr(bal, "bomb_disarm_ticks_min", 2) or 2)
+        hi = int(getattr(bal, "bomb_disarm_ticks_max", 10) or 10)
+        lo = max(1, lo)
+        hi = max(lo, hi)
+        return int(self._randint_func(lo, hi))
+
+    def _resolve_disarm(self, bomb: Any) -> bool:
+        """Resolve a completed disarm attempt. Return True to KEEP the bomb live.
+
+        Called by the tick loop when ``disarm_ticks_remaining`` reaches 0. Rolls
+        the success chance for the disarming player: success removes the bomb
+        (no blast, returns False so the loop drops it); FAILURE detonates it
+        immediately (also returns False — the bomb is gone either way).
+        """
+        db = getattr(bomb, "db", None)
+        location = getattr(bomb, "location", None)
+        item_name = getattr(bomb, "key", "bomb")
+        player = getattr(db, "disarm_by", None) if db is not None else None
+        bx = getattr(db, "coord_x", None) if db is not None else None
+        by = getattr(db, "coord_y", None) if db is not None else None
+
+        if self._rng_func() < self._disarm_success_chance(player):
+            # Success: remove it from the world with no explosion.
+            if player is not None:
+                self.notify(player, "disarm_success", item_name=item_name)
+            if location is not None and bx is not None and by is not None:
+                self._broadcast_tile(location, int(bx), int(by),
+                                     "disarm_success_tile", exclude=player,
+                                     item_name=item_name)
+            self._delete_bomb(bomb)
+            return False
+        # Failure: it goes off right now.
+        if player is not None:
+            self.notify(player, "disarm_failed", item_name=item_name)
+        self._detonate(bomb)
+        return False
+
+    def _disarm_success_chance(self, player: Any) -> float:
+        """Return the disarm success probability for *player*, clamped to [0,1].
+
+        Base ``balance.bomb_disarm_base_success`` (default 0.7). A hook for
+        future tech / equipment / class bonuses — a ``db.disarm_bonus`` on the
+        player, if present, is added now so those systems can wire in later
+        without touching this method. A None player (disarmer vanished) uses the
+        base chance alone.
+        """
+        base = float(getattr(self.registry.balance, "bomb_disarm_base_success", 0.7))
+        bonus = 0.0
+        db = getattr(player, "db", None) if player is not None else None
+        if db is not None:
+            try:
+                bonus = float(getattr(db, "disarm_bonus", 0.0) or 0.0)
+            except (TypeError, ValueError):
+                bonus = 0.0
+        return max(0.0, min(1.0, base + bonus))
+
+    def _live_bomb_at(self, x: int, y: int) -> Any:
+        """Return the first tracked live bomb on tile ``(x, y)``, or None."""
+        for bomb in self._live_bombs:
+            if getattr(bomb, "pk", True) is None:
+                continue
+            db = getattr(bomb, "db", None)
+            if db is None:
+                continue
+            bx = getattr(db, "coord_x", None)
+            by = getattr(db, "coord_y", None)
+            if bx is not None and by is not None and int(bx) == int(x) and int(by) == int(y):
+                return bomb
+        return None
+
     @staticmethod
     def _blast_stats(effect: dict) -> tuple[int, int]:
         """Read (amount, radius) from a bomb effect, defaulting safely."""
@@ -545,6 +674,9 @@ class BombSystem(BaseSystem):
         db = getattr(bomb, "db", None)
         if db is None:
             return False
+        # The FUSE always ticks first — the bomb's own countdown wins the race,
+        # so a disarm-in-progress bomb still explodes if its fuse runs out
+        # before the disarm timer does.
         remaining = int(getattr(db, "fuse_remaining", 0) or 0) - 1
         db.fuse_remaining = remaining
         location = getattr(bomb, "location", None)
@@ -553,9 +685,17 @@ class BombSystem(BaseSystem):
         if remaining <= 0:
             self._detonate(bomb)
             return False
+        # A disarm attempt in progress? Count it down and resolve at 0. The bomb
+        # survived the fuse tick above, so now the disarm timer gets its tick.
+        disarm_left = int(getattr(db, "disarm_ticks_remaining", 0) or 0)
+        if disarm_left > 0:
+            disarm_left -= 1
+            db.disarm_ticks_remaining = disarm_left
+            if disarm_left <= 0:
+                return self._resolve_disarm(bomb)
+        item_name = getattr(bomb, "key", "bomb")
         # Still ticking — show the countdown to everyone on the tile.
         if location is not None and bx is not None and by is not None:
-            item_name = getattr(bomb, "key", "bomb")
             self._broadcast_tile(location, int(bx), int(by), "bomb_tick",
                                  exclude=None, item_name=item_name,
                                  seconds=remaining)

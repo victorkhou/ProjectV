@@ -591,6 +591,100 @@ class TestUpgrade(unittest.TestCase):
         self.assertEqual(events[0]["old_level"], 1)
         self.assertEqual(events[0]["new_level"], 2)
 
+
+class TestTimedUpgradeResumeCancel(unittest.TestCase):
+    """start_upgrade RESUMES a paused upgrade (no re-charge); cancel_upgrade
+    aborts + refunds; a mid-upgrade building is non-operational."""
+
+    def _building(self, player, level=1):
+        return FakeBuilding(building_type="MM", owner=player, level=level,
+                            hp=150, hp_max=150)
+
+    def test_start_upgrade_charges_and_sets_timer(self):
+        player = FakePlayer(resources={"Straw": 100, "Wood": 100})
+        b = self._building(player)
+        system, _, _ = _make_building_system()
+        ok, msg = system.start_upgrade(player, b)
+        self.assertTrue(ok, msg)
+        # MM base Straw=20/Wood=10 → L2 cost ×2 = 40/20.
+        self.assertEqual(player.get_resource("Straw"), 60)
+        self.assertEqual(player.get_resource("Wood"), 80)
+        self.assertTrue(b.attributes.get("under_construction"))
+        self.assertEqual(b.attributes.get("upgrade_target_level"), 2)
+
+    def test_resume_does_not_recharge_or_reset_progress(self):
+        """The reported bug: typing 'upgrade' again mid-upgrade must RESUME,
+        not restart + re-deduct the full cost."""
+        player = FakePlayer(resources={"Straw": 100, "Wood": 100})
+        b = self._building(player)
+        system, _, _ = _make_building_system()
+        system.start_upgrade(player, b)  # charges 40/20; progress 0
+        # Simulate a few ticks of progress, then a pause (player stepped away).
+        b.attributes.add("construction_progress", 3)
+        straw_after_start = player.get_resource("Straw")  # 60
+
+        ok, msg = system.start_upgrade(player, b)  # resume
+        self.assertTrue(ok, msg)
+        self.assertIn("Resuming", msg)
+        # NOT re-charged, and progress preserved (not reset to 0).
+        self.assertEqual(player.get_resource("Straw"), straw_after_start)
+        self.assertEqual(b.attributes.get("construction_progress"), 3)
+        self.assertEqual(b.attributes.get("upgrade_target_level"), 2)
+
+    def test_resume_rejects_non_owner(self):
+        owner = FakePlayer(resources={"Straw": 100, "Wood": 100})
+        b = self._building(owner)
+        system, _, _ = _make_building_system()
+        system.start_upgrade(owner, b)
+        intruder = FakePlayer(resources={"Straw": 100, "Wood": 100})
+        ok, msg = system.start_upgrade(intruder, b)
+        self.assertFalse(ok)
+        self.assertIn("own", msg.lower())
+
+    def test_cancel_refunds_full_upgrade_cost(self):
+        player = FakePlayer(resources={"Straw": 100, "Wood": 100})
+        b = self._building(player)
+        system, _, _ = _make_building_system()
+        system.start_upgrade(player, b)  # charges 40/20 → 60/80 left
+        ok, msg = system.cancel_upgrade(player, b)
+        self.assertTrue(ok, msg)
+        # Full refund → back to the starting resources.
+        self.assertEqual(player.get_resource("Straw"), 100)
+        self.assertEqual(player.get_resource("Wood"), 100)
+        # Timer/flags cleared.
+        self.assertFalse(b.attributes.get("under_construction"))
+        self.assertIsNone(b.attributes.get("upgrade_target_level"))
+        self.assertEqual(b.building_level, 1)  # never rose
+
+    def test_cancel_rejects_when_not_upgrading(self):
+        player = FakePlayer(resources={"Straw": 100, "Wood": 100})
+        b = self._building(player)
+        system, _, _ = _make_building_system()
+        ok, msg = system.cancel_upgrade(player, b)
+        self.assertFalse(ok)
+        self.assertIn("not being upgraded", msg.lower())
+
+    def test_cancel_rejects_non_owner(self):
+        owner = FakePlayer(resources={"Straw": 100, "Wood": 100})
+        b = self._building(owner)
+        system, _, _ = _make_building_system()
+        system.start_upgrade(owner, b)
+        intruder = FakePlayer()
+        ok, msg = system.cancel_upgrade(intruder, b)
+        self.assertFalse(ok)
+        self.assertIn("own", msg.lower())
+
+    def test_mid_upgrade_building_is_not_operational(self):
+        from mygame.world.utils import building_is_operational
+        player = FakePlayer(resources={"Straw": 100, "Wood": 100})
+        b = self._building(player)
+        system, _, _ = _make_building_system()
+        self.assertTrue(building_is_operational(b))  # before
+        system.start_upgrade(player, b)
+        self.assertFalse(building_is_operational(b))  # during
+        system.cancel_upgrade(player, b)
+        self.assertTrue(building_is_operational(b))   # after cancel
+
 # -------------------------------------------------------------- #
 #  Destruction Tests
 # -------------------------------------------------------------- #
@@ -1276,6 +1370,36 @@ class TestProcessRepairTick(unittest.TestCase):
         player.db.activity_state = "idle"
         self.assertFalse(system.process_repair_tick(player))
         self.assertEqual(building.attributes.get("hp"), 250)
+
+    def test_repair_complete_notifies_owner_end_to_end(self):
+        """The repair_complete notification renders through the real presenter
+        (guards producer->formatter key drift for this kind)."""
+        from mygame.world.presenters.test_support import attach_presenter
+
+        system, _, event_bus = _make_building_system()
+        attach_presenter(event_bus)
+        building = FakeBuilding(building_type="HQ", hp=490, hp_max=500)
+        player = self._player(building)
+        building.attributes.add("owner", player)
+        messages = []
+        player.msg = lambda m, **kw: messages.append(m)
+        system.process_repair_tick(player)  # 490 -> 500, completes
+        self.assertTrue(any("fully repaired" in m for m in messages))
+
+    def test_repair_progress_notifies_at_quarter_milestones(self):
+        """Interim progress is emitted when a 25% HP milestone is crossed."""
+        from mygame.world.presenters.test_support import attach_presenter
+
+        system, _, event_bus = _make_building_system()
+        attach_presenter(event_bus)
+        # 240/500 (48%) -> 265/500 (53%): crosses the 50% quarter boundary.
+        building = FakeBuilding(building_type="HQ", hp=240, hp_max=500)
+        player = self._player(building)
+        building.attributes.add("owner", player)
+        messages = []
+        player.msg = lambda m, **kw: messages.append(m)
+        system.process_repair_tick(player)
+        self.assertTrue(any("[Repair]" in m and "%" in m for m in messages))
 
 
 # -------------------------------------------------------------- #
