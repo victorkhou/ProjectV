@@ -288,8 +288,11 @@ class TestDataclassContracts:
         #  + 3 disarm (bomb_disarm_base_success, bomb_disarm_ticks_min,
         #    bomb_disarm_ticks_max).
         #  + 1 chip floor (chip_damage_min_fraction).
+        #  + 4 rank-gap PvP protection (rank_gap_penalty_threshold,
+        #    rank_gap_full_penalty_span, rank_gap_min_damage_mult,
+        #    rank_gap_xp_loot_mult).
         # Bump this when adding a balance tunable.
-        assert len(fields(BalanceConfig)) == 109
+        assert len(fields(BalanceConfig)) == 113
 
     def test_coordinate_space_def_field_count(self):
         assert len(fields(CoordinateSpaceDef)) == 14

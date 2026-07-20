@@ -572,6 +572,8 @@ class SchemaValidator:
             "repair_hp_percent_per_tick",
             "attack_cooldown_seconds", "linkdead_grace_seconds",
             "chip_damage_min_fraction",
+            "rank_gap_penalty_threshold", "rank_gap_full_penalty_span",
+            "rank_gap_min_damage_mult", "rank_gap_xp_loot_mult",
         ]
         for field in non_negative_fields:
             val = data.get(field)

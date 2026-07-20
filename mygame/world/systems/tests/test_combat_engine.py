@@ -1862,6 +1862,88 @@ class TestFreshRangedWeaponFull(unittest.TestCase):
 
 
 # -------------------------------------------------------------- #
+#  Rank-gap PvP protection (anti-ganking / new-player protection)
+# -------------------------------------------------------------- #
+
+class TestRankGapPenalty(unittest.TestCase):
+    """A much-higher-ranked player deals reduced damage + earns reduced kill XP
+    when ganking a lower-ranked player they weren't provoked by — but never to
+    zero (killable), never in PvE, and never if the lower player started it."""
+
+    def _players(self, engine, atk_level, tgt_level):
+        weapon = FakeWeapon(damage=40, weapon_range=5)
+        atk = FakePlayer(name="Vet", weapon=weapon, oid=1,
+                         location=FakeTile(xyz=(0, 0, "earth")))
+        atk.db.level = atk_level
+        tgt = FakePlayer(name="Newbie", hp=100, oid=2,
+                         location=FakeTile(xyz=(1, 0, "earth")))
+        tgt.db.level = tgt_level
+        return atk, tgt, weapon
+
+    def test_no_penalty_below_threshold(self):
+        engine, _ = _make_engine()
+        atk, tgt, w = self._players(engine, atk_level=15, tgt_level=10)  # gap 5
+        # gap 5 < threshold 10 → full damage (40, no armor).
+        self.assertEqual(engine._calculate_damage(atk, tgt, w), 40)
+
+    def test_penalty_scales_with_gap(self):
+        engine, _ = _make_engine()
+        bal = engine.registry.balance
+        # gap exactly threshold (10) → mult 1.0 (falloff starts here).
+        atk, tgt, w = self._players(engine, atk_level=20, tgt_level=10)
+        self.assertEqual(engine._calculate_damage(atk, tgt, w), 40)
+        # gap threshold + full span (10+30=40) → min mult 0.25 → 40*0.25 = 10.
+        atk2, tgt2, w2 = self._players(engine, atk_level=50, tgt_level=10)
+        self.assertEqual(engine._calculate_damage(atk2, tgt2, w2), 10)
+
+    def test_penalty_never_reduces_to_zero(self):
+        engine, _ = _make_engine()
+        # Even a tiny hit from a maxed attacker vs a newbie deals >= 1.
+        weapon = FakeWeapon(damage=1, weapon_range=5)
+        atk = FakePlayer(name="Vet", weapon=weapon, oid=1,
+                         location=FakeTile(xyz=(0, 0, "earth")))
+        atk.db.level = 100
+        tgt = FakePlayer(name="New", hp=100, oid=2,
+                         location=FakeTile(xyz=(1, 0, "earth")))
+        tgt.db.level = 1
+        self.assertGreaterEqual(engine._calculate_damage(atk, tgt, weapon), 1)
+
+    def test_lower_rank_attacking_higher_is_never_penalized(self):
+        engine, _ = _make_engine()
+        atk, tgt, w = self._players(engine, atk_level=5, tgt_level=60)  # newbie hits vet
+        self.assertEqual(engine._calculate_damage(atk, tgt, w), 40)
+
+    def test_aggressor_lower_player_forfeits_protection(self):
+        """If the lower-ranked player struck first, the higher player's return
+        fire is NOT damped — they were provoked."""
+        engine, _ = _make_engine()
+        atk, tgt, w = self._players(engine, atk_level=50, tgt_level=10)
+        # Without provocation: heavily damped (0.25 → 10).
+        self.assertEqual(engine._calculate_damage(atk, tgt, w), 10)
+        # The lower player (tgt) attacks the vet (atk) first → stamps tgt as
+        # aggressor on atk. Now the vet's return fire is full damage.
+        engine._stamp_aggressor(tgt, atk, current_tick=0)
+        self.assertEqual(engine._calculate_damage(atk, tgt, w), 40)
+
+    def test_no_penalty_in_pve_or_ownerless(self):
+        """A player attacking an enemy NPC (no owning player) is never damped."""
+        engine, _ = _make_engine()
+        weapon = FakeWeapon(damage=40, weapon_range=5)
+        atk = FakePlayer(name="Vet", weapon=weapon, oid=1,
+                         location=FakeTile(xyz=(0, 0, "earth")))
+        atk.db.level = 80
+        enemy = FakeBuilding(building_type="EE")  # not a player, no owner
+        # _rank_gap_damage_mult must short-circuit to 1.0 (no PvP pair).
+        self.assertEqual(engine._rank_gap_damage_mult(atk, enemy), 1.0)
+
+    def test_disabled_when_threshold_zero(self):
+        engine, _ = _make_engine()
+        engine.registry.balance.rank_gap_penalty_threshold = 0
+        atk, tgt, w = self._players(engine, atk_level=100, tgt_level=1)
+        self.assertEqual(engine._calculate_damage(atk, tgt, w), 40)
+
+
+# -------------------------------------------------------------- #
 #  Damage-bonus aggregation (task 4.1, Req 2.3)
 # -------------------------------------------------------------- #
 

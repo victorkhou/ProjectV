@@ -271,6 +271,19 @@ class BalanceConfig:
     #: effective HP from armor at ~2x. Set to 0 to disable (revert to a plain
     #: max(0, …) floor). See CombatEngine._calculate_damage.
     chip_damage_min_fraction: float = 0.5
+    # --- Rank-gap PvP protection (anti-ganking, new-player protection) --- #
+    #: When an attacking player outranks their player target by at least
+    #: rank_gap_penalty_threshold LEVELS, the attacker's outgoing damage AND the
+    #: kill XP/loot are scaled down — UNLESS the lower-ranked player initiated
+    #: (struck first this engagement). Protects new players from being farmed by
+    #: veterans without removing self-defense or consensual PvP. The damage
+    #: multiplier drops linearly with the gap from 1.0 to rank_gap_min_damage_mult
+    #: (never 0 — a defender can always be hurt/killed). Set threshold to 0 to
+    #: disable the whole mechanic. See CombatEngine._rank_gap_damage_mult.
+    rank_gap_penalty_threshold: int = 10   # level gap that starts the penalty
+    rank_gap_full_penalty_span: int = 30   # extra gap over threshold → min mult
+    rank_gap_min_damage_mult: float = 0.25  # damage floor multiplier at max gap
+    rank_gap_xp_loot_mult: float = 0.25    # kill XP/loot kept on a lopsided kill
     tick_interval: float = 1.0
     # --- Passive HP regeneration (players and agents only) ------------ #
     #: HP regenerated per interval, as a PERCENT of the entity's hp_max.

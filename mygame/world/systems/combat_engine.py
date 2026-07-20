@@ -497,6 +497,12 @@ class CombatEngine(BaseSystem):
         if target_owner is not None and target_owner is not target:
             self._set_combat_lockout(target_owner, lockout_until)
 
+        # Record the aggressor for the rank-gap PvP damper: stamping on the
+        # TARGET that this attacker's owner struck them. If the target later
+        # returns fire, the damper sees the original attacker as the aggressor
+        # and applies no penalty (they started it).
+        self._stamp_aggressor(attacker_owner, target_owner, current_tick)
+
         # Publish combat_action event (drives the combat timer subscriber).
         # Include current_tick so the combat-timer subscriber doesn't have to
         # re-derive it with a per-hit search_script DB query — the engine already
@@ -564,6 +570,10 @@ class CombatEngine(BaseSystem):
         target_owner = self._owning_player(target)
         if target_owner is not None and target_owner is not target:
             self._set_combat_lockout(target_owner, lockout_until)
+
+        # Record the aggressor for the rank-gap PvP damper (a miss still starts a
+        # fight — see _finalize_hit).
+        self._stamp_aggressor(attacker_owner, target_owner, current_tick)
 
         # Publish COMBAT_ACTION (damage=0) so the combat-timer subscriber puts
         # both sides — and their owning players — "in combat" exactly as a hit
@@ -960,7 +970,16 @@ class CombatEngine(BaseSystem):
         fraction = self._chip_damage_min_fraction()
         if fraction > 0 and raw > 0:
             floor = int(math.ceil(raw * fraction))
-        return max(floor, net_damage, 0)
+        dealt = max(floor, net_damage, 0)
+
+        # Rank-gap PvP damper: a much-higher-ranked attacker deals reduced damage
+        # to a lower-ranked player they are ganking (anti-newbie-farming), UNLESS
+        # the lower player initiated the fight. Applied last, and never to zero —
+        # a floored hit of 1 preserves killability (a damper, not immunity).
+        mult = self._rank_gap_damage_mult(attacker, target)
+        if mult < 1.0 and dealt > 0:
+            dealt = max(1, int(round(dealt * mult)))
+        return dealt
 
     def _chip_damage_min_fraction(self) -> float:
         """The minimum fraction of raw damage a landed hit always deals.
@@ -975,6 +994,109 @@ class CombatEngine(BaseSystem):
         if frac > 1.0:
             return 1.0
         return frac
+
+    # ------------------------------------------------------------------ #
+    #  Rank-gap PvP protection (anti-ganking)
+    # ------------------------------------------------------------------ #
+
+    def _rank_gap_damage_mult(self, attacker: Any, target: Any) -> float:
+        """Damage multiplier for a rank-lopsided PvP hit (1.0 = no penalty).
+
+        Returns a value in ``[rank_gap_min_damage_mult, 1.0]`` when a much-
+        higher-ranked player attacks a lower-ranked player they have NOT been
+        provoked by; 1.0 (no penalty) in every other case:
+
+        - the mechanic is disabled (``rank_gap_penalty_threshold`` <= 0);
+        - either side is not a player-owned combatant (PvE, enemy NPCs, and
+          ownerless attackers are never damped — attributed via the OWNING
+          player on both sides, so an agent/turret inherits its owner's rank);
+        - attacker and target share an owner (friendly fire);
+        - the level gap is below the threshold;
+        - the LOWER-ranked player initiated this engagement (see
+          :meth:`_is_aggressor`) — they chose the fight, so full damage applies.
+
+        The multiplier falls linearly from 1.0 at the threshold gap to the
+        configured minimum once the gap reaches ``threshold + full_penalty_span``.
+        It is never 0 — this dampens ganking, it does not grant immunity.
+        """
+        bal = getattr(self.registry, "balance", None)
+        threshold = int(getattr(bal, "rank_gap_penalty_threshold", 0) or 0)
+        if threshold <= 0:
+            return 1.0
+
+        atk_owner = self._owning_player(attacker)
+        tgt_owner = self._owning_player(target)
+        if atk_owner is None or tgt_owner is None:
+            return 1.0  # PvE / enemy NPC / ownerless — no PvP damper
+        # Friendly fire (same owning player) is never damped.
+        from world.utils import is_owner, get_player_level
+        if atk_owner is tgt_owner or is_owner(atk_owner, tgt_owner):
+            return 1.0
+
+        gap = get_player_level(atk_owner) - get_player_level(tgt_owner)
+        if gap < threshold:
+            return 1.0  # not lopsided enough (incl. attacker is LOWER-ranked)
+
+        # The lower-ranked player provoked this fight → no protection for them.
+        if self._is_aggressor(tgt_owner, atk_owner):
+            return 1.0
+
+        span = max(1, int(getattr(bal, "rank_gap_full_penalty_span", 30) or 30))
+        min_mult = float(getattr(bal, "rank_gap_min_damage_mult", 0.25) or 0.0)
+        min_mult = min(1.0, max(0.0, min_mult))
+        # Linear falloff over the span past the threshold.
+        over = min(span, gap - threshold)
+        frac = over / span  # 0 at threshold → 1 at threshold+span
+        return 1.0 - (1.0 - min_mult) * frac
+
+    def _rank_gap_engagement_key(self, tick: int) -> int:
+        """Not used directly; aggressor expiry reuses the combat window."""
+        return tick
+
+    def _stamp_aggressor(self, attacker_owner: Any, target_owner: Any,
+                         current_tick: int) -> None:
+        """Record that *attacker_owner* struck *target_owner* (the aggressor).
+
+        Stamped on every player-vs-player combat action (hit or miss) so the
+        rank-gap damper can tell who started a fight. Stored on the TARGET as
+        ``db.aggressors = {aggressor_player_id: expiry_tick}`` — a small map,
+        entries expiring after the combat window — so later, when the target
+        (a higher-ranked player) returns fire, the damper sees the lower player
+        as the aggressor and applies no penalty. Read-modify-reassign so the
+        Evennia SaverDict persists.
+        """
+        if attacker_owner is None or target_owner is None:
+            return
+        if attacker_owner is target_owner:
+            return
+        aid = getattr(attacker_owner, "id", None)
+        tdb = getattr(target_owner, "db", None)
+        if aid is None or tdb is None:
+            return
+        from world.constants import COMBAT_TIMER_DURATION
+        expiry = current_tick + COMBAT_TIMER_DURATION
+        current = dict(getattr(tdb, "aggressors", None) or {})
+        # Prune expired entries so the map can't grow without bound.
+        current = {k: v for k, v in current.items() if v > current_tick}
+        current[aid] = expiry
+        tdb.aggressors = current
+
+    def _is_aggressor(self, candidate_owner: Any, victim_owner: Any) -> bool:
+        """True if *candidate_owner* initiated combat against *victim_owner*.
+
+        Reads *victim_owner*'s ``db.aggressors`` map (stamped by
+        :meth:`_stamp_aggressor`): if it holds a non-expired entry for the
+        candidate's player id, the candidate struck first this engagement.
+        """
+        cid = getattr(candidate_owner, "id", None)
+        vdb = getattr(victim_owner, "db", None)
+        if cid is None or vdb is None:
+            return False
+        aggressors = getattr(vdb, "aggressors", None) or {}
+        expiry = aggressors.get(cid)
+        if not expiry:
+            return False
+        return expiry > self._current_tick_func()
 
     # ------------------------------------------------------------------ #
     #  Handle player defeat
@@ -1049,9 +1171,19 @@ class CombatEngine(BaseSystem):
         if own_victim:
             pass  # no reward for friendly fire on your own unit or an ally
         elif attacker_owner is not None:
+            # Anti-farm: a much-higher-ranked player killing a lower-ranked one
+            # they weren't provoked by earns only a fraction of the kill XP, so
+            # newbie-farming isn't a progression engine. Uses the SAME rank-gap
+            # test as the damage damper (via the victim as target), so the XP
+            # penalty and damage penalty apply together or not at all.
+            kill_xp = xp_kill
+            if self._rank_gap_damage_mult(attacker, victim) < 1.0:
+                loot_mult = float(getattr(
+                    self.registry.balance, "rank_gap_xp_loot_mult", 1.0) or 0.0)
+                kill_xp = max(0, int(round(xp_kill * loot_mult)))
             # Route through the progression path (recompute level/rank + events),
             # not a raw db.combat_xp write.
-            self._award_player_combat_xp(attacker_owner, xp_kill)
+            self._award_player_combat_xp(attacker_owner, kill_xp)
             # Cosmetic acknowledgment: tally the kill on the acting unit (a
             # player or agent tracks its own; a turret's tallies on its owner).
             # This does NOT feed XP/level/cap — it's a stat, not progression.

@@ -331,11 +331,20 @@ principle 1: every defense has an attack that answers it).
   the segregation model (home-planet band, soft/hard block on returning to farm
   newbies) — but see §4/§5: return trips are *wanted*, just economic not PvP.
 
-### 3c. Rank-gap attack penalty
-- Higher-ranked attacking much-lower-ranked → penalty (reduced damage dealt / XP)
-  **unless the lower-ranked player initiated.** Slots into `_prepare_attack`
-  (combat_engine.py:229) / `_calculate_damage`; needs an aggressor/first-striker
-  stamp. Protects new players without removing self-defense or consensual PvP.
+### 3c. Rank-gap attack penalty  *(✅ DONE — Phase 1)*
+- **Shipped.** `_rank_gap_damage_mult` in `_calculate_damage`: when an attacking
+  player outranks their player target by ≥ `rank_gap_penalty_threshold` (10)
+  levels, outgoing damage scales down linearly from 1.0 to
+  `rank_gap_min_damage_mult` (0.25) over `rank_gap_full_penalty_span` (30) — and
+  kill XP scales to `rank_gap_xp_loot_mult` (0.25). **Never to zero** (min-1
+  floor → always killable). Attributed via the OWNING player on both sides (so
+  agents/turrets inherit their owner's rank); PvE / enemy-NPC / ownerless and
+  friendly-fire are exempt; disabled at threshold 0.
+- **Aggressor exemption:** an `db.aggressors = {player_id: expiry_tick}` map is
+  stamped on the target of every PvP combat action (hit or miss). If the
+  lower-ranked player struck first, the higher player's return fire is undamped.
+- Tests: `TestRankGapPenalty` (7 unit) + a live-boot test proving the
+  `db.aggressors` dict round-trips on a real Evennia object.
 
 ---
 

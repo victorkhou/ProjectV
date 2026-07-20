@@ -41,6 +41,21 @@ player_default_health: 100
 resource_respawn_ticks: 30
 combat_lockout_ticks: 5
 
+# Rank-gap PvP protection (anti-ganking / new-player protection). When an
+# attacking player outranks their player target by >= rank_gap_penalty_threshold
+# LEVELS, the attacker's outgoing damage and the kill XP/loot scale down — UNLESS
+# the lower-ranked player initiated (struck first this engagement), in which case
+# there is no penalty (they chose the fight). The damage multiplier falls
+# linearly from 1.0 at the threshold to rank_gap_min_damage_mult once the gap
+# reaches threshold + full_penalty_span, and is NEVER 0 (a defender can always be
+# hurt/killed — this is a damper, not immunity). Only genuine PvP (player owner
+# on both sides) is affected; PvE and a defender's own base turrets/guards are
+# not. Set rank_gap_penalty_threshold to 0 to disable entirely.
+rank_gap_penalty_threshold: 10
+rank_gap_full_penalty_span: 30
+rank_gap_min_damage_mult: 0.25
+rank_gap_xp_loot_mult: 0.25
+
 # Passive HP regeneration for players and agents (NOT buildings — buildings
 # must be repaired). hp_regen_percent% of max HP is restored every
 # hp_regen_interval_ticks ticks (default: 1% per 2 ticks). Set hp_regen_percent

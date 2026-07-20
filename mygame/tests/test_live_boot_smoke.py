@@ -2370,6 +2370,51 @@ class LiveBootSmokeTest(EvenniaTest):
         finally:
             _teardown_game(systems)
 
+    def test_rank_gap_penalty_on_real_objects(self):
+        """Rank-gap PvP damper end-to-end on REAL Evennia objects, incl. the
+        db.aggressors dict round-tripping through the Evennia attribute store
+        (a plain dict read back as a SaverDict — the 'fakes higher-fidelity-
+        than-real' trap). A maxed player ganking a newbie deals reduced damage;
+        once the newbie has struck first, the return fire is undamped."""
+        from server.conf.game_init import initialize_game
+        from world.systems.combat_engine import SyntheticWeapon
+
+        systems = initialize_game()
+        try:
+            engine = systems["combat_engine"]
+            bal = engine.registry.balance
+            self.assertGreater(bal.rank_gap_penalty_threshold, 0)
+            room = self._make_planet_room("earth")
+
+            weapon = SyntheticWeapon(40, 1, name="Maul")
+            weapon.weapon_type = "melee"
+
+            vet = self._make_player(x=5, y=5, planet="earth", location=room)
+            vet.db.level = 60
+            vet.db.combat_xp = 500000
+            newbie = self._make_player(x=5, y=5, planet="earth", location=room)
+            newbie.db.level = 5
+            newbie.db.hp = 100
+            newbie.db.hp_max = 100
+
+            # Unprovoked gank: gap 55 (>> threshold) → heavily damped, but never 0.
+            dmg = engine._calculate_damage(vet, newbie, weapon)
+            self.assertGreater(dmg, 0, "damper is never total immunity")
+            self.assertLess(dmg, 40, "a lopsided gank is damped below full")
+
+            # Now the newbie strikes the vet first on real objects — this stamps
+            # db.aggressors on the vet (a real dict attribute write).
+            engine.apply_direct_hit(newbie, vet, weapon, current_tick=1)
+            self.assertIn(newbie.id, dict(vet.db.aggressors or {}),
+                          "aggressor stamp must persist on a real db attribute")
+
+            # The vet's return fire is now UNDAMPED (provoked → full 40).
+            dmg_after = engine._calculate_damage(vet, newbie, weapon)
+            self.assertEqual(dmg_after, 40,
+                             "provoked defender deals full damage")
+        finally:
+            _teardown_game(systems)
+
 
 def _teardown_game(systems):
     """Best-effort teardown: stop any scripts initialize_game created so they
