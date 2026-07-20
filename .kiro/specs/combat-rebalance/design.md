@@ -23,6 +23,55 @@ sound; a number/wiring detail must change — the fix is recorded), **reject**.
 
 ---
 
+## SHIPPED (this session)
+
+| Commit | Fix | Phase |
+|--------|-----|-------|
+| `5d1522e` | Chip-damage floor — closes the flat-DR immunity wall | 0 |
+| `e1117df` | Turret damage scales with level (wired dead `turret_level_bonus`) | 0 |
+| `9aa4157` | Freely-craftable essentials are Terra-craftable (forward-dep bug) | 0 |
+| `294ca7a` | Rank-gap PvP protection (anti-ganking, aggressor-aware) | 1 |
+
+## SETTLED DECISIONS (user, 2026-07-20) — drive the remaining build
+
+**Damage types** (§3a):
+- Ship **Fire (burn DoT)**, **Psychic (physical-armor bypass)**, **Blast (armor
+  shred)** — physical stays the current model. *Sound/crit is NOT shipped (no
+  crit system exists).*
+- **50% per-axis mitigation cap** (no global budget) — each resist type caps at
+  50%, so no single axis exceeds 2× EHP; stacking across types is allowed.
+- **Baseline resist for ALL players at spawn** — a small innate resist to each
+  type so resists are a veteran *edge*, not a wall a newbie can't touch.
+
+**Planet re-map** (§3.5):
+- **Biomass sink = consumables** (medkits/stims/cleanse). Universal, constant
+  demand → the strongest permanent Terra round-trip pull.
+- **Pacing: spread the ladder gates evenly, Terra as home for L1–20.** Terra is
+  the L1–20 home band; the other 5 ladder planets + Citadel spread evenly across
+  the rest of the curve (revise the earlier Terra-L1/Forge-L11/... spacing so no
+  28-level dead stretch; Citadel still the top battleground). *Recompute the full
+  ladder to honor "Terra 1–20, everything else follows evenly."*
+- **Travel friction = cost/cooldown** on inter-planet hops (returning to farm is
+  deliberate, not spammy) — in addition to the shipped rank-gap protection.
+
+**Final ladder + names (locked 2026-07-20):**
+
+| Planet | Gate | Rank | Signature resource | Role |
+|--------|------|------|--------------------|------|
+| **Terra** | L1 (home band 1–20) | Recruit | Wood/Stone/Iron + **Biomass** (exclusive) | Start home |
+| **Forge** | L21 | Staff_Sgt | Energy, Circuits | Industrial |
+| **Tundra** | L33 | Lieutenant | **Cryogen** | Frozen |
+| **Inferno** | L46 | Major | **Magmite** (feeds FIRE gear) | Volcanic |
+| **Elysium** | L58 | Colonel | *(signature TBD)* | **Endgame home** (major bases) |
+| **Citadel** | L70 | Brigadier | **Nexium** | **Battleground** (raid) |
+| Space | off-ladder hub | — | *(optional, excluded)* | Travel hub |
+
+Even ~12-level gaps, no dead stretch; honors Terra-home-1–20, Citadel=Brigadier
+L70, Elysium below Citadel. **Biomass** = the permanent Terra round-trip anchor
+(feeds consumables/medkits). ⚠ Elysium still needs a signature-resource name.
+
+---
+
 ## 1. Evaluation of the current system
 
 ### How combat works today
