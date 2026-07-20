@@ -476,6 +476,8 @@ class GameTickScript(DefaultScript):
                     state = getattr(getattr(player, "db", None), "activity_state", "idle")
                     if state == "building" and building_system:
                         building_system.process_construction_tick(player)
+                    elif state == "repairing" and building_system:
+                        building_system.process_repair_tick(player)
                     elif state == "harvesting" and resource_system:
                         resource_system.process_harvest_tick(player)
             registered["active_presence"] = process_active_presence

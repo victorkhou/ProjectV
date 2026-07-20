@@ -592,9 +592,9 @@ class TestValidateBalance:
         errs = self.v.validate_balance({"hp_regen_interval_ticks": -2})
         assert any("hp_regen_interval_ticks" in e and ">= 0" in e for e in errs)
 
-    def test_repair_cost_fraction_negative_rejected(self):
-        errs = self.v.validate_balance({"repair_cost_fraction": -0.5})
-        assert any("repair_cost_fraction" in e and ">= 0" in e for e in errs)
+    def test_repair_hp_percent_per_tick_negative_rejected(self):
+        errs = self.v.validate_balance({"repair_hp_percent_per_tick": -0.5})
+        assert any("repair_hp_percent_per_tick" in e and ">= 0" in e for e in errs)
 
     def test_hp_regen_percent_nan_rejected(self):
         errs = self.v.validate_balance({"hp_regen_percent": float("nan")})
@@ -604,7 +604,7 @@ class TestValidateBalance:
         """0 (disabled / free) and positive values are valid."""
         assert self.v.validate_balance({"hp_regen_percent": 0.0}) == []
         assert self.v.validate_balance({"hp_regen_interval_ticks": 2}) == []
-        assert self.v.validate_balance({"repair_cost_fraction": 0.5}) == []
+        assert self.v.validate_balance({"repair_hp_percent_per_tick": 5.0}) == []
 
     # --- Migrated economy tunables ---------------------------------- #
 

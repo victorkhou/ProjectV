@@ -1053,81 +1053,80 @@ class TestBuildingOfflineOnZeroHP(unittest.TestCase):
 
 
 # -------------------------------------------------------------- #
-#  Repair Cost Tests (Req 6.10, 14b.3)
+#  Repair Tests — tick-based (5%/tick of cumulative investment)
 # -------------------------------------------------------------- #
 
-class TestRepairCost(unittest.TestCase):
-    """Repair cost scales with missing HP (repair_cost_fraction of full cost)."""
+class TestBuildingInvestment(unittest.TestCase):
+    """get_building_investment = base build cost + all upgrade costs to level."""
 
-    def test_full_repair_from_zero_hp_is_fraction_of_base(self):
-        """At 0 HP the cost is repair_cost_fraction (0.5) of base cost."""
-        building = FakeBuilding(building_type="HQ", hp=0, hp_max=500)
+    def test_level_1_investment_is_base_cost(self):
         system, _, _ = _make_building_system()
-        # HQ base cost: Straw=50, Wood=50, Stone=30; fraction 0.5, missing 100%.
-        cost = system.get_repair_cost(building)
-        self.assertEqual(cost["Straw"], 25)
-        self.assertEqual(cost["Wood"], 25)
-        self.assertEqual(cost["Stone"], 15)
+        bdef = system.registry.get_building("HQ")
+        # HQ base cost: Straw=50, Wood=50, Stone=30.
+        self.assertEqual(
+            system.get_building_investment(bdef, 1),
+            {"Straw": 50, "Wood": 50, "Stone": 30},
+        )
 
-    def test_cost_scales_with_missing_hp(self):
-        """Half-damaged costs half of the full-repair cost (rounded up)."""
-        building = FakeBuilding(building_type="HQ", hp=250, hp_max=500)
+    def test_level_3_adds_upgrade_costs(self):
         system, _, _ = _make_building_system()
-        # missing 50% -> ceil(50*0.5*0.5)=13, ceil(50*0.5*0.5)=13, ceil(30*0.5*0.5)=8
-        cost = system.get_repair_cost(building)
-        self.assertEqual(cost["Straw"], 13)
-        self.assertEqual(cost["Wood"], 13)
-        self.assertEqual(cost["Stone"], 8)
+        bdef = system.registry.get_building("HQ")
+        # upgrade_cost_base default 2 → L2 cost = base×2, L3 = base×4.
+        # Investment(3) = base + base×2 + base×4 = base×7.
+        inv = system.get_building_investment(bdef, 3)
+        self.assertEqual(inv["Straw"], 50 * 7)
+        self.assertEqual(inv["Wood"], 50 * 7)
+        self.assertEqual(inv["Stone"], 30 * 7)
 
-    def test_full_hp_building_costs_nothing(self):
-        """An undamaged building has no repair cost."""
-        building = FakeBuilding(building_type="HQ", hp=500, hp_max=500)
-        system, _, _ = _make_building_system()
-        self.assertEqual(system.get_repair_cost(building), {})
 
-    def test_repair_cost_minimum_one_per_resource(self):
-        """A tiny bit of damage still costs at least 1 of each resource."""
-        building = FakeBuilding(building_type="MM", hp=149, hp_max=150)
+class TestRepairCostPerTick(unittest.TestCase):
+    """Per-tick cost = repair_hp_percent_per_tick% of cumulative investment."""
+
+    def test_per_tick_is_5pct_of_investment_level_1(self):
         system, _, _ = _make_building_system()
-        # missing < 1% -> raw well below 1, but clamped to min 1 each.
-        cost = system.get_repair_cost(building)
+        building = FakeBuilding(building_type="HQ", hp=0, hp_max=500, level=1)
+        # 5% of base: ceil(50*.05)=3, ceil(50*.05)=3, ceil(30*.05)=2.
+        cost = system.get_repair_cost_per_tick(building)
+        self.assertEqual(cost, {"Straw": 3, "Wood": 3, "Stone": 2})
+
+    def test_per_tick_scales_with_level_investment(self):
+        system, _, _ = _make_building_system()
+        building = FakeBuilding(building_type="HQ", hp=0, hp_max=500, level=3)
+        # Investment(3) = base×7 → 5% of 350/350/210 = ceil 18/18/11.
+        cost = system.get_repair_cost_per_tick(building)
+        self.assertEqual(cost, {"Straw": 18, "Wood": 18, "Stone": 11})
+
+    def test_per_tick_minimum_one_per_resource(self):
+        system, _, _ = _make_building_system()
+        building = FakeBuilding(building_type="MM", hp=0, hp_max=150, level=1)
+        # MM base Straw=20, Wood=10 → 5% = ceil 1, ceil 1.
+        cost = system.get_repair_cost_per_tick(building)
         self.assertEqual(cost["Straw"], 1)
         self.assertEqual(cost["Wood"], 1)
 
-    def test_repair_cost_unknown_building_returns_empty(self):
-        """Unknown building type returns empty cost dict."""
-        building = FakeBuilding(building_type="ZZ", hp=0, hp_max=100)
+    def test_per_tick_unknown_building_returns_empty(self):
         system, _, _ = _make_building_system()
-        cost = system.get_repair_cost(building)
-        self.assertEqual(cost, {})
+        building = FakeBuilding(building_type="ZZ", hp=0, hp_max=100)
+        self.assertEqual(system.get_repair_cost_per_tick(building), {})
 
 
-class TestRepair(unittest.TestCase):
-    """BuildingSystem.repair restores HP for resources (owner-only, instant)."""
+class TestRepairStart(unittest.TestCase):
+    """BuildingSystem.repair starts a tick-based active-presence repair."""
 
     def _player(self, **res):
         return FakePlayer(resources=res or {"Straw": 999, "Wood": 999, "Stone": 999})
 
-    def test_repair_restores_full_hp_and_charges(self):
+    def test_repair_enters_repairing_state(self):
         system, _, _ = _make_building_system()
         player = self._player()
         building = FakeBuilding(building_type="HQ", owner=player, hp=250, hp_max=500)
         ok, msg = system.repair(player, building)
         self.assertTrue(ok, msg)
-        self.assertEqual(building.attributes.get("hp"), 500)
-        # Charged the half-damage cost (13/13/8).
-        self.assertEqual(player.get_resource("Straw"), 999 - 13)
-        self.assertEqual(player.get_resource("Stone"), 999 - 8)
-
-    def test_repair_clears_offline(self):
-        system, _, _ = _make_building_system()
-        player = self._player()
-        building = FakeBuilding(building_type="HQ", owner=player,
-                                hp=0, hp_max=500, offline=True)
-        ok, msg = system.repair(player, building)
-        self.assertTrue(ok, msg)
-        self.assertFalse(building.is_offline)
-        self.assertEqual(building.attributes.get("hp"), 500)
+        self.assertEqual(player.db.activity_state, "repairing")
+        self.assertIs(player.db.activity_target, building)
+        # Starting does NOT instantly heal or charge.
+        self.assertEqual(building.attributes.get("hp"), 250)
+        self.assertEqual(player.get_resource("Straw"), 999)
 
     def test_repair_rejects_non_owner(self):
         system, _, _ = _make_building_system()
@@ -1146,14 +1145,14 @@ class TestRepair(unittest.TestCase):
         self.assertFalse(ok)
         self.assertIn("full health", msg.lower())
 
-    def test_repair_insufficient_resources(self):
+    def test_repair_insufficient_resources_up_front(self):
         system, _, _ = _make_building_system()
         player = self._player(Straw=0, Wood=0, Stone=0)
         building = FakeBuilding(building_type="HQ", owner=player, hp=0, hp_max=500)
         ok, msg = system.repair(player, building)
         self.assertFalse(ok)
         self.assertIn("Insufficient", msg)
-        self.assertEqual(building.attributes.get("hp"), 0)  # unchanged
+        self.assertNotEqual(getattr(player.db, "activity_state", None), "repairing")
 
     def test_repair_rejects_under_construction(self):
         system, _, _ = _make_building_system()
@@ -1163,6 +1162,120 @@ class TestRepair(unittest.TestCase):
         ok, msg = system.repair(player, building)
         self.assertFalse(ok)
         self.assertIn("construction", msg.lower())
+
+
+class TestApplyRepairStep(unittest.TestCase):
+    """apply_repair_step: one tick restores 5% HP and charges the per-tick cost."""
+
+    def _player(self, **res):
+        return FakePlayer(resources=res or {"Straw": 999, "Wood": 999, "Stone": 999})
+
+    def test_one_step_restores_5pct_and_charges(self):
+        system, _, _ = _make_building_system()
+        player = self._player()
+        building = FakeBuilding(building_type="HQ", owner=player, hp=250, hp_max=500)
+        done, reason = system.apply_repair_step(building, player)
+        self.assertFalse(done)
+        self.assertEqual(reason, "repaired")
+        # 5% of 500 = 25 HP.
+        self.assertEqual(building.attributes.get("hp"), 275)
+        # Charged one tick (3/3/2).
+        self.assertEqual(player.get_resource("Straw"), 999 - 3)
+        self.assertEqual(player.get_resource("Stone"), 999 - 2)
+
+    def test_twenty_steps_from_zero_reaches_full(self):
+        system, _, _ = _make_building_system()
+        player = self._player()
+        building = FakeBuilding(building_type="HQ", owner=player, hp=0, hp_max=500)
+        done = False
+        for _ in range(20):
+            done, _reason = system.apply_repair_step(building, player)
+        self.assertTrue(done)
+        self.assertEqual(building.attributes.get("hp"), 500)
+
+    def test_step_clears_offline_once_healing(self):
+        system, _, _ = _make_building_system()
+        player = self._player()
+        building = FakeBuilding(building_type="HQ", owner=player,
+                                hp=0, hp_max=500, offline=True)
+        system.apply_repair_step(building, player)
+        self.assertFalse(building.is_offline)
+        self.assertEqual(building.attributes.get("hp"), 25)
+
+    def test_step_insufficient_does_not_apply(self):
+        system, _, _ = _make_building_system()
+        player = self._player(Straw=0, Wood=0, Stone=0)
+        building = FakeBuilding(building_type="HQ", owner=player, hp=100, hp_max=500)
+        done, reason = system.apply_repair_step(building, player)
+        self.assertFalse(done)
+        self.assertEqual(reason, "insufficient")
+        self.assertEqual(building.attributes.get("hp"), 100)  # unchanged
+
+    def test_step_at_full_hp_is_done_noop(self):
+        system, _, _ = _make_building_system()
+        player = self._player()
+        building = FakeBuilding(building_type="HQ", owner=player, hp=500, hp_max=500)
+        done, reason = system.apply_repair_step(building, player)
+        self.assertTrue(done)
+        self.assertEqual(reason, "full")
+        self.assertEqual(player.get_resource("Straw"), 999)  # not charged
+
+
+class TestProcessRepairTick(unittest.TestCase):
+    """process_repair_tick drives the player active-presence repair loop."""
+
+    def _player(self, building, **res):
+        p = FakePlayer(resources=res or {"Straw": 999, "Wood": 999, "Stone": 999})
+        p.db.activity_state = "repairing"
+        p.db.activity_target = building
+        # Co-locate the player on the building's tile so the on-tile check passes.
+        # player_at_building reads the building's coords from building.location
+        # (FakeBuilding has no db proxy), so give it a tile at (3, 4).
+        tile = FakeTile(xyz=(3, 4, "earth"))
+        building._location = tile
+        p.db.coord_x = 3
+        p.db.coord_y = 4
+        p.db.coord_planet = "earth"
+        return p
+
+    def test_tick_progresses_repair(self):
+        system, _, _ = _make_building_system()
+        building = FakeBuilding(building_type="HQ", hp=250, hp_max=500)
+        player = self._player(building)
+        building.attributes.add("owner", player)
+        finished = system.process_repair_tick(player)
+        self.assertFalse(finished)
+        self.assertEqual(building.attributes.get("hp"), 275)
+        self.assertEqual(player.db.activity_state, "repairing")  # still going
+
+    def test_tick_finishes_and_clears_state(self):
+        system, _, _ = _make_building_system()
+        building = FakeBuilding(building_type="HQ", hp=490, hp_max=500)
+        player = self._player(building)
+        building.attributes.add("owner", player)
+        finished = system.process_repair_tick(player)
+        self.assertTrue(finished)
+        self.assertEqual(building.attributes.get("hp"), 500)
+        self.assertEqual(player.db.activity_state, "idle")
+        self.assertIsNone(player.db.activity_target)
+
+    def test_tick_stops_when_out_of_resources(self):
+        system, _, _ = _make_building_system()
+        building = FakeBuilding(building_type="HQ", hp=100, hp_max=500)
+        player = self._player(building, Straw=0, Wood=0, Stone=0)
+        building.attributes.add("owner", player)
+        finished = system.process_repair_tick(player)
+        self.assertFalse(finished)
+        self.assertEqual(building.attributes.get("hp"), 100)  # unchanged
+        self.assertEqual(player.db.activity_state, "idle")  # bailed out
+
+    def test_tick_noop_when_not_repairing(self):
+        system, _, _ = _make_building_system()
+        building = FakeBuilding(building_type="HQ", hp=250, hp_max=500)
+        player = self._player(building)
+        player.db.activity_state = "idle"
+        self.assertFalse(system.process_repair_tick(player))
+        self.assertEqual(building.attributes.get("hp"), 250)
 
 
 # -------------------------------------------------------------- #

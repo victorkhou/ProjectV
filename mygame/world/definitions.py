@@ -276,13 +276,15 @@ class BalanceConfig:
     hp_regen_percent: float = 1.0
     #: Ticks between passive-regen applications (the "per N ticks" period).
     hp_regen_interval_ticks: int = 2
-    #: Building repair cost, as a fraction of the building's full construction
-    #: cost to repair it from 0 HP to full. The actual `repair` charge scales
-    #: with the fraction of HP missing, so repairing minor damage is cheap and a
-    #: near-destroyed building costs up to this fraction of a rebuild. Buildings
-    #: don't passively heal (unlike players/agents) — repair is the only way to
-    #: restore building HP.
-    repair_cost_fraction: float = 0.5
+    #: Building repair rate, as a PERCENT of max HP restored per tick, and (by
+    #: the same fraction) the per-tick resource cost as a percent of the
+    #: building's cumulative investment — its base build cost PLUS every upgrade
+    #: cost up to its current level. Repair is active-presence like construction
+    #: (stay on the tile, or an Engineer works it). Default 5%/tick → 20 ticks
+    #: from 0 to full, and a full repair costs 100% of what was invested.
+    #: Buildings don't passively heal (unlike players/agents) — repair is the
+    #: only way to restore building HP.
+    repair_hp_percent_per_tick: float = 5.0
     chunk_size: int = 10
     save_interval: int = 30
     metrics_enabled: bool = False

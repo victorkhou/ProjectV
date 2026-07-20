@@ -40,10 +40,14 @@ hp_regen_percent: 1.0
 hp_regen_interval_ticks: 2
 
 # Building repair (the 'repair' command). Buildings do NOT passively heal;
-# repairing restores a damaged building to full HP for resources. Cost scales
-# with the fraction of HP missing: fully repairing from 0 HP costs
-# repair_cost_fraction of the building's full construction cost.
-repair_cost_fraction: 0.5
+# repairing restores HP over time for resources — active-presence like
+# construction (stay on the tile, or assign an Engineer). Each tick restores
+# repair_hp_percent_per_tick% of max HP and costs the SAME percent of the
+# building's cumulative investment (its base build cost PLUS every upgrade cost
+# up to its current level). At 5%/tick a building takes 20 ticks to go 0 -> full
+# and a full repair costs 100% of what was invested in it. Pay-as-you-go: an
+# interrupted repair only charges for the HP actually restored.
+repair_hp_percent_per_tick: 5.0
 
 tick_interval: 1.0
 chunk_size: 10

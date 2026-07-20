@@ -354,7 +354,7 @@ HELP_ENTRY_DICTS = [
 
             Stand on a tile and type |wbuild <type>|n (by abbreviation like |wEX|n or full name like |wextractor|n). Stay on the tile while it builds — or let an |cEngineer|n agent finish it. |wbuild|n with no argument lists what you can build right now.
 
-            |wupgrade|n improves the building you're standing on; costs and times climb steeply. |wrepair|n restores a damaged building to full HP for resources (buildings don't heal on their own — the cost scales with how damaged it is, and a building knocked offline comes back online when repaired). |wdemolish|n tears one down for a partial refund (40% at L1 up to 80% at L5).
+            |wupgrade|n improves the building you're standing on; costs and times climb steeply. |wrepair|n restores a damaged building over time, like construction — stay on the tile or assign an |cEngineer|n. Each tick restores 5% of max HP and costs 5% of everything invested in the building (its build cost plus any upgrades), so a heavily-upgraded building costs more to patch up; buildings don't heal on their own, and one knocked offline comes back online as soon as it starts healing. |wdemolish|n tears one down for a partial refund (40% at L1 up to 80% at L5).
 
             # Building Types
 

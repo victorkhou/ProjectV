@@ -860,57 +860,77 @@ class BuildingSystem(BaseSystem):
     #  Repair
     # ------------------------------------------------------------------ #
 
-    def get_repair_cost(self, building: Any) -> dict[str, int]:
-        """Return the resource cost to repair *building* to full HP.
+    def get_building_investment(self, building_def: BuildingDef, level: int) -> dict[str, int]:
+        """Return the CUMULATIVE resource investment in a *level* building.
 
-        Cost scales with the fraction of HP missing: fully repairing from 0 HP
-        costs ``balance.repair_cost_fraction`` of the building's full
-        construction cost, and lesser damage costs proportionally less. A
-        building at (or above) full HP costs nothing. Each resource line is
-        rounded up so any repair of a resource costs at least 1 of it.
+        The base construction cost PLUS every upgrade cost up to *level*: a
+        level-5 building's investment is its build cost + the L2, L3, L4 and L5
+        upgrade costs summed per resource. Level 1 (or below) is just the base
+        build cost. This is the basis the tick-based repair charges against —
+        repairing a heavily-invested, upgraded building costs proportionally
+        more than a fresh one.
+        """
+        total: dict[str, float] = {res: float(amt) for res, amt in building_def.cost.items()}
+        for lvl in range(2, max(1, int(level or 1)) + 1):
+            for res, amt in self.get_upgrade_cost(building_def, lvl).items():
+                total[res] = total.get(res, 0.0) + float(amt)
+        return {res: int(round(amt)) for res, amt in total.items()}
+
+    def get_repair_cost_per_tick(self, building: Any) -> dict[str, int]:
+        """Return the per-tick resource cost of repairing *building*.
+
+        One repair tick restores ``repair_hp_percent_per_tick``% of max HP and
+        costs the SAME percent of the building's cumulative investment (see
+        :meth:`get_building_investment`). Each resource line is rounded UP so a
+        tick of any resource in the investment costs at least 1 of it — the
+        pay-as-you-go charge, so an interrupted repair only bills for the HP it
+        actually restored. Returns ``{}`` for an unknown type or a building
+        whose investment is empty.
 
         Args:
-            building: The building object to repair.
+            building: The building object being repaired.
 
         Returns:
-            Dict of resource_type -> amount (empty if undamaged/unknown type).
+            Dict of resource_type -> amount charged this tick.
         """
         import math
 
         building_type = self._get_building_attr(building, "building_type")
         if building_type is None:
             return {}
-
         try:
             building_def = self.registry.get_building(building_type)
         except KeyError:
             return {}
 
-        hp = int(self._get_building_attr(building, "hp", 0) or 0)
-        hp_max = int(self._get_building_attr(building, "hp_max", 0) or 0)
-        if hp_max <= 0:
+        level = int(self._get_building_attr(building, "building_level", 1) or 1)
+        investment = self.get_building_investment(building_def, level)
+        percent = float(getattr(self.registry.balance, "repair_hp_percent_per_tick", 5.0))
+        if percent <= 0:
             return {}
-        missing_ratio = max(0.0, min(1.0, (hp_max - hp) / hp_max))
-        if missing_ratio <= 0:
-            return {}
-
-        fraction = float(getattr(self.registry.balance, "repair_cost_fraction", 0.5))
+        fraction = percent / 100.0
         return {
-            resource: max(1, math.ceil(amount * fraction * missing_ratio))
-            for resource, amount in building_def.cost.items()
+            resource: max(1, math.ceil(amount * fraction))
+            for resource, amount in investment.items()
+            if amount > 0
         }
 
     def repair(self, player: Any, building: Any) -> tuple[bool, str]:
-        """Repair a damaged building the player owns, restoring it to full HP.
+        """Begin a tick-based repair of a damaged building the player owns.
 
         Buildings do not passively regenerate (unlike players/agents), so this
-        is the only way to restore building HP. Instant and resource-costed:
+        is the only way to restore building HP. Repair is active-presence, just
+        like construction: this validates and starts it, then each tick (while
+        the player stays on the tile, or an assigned Engineer works it) restores
+        ``repair_hp_percent_per_tick``% of max HP and charges the matching
+        per-tick cost via :meth:`process_repair_tick`.
 
             1. Owner check.
-            2. Reject if the building is already at full HP (nothing to do).
-            3. Charge the HP-proportional :meth:`get_repair_cost` (insufficient
-               resources → shared have/need breakdown).
-            4. Set HP to hp_max and clear the offline state if it was set.
+            2. Reject if under construction, unrepairable, or already full HP.
+            3. Require at least the FIRST tick's cost up front (so a repair with
+               zero resources fails immediately with the shared have/need
+               breakdown rather than silently starting and stalling).
+            4. Put the player into the ``"repairing"`` activity state.
 
         Returns:
             (success, message) tuple.
@@ -936,28 +956,99 @@ class BuildingSystem(BaseSystem):
         if hp >= hp_max:
             return False, "This building is already at full health."
 
-        cost = self.get_repair_cost(building)
-        err = self._validate_resources(player, cost)
+        # Must at least afford the first tick, else fail up front.
+        per_tick = self.get_repair_cost_per_tick(building)
+        err = self._validate_resources(player, per_tick)
         if err:
             return False, err
 
-        player.deduct_resources(cost)
-
-        self._set_building_attr(building, "hp", hp_max)
-        # A building knocked offline (HP hit 0) comes back online once repaired.
-        was_offline = bool(self._get_building_attr(building, "offline", False))
-        if was_offline:
-            self._set_building_attr(building, "offline", False)
+        # Enter the active-presence repair state (mirrors construction).
+        if hasattr(player, "db"):
+            player.db.activity_state = "repairing"
+            player.db.activity_target = building
 
         from world.utils import format_cost_summary
         name = self._building_name(building_type)
-        cost_str = format_cost_summary(cost)
-        restored = hp_max - hp
-        online_note = " It is back online." if was_offline else ""
+        percent = float(getattr(self.registry.balance, "repair_hp_percent_per_tick", 5.0))
+        cost_str = format_cost_summary(per_tick) or "nothing"
         return True, (
-            f"Repaired {name} +{restored} HP to {hp_max}/{hp_max} "
-            f"(cost: {cost_str}).{online_note}"
+            f"Repairing {name} ({hp}/{hp_max} HP). Restores {percent:.0f}% HP "
+            f"per tick at {cost_str}/tick — stay on the tile or assign an "
+            f"Engineer to continue."
         )
+
+    def process_repair_tick(self, player: Any) -> bool:
+        """Advance an active-presence repair for a player in ``"repairing"``.
+
+        Called once per tick per online player (mirrors
+        :meth:`process_construction_tick`). Verifies the player is still
+        repairing and on the building's tile, then applies one repair step,
+        charging *player*. Leaves the ``"repairing"`` state when the building
+        reaches full HP or the player can't afford the next tick.
+
+        Returns:
+            ``True`` when the repair finished (full HP) this tick.
+        """
+        if not hasattr(player, "db"):
+            return False
+        if getattr(player.db, "activity_state", "idle") != "repairing":
+            return False
+
+        building = getattr(player.db, "activity_target", None)
+        if building is None:
+            player.db.activity_state = "idle"
+            return False
+        if not self._player_on_building_tile(player, building):
+            return False
+
+        done, reason = self.apply_repair_step(building, player)
+        if done or reason == "insufficient":
+            player.db.activity_state = "idle"
+            player.db.activity_target = None
+        return done
+
+    def apply_repair_step(self, building: Any, payer: Any) -> tuple[bool, str]:
+        """Apply ONE repair tick to *building*, charged to *payer*.
+
+        Restores ``repair_hp_percent_per_tick``% of max HP (at least 1 HP) and
+        deducts the matching per-tick cost (:meth:`get_repair_cost_per_tick`)
+        from *payer*. Pay-as-you-go: the charge lands per tick, so an
+        interrupted repair only bills for the HP actually restored. A building
+        knocked offline (HP 0) comes back online as soon as it starts healing.
+        Shared by the player active-presence path (:meth:`process_repair_tick`)
+        and the Engineer script.
+
+        Returns:
+            ``(finished, reason)`` — ``finished`` True at full HP; ``reason`` is
+            ``"full"``, ``"repaired"`` (progressed this tick), ``"insufficient"``
+            (payer can't afford this tick — nothing applied), or ``"noop"``
+            (nothing to do / unrepairable).
+        """
+        hp = int(self._get_building_attr(building, "hp", 0) or 0)
+        hp_max = int(self._get_building_attr(building, "hp_max", 0) or 0)
+        if hp_max <= 0:
+            return False, "noop"
+        if hp >= hp_max:
+            return True, "full"
+
+        per_tick = self.get_repair_cost_per_tick(building)
+        if per_tick and payer is not None and not payer.has_resources(per_tick):
+            return False, "insufficient"
+        if per_tick and payer is not None:
+            payer.deduct_resources(per_tick)
+
+        percent = float(getattr(self.registry.balance, "repair_hp_percent_per_tick", 5.0))
+        step = max(1, int(round(hp_max * percent / 100.0)))
+        new_hp = min(hp_max, hp + step)
+        self._set_building_attr(building, "hp", new_hp)
+
+        # A building that hit 0 HP was set offline; restore it once healing.
+        if bool(self._get_building_attr(building, "offline", False)):
+            self._set_building_attr(building, "offline", False)
+
+        if new_hp >= hp_max:
+            return True, "full"
+        return False, "repaired"
 
     def _building_name(self, building_type: str) -> str:
         """Return the display name for a building type, or the type itself."""

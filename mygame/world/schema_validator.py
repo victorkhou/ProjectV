@@ -568,7 +568,8 @@ class SchemaValidator:
         # instead of erroring — catch it here. NaN also fails (nan >= 0 is
         # False), so a malformed float can't slip through the type check.
         non_negative_fields = [
-            "hp_regen_percent", "hp_regen_interval_ticks", "repair_cost_fraction",
+            "hp_regen_percent", "hp_regen_interval_ticks",
+            "repair_hp_percent_per_tick",
             "attack_cooldown_seconds", "linkdead_grace_seconds",
         ]
         for field in non_negative_fields:

@@ -69,6 +69,31 @@ def _award_agent_xp(npc: Any, source: str) -> None:
         logger.debug("Agent XP award failed for source %r", source, exc_info=True)
 
 
+def _engineer_repair_step(npc: Any, building: Any) -> bool:
+    """Apply one Engineer repair tick to *building*, charged to its owner.
+
+    Delegates to ``BuildingSystem.apply_repair_step`` (the shared per-tick
+    repair the owner's active-presence path also uses), paying from the
+    building OWNER's resources. Looked up lazily from the global
+    ``game_systems`` dict and wrapped defensively so a missing system or a
+    None owner never breaks the per-tick agent loop.
+
+    Returns:
+        True only when this tick brought the building to full HP.
+    """
+    try:
+        from server.conf.game_init import game_systems
+        building_system = game_systems.get("building_system")
+        if building_system is None:
+            return False
+        owner = _get_attr(building, "owner", None)
+        finished, _reason = building_system.apply_repair_step(building, owner)
+        return bool(finished)
+    except Exception:  # noqa: BLE001 - never let repair break the tick loop
+        logger.debug("Engineer repair step failed", exc_info=True)
+        return False
+
+
 def _notify_owner(npc: Any, kind: str, **data: Any) -> None:
     """Emit a player-facing notification to *npc*'s owner via the presenter.
 
@@ -338,6 +363,18 @@ class EngineerScript(DefaultScript):
                     # via the module helper.
                     _award_agent_xp(npc, "construction")
                 return
+
+        # No construction/research pending: repair the building if it's damaged.
+        # An assigned Engineer restores repair_hp_percent_per_tick% HP per tick,
+        # charged to the building's OWNER (the same active-presence repair the
+        # owner would drive by standing on the tile — the Engineer just does it
+        # autonomously). Award construction XP on the tick the repair completes.
+        hp = _get_attr(building, "hp", 0) or 0
+        hp_max = _get_attr(building, "hp_max", 0) or 0
+        if hp_max and hp < hp_max:
+            finished = _engineer_repair_step(npc, building)
+            if finished:
+                _award_agent_xp(npc, "construction")
 
     @staticmethod
     def _complete_construction(building: Any) -> None:

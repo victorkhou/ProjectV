@@ -874,6 +874,47 @@ class LiveBootSmokeTest(EvenniaTest):
             _teardown_game(systems)
 
     # -------------------------------------------------------------- #
+    #  Repair — tick-based, active-presence, on real objects/composition root
+    # -------------------------------------------------------------- #
+
+    def test_repair_progresses_per_tick_and_charges(self):
+        """A tick-based repair restores repair_hp_percent_per_tick% HP and
+        charges the matching per-tick cost, on a real Building through the real
+        BuildingSystem — the active-presence loop the tick script drives."""
+        from server.conf.game_init import initialize_game
+
+        systems = initialize_game()
+        try:
+            building_system = systems["building_system"]
+            room = self._make_planet_room("earth")
+            player = self._make_player(x=6, y=6, planet="earth", location=room)
+            player.db.level = 20
+            player.db.rank_level = 20
+            # Seed plenty of every resource a Vault needs (Stone + Iron).
+            player.db.resources = {"Stone": 999, "Iron": 999}
+
+            vault = self._make_building("VT", x=6, y=6, planet="earth", hp=400)
+            vault.db.owner = player
+            vault.db.building_level = 1
+            vault.db.hp = 200  # damaged to 50%
+
+            ok, msg = building_system.repair(player, vault)
+            self.assertTrue(ok, msg)
+            self.assertEqual(player.db.activity_state, "repairing")
+
+            # One repair step restores 5% of 400 = 20 HP and charges one tick.
+            before = dict(player.db.resources)
+            done, reason = building_system.apply_repair_step(vault, player)
+            self.assertFalse(done)
+            self.assertEqual(vault.db.hp, 220)
+            self.assertLess(
+                sum(player.db.resources.values()), sum(before.values()),
+                "a repair tick must charge resources",
+            )
+        finally:
+            _teardown_game(systems)
+
+    # -------------------------------------------------------------- #
     #  Drop/pickup — a dropped item must be indexed and re-gettable
     # -------------------------------------------------------------- #
 
