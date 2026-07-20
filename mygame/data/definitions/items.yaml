@@ -268,9 +268,11 @@ items:
     effect:
       type: heal
       amount: 30
+    # Terra-craftable basics only: a Recruit-tier essential must never require a
+    # resource gated to a higher planet (Energy is Forge+). Was Wood 5 / Energy 3.
     craft_cost:
       Wood: 5
-      Energy: 3
+      Stone: 3
     weight: 2.0
     max_stack: 20
     classification: modern
@@ -311,9 +313,11 @@ items:
       fuse_min: 1
       fuse_max: 10
       fuse_default: 3
+    # Terra-craftable basics only (see medkit): the frag grenade is a freely
+    # craftable anti-armor equalizer new players rely on. Was Iron 10 / Energy 10.
     craft_cost:
       Iron: 10
-      Energy: 10
+      Stone: 10
     weight: 3.0
     max_stack: 10
     classification: modern
@@ -356,9 +360,11 @@ items:
       fuse_min: 1
       fuse_max: 30
       fuse_default: 5
+    # Terra-craftable basics only (see medkit): the land mine is a freely
+    # craftable anti-armor equalizer new players rely on. Was Iron 15 / Energy 5.
     craft_cost:
       Iron: 15
-      Energy: 5
+      Stone: 5
     weight: 4.0
     max_stack: 10
     classification: modern

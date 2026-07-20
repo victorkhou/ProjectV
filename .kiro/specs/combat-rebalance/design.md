@@ -456,10 +456,16 @@ before any new content.
   now scales the synthetic weapon's damage via that (now-shared) formula: L1=15,
   L3=21, L5=27 (1.8×, under the 2× ceiling). Base defenses finally improve with
   investment. Test: `test_turret_damage_scales_with_level`.
-- **[S] Forward-dependency recipe fixes** (§3.5 audit) — the `rank=none` items
-  (medkit, land_mine, frag_grenade, energy_cell, combat_stim) require
-  Energy/Circuits a Terra newbie can't get. Re-cost to basics or gate to L11.
-  *Independent of the planet re-map; a real live bug.*
+- **[S] ✅ PARTIAL — Forward-dependency recipe fixes** (§3.5 audit) — the
+  `rank=none` essentials **medkit, frag_grenade, land_mine** were re-costed to
+  Terra basics (Energy → Stone, same magnitude), so a Recruit can craft them on
+  the spawn planet. A regression guard
+  (`test_freely_craftable_items_need_only_starter_planet_resources`) enforces
+  the invariant going forward, deriving starter resources from the real terrain
+  data. **Still pending (resolved by the Phase 2 re-map, not re-costed):**
+  `energy_cell` + `combat_stim` are futuristic-tech supplies — the re-map moving
+  Forge → L11 makes their Energy/Circuits reachable at their tier; re-costing an
+  "energy cell" to wood would be nonsensical. The guard allowlists these two.
 
 ### Phase 1 — New-player protection *(small–medium; depends on Phase 0)*
 - **[S] Rank-gap attack penalty** (§3c) — the ✅-sound owner-attributed version

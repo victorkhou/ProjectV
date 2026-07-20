@@ -195,6 +195,57 @@ class TestRealContentLoadsClean:
         assert supply_produced, "no supplies routed in production_map"
         assert gear_produced, "no gear routed in production_map"
 
+    def test_freely_craftable_items_need_only_starter_planet_resources(self):
+        """No-forward-dependency invariant for new players: every item with NO
+        rank gate (required_rank is None) must be craftable from Terra-tier
+        resources ONLY — the resources available on the default spawn planet.
+
+        Otherwise a Recruit is shown a 'freely craftable' essential (medkit,
+        frag grenade, land mine, ...) whose recipe needs a resource that only
+        exists on a higher, rank-gated planet — an impossible craft. This guards
+        the class of forward-dependency bug the re-map fixes (medkit once needed
+        Energy, only on Forge). Starter resources are derived from the real
+        terrain data so this stays correct if the planet resource map changes.
+        """
+        items_path = os.path.join(_REAL_DATA_DIR, "definitions", "items.yaml")
+        terrain_path = os.path.join(_REAL_DATA_DIR, "definitions", "terrain.yaml")
+        with open(items_path) as f:
+            raw_items = yaml.safe_load(f)
+        with open(terrain_path) as f:
+            raw_terrain = yaml.safe_load(f)
+
+        # The default spawn planet and its harvestable resources.
+        starter_planet = "terra"
+        starter_resources = {
+            t["resource_type"]
+            for t in raw_terrain["terrain"]
+            if t.get("planet") == starter_planet and t.get("resource_type")
+        }
+        assert starter_resources, "no starter-planet resources found in terrain"
+
+        offenders = []
+        for it in raw_items["items"]:
+            if it.get("required_rank") is not None:
+                continue  # rank-gated items may need higher-planet resources
+            for resource in (it.get("craft_cost") or {}):
+                if resource not in starter_resources:
+                    offenders.append(
+                        f"{it['key']} needs '{resource}' (not on {starter_planet})"
+                    )
+
+        # energy_cell/combat_stim are futuristic-tech supplies, intentionally
+        # NOT reframed as basics; they are resolved by the planet re-map moving
+        # their resource-planet gate to a reachable rank, not by re-costing here.
+        allowed_pending = {"energy_cell", "combat_stim"}
+        hard_offenders = [
+            o for o in offenders
+            if o.split()[0] not in allowed_pending
+        ]
+        assert hard_offenders == [], (
+            "freely-craftable essentials require a non-starter-planet resource "
+            f"(forward-dependency bug): {hard_offenders}"
+        )
+
 
 # ================================================================== #
 #  Requirement 13.6 — @reboot swaps content atomically
