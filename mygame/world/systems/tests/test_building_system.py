@@ -352,6 +352,26 @@ class TestShieldGeneratorCap(unittest.TestCase):
         self.assertTrue(ok, msg)
         self.assertEqual(len(created), 1)
 
+    def test_cap_resolves_planet_from_location_when_coord_planet_unset(self):
+        """Real generators don't store coord_planet — the cap must resolve each
+        one's planet from its location, else it counts ALL of a player's
+        generators globally instead of per-planet."""
+        hq = FakeBuilding(building_type="HQ")
+        earth_room = FakeTile(xyz=(0, 0, "earth")); earth_room.db.planet = "earth"
+        mars_room = FakeTile(xyz=(0, 0, "mars")); mars_room.db.planet = "mars"
+        sgs = []
+        for _ in range(4):  # 4 generators on MARS, planet only via .location
+            sg = FakeBuilding(building_type="SG")
+            sg._location = mars_room
+            sgs.append(sg)
+        player = FakePlayer(resources={"Iron": 500}, buildings=[hq] + sgs)
+        # Building a 1st generator on EARTH must be allowed (Mars ones don't count).
+        tile = FakeTile(xyz=(5, 5, "earth")); tile.db.planet = "earth"
+        system, created, _ = _make_building_system()
+        ok, msg = system.construct(player, tile, "SG")
+        self.assertTrue(ok, msg)
+        self.assertEqual(len(created), 1)
+
 
 class TestConstructRequiresHQ(unittest.TestCase):
     """Test HQ prerequisite enforcement."""

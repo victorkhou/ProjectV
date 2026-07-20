@@ -842,8 +842,12 @@ class BuildingSystem(BaseSystem):
                 continue
             # Planet-scope the count when we can resolve both planets; if the
             # target planet is unknown, count all (fail safe — never over-cap).
+            # Real buildings don't store coord_planet, so resolve it from the
+            # building's location too (same fallback the shield grouping uses) —
+            # otherwise b_planet is always None and the "per planet" cap silently
+            # counts a player's generators across ALL planets (a global cap).
             if planet is not None:
-                b_planet = self._get_building_attr(b, "coord_planet", None)
+                b_planet = self._building_planet(b)
                 if b_planet is not None and b_planet != planet:
                     continue
             existing += 1
@@ -858,6 +862,20 @@ class BuildingSystem(BaseSystem):
         """Value-based capability check for a live building (hermetic registry)."""
         from world.utils import building_has_capability
         return building_has_capability(building, capability, provider=self.registry)
+
+    def _building_planet(self, building: Any) -> Any:
+        """Resolve a building's planet: coord_planet, else its location's.
+
+        Real buildings store only coord_x/coord_y (never coord_planet), so this
+        falls back to the building's location (PlanetRoom db.planet /
+        planet_name) — mirroring :func:`_tile_planet` for an already-placed
+        building.
+        """
+        planet = self._get_building_attr(building, "coord_planet", None)
+        if planet:
+            return planet
+        loc = getattr(building, "location", None)
+        return self._tile_planet(loc) if loc is not None else None
 
     def _tile_planet(
         self, tile: Any, x: int | None = None, y: int | None = None
