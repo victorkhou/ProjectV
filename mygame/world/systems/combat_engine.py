@@ -971,8 +971,15 @@ class CombatEngine(BaseSystem):
         # Tech/powerup modifiers from attacker (additive bonus)
         bonus = self._get_attacker_bonus(attacker) if include_attacker_bonus else 0
 
-        # Armor damage reduction from target
-        armor_reduction = self._get_target_armor_reduction(target)
+        # --- Damage-type dispatch (Phase 3) ---
+        # The weapon's damage_type determines which resist axis the target uses.
+        # "physical" (default) uses the existing flat DR model; other types
+        # (fire, psychic, blast) read a type-specific %-resist, capped at 50%.
+        damage_type = self._get_damage_type(weapon_item)
+        if damage_type == "physical":
+            armor_reduction = self._get_target_armor_reduction(target)
+        else:
+            armor_reduction = self._get_target_typed_resist(target, damage_type)
 
         raw = base_damage + bonus
         net_damage = int(raw - armor_reduction)
@@ -1627,6 +1634,54 @@ class CombatEngine(BaseSystem):
         if owner is not None:
             bonus += get_tech_bonus(owner, "damage")
         return bonus
+
+    @staticmethod
+    def _get_damage_type(weapon_item: Any) -> str:
+        """Return the weapon's damage type (default 'physical').
+
+        Reads the ``damage_type`` field from the weapon item/dict. Physical is
+        the legacy default — all existing weapons have no damage_type field and
+        fall through to the standard flat-DR model.
+        """
+        if hasattr(weapon_item, "damage_type"):
+            dt = weapon_item.damage_type
+            if dt and isinstance(dt, str):
+                return dt.lower()
+        if isinstance(weapon_item, dict):
+            dt = weapon_item.get("damage_type")
+            if dt and isinstance(dt, str):
+                return dt.lower()
+        return "physical"
+
+    def _get_target_typed_resist(self, target: Any, damage_type: str) -> float:
+        """Get the target's flat resist for a non-physical damage type.
+
+        Non-physical types (fire, psychic, blast) **ignore physical DR entirely**
+        and read only their own resist stat (``<type>_resist``, e.g.
+        ``fire_resist``). This means a full-physical-armor turtle has ZERO resist
+        to a psychic attack — the core design point of multi-type damage.
+
+        The 50% per-axis cap (the binding principle) is enforced by the chip
+        floor: ``chip_damage_min_fraction = 0.5`` guarantees at least 50% of raw
+        always goes through regardless of resist. So no new cap logic is needed
+        here — the existing chip floor IS the 50% cap, applied uniformly to all
+        damage types.
+
+        A small ``baseline_resist`` (from BalanceConfig) ensures new players have
+        at least token protection against typed damage at spawn.
+        """
+        if not self._is_player(target):
+            return 0.0
+        resist_key = f"{damage_type}_resist"
+        resist = 0.0
+        equipment = getattr(target, "equipment", None)
+        if equipment and hasattr(equipment, "get_stat_total"):
+            resist += equipment.get_stat_total(resist_key)
+        # Baseline resist for all players (from balance config)
+        bal = getattr(self.registry, "balance", None)
+        baseline = float(getattr(bal, "baseline_resist", 0) or 0)
+        resist += baseline
+        return resist
 
     def _get_target_armor_reduction(self, target: Any) -> float:
         """Get armor damage_reduction from the target."""

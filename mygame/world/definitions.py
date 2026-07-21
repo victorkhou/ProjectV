@@ -560,6 +560,13 @@ class BalanceConfig:
     shield_regen_percent: float = 1.0    # % of shield_max restored per interval
     shield_regen_interval_ticks: int = 5 # ticks between shield-regen ticks
 
+    # --- Damage types (§3, Phase 3) ---------------------------------------- #
+    #: Baseline typed-resist given to ALL players at spawn (flat points). Ensures
+    #: new players have token protection against fire/psychic/blast so typed
+    #: damage isn't a veteran-only wall. Small (2–3 is appropriate at the current
+    #: weapon scale). Applies to all non-physical types equally.
+    baseline_resist: float = 2.0
+
     # --- Cross-planet travel (§7) ---------------------------------------- #
     #: Cooldown in ticks between successive launches from a pad.
     travel_cooldown_ticks: int = 300       # 5 min at 1 tick/s

@@ -2768,5 +2768,100 @@ class TestResolveNow(unittest.TestCase):
         self.assertLess(target.db.hp, 100)
 
 
+# ====================================================================== #
+#  Damage Types (Phase 3)
+# ====================================================================== #
+
+class TestDamageTypes(unittest.TestCase):
+    """The damage-type dispatch: non-physical weapons ignore physical DR and
+    read a type-specific resist (``<type>_resist``) instead."""
+
+    def _dmg(self, weapon_damage, damage_type="physical", armor_dr=0,
+             typed_resist=0, *, baseline=0.0):
+        """Compute damage for a typed weapon vs armor + typed resist."""
+        registry = _make_registry()
+        registry.balance.baseline_resist = baseline
+        engine, _ = _make_engine(registry=registry)
+
+        weapon = FakeWeapon(damage=weapon_damage)
+        weapon.damage_type = damage_type
+
+        # Physical armor (only matters for physical type)
+        armor = FakeArmor(damage_reduction=armor_dr) if armor_dr else None
+        # Typed resist gear
+        typed_armor = None
+        if typed_resist:
+            typed_armor = FakeArmor(damage_reduction=0)
+            typed_armor.stat_modifiers = {f"{damage_type}_resist": typed_resist}
+            typed_armor.slot = "back"  # different slot so both equip
+
+        target = FakePlayer(name="T", armor=armor)
+        if typed_armor:
+            target.equipment.equip(typed_armor)
+
+        return engine._calculate_damage(
+            attacker=FakePlayer(name="A"),
+            target=target,
+            weapon_item=weapon,
+        )
+
+    def test_physical_weapon_uses_armor_dr(self):
+        """Physical weapon respects damage_reduction (the existing model)."""
+        # 25 raw - 10 DR = 15
+        self.assertEqual(self._dmg(25, "physical", armor_dr=10), 15)
+
+    def test_fire_weapon_ignores_physical_armor(self):
+        """A fire weapon deals full damage through physical armor."""
+        # 25 raw vs 38 physical DR — fire ignores it entirely
+        self.assertEqual(self._dmg(25, "fire", armor_dr=38), 25)
+
+    def test_psychic_weapon_ignores_physical_armor(self):
+        """Psychic bypasses physical armor completely."""
+        self.assertEqual(self._dmg(30, "psychic", armor_dr=50), 30)
+
+    def test_typed_resist_reduces_typed_damage(self):
+        """fire_resist reduces fire damage (typed resist works)."""
+        # 25 fire - 10 fire_resist = 15
+        self.assertEqual(self._dmg(25, "fire", typed_resist=10), 15)
+
+    def test_typed_resist_does_not_reduce_physical(self):
+        """fire_resist has no effect on a physical weapon."""
+        # The physical path reads damage_reduction, not fire_resist
+        # 25 physical - 0 DR (typed_resist is fire_resist, ignored) = 25
+        self.assertEqual(self._dmg(25, "physical", typed_resist=10), 25)
+
+    def test_chip_floor_applies_to_typed_damage(self):
+        """The chip floor (50%) still protects typed damage from total immunity."""
+        # 25 fire vs 999 fire_resist → chip = ceil(25*0.5) = 13
+        self.assertEqual(self._dmg(25, "fire", typed_resist=999), 13)
+
+    def test_baseline_resist_applies(self):
+        """The global baseline_resist gives all players token typed protection."""
+        # 25 fire - 2 baseline = 23
+        self.assertEqual(self._dmg(25, "fire", baseline=2.0), 23)
+
+    def test_baseline_plus_gear_resist_stacks(self):
+        """Baseline + equipped typed resist stack additively."""
+        # 25 fire - (2 baseline + 5 gear) = 18
+        self.assertEqual(self._dmg(25, "fire", typed_resist=5, baseline=2.0), 18)
+
+    def test_blast_ignores_physical_armor(self):
+        """Blast type ignores physical DR like other typed damage."""
+        self.assertEqual(self._dmg(40, "blast", armor_dr=30), 40)
+
+    def test_default_type_is_physical(self):
+        """Weapons without a damage_type field default to physical."""
+        registry = _make_registry()
+        engine, _ = _make_engine(registry=registry)
+        weapon = FakeWeapon(damage=25)  # no damage_type attribute
+        target = FakePlayer(name="T", armor=FakeArmor(damage_reduction=10))
+        result = engine._calculate_damage(
+            attacker=FakePlayer(name="A"),
+            target=target,
+            weapon_item=weapon,
+        )
+        self.assertEqual(result, 15)  # 25 - 10 = 15 (physical path)
+
+
 if __name__ == "__main__":
     unittest.main()

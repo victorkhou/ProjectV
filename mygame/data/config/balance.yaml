@@ -275,6 +275,11 @@ alliance_level_thresholds:
   180: 4    # tier 4 — a mid-size active roster
   280: 5    # tier 5 (max) — a large, active, high-level roster
 
+# --- Damage types (§3, Phase 3) -----------------------------------------
+# Baseline typed resist for all players at spawn (flat points). A small innate
+# resist so typed damage is a veteran EDGE, not a wall newbies can't touch.
+baseline_resist: 2.0
+
 # --- Cross-planet travel (§7) ------------------------------------------
 travel_cooldown_ticks: 300        # 5 min standard cooldown between launches
 travel_cooldown_owned_ticks: 120  # 2 min when you own a base on both ends

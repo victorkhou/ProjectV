@@ -577,6 +577,7 @@ class SchemaValidator:
             "travel_cooldown_ticks", "travel_cooldown_owned_ticks",
             "travel_manifest_weight_per_level",
             "travel_fuel_per_agent", "travel_fuel_per_hop",
+            "baseline_resist",
         ]
         for field in non_negative_fields:
             val = data.get(field)
