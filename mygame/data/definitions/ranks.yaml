@@ -1,122 +1,75 @@
 # Rank definitions for RTS Combat Overworld
 #
-# Each rank defines a NAME, agent_cap, and planet_access. Rank membership is
-# derived from the player's LEVEL via the widening RANK_BANDS table in
-# world/constants.py (R14.5) — NOT from the xp_threshold values below.
+# Each rank defines a NAME and agent_cap. Rank membership is derived from the
+# player's LEVEL via the widening RANK_BANDS table in world/constants.py
+# (R14.5) — NOT from the xp_threshold values below.
 #
 # xp_threshold is LEGACY DISPLAY DATA ONLY (task 6.5): the live XP curve is
 # the hybrid formula in world/progression.py, tuned via balance.yaml
 # (xp_curve_*). These values are kept for schema stability and historical
 # reference; no runtime system derives rank or level from them.
 #
-# Planet rank requirements: Terra=1, Forge=5, Tundra=7, Space=7, Inferno=9, Citadel=11
+# Planet access is gated solely by the LEVEL rank_requirement in
+# data/definitions/planets.yaml (enforced by can_access_planet in
+# rank_system.py). The old per-rank planet_access lists have been removed
+# (they were dead data — no runtime consumer ever read them).
 
 - name: Recruit
   level: 1
   xp_threshold: 0
   agent_cap: 2
-  planet_access:
-    - terra
 
 - name: Private
   level: 2
   xp_threshold: 200
   agent_cap: 3
-  planet_access:
-    - terra
 
 - name: Corporal
   level: 3
   xp_threshold: 600
   agent_cap: 4
-  planet_access:
-    - terra
 
 - name: Sergeant
   level: 4
   xp_threshold: 1500
   agent_cap: 6
-  planet_access:
-    - terra
 
 - name: Staff_Sergeant
   level: 5
   xp_threshold: 3500
   agent_cap: 8
-  planet_access:
-    - terra
-    - forge
 
 - name: Lieutenant
   level: 6
   xp_threshold: 7000
   agent_cap: 10
-  planet_access:
-    - terra
-    - forge
 
 - name: Captain
   level: 7
   xp_threshold: 12000
   agent_cap: 12
-  planet_access:
-    - terra
-    - forge
-    - tundra
-    - space
 
 - name: Major
   level: 8
   xp_threshold: 20000
   agent_cap: 14
-  planet_access:
-    - terra
-    - forge
-    - tundra
-    - space
 
 - name: Colonel
   level: 9
   xp_threshold: 35000
   agent_cap: 16
-  planet_access:
-    - terra
-    - forge
-    - tundra
-    - space
-    - inferno
 
 - name: Brigadier
   level: 10
   xp_threshold: 55000
   agent_cap: 17
-  planet_access:
-    - terra
-    - forge
-    - tundra
-    - space
-    - inferno
 
 - name: General
   level: 11
   xp_threshold: 80000
   agent_cap: 19
-  planet_access:
-    - terra
-    - forge
-    - tundra
-    - space
-    - inferno
-    - citadel
 
 - name: Marshal
   level: 12
   xp_threshold: 120000
   agent_cap: 20
-  planet_access:
-    - terra
-    - forge
-    - tundra
-    - space
-    - inferno
-    - citadel

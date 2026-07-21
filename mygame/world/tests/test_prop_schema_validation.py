@@ -257,7 +257,7 @@ BUILDING_REQUIRED_FIELDS = [
     "build_time_seconds", "max_level", "rank_requirement", "requires_agent", "storage_capacity",
 ]
 ITEM_REQUIRED_FIELDS = ["key", "name", "slot"]
-RANK_REQUIRED_FIELDS = ["name", "level", "xp_threshold", "agent_cap", "planet_access"]
+RANK_REQUIRED_FIELDS = ["name", "level", "xp_threshold", "agent_cap"]
 TECH_REQUIRED_FIELDS = ["name", "key", "required_rank", "resource_cost", "research_ticks"]
 POWERUP_REQUIRED_FIELDS = ["name", "key", "required_rank", "effect_type", "effect_value", "duration_ticks", "cooldown_ticks"]
 TERRAIN_REQUIRED_FIELDS = ["terrain_type", "map_symbol"]

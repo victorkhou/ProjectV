@@ -66,6 +66,7 @@ LIMBO_ROOM_ID = 2
 RESOURCE_TYPES: tuple[str, ...] = (
     "Wood", "Stone", "Iron",
     "Energy", "Circuits", "Nexium",
+    "Biomass", "Cryogen", "Magmite", "Aether",
 )
 
 # ------------------------------------------------------------------ #

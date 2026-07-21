@@ -167,6 +167,10 @@ resource_weights:
   Energy: 0.2
   Circuits: 0.3
   Nexium: 2.0
+  Biomass: 0.8
+  Cryogen: 1.5
+  Magmite: 2.5
+  Aether: 3.0
 
 # --- Equipment production (equipment/items feature) ---
 # An equipment building (Armorer/Lab/Medbay) yields at most one item every

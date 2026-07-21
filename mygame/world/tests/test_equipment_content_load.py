@@ -233,17 +233,12 @@ class TestRealContentLoadsClean:
                         f"{it['key']} needs '{resource}' (not on {starter_planet})"
                     )
 
-        # energy_cell/combat_stim are futuristic-tech supplies, intentionally
-        # NOT reframed as basics; they are resolved by the planet re-map moving
-        # their resource-planet gate to a reachable rank, not by re-costing here.
-        allowed_pending = {"energy_cell", "combat_stim"}
-        hard_offenders = [
-            o for o in offenders
-            if o.split()[0] not in allowed_pending
-        ]
-        assert hard_offenders == [], (
+        # All formerly-pending forward-dep items (energy_cell, combat_stim) are
+        # now rank-gated (Staff_Sergeant) and skipped by the required_rank filter
+        # above, so the allowed_pending set is retired.
+        assert offenders == [], (
             "freely-craftable essentials require a non-starter-planet resource "
-            f"(forward-dependency bug): {hard_offenders}"
+            f"(forward-dependency bug): {offenders}"
         )
 
 

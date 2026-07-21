@@ -448,13 +448,16 @@ class TestCombatCharacterBackwardCompat(unittest.TestCase):
 
 
 class TestResourceTypeMigration(unittest.TestCase):
-    """Verify RESOURCE_TYPES constant has exactly 6 types after Phase 1."""
+    """Verify RESOURCE_TYPES constant has exactly 10 types after Phase 2a re-map."""
 
     def test_resource_types_count(self):
-        self.assertEqual(len(RESOURCE_TYPES), 6)
+        self.assertEqual(len(RESOURCE_TYPES), 10)
 
     def test_resource_types_names(self):
-        expected = {"Wood", "Stone", "Iron", "Energy", "Circuits", "Nexium"}
+        expected = {
+            "Wood", "Stone", "Iron", "Energy", "Circuits", "Nexium",
+            "Biomass", "Cryogen", "Magmite", "Aether",
+        }
         self.assertEqual(set(RESOURCE_TYPES), expected)
 
     def test_default_resources_match_resource_types(self):

@@ -244,7 +244,7 @@ BUILDING_REQUIRED = [
     "build_time_seconds", "max_level", "rank_requirement", "requires_agent",
     "storage_capacity",
 ]
-RANK_REQUIRED = ["name", "level", "xp_threshold", "agent_cap", "planet_access"]
+RANK_REQUIRED = ["name", "level", "xp_threshold", "agent_cap"]
 TERRAIN_REQUIRED = ["terrain_type", "map_symbol"]
 
 

@@ -4,9 +4,9 @@
 # z_level provides a numeric shorthand for teleport (e.g. teleport 50,50,0)
 # Phase 1: 6 planets with level-gated progression
 #
-# rank_requirement is now a LEVEL requirement (1-60).
-# Old rank → level mapping: rank N → level (N-1)*5 + 1
-# Terra=1, Forge=21, Tundra=31, Space=31, Inferno=41, Citadel=51
+# rank_requirement is now a LEVEL requirement (1-100).
+# Final ladder (2026-07-20): Terra=1, Forge=21, Tundra=33, Inferno=46,
+# Elysium=58, Citadel=70, Space=1 (off-ladder hub).
 
 planets:
   - planet_key: "terra"
@@ -71,7 +71,7 @@ planets:
     persistence_type: "static"
     spawn_x: 200
     spawn_y: 200
-    rank_requirement: 31
+    rank_requirement: 33
 
   - planet_key: "inferno"
     planet_type: "volcanic"
@@ -92,7 +92,7 @@ planets:
     persistence_type: "static"
     spawn_x: 150
     spawn_y: 150
-    rank_requirement: 41
+    rank_requirement: 46
 
   - planet_key: "citadel"
     planet_type: "fortress"
@@ -113,7 +113,7 @@ planets:
     persistence_type: "static"
     spawn_x: 100
     spawn_y: 100
-    rank_requirement: 51
+    rank_requirement: 70
 
   - planet_key: "space"
     planet_type: "space"
@@ -134,4 +134,25 @@ planets:
     persistence_type: "static"
     spawn_x: 500
     spawn_y: 500
-    rank_requirement: 31
+    rank_requirement: 1
+
+  - planet_key: "elysium"
+    planet_type: "paradise"
+    z_level: 6
+    width: 400
+    height: 400
+    terrain_seed: 117
+    terrain_noise_cell_size: 8
+    terrain_weights:
+      Aether_Spring: 0.12
+      Crystal_Grove: 0.15
+      Marble_Terrace: 0.14
+      Starfall_Crater: 0.12
+      Ley_Nexus: 0.10
+      Arcane_Relay: 0.09
+      Cloud_Meadow: 0.15
+      Shimmer_Lake: 0.13
+    persistence_type: "static"
+    spawn_x: 200
+    spawn_y: 200
+    rank_requirement: 58

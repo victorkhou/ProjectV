@@ -165,8 +165,9 @@
 - name: Radar
   abbreviation: RD
   cost:
+    Wood: 10
+    Stone: 5
     Iron: 15
-    Energy: 10
   build_time_seconds: 22
   max_level: 5
   rank_requirement: 9
@@ -202,11 +203,12 @@
 - name: Relay
   abbreviation: RL
   cost:
+    Wood: 15
+    Stone: 10
     Iron: 20
-    Energy: 15
   build_time_seconds: 22
   max_level: 5
-  rank_requirement: 15
+  rank_requirement: 21
   max_health: 200
   requires_hq: true
   required_terrain: null
@@ -219,13 +221,12 @@
 - name: Medbay
   abbreviation: MB
   cost:
-    Wood: 15
+    Wood: 20
     Stone: 10
     Iron: 10
-    Energy: 5
   build_time_seconds: 30
   max_level: 5
-  rank_requirement: 18
+  rank_requirement: 21
   max_health: 250
   requires_hq: true
   required_terrain: null
@@ -244,9 +245,9 @@
 - name: Shield Generator
   abbreviation: SG
   cost:
+    Wood: 30
+    Stone: 20
     Iron: 40
-    Energy: 30
-    Circuits: 20
   build_time_seconds: 35
   max_level: 5
   rank_requirement: 15

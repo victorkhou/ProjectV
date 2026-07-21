@@ -349,7 +349,7 @@ class SchemaValidator:
     def validate_ranks(self, data: list[dict]) -> list[str]:
         """Validate a list of rank definition dicts."""
         errors: list[str] = []
-        required = {"name", "level", "xp_threshold", "agent_cap", "planet_access"}
+        required = {"name", "level", "xp_threshold", "agent_cap"}
         levels_seen: set[int] = set()
         level_xp: list[tuple[int, int]] = []
 

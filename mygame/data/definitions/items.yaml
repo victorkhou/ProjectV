@@ -63,7 +63,7 @@ items:
       Circuits: 10
     weight: 12.0
     classification: futuristic
-    required_rank: Sergeant
+    required_rank: Staff_Sergeant
 
   - key: sniper_rifle
     name: Sniper Rifle
@@ -257,7 +257,7 @@ items:
     weight: 0.1
     max_stack: 200
     classification: futuristic
-    required_rank: null
+    required_rank: Staff_Sergeant
 
   # ------------------------------------------------------------------ #
   #  Consumables (Supply)
@@ -292,7 +292,7 @@ items:
     weight: 1.0
     max_stack: 20
     classification: modern
-    required_rank: null
+    required_rank: Staff_Sergeant
 
   # ------------------------------------------------------------------ #
   #  Throwables — GRENADES (Supply). Thrown in a compass direction; fly to the
@@ -341,7 +341,7 @@ items:
     weight: 3.0
     max_stack: 10
     classification: futuristic
-    required_rank: Sergeant
+    required_rank: Staff_Sergeant
 
   # ------------------------------------------------------------------ #
   #  Mines (Supply). Armed in place with `arm <mine>` (no throw); the set fuse

@@ -135,6 +135,7 @@ DEFAULT_HEALTH = 100
 STARTING_RESOURCES = {
     "Wood": 40, "Stone": 25, "Iron": 10,
     "Energy": 0, "Circuits": 0, "Nexium": 0,
+    "Biomass": 0, "Cryogen": 0, "Magmite": 0, "Aether": 0,
 }
 
 PLAYER_DEFAULTS: dict[str, object] = {

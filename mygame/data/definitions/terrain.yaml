@@ -8,7 +8,7 @@ terrain:
   # Basics: Wood, Stone, Iron
   - terrain_type: Plains
     map_symbol: ".."
-    resource_type: null
+    resource_type: Biomass
     passable: true
     planet: terra
 
@@ -20,7 +20,7 @@ terrain:
 
   - terrain_type: Dirt
     map_symbol: "~~"
-    resource_type: null
+    resource_type: Biomass
     passable: true
     planet: terra
 
@@ -114,7 +114,7 @@ terrain:
 
   - terrain_type: Frozen_Lake
     map_symbol: "><"
-    resource_type: null
+    resource_type: Cryogen
     passable: true
     planet: tundra
 
@@ -144,7 +144,7 @@ terrain:
 
   - terrain_type: Hot_Spring
     map_symbol: "@@"
-    resource_type: null
+    resource_type: Cryogen
     passable: true
     planet: tundra
 
@@ -164,7 +164,7 @@ terrain:
 
   - terrain_type: Lava_Flow
     map_symbol: "!!"
-    resource_type: null
+    resource_type: Magmite
     passable: true
     planet: inferno
 
@@ -188,7 +188,7 @@ terrain:
 
   - terrain_type: Sulfur_Pit
     map_symbol: "%%"
-    resource_type: null
+    resource_type: Magmite
     passable: true
     planet: inferno
 
@@ -304,6 +304,56 @@ terrain:
     passable: true
     planet: space
 
+  # -- Elysium (paradise) -- L58+ -----------------------------------------
+  # Aether (only source), plus the full resource ladder MINUS Biomass
+  - terrain_type: Aether_Spring
+    map_symbol: "**"
+    resource_type: Aether
+    passable: true
+    planet: elysium
+
+  - terrain_type: Crystal_Grove
+    map_symbol: "&&"
+    resource_type: Wood
+    passable: true
+    planet: elysium
+
+  - terrain_type: Marble_Terrace
+    map_symbol: "##"
+    resource_type: Stone
+    passable: true
+    planet: elysium
+
+  - terrain_type: Starfall_Crater
+    map_symbol: "<>"
+    resource_type: Iron
+    passable: true
+    planet: elysium
+
+  - terrain_type: Ley_Nexus
+    map_symbol: "++"
+    resource_type: Energy
+    passable: true
+    planet: elysium
+
+  - terrain_type: Arcane_Relay
+    map_symbol: "::"
+    resource_type: Circuits
+    passable: true
+    planet: elysium
+
+  - terrain_type: Cloud_Meadow
+    map_symbol: ".."
+    resource_type: null
+    passable: true
+    planet: elysium
+
+  - terrain_type: Shimmer_Lake
+    map_symbol: "><"
+    resource_type: null
+    passable: true
+    planet: elysium
+
 # Legacy planet list for backward compatibility with DataRegistry._populate_terrain
 planets:
   - name: Terra
@@ -377,3 +427,15 @@ planets:
       - Wormhole
       - Radiation_Zone
       - Derelict_Ship
+
+  - name: Elysium
+    planet_type: paradise
+    terrain_types:
+      - Aether_Spring
+      - Crystal_Grove
+      - Marble_Terrace
+      - Starfall_Crater
+      - Ley_Nexus
+      - Arcane_Relay
+      - Cloud_Meadow
+      - Shimmer_Lake
