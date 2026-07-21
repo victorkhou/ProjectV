@@ -331,11 +331,11 @@ items:
     effect:
       type: heal
       amount: 30
-    # Terra-craftable basics only: a Recruit-tier essential must never require a
-    # resource gated to a higher planet (Energy is Forge+). Was Wood 5 / Energy 3.
+    # Terra-craftable: Biomass is the consumable resource (the permanent Terra
+    # round-trip anchor per §4). Recruits can harvest Biomass from Plains/Dirt.
     craft_cost:
-      Wood: 5
-      Stone: 3
+      Biomass: 5
+      Stone: 2
     weight: 2.0
     max_stack: 20
     classification: modern

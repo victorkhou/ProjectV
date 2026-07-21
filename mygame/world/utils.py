@@ -1373,3 +1373,81 @@ def _get_rank_name(player: Any, provider: Any = None) -> str:
     except (ImportError, AttributeError):
         pass
     return "Recruit"
+
+
+# ------------------------------------------------------------------ #
+#  Graduation economy (§4) — outgrown-planet throttle
+# ------------------------------------------------------------------ #
+
+def outgrown_factor(player: Any, planet_key: str | None = None) -> float:
+    """Return a 0.0–1.0 multiplier reflecting how much a player has outgrown a planet.
+
+    Returns **1.0** (no throttle) when the player:
+    - is a legitimate resident (hasn't yet reached the next planet's gate), or
+    - is on a planet with no next-gate (top of the ladder), or
+    - no planet registry is available.
+
+    Returns a value in ``(0.0, 1.0)`` when the player COULD graduate (their level
+    ≥ the next planet's gate) but is still operating on the lower planet — the
+    "camping" case the graduation economy needs to throttle.
+
+    The factor is linear: at the next gate, factor = 1.0 (just became eligible,
+    full reward one more time); at gate + grace, factor drops to the configured
+    minimum. This keeps the transition gentle and predictable.
+
+    **Usage:** multiply XP awards, harvest yields, and loot rolls on the given
+    planet by this factor. Apply in EXACTLY ONE choke point per axis (e.g.
+    ``RankSystem.award_xp``). **EXEMPT Biomass** (the Terra round-trip anchor) —
+    Biomass yield should never be throttled.
+    """
+    if planet_key is None:
+        planet_key = getattr(getattr(player, "db", None), "coord_planet", None)
+    if not planet_key:
+        return 1.0
+
+    try:
+        from server.conf.game_init import game_systems
+        registry = game_systems.get("registry")
+        if registry is None:
+            return 1.0
+        planet_reg = getattr(registry, "planet_registry", None)
+        if planet_reg is None:
+            return 1.0
+    except (ImportError, AttributeError):
+        return 1.0
+
+    # Find the current planet's gate and the NEXT planet's gate.
+    try:
+        current_space = planet_reg.get_space(planet_key)
+    except KeyError:
+        return 1.0
+
+    current_gate = current_space.rank_requirement
+
+    # Find the next planet = the one with the lowest gate ABOVE current_gate.
+    next_gate = None
+    for key in planet_reg.list_planets():
+        try:
+            space = planet_reg.get_space(key)
+        except KeyError:
+            continue
+        req = space.rank_requirement
+        if req > current_gate:
+            if next_gate is None or req < next_gate:
+                next_gate = req
+
+    if next_gate is None:
+        return 1.0  # top of the ladder — no throttle
+
+    level = getattr(getattr(player, "db", None), "level", 1) or 1
+    if level < next_gate:
+        return 1.0  # legitimate resident — hasn't reached the next gate
+
+    # Player has outgrown this planet. Throttle linearly over a grace span.
+    grace = 5  # levels of grace past the gate before full throttle
+    min_factor = 0.25  # minimum throttle (never zero — still some reward)
+    over = level - next_gate
+    if over >= grace:
+        return min_factor
+    # Linear falloff: at over=0 → 1.0; at over=grace → min_factor
+    return 1.0 - (1.0 - min_factor) * (over / grace)

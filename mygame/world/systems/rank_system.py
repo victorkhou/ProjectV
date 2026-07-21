@@ -137,9 +137,18 @@ class RankSystem(BaseSystem):
 
         Delegates the XP mutation to the entity's ``CombatEntity.award_xp``
         method, then syncs player-facing level/rank state and fires events.
+
+        The outgrown-planet throttle (§4) scales XP by the player's
+        outgrown_factor for their current planet — a player who COULD graduate
+        but is camping earns less XP, incentivizing progression up the ladder.
         """
         if amount <= 0:
             return
+        # Apply the outgrown-planet XP throttle (§4).
+        from world.utils import outgrown_factor
+        factor = outgrown_factor(player)
+        if factor < 1.0:
+            amount = max(1, int(round(amount * factor)))
         old_level = self._get_level(player)
         player.award_xp(amount)
         logger.info(
