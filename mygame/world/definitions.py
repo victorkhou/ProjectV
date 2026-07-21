@@ -65,6 +65,7 @@ class ItemDef:
     stat_modifiers: dict[str, float] = field(default_factory=dict)
     # weapon
     weapon_type: str | None = None  # melee|ranged (weapon category only)
+    damage_type: str = "physical"  # physical|fire|psychic|blast (Phase 3)
     ammo_type: str | None = None  # ammo item key the magazine holds (ranged)
     ammo_per_shot: int = 1
     magazine_size: int | None = None  # magazine capacity (ranged); weapon tracks db.loaded

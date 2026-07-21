@@ -319,6 +319,7 @@ class DataRegistry:
                 category=entry.get("category", "armor"),
                 stat_modifiers=entry.get("stat_modifiers", {}),
                 weapon_type=entry.get("weapon_type"),
+                damage_type=entry.get("damage_type", "physical"),
                 ammo_type=entry.get("ammo_type"),
                 ammo_per_shot=entry.get("ammo_per_shot", 1),
                 magazine_size=entry.get("magazine_size"),

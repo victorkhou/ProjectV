@@ -104,6 +104,43 @@ items:
     required_rank: null
 
   # ------------------------------------------------------------------ #
+  #  Typed-damage weapons (Phase 3 — ignore physical DR, read typed resist)
+  # ------------------------------------------------------------------ #
+  - key: incendiary_rifle
+    name: Incendiary Rifle
+    slot: weapon
+    category: weapon
+    weapon_type: ranged
+    damage_type: fire
+    stat_modifiers:
+      damage: 20
+      range: 5
+    ammo_cost:
+      Magmite: 1
+    craft_cost:
+      Iron: 25
+      Magmite: 15
+    weight: 11.0
+    classification: futuristic
+    required_rank: Major
+
+  - key: psi_blade
+    name: Psi Blade
+    slot: weapon
+    category: weapon
+    weapon_type: melee
+    damage_type: psychic
+    stat_modifiers:
+      damage: 18
+      range: 1
+    craft_cost:
+      Aether: 10
+      Circuits: 5
+    weight: 3.0
+    classification: futuristic
+    required_rank: Colonel
+
+  # ------------------------------------------------------------------ #
   #  Armor (Gear) — one piece per body slot
   # ------------------------------------------------------------------ #
   - key: combat_helmet
