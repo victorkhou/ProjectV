@@ -1725,6 +1725,11 @@ class CombatEngine(BaseSystem):
         if equipment and hasattr(equipment, "get_stat_total"):
             bonus += equipment.get_stat_total("damage_bonus")
 
+        # Class sidegrade modifier (Phase 5): flat bonus/penalty from the
+        # player's chosen class. Read from ClassDef.stat_modifiers via the
+        # owning player's db.player_class.
+        bonus += self._get_class_modifier(attacker, "damage_bonus")
+
         # Check active powerups for damage_bonus
         active_powerups = None
         if hasattr(attacker, "db"):
@@ -1762,6 +1767,28 @@ class CombatEngine(BaseSystem):
             perm_bonus = cap
         bonus += perm_bonus
         return bonus
+
+    def _get_class_modifier(self, entity: Any, stat_key: str) -> float:
+        """Return the class sidegrade modifier for *stat_key* on *entity*.
+
+        Reads ``db.player_class`` from the owning player, looks up the ClassDef
+        in the registry, and returns the flat modifier from ``stat_modifiers``.
+        Returns 0.0 if no class is set, the registry is unavailable, or the
+        class has no modifier for that stat.
+        """
+        owner = self._owning_player(entity)
+        if owner is None:
+            return 0.0
+        cls_key = getattr(getattr(owner, "db", None), "player_class", None)
+        if not cls_key:
+            return 0.0
+        registry = getattr(self, "registry", None)
+        if registry is None:
+            return 0.0
+        cls_def = registry.get_class(cls_key) if hasattr(registry, "get_class") else None
+        if cls_def is None:
+            return 0.0
+        return float(cls_def.stat_modifiers.get(stat_key, 0))
 
     @staticmethod
     def _get_damage_type(weapon_item: Any) -> str:

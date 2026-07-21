@@ -74,8 +74,10 @@ class ResourceSystem(BaseSystem):
         if not resource_type:
             return False, "This resource node has no resource type."
 
-        # Determine yield amount from balance config
+        # Determine yield amount from balance config, scaled by planet tier.
         gather_amount = self.registry.balance.gather_amount
+        planet_key = getattr(getattr(player, "db", None), "coord_planet", None)
+        gather_amount = self._scale_yield_by_planet(gather_amount, planet_key)
 
         # Add resources to player
         player.add_resource(resource_type, gather_amount)
@@ -556,6 +558,26 @@ class ResourceSystem(BaseSystem):
     # ------------------------------------------------------------------ #
     #  Internal helpers
     # ------------------------------------------------------------------ #
+
+    # Planet yield scaling (Phase 4): higher planets give more per action.
+    # The scale is simple: Terra=1.0, Forge=1.2, Tundra=1.4, Inferno=1.6,
+    # Elysium=1.8, Citadel=2.0. Indexed by rank_requirement tier.
+    _PLANET_YIELD_SCALE: dict[str, float] = {
+        "terra": 1.0,
+        "forge": 1.2,
+        "tundra": 1.4,
+        "inferno": 1.6,
+        "elysium": 1.8,
+        "citadel": 2.0,
+        "space": 1.0,
+    }
+
+    def _scale_yield_by_planet(self, base_amount: int, planet_key: str | None) -> int:
+        """Scale a harvest yield by the planet's tier multiplier."""
+        if not planet_key:
+            return base_amount
+        scale = self._PLANET_YIELD_SCALE.get(planet_key, 1.0)
+        return max(1, int(round(base_amount * scale)))
 
     @staticmethod
     def _get_resource_node(tile: Any) -> dict | None:

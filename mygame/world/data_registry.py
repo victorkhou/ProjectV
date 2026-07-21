@@ -650,6 +650,7 @@ class DataRegistry:
                 key=key,
                 name=name if isinstance(name, str) and name else key.title(),
                 description=(description if isinstance(description, str) else "").strip(),
+                stat_modifiers=entry.get("stat_modifiers") or {},
             )
         logger.info("Loaded %d player class(es).", len(self.classes))
 

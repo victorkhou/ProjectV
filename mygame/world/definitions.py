@@ -97,21 +97,21 @@ class RankDef:
 
 @dataclass
 class ClassDef:
-    """Definition for a selectable player class (state 3.2).
+    """Definition for a selectable player class (state 3.2 + Phase 5 substrate).
 
-    Selection + stored label only in this iteration — a class carries a
-    display ``name``, a stable ``key`` (persisted on ``db.player_class``), and a
-    short ``description`` shown in the selection menu. It has NO mechanical
-    effect yet (no starting-loadout / stat fields), so the combat, equipment,
-    and progression systems remain class-agnostic. Modeled on ``RankDef`` so the
-    YAML + dataclass + DataRegistry pattern is ready to gain mechanics later
-    (e.g. a ``starting_items`` or ``stat_modifiers`` field) without reshaping
-    the selection flow.
+    Each class is a **sidegrade**: a strength paired with a weakness, never a
+    power tier. The ``stat_modifiers`` dict applies flat additive bonuses or
+    penalties to the player's combat stats (read in CombatEngine via a class-
+    modifier accessor). A class with +damage always pays with -HP/-accuracy/etc.
+
+    ``key`` persists on ``db.player_class``; ``name`` + ``description`` drive
+    the selection menu and score display.
     """
 
     key: str
     name: str
     description: str = ""
+    stat_modifiers: dict[str, float] = field(default_factory=dict)
 
 
 @dataclass

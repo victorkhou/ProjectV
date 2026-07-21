@@ -190,7 +190,7 @@ class OutpostSpawnerSystem(BaseSystem):
 
         # 3. Guards at the HQ tile. A running 1-based index across all guard
         # groups makes each guard uniquely named (Guard-1, Guard-2, Soldier-3…).
-        guard_hp = self._guard_hp(tier)
+        guard_hp = self._guard_hp(tier, planet)
         guard_index = 0
         for g in template.guards:
             hp = g.hp if g.hp is not None else guard_hp
@@ -454,9 +454,22 @@ class OutpostSpawnerSystem(BaseSystem):
         except Exception:  # noqa: BLE001
             return None
 
-    def _guard_hp(self, tier: str) -> int:
+    # Planet NPC scaling (Phase 4): higher planets have tougher NPC bases.
+    _PLANET_NPC_SCALE: dict[str, float] = {
+        "terra": 1.0,
+        "forge": 1.3,
+        "tundra": 1.6,
+        "inferno": 2.0,
+        "elysium": 2.5,
+        "citadel": 3.0,
+        "space": 1.0,
+    }
+
+    def _guard_hp(self, tier: str, planet: str | None = None) -> int:
         bal = self.registry.balance
-        return bal.fortress_guard_hp if tier == "fortress" else bal.outpost_guard_hp
+        base = bal.fortress_guard_hp if tier == "fortress" else bal.outpost_guard_hp
+        scale = self._PLANET_NPC_SCALE.get(planet or "", 1.0)
+        return int(round(base * scale))
 
     def _sentinel_name(self, template: Any) -> str:
         """A per-base display name, e.g. "Outpost #3"."""

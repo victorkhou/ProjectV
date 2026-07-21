@@ -1,33 +1,50 @@
 # Player class definitions (state 3.2 — class selection).
 #
-# Selection + stored label ONLY in this iteration: a class is a cosmetic
-# identity a player picks during spawning. It has no mechanical effect yet
-# (no starting loadout, no stat bonuses) — combat/equipment/progression stay
-# class-agnostic. The `key` is what persists on the character
-# (db.player_class); `name` + `description` drive the selection menu and the
-# score/who display. Add mechanics later by extending ClassDef + this file,
-# without changing the selection flow.
+# Each class is a SIDEGRADE: a strength paired with a weakness, never a raw
+# power tier (binding principle: skill > progression). The `stat_modifiers`
+# are applied in CombatEngine._get_attacker_bonus / _get_target_armor_reduction
+# / _get_class_modifier as flat additive bonuses/penalties. A class with
+# +damage always pays with -something (HP, accuracy, range, speed).
 #
-# Optional file: if absent/empty, class selection falls back to a single
-# default so the spawning flow never dead-ends.
+# key: persists on db.player_class; name/description drive the selection menu.
 
 classes:
   - key: vanguard
     name: Vanguard
     description: >-
       Front-line assault specialist. Leads the breach and holds the line.
+      +15 max HP, faster in-combat move; reduced accuracy and range.
+    stat_modifiers:
+      max_hp: 15
+      move_speed: 1
+      accuracy: -0.15
+      range: -1
 
   - key: engineer
     name: Engineer
     description: >-
       Builder and fortifier. Keeps the base running and the walls standing.
+      Sees farther (fog), builds faster; weaker in direct combat.
+    stat_modifiers:
+      sight_range: 2
+      damage_bonus: -5
 
   - key: ranger
     name: Ranger
     description: >-
       Scout and marksman. Ranges ahead, spots targets, strikes from distance.
+      +1 weapon range, higher accuracy; less HP.
+    stat_modifiers:
+      range: 1
+      accuracy: 0.10
+      max_hp: -10
 
   - key: commander
     name: Commander
     description: >-
       Tactician who leads agents and coordinates the war effort.
+      +1 agent cap, small damage aura to nearby allies; fragile in solo combat.
+    stat_modifiers:
+      agent_cap: 1
+      damage_bonus: 2
+      max_hp: -15
