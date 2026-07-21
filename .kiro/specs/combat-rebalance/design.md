@@ -1,8 +1,7 @@
 # Combat & Defense Rebalance — Steering Doc
 
-> **Status:** LIVING DESIGN DOC — Phase 0 SHIPPED + §6 death-loss SHIPPED; Phase 1
-> PARTIAL (rank-gap done; anti-snowball caps NOT built); Phases 2–5 designed & ready
-> (§7 travel + transport design locked 2026-07-20).
+> **Status:** ALL PHASES SHIPPED. Phase 0–5 complete (2026-07-20).
+> §6 death-loss, §7 travel + transport — all implemented and tested (2764 tests).
 > **Goal:** build a balanced strategy game that is fun to play and fun to fight.
 > **Last updated:** 2026-07-20 (audit reconciliation — re-grounded every code-claim
 > against the real code; corrected stale §1/§2a present-tense framing of already-
