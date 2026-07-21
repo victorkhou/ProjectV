@@ -460,9 +460,12 @@ class CombatEngine(BaseSystem):
 
             # Fire burn DoT: if the weapon is fire-typed, apply a burn that
             # deals additional damage over subsequent ticks (Phase 3).
-            if self._get_damage_type(weapon_item) == "fire" and damage > 0:
+            damage_type = self._get_damage_type(weapon_item)
+            if damage_type == "fire" and damage > 0:
                 raw = self._get_stat(weapon_item, "damage", 0)
                 self._apply_fire_dot(target, raw, attacker)
+            elif damage_type == "blast" and damage > 0:
+                self._apply_blast_shred(target)
 
             # Lockout + event + notify + defeat/destruction. Shared with the
             # throw AoE path so both resolve hits identically.
@@ -716,6 +719,25 @@ class CombatEngine(BaseSystem):
         # future expansion point for a proper per-player effect loop. The burn
         # is applied immediately on hit rather than requiring a separate tick.
         pass
+
+    def _apply_blast_shred(self, target: Any) -> None:
+        """Apply blast armor-shred: reduce the target's effective DR temporarily.
+
+        Blast weapons *degrade* physical armor rather than being reduced by it.
+        Each blast hit adds a stacking ``armor_shred`` debuff on the target that
+        is subtracted from their effective ``damage_reduction`` on subsequent
+        physical hits. The shred decays over time (ticks_remaining).
+
+        Implementation: store ``db.armor_shred`` as a flat value subtracted from
+        the target's DR in ``_get_target_armor_reduction``. Each blast hit adds
+        to the shred pool (capped at their total DR so it never goes negative).
+        """
+        bal = getattr(self.registry, "balance", None)
+        shred_amount = int(getattr(bal, "blast_shred_per_hit", 5) or 0)
+        if shred_amount <= 0:
+            return
+        current_shred = getattr(getattr(target, "db", None), "armor_shred", 0) or 0
+        target.db.armor_shred = current_shred + shred_amount
 
     def _apply_fire_dot(self, target: Any, raw_damage: int, attacker: Any) -> None:
         """Apply a burn DoT effect when a fire-type weapon hits.
@@ -1818,6 +1840,13 @@ class CombatEngine(BaseSystem):
         if cap > 0 and perm_dr > cap:
             perm_dr = cap
         reduction += perm_dr
+
+        # Blast armor-shred: subtract accumulated shred from effective DR.
+        # The shred makes subsequent physical hits hurt more (the blast "opens
+        # up" the turtle for follow-up attacks).
+        shred = getattr(getattr(target, "db", None), "armor_shred", 0) or 0
+        if shred > 0:
+            reduction = max(0, reduction - shred)
         return reduction
 
     def _alliance_combat_bonus(self, entity: Any, category: str, field: str) -> float:

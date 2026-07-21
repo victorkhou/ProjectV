@@ -579,6 +579,7 @@ class SchemaValidator:
             "travel_fuel_per_agent", "travel_fuel_per_hop",
             "baseline_resist",
             "fire_burn_fraction", "fire_burn_ticks",
+            "blast_shred_per_hit",
             "perm_bonus_cap_damage", "perm_bonus_cap_dr",
         ]
         for field in non_negative_fields:

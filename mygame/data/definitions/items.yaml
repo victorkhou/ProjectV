@@ -140,6 +140,24 @@ items:
     classification: futuristic
     required_rank: Colonel
 
+  - key: blast_launcher
+    name: Blast Launcher
+    slot: weapon
+    category: weapon
+    weapon_type: ranged
+    damage_type: blast
+    stat_modifiers:
+      damage: 30
+      range: 4
+    ammo_cost:
+      Iron: 3
+    craft_cost:
+      Iron: 30
+      Cryogen: 10
+    weight: 14.0
+    classification: futuristic
+    required_rank: Lieutenant
+
   # ------------------------------------------------------------------ #
   #  Armor (Gear) — one piece per body slot
   # ------------------------------------------------------------------ #

@@ -571,6 +571,9 @@ class BalanceConfig:
     fire_burn_fraction: float = 0.2  # 20% of raw per burn tick
     #: Number of ticks the burn lasts after a fire hit.
     fire_burn_ticks: int = 3
+    #: Blast armor-shred: flat DR removed from the target per blast hit.
+    #: Stacks additively; makes subsequent physical hits hurt more.
+    blast_shred_per_hit: int = 5
 
     #: Aggregate permanent-bonus cap (§2a anti-snowball): the maximum total flat
     #: bonus from tech + alliance perks on the DAMAGE axis. Gear bonus is

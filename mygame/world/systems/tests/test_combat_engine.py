@@ -2952,6 +2952,80 @@ class TestFireBurnDoT(unittest.TestCase):
         self.assertEqual(effects, [])
 
 
+class TestBlastArmorShred(unittest.TestCase):
+    """Blast weapons shred target's physical armor, stacking per hit."""
+
+    def test_blast_hit_adds_shred(self):
+        """A blast weapon hit increments db.armor_shred on the target."""
+        registry = _make_registry()
+        registry.balance.blast_shred_per_hit = 5
+        engine, _ = _make_engine(registry=registry)
+
+        weapon = FakeWeapon(damage=30)
+        weapon.damage_type = "blast"
+        attacker = FakePlayer(name="A")
+        target = FakePlayer(name="T")
+        target.db.armor_shred = 0
+
+        engine.pending_actions.append({
+            "attacker": attacker, "target": target, "weapon_item": weapon,
+        })
+        engine.resolve_tick()
+        self.assertEqual(target.db.armor_shred, 5)
+
+    def test_shred_stacks(self):
+        """Multiple blast hits stack the shred."""
+        registry = _make_registry()
+        registry.balance.blast_shred_per_hit = 5
+        engine, _ = _make_engine(registry=registry)
+
+        weapon = FakeWeapon(damage=30)
+        weapon.damage_type = "blast"
+        attacker = FakePlayer(name="A")
+        target = FakePlayer(name="T")
+        target.db.armor_shred = 0
+
+        for _ in range(3):
+            engine.pending_actions.append({
+                "attacker": attacker, "target": target, "weapon_item": weapon,
+            })
+            engine.resolve_tick()
+        self.assertEqual(target.db.armor_shred, 15)
+
+    def test_shred_reduces_physical_dr(self):
+        """Accumulated shred reduces the target's effective DR for physical hits."""
+        registry = _make_registry()
+        registry.balance.blast_shred_per_hit = 5
+        engine, _ = _make_engine(registry=registry)
+
+        # Target has 20 DR from armor, but 10 shred accumulated
+        armor = FakeArmor(damage_reduction=20)
+        target = FakePlayer(name="T", armor=armor)
+        target.db.armor_shred = 10
+
+        # A physical weapon: 25 - (20 DR - 10 shred) = 25 - 10 = 15
+        phys_weapon = FakeWeapon(damage=25)
+        result = engine._calculate_damage(
+            attacker=FakePlayer(name="A"), target=target, weapon_item=phys_weapon,
+        )
+        self.assertEqual(result, 15)
+
+    def test_shred_does_not_go_negative(self):
+        """Shred cannot reduce DR below 0 (no damage amplification)."""
+        registry = _make_registry()
+        engine, _ = _make_engine(registry=registry)
+
+        target = FakePlayer(name="T")  # no armor, 0 DR
+        target.db.armor_shred = 99
+
+        phys_weapon = FakeWeapon(damage=25)
+        result = engine._calculate_damage(
+            attacker=FakePlayer(name="A"), target=target, weapon_item=phys_weapon,
+        )
+        # DR = max(0, 0 - 99) = 0; damage = 25 - 0 = 25 (no amplification)
+        self.assertEqual(result, 25)
+
+
 class TestPermanentBonusCap(unittest.TestCase):
     """The aggregate permanent-bonus cap (§2a anti-snowball): tech + alliance
     perk bonuses are capped so no combo approaches 2× without counterplay."""

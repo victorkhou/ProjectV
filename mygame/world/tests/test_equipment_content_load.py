@@ -44,9 +44,9 @@ _REAL_DATA_DIR = os.path.normpath(
 
 # The full seeded/migrated item set authored in data/definitions/items.yaml.
 EXPECTED_ITEM_KEYS = {
-    # weapons (7)
+    # weapons (8)
     "combat_knife", "assault_rifle", "plasma_rifle", "sniper_rifle", "service_rifle",
-    "incendiary_rifle", "psi_blade",
+    "incendiary_rifle", "psi_blade", "blast_launcher",
     # armor (6)
     "combat_helmet", "kevlar_vest", "power_armor",
     "combat_gloves", "combat_greaves", "combat_boots",
@@ -111,7 +111,7 @@ class TestRealContentLoadsClean:
     def test_all_expected_items_present(self, real_registry):
         """Every seeded/migrated item is present — no more, no less."""
         assert set(real_registry.items.keys()) == EXPECTED_ITEM_KEYS
-        assert len(real_registry.items) == 26
+        assert len(real_registry.items) == 27
 
     def test_every_item_has_valid_category(self, real_registry):
         for key, idef in real_registry.items.items():
