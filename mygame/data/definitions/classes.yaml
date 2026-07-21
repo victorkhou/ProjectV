@@ -1,10 +1,16 @@
-# Player class definitions (state 3.2 — class selection).
+# Player class definitions (state 3.2 + Phase 5 substrate).
 #
 # Each class is a SIDEGRADE: a strength paired with a weakness, never a raw
-# power tier (binding principle: skill > progression). The `stat_modifiers`
-# are applied in CombatEngine._get_attacker_bonus / _get_target_armor_reduction
-# / _get_class_modifier as flat additive bonuses/penalties. A class with
-# +damage always pays with -something (HP, accuracy, range, speed).
+# power tier (binding principle: skill > progression).
+#
+# ⚠ WIRING STATUS: only the `damage_bonus` axis is currently consumed by combat
+# (CombatEngine._get_class_modifier, folded into _get_attacker_bonus). The other
+# axes (max_hp, accuracy, move_speed, range, sight_range, agent_cap) each need
+# their own consumer wiring at their respective read sites — until then they would
+# be DEAD DATA. To avoid shipping stats that look functional but aren't, each
+# class currently carries ONLY its damage_bonus modifier; the intended full
+# sidegrade (the paired strength+weakness) is recorded in the description and will
+# be filled in as each axis gets a consumer. See steering doc §2d / Phase 5.
 #
 # key: persists on db.player_class; name/description drive the selection menu.
 
@@ -13,38 +19,32 @@ classes:
     name: Vanguard
     description: >-
       Front-line assault specialist. Leads the breach and holds the line.
-      +15 max HP, faster in-combat move; reduced accuracy and range.
-    stat_modifiers:
-      max_hp: 15
-      move_speed: 1
-      accuracy: -0.15
-      range: -1
+      Intended sidegrade: +HP, faster move; -accuracy, -range. Currently a
+      neutral damage profile (bruiser bonuses pending max_hp/accuracy wiring).
+    stat_modifiers: {}
 
   - key: engineer
     name: Engineer
     description: >-
       Builder and fortifier. Keeps the base running and the walls standing.
-      Sees farther (fog), builds faster; weaker in direct combat.
+      Weaker in direct combat (-5 damage) — the paired sight/build strengths
+      are pending their consumer wiring.
     stat_modifiers:
-      sight_range: 2
       damage_bonus: -5
 
   - key: ranger
     name: Ranger
     description: >-
       Scout and marksman. Ranges ahead, spots targets, strikes from distance.
-      +1 weapon range, higher accuracy; less HP.
-    stat_modifiers:
-      range: 1
-      accuracy: 0.10
-      max_hp: -10
+      Intended sidegrade: +range, +accuracy; -HP. Currently neutral (bonuses
+      pending range/accuracy/max_hp wiring).
+    stat_modifiers: {}
 
   - key: commander
     name: Commander
     description: >-
       Tactician who leads agents and coordinates the war effort.
-      +1 agent cap, small damage aura to nearby allies; fragile in solo combat.
+      +2 damage aura strength; the paired +agent-cap / -HP fragility is pending
+      agent_cap/max_hp wiring.
     stat_modifiers:
-      agent_cap: 1
       damage_bonus: 2
-      max_hp: -15

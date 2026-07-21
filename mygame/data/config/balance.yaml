@@ -282,8 +282,9 @@ baseline_resist: 2.0
 # Fire burn DoT: fraction of raw damage per tick + duration.
 fire_burn_fraction: 0.2       # 20% of raw per burn tick
 fire_burn_ticks: 3            # burn lasts 3 ticks after hit
-# Blast armor-shred: flat DR removed per blast hit (stacks).
+# Blast armor-shred: flat DR removed per blast hit (stacks), + recovery rate.
 blast_shred_per_hit: 5        # each blast hit shreds 5 DR from the target
+blast_shred_decay_per_tick: 1 # shred recovers 1 DR/tick (not permanent)
 
 # Aggregate permanent-bonus cap (anti-snowball, S2a): max total flat bonus from
 # tech + alliance perks per axis. Gear is UNCAPPED (loseable). 0 = disabled.

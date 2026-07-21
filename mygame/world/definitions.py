@@ -574,6 +574,9 @@ class BalanceConfig:
     #: Blast armor-shred: flat DR removed from the target per blast hit.
     #: Stacks additively; makes subsequent physical hits hurt more.
     blast_shred_per_hit: int = 5
+    #: Blast armor-shred recovery: DR restored per tick (shred is not permanent —
+    #: it decays so a target recovers after the blast assault ends).
+    blast_shred_decay_per_tick: int = 1
 
     #: Aggregate permanent-bonus cap (§2a anti-snowball): the maximum total flat
     #: bonus from tech + alliance perks on the DAMAGE axis. Gear bonus is

@@ -3025,6 +3025,79 @@ class TestBlastArmorShred(unittest.TestCase):
         # DR = max(0, 0 - 99) = 0; damage = 25 - 0 = 25 (no amplification)
         self.assertEqual(result, 25)
 
+    def test_shred_decays_per_tick(self):
+        """Armor shred recovers over time via tick_effects_on_entity."""
+        registry = _make_registry()
+        registry.balance.blast_shred_decay_per_tick = 1
+        engine, _ = _make_engine(registry=registry)
+        target = FakePlayer(name="T")
+        target.db.armor_shred = 3
+        target.db.active_effects = []
+
+        engine.tick_effects_on_entity(target)
+        self.assertEqual(target.db.armor_shred, 2)
+        engine.tick_effects_on_entity(target)
+        self.assertEqual(target.db.armor_shred, 1)
+
+    def test_shred_resets_on_death(self):
+        """Death (defeat/respawn) clears accumulated armor shred."""
+        registry = _make_registry()
+        engine, _ = _make_engine(registry=registry)
+        victim = FakePlayer(name="V", hp=100)
+        victim.db.armor_shred = 25
+        engine._handle_player_defeat(victim, FakePlayer(name="K"))
+        self.assertEqual(victim.db.armor_shred, 0)
+
+
+class TestClassModifier(unittest.TestCase):
+    """Class stat_modifiers (Phase 5) affect combat via _get_class_modifier."""
+
+    def _registry_with_classes(self):
+        from world.definitions import ClassDef
+        registry = _make_registry()
+        registry.classes = {
+            "engineer": ClassDef(key="engineer", name="Engineer",
+                                 stat_modifiers={"damage_bonus": -5}),
+            "commander": ClassDef(key="commander", name="Commander",
+                                  stat_modifiers={"damage_bonus": 2}),
+        }
+        return registry
+
+    def test_engineer_damage_penalty_applies(self):
+        """An Engineer attacker deals 5 less damage (the class penalty)."""
+        registry = self._registry_with_classes()
+        engine, _ = _make_engine(registry=registry)
+        attacker = FakePlayer(name="A")
+        attacker.db.player_class = "engineer"
+        target = FakePlayer(name="T")  # unarmored
+        weapon = FakeWeapon(damage=20)
+        result = engine._calculate_damage(attacker=attacker, target=target,
+                                          weapon_item=weapon)
+        self.assertEqual(result, 15)  # 20 - 5 class penalty
+
+    def test_commander_damage_bonus_applies(self):
+        """A Commander attacker deals +2 damage (the class bonus)."""
+        registry = self._registry_with_classes()
+        engine, _ = _make_engine(registry=registry)
+        attacker = FakePlayer(name="A")
+        attacker.db.player_class = "commander"
+        target = FakePlayer(name="T")
+        weapon = FakeWeapon(damage=20)
+        result = engine._calculate_damage(attacker=attacker, target=target,
+                                          weapon_item=weapon)
+        self.assertEqual(result, 22)  # 20 + 2 class bonus
+
+    def test_no_class_no_modifier(self):
+        """A player with no class gets no modifier."""
+        registry = self._registry_with_classes()
+        engine, _ = _make_engine(registry=registry)
+        attacker = FakePlayer(name="A")  # no player_class set
+        target = FakePlayer(name="T")
+        weapon = FakeWeapon(damage=20)
+        result = engine._calculate_damage(attacker=attacker, target=target,
+                                          weapon_item=weapon)
+        self.assertEqual(result, 20)
+
 
 class TestPermanentBonusCap(unittest.TestCase):
     """The aggregate permanent-bonus cap (§2a anti-snowball): tech + alliance

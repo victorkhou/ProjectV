@@ -297,9 +297,9 @@ class TestDataclassContracts:
         #  + 1 damage-type baseline (baseline_resist).
         #  + 2 permanent-bonus caps (perm_bonus_cap_damage, perm_bonus_cap_dr).
         #  + 2 fire burn DoT (fire_burn_fraction, fire_burn_ticks).
-        #  + 1 blast armor-shred (blast_shred_per_hit).
+        #  + 2 blast armor-shred (blast_shred_per_hit, blast_shred_decay_per_tick).
         # Bump this when adding a balance tunable.
-        assert len(fields(BalanceConfig)) == 124
+        assert len(fields(BalanceConfig)) == 125
 
     def test_coordinate_space_def_field_count(self):
         assert len(fields(CoordinateSpaceDef)) == 14

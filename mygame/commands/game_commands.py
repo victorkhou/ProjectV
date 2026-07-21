@@ -4428,9 +4428,12 @@ class CmdLaunch(GameCommand):
 
     def _launch_to_space(self, caller, building, origin_planet):
         """Leg 1: surface pad → Space station."""
-        # Check cooldown
-        import time as _time
-        now_tick = getattr(caller.db, "current_tick", 0) or 0
+        # Check cooldown against the REAL game tick (GameTickScript.db.tick_count
+        # via combat_timer._get_current_tick) — db.current_tick does not exist on
+        # player characters, so reading it would always yield 0 and the cooldown
+        # would never bind.
+        from world.combat_timer import _get_current_tick
+        now_tick = _get_current_tick()
         last_launch = getattr(caller.db, "last_launch_tick", 0) or 0
         balance = self._get_balance(caller)
         cooldown = balance.travel_cooldown_ticks if balance else 300
@@ -4593,9 +4596,12 @@ class CmdRecall(GameCommand):
     def func(self):
         caller = self.caller
 
-        # Block if in combat
+        # Block if in combat — compare against the REAL game tick (db.current_
+        # tick does not exist on players; combat_timer._get_current_tick reads
+        # GameTickScript.db.tick_count, the same clock the combat timer uses).
+        from world.combat_timer import _get_current_tick
+        current_tick = _get_current_tick()
         combat_timer = getattr(caller.db, "combat_timer_expires", 0) or 0
-        current_tick = getattr(caller.db, "current_tick", 0) or 0
         if combat_timer > current_tick:
             caller.msg("You cannot recall while in combat!")
             return

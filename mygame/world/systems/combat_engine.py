@@ -769,9 +769,21 @@ class CombatEngine(BaseSystem):
     def tick_effects_on_entity(self, entity: Any) -> None:
         """Process active effects on a single entity (called from the tick loop).
 
-        Applies pending burn damage, decrements counters, removes expired effects.
+        Applies pending burn damage, decrements counters, removes expired effects,
+        and decays blast armor-shred so it recovers over time (not permanent).
         """
-        effects = getattr(getattr(entity, "db", None), "active_effects", None)
+        # Blast armor-shred decay: shred recovers each tick so a target isn't
+        # permanently crippled after a blast assault ends.
+        entity_db = getattr(entity, "db", None)
+        if entity_db is not None:
+            shred = getattr(entity_db, "armor_shred", 0) or 0
+            if shred > 0:
+                bal = getattr(self.registry, "balance", None)
+                decay = int(getattr(bal, "blast_shred_decay_per_tick", 1) or 0)
+                if decay > 0:
+                    entity_db.armor_shred = max(0, shred - decay)
+
+        effects = getattr(entity_db, "active_effects", None)
         if not effects:
             return
 
@@ -1362,9 +1374,17 @@ class CombatEngine(BaseSystem):
                 from world.systems.agent_constants import logger as _log
                 _log.exception("Death-loss handling failed")
 
-        # Respawn victim (reset HP)
+        # Respawn victim (reset HP + clear combat debuffs)
         hp_max = self._get_hp_max(victim)
         self._set_hp(victim, hp_max)
+        # Clear transient combat debuffs on respawn: blast armor-shred and any
+        # active effects (burn DoT) should not carry across a death.
+        vdb = getattr(victim, "db", None)
+        if vdb is not None:
+            if getattr(vdb, "armor_shred", 0):
+                vdb.armor_shred = 0
+            if getattr(vdb, "active_effects", None):
+                vdb.active_effects = []
 
         # Player respawn routing (lobby lifecycle flow). For a real PLAYER victim
         # (never an agent), hand off to the injected respawn handler, which
@@ -1520,9 +1540,60 @@ class CombatEngine(BaseSystem):
                 and self._is_player(owner):
             self.notify(owner, "base_deactivated")
 
+        # Launch Pad manifest recovery: if this building held a loaded cargo
+        # manifest (agents/resources staged for travel), return it to the owner
+        # rather than destroying it — mirrors the death-recovery principle so a
+        # raided pad doesn't silently vaporize staged cargo + orphan agents in
+        # reserve. (§7 transport.)
+        self._recover_pad_manifest(building, owner)
+
         # Remove building
         if hasattr(building, "delete"):
             building.delete()
+
+    def _recover_pad_manifest(self, building: Any, owner: Any) -> None:
+        """Return a destroyed Launch Pad's manifest to its owner.
+
+        Resources go back into the owner's carried pool; manifested agents are
+        taken out of reserve (so they're not orphaned). Best-effort: never raises
+        into the destruction path.
+        """
+        manifest = getattr(getattr(building, "db", None), "manifest", None)
+        if not manifest:
+            return
+        try:
+            # Un-reserve manifested agents so they return to the owner's control.
+            for aid in manifest.get("agents", []) or []:
+                agent = self._find_owner_agent(owner, aid)
+                if agent is not None and getattr(agent, "db", None) is not None:
+                    agent.db.reserve = False
+            # Return resources to the owner's carried pool.
+            resources = manifest.get("resources", {}) or {}
+            if owner is not None and hasattr(owner, "add_resource"):
+                for rtype, amount in resources.items():
+                    if amount > 0:
+                        owner.add_resource(rtype, amount)
+        except Exception:  # noqa: BLE001 - recovery must not break destruction
+            from world.systems.agent_constants import logger as _log
+            _log.exception("Launch Pad manifest recovery failed")
+
+    def _find_owner_agent(self, owner: Any, agent_id: int) -> Any:
+        """Find an agent by id among the owner's agents (best-effort)."""
+        if owner is None:
+            return None
+        agent_sys = None
+        systems = getattr(getattr(owner, "ndb", None), "systems", None)
+        if systems:
+            agent_sys = systems.get("agent")
+        if agent_sys is None:
+            try:
+                from server.conf.game_init import game_systems
+                agent_sys = game_systems.get("agent")
+            except (ImportError, AttributeError):
+                return None
+        if agent_sys and hasattr(agent_sys, "get_agent_by_id"):
+            return agent_sys.get_agent_by_id(owner, agent_id)
+        return None
 
     # ------------------------------------------------------------------ #
     #  Notification

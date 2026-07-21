@@ -235,6 +235,62 @@ class TestCmdLaunch(unittest.TestCase):
         # Fuel consumed
         self.assertEqual(c.db.supplies.get("basic_fuel_cell", 0), 4)
 
+    def test_cooldown_refuses_second_launch(self):
+        """A launch within the cooldown window is refused."""
+        import world.combat_timer as ct
+        orig = ct._get_current_tick
+        ct._get_current_tick = lambda: 100  # current tick = 100
+        try:
+            pad = _FakeBuilding(capabilities=["launch_pad"])
+            c = _Caller(supplies={"basic_fuel_cell": 5})
+            c.db.last_launch_tick = 50  # launched at tick 50, delta 50 < 300
+
+            cmd = CmdLaunch()
+            cmd.caller = c
+            cmd.args = ""
+            cmd.session = None
+            cmd.cmdstring = "launch"
+            cmd._building_at_caller = lambda caller, **kw: pad
+            cmd.require_system = lambda n, **kw: None
+            travel_log = []
+            cmd._do_travel = lambda caller, dest, *a, **kw: travel_log.append(dest)
+            cmd._get_balance = lambda caller: _FakeRegistry().balance
+            cmd.func()
+
+            # Refused: no travel, cooldown message, fuel NOT consumed
+            self.assertEqual(travel_log, [])
+            self.assertIn("cooling down", c.last().lower())
+            self.assertEqual(c.db.supplies.get("basic_fuel_cell", 0), 5)
+        finally:
+            ct._get_current_tick = orig
+
+    def test_first_launch_not_refused(self):
+        """The very first launch (last_launch_tick=0) is NOT cooldown-refused."""
+        import world.combat_timer as ct
+        orig = ct._get_current_tick
+        ct._get_current_tick = lambda: 100
+        try:
+            pad = _FakeBuilding(capabilities=["launch_pad"])
+            c = _Caller(supplies={"basic_fuel_cell": 5})
+            c.db.last_launch_tick = 0  # never launched
+
+            cmd = CmdLaunch()
+            cmd.caller = c
+            cmd.args = ""
+            cmd.session = None
+            cmd.cmdstring = "launch"
+            cmd._building_at_caller = lambda caller, **kw: pad
+            cmd.require_system = lambda n, **kw: None
+            travel_log = []
+            cmd._do_travel = lambda caller, dest, *a, **kw: travel_log.append(dest)
+            cmd._get_balance = lambda caller: _FakeRegistry().balance
+            cmd.func()
+
+            self.assertEqual(travel_log, ["space"])
+            self.assertEqual(c.db.last_launch_tick, 100)  # stamped with real tick
+        finally:
+            ct._get_current_tick = orig
+
     def test_from_space_with_arg_checks_access(self):
         """From Space, launch <planet> checks can_access_planet."""
         rank_sys = _FakeRankSystem(accessible={"terra"})

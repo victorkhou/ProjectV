@@ -1407,13 +1407,16 @@ def outgrown_factor(player: Any, planet_key: str | None = None) -> float:
 
     try:
         from server.conf.game_init import game_systems
-        registry = game_systems.get("registry")
-        if registry is None:
-            return 1.0
-        planet_reg = getattr(registry, "planet_registry", None)
+        # PlanetRegistry is a top-level game_systems key (NOT an attribute of the
+        # DataRegistry). This mirrors characters.py's planet lookup.
+        planet_reg = game_systems.get("planet_registry")
         if planet_reg is None:
             return 1.0
     except (ImportError, AttributeError):
+        return 1.0
+
+    # Off-ladder hub (Space): never throttled — it's not part of progression.
+    if planet_key == "space":
         return 1.0
 
     # Find the current planet's gate and the NEXT planet's gate.
