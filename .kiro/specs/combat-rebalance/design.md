@@ -36,12 +36,17 @@ sound; a number/wiring detail must change — the fix is recorded), **reject**.
 | `9aa4157` | Freely-craftable essentials are Terra-craftable (forward-dep bug) | 0 |
 | `294ca7a` | Rank-gap PvP protection (anti-ganking, aggressor-aware) | 1 |
 | `b173382` | Full-loss-on-death + Respawn Beacon recovery (§6) | — |
-
-> **Phase 1 is PARTIAL:** the rank-gap penalty (`294ca7a`) shipped, but the
-> anti-snowball caps (DR soft-cap + aggregate permanent-bonus cap, §2a) are **NOT
-> built** — no clamp exists in `_get_attacker_bonus` / `_get_target_armor_reduction`.
-> Those caps are scheduled to land with the Phase-3 damage-type accessors (see the
-> Open-questions light-aggregate-cap note).
+| `d48e210` | Aggregate permanent-bonus cap (anti-snowball, §2a) | 1 |
+| `433cb9c` | Planet re-map foundation (§3.5) | 2 |
+| `7a4b1a1` | Travel core — Launch Pad + Fuel Cells + CmdLaunch + CmdRecall (§7) | 2 |
+| `b0f3f30` | Transport layer (CmdLoad manifest) + planet-unlock announce (§7) | 2 |
+| `8fa4864` | Type-aware _calculate_damage backbone (§3a) | 3 |
+| `7cf88e9` | Typed weapons + damage_type field on ItemDef (§3a) | 3 |
+| `f73a05a` | Fire burn DoT — first effect system (§3a) | 3 |
+| `5f77475` | Blast armor-shred (§3a) | 3 |
+| `113a75a` | Biomass sink + outgrown_factor throttle (§4) | 4 |
+| `df991de` | Planet yield/NPC scaling + class substrate (_get_class_modifier) | 4–5 |
+| `d40da6b` | Post-implementation adversarial review fixes (11 findings) | — |
 
 ## SETTLED DECISIONS (user, 2026-07-20) — drive the remaining build
 

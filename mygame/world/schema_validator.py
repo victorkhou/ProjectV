@@ -581,6 +581,7 @@ class SchemaValidator:
             "fire_burn_fraction", "fire_burn_ticks",
             "blast_shred_per_hit", "blast_shred_decay_per_tick",
             "perm_bonus_cap_damage", "perm_bonus_cap_dr",
+            "outgrown_grace_levels", "outgrown_min_factor",
         ]
         for field in non_negative_fields:
             val = data.get(field)

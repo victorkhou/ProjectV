@@ -534,12 +534,20 @@ class GameTickScript(DefaultScript):
                     active_owner_ids=_active_hq_owner_ids(),
                 )
             )
-            registered["effect_ticks"] = (
-                lambda: [
+            def process_effect_ticks():
+                # Tick active effects (burn DoT, shred decay) on EVERY
+                # effect-capable entity: players AND the agent/enemy rosters —
+                # otherwise typed weapons do nothing against PvE targets
+                # (burns never tick) and blast shred on NPCs never decays.
+                # Both rosters are cached against the agent-index generation
+                # (a DB scan only when an NPC is created/deleted).
+                for p in tick_data["online_players"]:
                     combat_engine.tick_effects_on_entity(p)
-                    for p in tick_data["online_players"]
-                ]
-            )
+                for npc in self._get_all_agents(agent_system):
+                    combat_engine.tick_effects_on_entity(npc)
+                for npc in self._get_all_enemies(agent_system):
+                    combat_engine.tick_effects_on_entity(npc)
+            registered["effect_ticks"] = process_effect_ticks
 
         bomb_system = systems.get("bomb_system")
         if bomb_system:

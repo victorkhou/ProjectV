@@ -4539,8 +4539,8 @@ class CmdLaunch(GameCommand):
 
     def _do_travel(self, caller, dest_planet, tx=None, ty=None):
         """Relocate the caller to (tx, ty) on dest_planet."""
-        from commands.admin_commands import _resolve_planet_room, _relocate_object
-        target_room = _resolve_planet_room(caller, dest_planet)
+        from world.adapters.relocation import relocate_object, resolve_planet_room
+        target_room = resolve_planet_room(caller, dest_planet)
         if target_room is None:
             return
         if tx is None or ty is None:
@@ -4552,7 +4552,7 @@ class CmdLaunch(GameCommand):
                 tx, ty = space.spawn_x, space.spawn_y
             except (ImportError, AttributeError, KeyError):
                 tx, ty = 500, 500
-        _relocate_object(caller, target_room, tx, ty, dest_planet)
+        relocate_object(caller, target_room, tx, ty, dest_planet)
         if hasattr(caller, "execute_cmd"):
             caller.execute_cmd("look")
 
@@ -4652,11 +4652,11 @@ class CmdRecall(GameCommand):
             return
 
         # Do the direct recall
-        from commands.admin_commands import _resolve_planet_room, _relocate_object
-        target_room = _resolve_planet_room(caller, b_planet)
+        from world.adapters.relocation import relocate_object, resolve_planet_room
+        target_room = resolve_planet_room(caller, b_planet)
         if target_room is None:
             return
-        _relocate_object(caller, target_room, int(bx), int(by), b_planet)
+        relocate_object(caller, target_room, int(bx), int(by), b_planet)
         caller.db.last_launch_tick = now_tick
         caller.msg(
             f"You activate your Respawn Beacon's recall — "

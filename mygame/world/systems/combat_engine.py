@@ -458,17 +458,9 @@ class CombatEngine(BaseSystem):
             # Apply damage
             self._apply_damage(target, damage, attacker)
 
-            # Fire burn DoT: if the weapon is fire-typed, apply a burn that
-            # deals additional damage over subsequent ticks (Phase 3).
-            damage_type = self._get_damage_type(weapon_item)
-            if damage_type == "fire" and damage > 0:
-                raw = self._get_stat(weapon_item, "damage", 0)
-                self._apply_fire_dot(target, raw, attacker)
-            elif damage_type == "blast" and damage > 0:
-                self._apply_blast_shred(target)
-
-            # Lockout + event + notify + defeat/destruction. Shared with the
-            # throw AoE path so both resolve hits identically.
+            # Lockout + event + notify + typed on-hit effects (fire burn /
+            # blast shred) + defeat/destruction. Shared with resolve_now and
+            # the throw AoE path so ALL paths resolve hits identically.
             self._finalize_hit(attacker, target, weapon_item, damage,
                                current_tick, lockout_attacker=True)
 
@@ -550,19 +542,43 @@ class CombatEngine(BaseSystem):
         self._notify_target(target, attacker, weapon_item, damage,
                             notify_attacker_hit=notify_attacker_hit)
 
+        # Typed on-hit effects (Phase 3): fire applies a burn DoT, blast
+        # shreds armor. Applied HERE — the one choke point every hit path
+        # (queued, instant resolve_now, direct/AoE) flows through — so typed
+        # weapons behave identically regardless of how the shot resolved.
+        # Buildings are excluded: burns never tick on structures and shred
+        # is meaningless against their 0 DR.
+        if damage > 0 and not self._is_building(target):
+            damage_type = self._get_damage_type(weapon_item)
+            if damage_type == "fire":
+                raw = self._get_stat(weapon_item, "damage", 0)
+                self._apply_fire_dot(target, raw, attacker)
+            elif damage_type == "blast":
+                self._apply_blast_shred(target)
+
         # Defeat / destruction when HP has reached zero.
-        #
-        # Enemy NPCs are checked FIRST, above the _is_player branch: an enemy
-        # NPC also satisfies _is_player (it carries db.combat_xp like every
-        # CombatEntity), so without this ordering it would be routed to
-        # _handle_player_defeat and respawned instead of dying permanently.
-        if self._get_hp(target) <= 0:
-            if self._is_enemy_npc(target):
-                self._handle_enemy_death(target, attacker)
-            elif self._is_player(target):
-                self._handle_player_defeat(target, attacker)
-            elif self._is_building(target):
-                self._handle_building_destruction(target, attacker)
+        self._handle_zero_hp(target, attacker)
+
+    def _handle_zero_hp(self, target: Any, attacker: Any) -> None:
+        """Route a zero-HP target to the correct defeat/destruction handler.
+
+        The SINGLE defeat-branching choke point, shared by ``_finalize_hit``
+        and the effect tick (burn DoT deaths). Enemy NPCs are checked FIRST,
+        above the ``_is_player`` branch: an enemy NPC also satisfies
+        ``_is_player`` (it carries ``db.combat_xp`` like every CombatEntity),
+        so without this ordering it would be routed to
+        ``_handle_player_defeat`` and respawned instead of dying permanently.
+        Any death path that bypasses this method risks silently regressing
+        that invariant — do not inline the branches elsewhere.
+        """
+        if self._get_hp(target) > 0:
+            return
+        if self._is_enemy_npc(target):
+            self._handle_enemy_death(target, attacker)
+        elif self._is_player(target):
+            self._handle_player_defeat(target, attacker)
+        elif self._is_building(target):
+            self._handle_building_destruction(target, attacker)
 
     def _finalize_miss(
         self, attacker: Any, target: Any, weapon_item: Any, current_tick: int
@@ -691,34 +707,12 @@ class CombatEngine(BaseSystem):
         return damage
 
     # ------------------------------------------------------------------ #
-    #  Process active effects (burn DoT, etc.) — Phase 3
+    #  Active effects (burn DoT, blast shred) — Phase 3
     # ------------------------------------------------------------------ #
-
-    def process_effects(self) -> None:
-        """Tick all active effects on players (burn DoT, etc.).
-
-        Called once per tick from the game loop. Reads ``db.active_effects``
-        (a list of effect dicts), applies each, decrements remaining ticks,
-        and removes expired ones.
-
-        Effect dict format::
-
-            {"type": "burn", "damage": 5, "ticks_remaining": 3,
-             "source_owner_id": <int>}  # for kill attribution
-        """
-        current_tick = self._current_tick_func()
-        # Iterate all players in the combat system's awareness. Since we don't
-        # have a global player list here, effects are processed when the player's
-        # planet is active (the tick loop only runs on active planets anyway).
-        # We process effects stored on entities that passed through combat.
-        # In practice: effects are applied in _finalize_hit, and the tick loop
-        # calls this every tick — effects self-expire via ticks_remaining.
-        #
-        # For now, effects are processed inline during resolve_tick (see the
-        # _apply_burn_on_hit hook in _finalize_hit). This method exists as the
-        # future expansion point for a proper per-player effect loop. The burn
-        # is applied immediately on hit rather than requiring a separate tick.
-        pass
+    # Effects are APPLIED in _finalize_hit (the shared hit choke point) and
+    # TICKED by tick_effects_on_entity, driven from the game loop's
+    # "effect_ticks" step for every effect-capable entity (players + agents +
+    # enemy NPCs). There is no separate global process loop.
 
     def _apply_blast_shred(self, target: Any) -> None:
         """Apply blast armor-shred: reduce the target's effective DR temporarily.
@@ -726,18 +720,25 @@ class CombatEngine(BaseSystem):
         Blast weapons *degrade* physical armor rather than being reduced by it.
         Each blast hit adds a stacking ``armor_shred`` debuff on the target that
         is subtracted from their effective ``damage_reduction`` on subsequent
-        physical hits. The shred decays over time (ticks_remaining).
+        physical hits. The shred decays over time (see tick_effects_on_entity).
 
-        Implementation: store ``db.armor_shred`` as a flat value subtracted from
-        the target's DR in ``_get_target_armor_reduction``. Each blast hit adds
-        to the shred pool (capped at their total DR so it never goes negative).
+        The shred pool is CAPPED at the target's current pre-shred DR: shred
+        can strip armor down to zero but never stacks beyond what exists to
+        strip — unbounded stacking would make sustained blast fire a permanent
+        debuff engine rather than an armor answer.
         """
         bal = getattr(self.registry, "balance", None)
         shred_amount = int(getattr(bal, "blast_shred_per_hit", 5) or 0)
         if shred_amount <= 0:
             return
-        current_shred = getattr(getattr(target, "db", None), "armor_shred", 0) or 0
-        target.db.armor_shred = current_shred + shred_amount
+        db = getattr(target, "db", None)
+        if db is None:
+            return
+        current_shred = getattr(db, "armor_shred", 0) or 0
+        # Cap at the target's base (pre-shred) DR — nothing beyond that exists
+        # to strip.
+        base_dr = self._get_target_armor_reduction(target, include_shred=False)
+        target.db.armor_shred = min(current_shred + shred_amount, max(0, base_dr))
 
     def _apply_fire_dot(self, target: Any, raw_damage: int, attacker: Any) -> None:
         """Apply a burn DoT effect when a fire-type weapon hits.
@@ -745,6 +746,15 @@ class CombatEngine(BaseSystem):
         Burns deal a fixed amount of damage per tick for a short duration,
         independent of armor (the burn is already past the armor — it landed).
         The burn amount is a fraction of the original hit's raw damage.
+
+        Effect dict format (stored on ``db.active_effects``)::
+
+            {"type": "burn", "damage": <int per tick>,
+             "ticks_remaining": <int>, "source": <attacking entity ref>}
+
+        ``source`` is a live entity reference (Evennia persists object refs in
+        Attributes); the tick guards against it having been deleted before the
+        burn expires (see :meth:`_live_or_none`).
         """
         bal = getattr(self.registry, "balance", None)
         burn_fraction = float(getattr(bal, "fire_burn_fraction", 0.2) or 0)
@@ -766,11 +776,32 @@ class CombatEngine(BaseSystem):
         })
         target.db.active_effects = effects
 
+    @staticmethod
+    def _live_or_none(entity: Any) -> Any:
+        """Return *entity* unless it is None or a deleted Evennia object.
+
+        A burn's ``source`` may be deleted (an enemy guard wiped with its base)
+        before the burn expires; attribution then degrades to None rather than
+        touching a dead object.
+        """
+        if entity is None:
+            return None
+        # A deleted Evennia object has pk=None; non-Evennia doubles lack pk.
+        if getattr(entity, "pk", 1) is None:
+            return None
+        return entity
+
     def tick_effects_on_entity(self, entity: Any) -> None:
         """Process active effects on a single entity (called from the tick loop).
 
-        Applies pending burn damage, decrements counters, removes expired effects,
-        and decays blast armor-shred so it recovers over time (not permanent).
+        Applies pending burn damage, decrements counters, removes expired
+        effects, and decays blast armor-shred so it recovers over time (not
+        permanent). Runs for EVERY effect-capable entity — players, agents,
+        and enemy NPCs — so typed weapons work against PvE targets too.
+
+        Burn deaths route through :meth:`_handle_zero_hp` (the shared defeat
+        branch), so a burn that kills an enemy NPC still results in permanent
+        death — never the player-respawn path.
         """
         # Blast armor-shred decay: shred recovers each tick so a target isn't
         # permanently crippled after a blast assault ends.
@@ -796,13 +827,14 @@ class CombatEngine(BaseSystem):
 
             if etype == "burn":
                 dmg = effect.get("damage", 1)
-                source = effect.get("source")
+                source = self._live_or_none(effect.get("source"))
                 self._apply_damage(entity, dmg, source)
-                # Check for defeat
-                hp = getattr(entity.db, "hp", 0)
-                if hp <= 0:
-                    self._handle_player_defeat(entity, source)
-                    entity.db.active_effects = []
+                if self._get_hp(entity) <= 0:
+                    # Shared defeat routing — enemy NPCs die permanently,
+                    # players respawn, exactly as a direct hit would resolve.
+                    self._handle_zero_hp(entity, source)
+                    if getattr(entity, "db", None) is not None:
+                        entity.db.active_effects = []
                     return
 
             effect["ticks_remaining"] = ticks - 1
@@ -1581,16 +1613,11 @@ class CombatEngine(BaseSystem):
         """Find an agent by id among the owner's agents (best-effort)."""
         if owner is None:
             return None
-        agent_sys = None
-        systems = getattr(getattr(owner, "ndb", None), "systems", None)
-        if systems:
-            agent_sys = systems.get("agent")
-        if agent_sys is None:
-            try:
-                from server.conf.game_init import game_systems
-                agent_sys = game_systems.get("agent")
-            except (ImportError, AttributeError):
-                return None
+        # Resolve via the shared system-lookup helper — the registered key is
+        # "agent_system" (game_init), NOT "agent"; the old literal always
+        # missed, silently orphaning manifested agents in reserve.
+        from world.utils import get_system
+        agent_sys = get_system(owner, "agent_system")
         if agent_sys and hasattr(agent_sys, "get_agent_by_id"):
             return agent_sys.get_agent_by_id(owner, agent_id)
         return None
@@ -1909,8 +1936,14 @@ class CombatEngine(BaseSystem):
         resist += baseline
         return resist
 
-    def _get_target_armor_reduction(self, target: Any) -> float:
-        """Get armor damage_reduction from the target."""
+    def _get_target_armor_reduction(
+        self, target: Any, include_shred: bool = True
+    ) -> float:
+        """Get armor damage_reduction from the target.
+
+        ``include_shred=False`` returns the base (pre-shred) DR — used by
+        ``_apply_blast_shred`` to cap the shred pool at what exists to strip.
+        """
         if not self._is_player(target):
             return 0.0
         reduction = 0.0
@@ -1942,9 +1975,10 @@ class CombatEngine(BaseSystem):
         # Blast armor-shred: subtract accumulated shred from effective DR.
         # The shred makes subsequent physical hits hurt more (the blast "opens
         # up" the turtle for follow-up attacks).
-        shred = getattr(getattr(target, "db", None), "armor_shred", 0) or 0
-        if shred > 0:
-            reduction = max(0, reduction - shred)
+        if include_shred:
+            shred = getattr(getattr(target, "db", None), "armor_shred", 0) or 0
+            if shred > 0:
+                reduction = max(0, reduction - shred)
         return reduction
 
     def _alliance_combat_bonus(self, entity: Any, category: str, field: str) -> float:

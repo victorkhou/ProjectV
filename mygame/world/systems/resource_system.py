@@ -559,24 +559,17 @@ class ResourceSystem(BaseSystem):
     #  Internal helpers
     # ------------------------------------------------------------------ #
 
-    # Planet yield scaling (Phase 4): higher planets give more per action.
-    # The scale is simple: Terra=1.0, Forge=1.2, Tundra=1.4, Inferno=1.6,
-    # Elysium=1.8, Citadel=2.0. Indexed by rank_requirement tier.
-    _PLANET_YIELD_SCALE: dict[str, float] = {
-        "terra": 1.0,
-        "forge": 1.2,
-        "tundra": 1.4,
-        "inferno": 1.6,
-        "elysium": 1.8,
-        "citadel": 2.0,
-        "space": 1.0,
-    }
-
     def _scale_yield_by_planet(self, base_amount: int, planet_key: str | None) -> int:
-        """Scale a harvest yield by the planet's tier multiplier."""
+        """Scale a harvest yield by the planet's tier multiplier (Phase 4).
+
+        The multiplier is the planet's ``yield_scale`` field in planets.yaml
+        (data-driven — adding a planet needs no code change), read via the
+        shared ``world.utils.planet_scale`` lookup. Unknown planets scale 1.0.
+        """
         if not planet_key:
             return base_amount
-        scale = self._PLANET_YIELD_SCALE.get(planet_key, 1.0)
+        from world.utils import planet_scale
+        scale = planet_scale(planet_key, "yield_scale")
         return max(1, int(round(base_amount * scale)))
 
     @staticmethod

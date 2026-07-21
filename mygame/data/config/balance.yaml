@@ -286,6 +286,12 @@ fire_burn_ticks: 3            # burn lasts 3 ticks after hit
 blast_shred_per_hit: 5        # each blast hit shreds 5 DR from the target
 blast_shred_decay_per_tick: 1 # shred recovers 1 DR/tick (not permanent)
 
+# Outgrown-planet throttle (graduation economy): a player who COULD graduate
+# (level >= the next planet's gate) but keeps farming the lower planet earns
+# reduced XP. Linear falloff over the grace band down to the floor.
+outgrown_grace_levels: 5      # levels past the next gate before the floor
+outgrown_min_factor: 0.25     # throttle floor (never zero — some reward remains)
+
 # Aggregate permanent-bonus cap (anti-snowball, S2a): max total flat bonus from
 # tech + alliance perks per axis. Gear is UNCAPPED (loseable). 0 = disabled.
 perm_bonus_cap_damage: 6.0   # max non-gear flat damage bonus

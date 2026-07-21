@@ -298,11 +298,13 @@ class TestDataclassContracts:
         #  + 2 permanent-bonus caps (perm_bonus_cap_damage, perm_bonus_cap_dr).
         #  + 2 fire burn DoT (fire_burn_fraction, fire_burn_ticks).
         #  + 2 blast armor-shred (blast_shred_per_hit, blast_shred_decay_per_tick).
+        #  + 2 graduation throttle (outgrown_grace_levels, outgrown_min_factor).
         # Bump this when adding a balance tunable.
-        assert len(fields(BalanceConfig)) == 125
+        assert len(fields(BalanceConfig)) == 127
 
     def test_coordinate_space_def_field_count(self):
-        assert len(fields(CoordinateSpaceDef)) == 14
+        # 14 core + 2 graduation-economy scales (yield_scale, npc_scale).
+        assert len(fields(CoordinateSpaceDef)) == 16
 
     def test_all_serializable_via_asdict(self):
         """All defs should be convertible to dicts for YAML round-tripping."""

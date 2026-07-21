@@ -177,6 +177,11 @@ class CoordinateSpaceDef:
     z_level: int = 0
     seed_rotation_ticks: int = 0  # 0 = never rotate; >0 = reshuffle every N ticks
     rank_requirement: int = 1
+    #: Harvest-yield multiplier for this planet (Phase 4 ascending yields).
+    #: Higher-ladder planets reward more per action; 1.0 = baseline.
+    yield_scale: float = 1.0
+    #: NPC-base difficulty/loot multiplier for this planet (Phase 4 tiering).
+    npc_scale: float = 1.0
 
 
 @dataclass
@@ -577,6 +582,13 @@ class BalanceConfig:
     #: Blast armor-shred recovery: DR restored per tick (shred is not permanent —
     #: it decays so a target recovers after the blast assault ends).
     blast_shred_decay_per_tick: int = 1
+
+    #: Outgrown-planet throttle (§4 graduation): levels of grace past the next
+    #: planet's gate before the throttle reaches its floor.
+    outgrown_grace_levels: int = 5
+    #: The throttle floor — never zero, an outgrown camper still earns SOME
+    #: reward (0.25 = 25%).
+    outgrown_min_factor: float = 0.25
 
     #: Aggregate permanent-bonus cap (§2a anti-snowball): the maximum total flat
     #: bonus from tech + alliance perks on the DAMAGE axis. Gear bonus is

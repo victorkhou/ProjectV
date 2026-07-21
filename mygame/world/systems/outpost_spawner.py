@@ -454,21 +454,18 @@ class OutpostSpawnerSystem(BaseSystem):
         except Exception:  # noqa: BLE001
             return None
 
-    # Planet NPC scaling (Phase 4): higher planets have tougher NPC bases.
-    _PLANET_NPC_SCALE: dict[str, float] = {
-        "terra": 1.0,
-        "forge": 1.3,
-        "tundra": 1.6,
-        "inferno": 2.0,
-        "elysium": 2.5,
-        "citadel": 3.0,
-        "space": 1.0,
-    }
-
     def _guard_hp(self, tier: str, planet: str | None = None) -> int:
+        """Guard HP for *tier*, scaled by the planet's ``npc_scale`` (Phase 4).
+
+        The scale is data-driven from planets.yaml via the injected
+        PlanetRegistry (shared ``world.utils.planet_scale`` lookup) — adding a
+        planet needs no code change. Unknown planets scale 1.0.
+        """
+        from world.utils import planet_scale
         bal = self.registry.balance
         base = bal.fortress_guard_hp if tier == "fortress" else bal.outpost_guard_hp
-        scale = self._PLANET_NPC_SCALE.get(planet or "", 1.0)
+        scale = planet_scale(planet, "npc_scale",
+                             planet_registry=self._planet_registry)
         return int(round(base * scale))
 
     def _sentinel_name(self, template: Any) -> str:

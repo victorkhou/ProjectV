@@ -1379,6 +1379,40 @@ def _get_rank_name(player: Any, provider: Any = None) -> str:
 #  Graduation economy (§4) — outgrown-planet throttle
 # ------------------------------------------------------------------ #
 
+def planet_scale(planet_key: str | None, attr: str, default: float = 1.0,
+                 planet_registry: Any = None) -> float:
+    """Read a per-planet scale field (``yield_scale`` / ``npc_scale``).
+
+    The single data-driven lookup for planet-tier multipliers (Phase 4
+    ascending yields + NPC-base tiering) — the scales live on each planet's
+    entry in planets.yaml (``CoordinateSpaceDef``), NOT in per-system Python
+    dicts, so adding a planet is a YAML-only change.
+
+    Pass *planet_registry* when the caller holds one (DI); otherwise the
+    global game_systems registry is consulted. Unknown planets, a missing
+    registry, or a missing field all resolve to *default* (1.0 = no scaling).
+    """
+    if not planet_key:
+        return default
+    reg = planet_registry
+    if reg is None:
+        try:
+            from server.conf.game_init import game_systems
+            reg = game_systems.get("planet_registry")
+        except (ImportError, AttributeError):
+            return default
+    if reg is None:
+        return default
+    try:
+        space = reg.get_space(planet_key)
+    except Exception:  # noqa: BLE001 - unknown planet → no scaling
+        return default
+    try:
+        return float(getattr(space, attr, default) or default)
+    except (TypeError, ValueError):
+        return default
+
+
 def outgrown_factor(player: Any, planet_key: str | None = None) -> float:
     """Return a 0.0–1.0 multiplier reflecting how much a player has outgrown a planet.
 
@@ -1395,10 +1429,14 @@ def outgrown_factor(player: Any, planet_key: str | None = None) -> float:
     full reward one more time); at gate + grace, factor drops to the configured
     minimum. This keeps the transition gentle and predictable.
 
-    **Usage:** multiply XP awards, harvest yields, and loot rolls on the given
-    planet by this factor. Apply in EXACTLY ONE choke point per axis (e.g.
-    ``RankSystem.award_xp``). **EXEMPT Biomass** (the Terra round-trip anchor) —
-    Biomass yield should never be throttled.
+    **Usage:** apply in EXACTLY ONE choke point per axis. Today the only
+    wired consumer is XP (``RankSystem.award_xp``); harvest-yield and
+    loot-roll tapers are NOT built. If a resource-yield taper is ever added,
+    it MUST exempt Biomass (the Terra round-trip anchor) — that exemption is
+    a caller responsibility, meaningful only for resource-specific axes.
+
+    The grace band and floor are balance tunables (``outgrown_grace_levels``,
+    ``outgrown_min_factor``).
     """
     if planet_key is None:
         planet_key = getattr(getattr(player, "db", None), "coord_planet", None)
@@ -1447,8 +1485,20 @@ def outgrown_factor(player: Any, planet_key: str | None = None) -> float:
         return 1.0  # legitimate resident — hasn't reached the next gate
 
     # Player has outgrown this planet. Throttle linearly over a grace span.
-    grace = 5  # levels of grace past the gate before full throttle
-    min_factor = 0.25  # minimum throttle (never zero — still some reward)
+    # Grace band + floor are hot-tunable balance knobs (with safe fallbacks
+    # for isolated tests where no registry is live).
+    grace, min_factor = 5, 0.25
+    try:
+        from world.adapters.registry_definitions_provider import default_balance
+
+        bal = default_balance()
+        grace = int(getattr(bal, "outgrown_grace_levels", grace) or grace)
+        min_factor = float(
+            getattr(bal, "outgrown_min_factor", min_factor) or min_factor
+        )
+    except Exception:  # noqa: BLE001 - fall back to defaults outside a live boot
+        pass
+    grace = max(1, grace)
     over = level - next_gate
     if over >= grace:
         return min_factor

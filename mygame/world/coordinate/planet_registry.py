@@ -114,6 +114,8 @@ class PlanetRegistry:
                 z_level=entry.get("z_level", i),
                 seed_rotation_ticks=entry.get("seed_rotation_ticks", 0),
                 rank_requirement=entry.get("rank_requirement", 1),
+                yield_scale=float(entry.get("yield_scale", 1.0) or 1.0),
+                npc_scale=float(entry.get("npc_scale", 1.0) or 1.0),
             )
             spaces[planet_key] = space
 

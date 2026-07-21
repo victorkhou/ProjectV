@@ -2863,6 +2863,116 @@ class TestDamageTypes(unittest.TestCase):
         self.assertEqual(result, 15)  # 25 - 10 = 15 (physical path)
 
 
+class TestTypedEffectsAllHitPaths(unittest.TestCase):
+    """Typed on-hit effects live in _finalize_hit — the choke point EVERY
+    hit path flows through. Regression for the bug where they were applied
+    only in resolve_tick, so the player's instant attack/shoot (resolve_now)
+    never burned or shredded."""
+
+    def _fire_weapon(self):
+        weapon = FakeWeapon(damage=20, weapon_range=5)
+        weapon.damage_type = "fire"
+        return weapon
+
+    def test_resolve_now_applies_burn(self):
+        """The INSTANT path (player attack/shoot) applies the fire burn."""
+        registry = _make_registry()
+        registry.balance.fire_burn_fraction = 0.2
+        registry.balance.fire_burn_ticks = 3
+        engine, _ = _make_engine(registry=registry)
+        attacker = FakePlayer(name="A",
+                              location=FakeTile(xyz=(0, 0, "earth")))
+        attacker.equipment.equip(self._fire_weapon())
+        target = FakePlayer(name="T",
+                            location=FakeTile(xyz=(1, 0, "earth")))
+        target.db.active_effects = []
+
+        ok, _ = engine.resolve_now(attacker, target)
+        self.assertTrue(ok)
+        effects = target.db.active_effects
+        self.assertEqual(len(effects), 1, "instant hit must apply the burn")
+        self.assertEqual(effects[0]["type"], "burn")
+
+    def test_apply_direct_hit_applies_shred(self):
+        """The direct-hit path (AoE fan-out) applies blast shred too."""
+        registry = _make_registry()
+        registry.balance.blast_shred_per_hit = 5
+        engine, _ = _make_engine(registry=registry)
+        weapon = FakeWeapon(damage=30)
+        weapon.damage_type = "blast"
+        attacker = FakePlayer(name="A",
+                              location=FakeTile(xyz=(0, 0, "earth")))
+        target = FakePlayer(name="T", armor=FakeArmor(damage_reduction=20),
+                            location=FakeTile(xyz=(1, 0, "earth")))
+        target.db.armor_shred = 0
+
+        engine.apply_direct_hit(attacker, target, weapon, current_tick=1)
+        self.assertEqual(target.db.armor_shred, 5)
+
+    def test_burn_death_of_enemy_npc_is_permanent(self):
+        """A burn tick that kills an enemy NPC routes through the shared
+        defeat branch (_handle_zero_hp) → permanent death, NEVER the
+        player-respawn path. Regression for the effect tick calling
+        _handle_player_defeat directly."""
+        registry = _make_registry()
+        engine, _ = _make_engine(registry=registry)
+        guard = FakePlayer(name="Guard", hp=3,
+                           location=FakeTile(xyz=(0, 0, "earth")))
+        guard.db.npc_type = "enemy"  # an NPC-base guard
+        deleted = []
+        guard.delete = lambda: deleted.append(True)
+        guard.db.active_effects = [
+            {"type": "burn", "damage": 5, "ticks_remaining": 2, "source": None}
+        ]
+
+        engine.tick_effects_on_entity(guard)
+
+        self.assertTrue(deleted, "burn-killed enemy NPC must be deleted")
+        self.assertLessEqual(guard.db.hp, 0,
+                             "must NOT be respawned to full HP")
+
+
+class TestPadManifestRecovery(unittest.TestCase):
+    """A destroyed Launch Pad returns its manifest to the owner (§7.5).
+
+    Regression for the wrong system key ("agent" instead of "agent_system"):
+    the agent lookup always missed, silently orphaning manifested agents in
+    reserve. Recovery now resolves the AgentSystem via the shared get_system
+    helper — this test drives it through the ndb.systems path a live boot
+    populates."""
+
+    def test_destroyed_pad_returns_resources_and_unreserves_agents(self):
+        import types as _types
+        engine, _ = _make_engine()
+
+        owner = FakePlayer(name="Owner", oid=7)
+        agent = FakePlayer(name="Agent7", oid=77)
+        agent.db.reserve = True  # manifested = in reserve for transit
+
+        class _AgentSys:
+            def get_agent_by_id(self, player, agent_id):
+                return agent if agent_id == 77 else None
+
+        owner.ndb = _types.SimpleNamespace(
+            systems={"agent_system": _AgentSys()})
+
+        pad = FakeBuilding(building_type="LP", owner=owner,
+                           hp=0, hp_max=300,
+                           location=FakeTile(xyz=(0, 0, "earth")))
+        # A real Building exposes db (same store as attributes); the fake
+        # doesn't, so attach the db view the recovery path reads.
+        pad.db = _types.SimpleNamespace(
+            manifest={"agents": [77], "resources": {"Iron": 25}})
+
+        engine._handle_building_destruction(pad, FakePlayer(name="Raider",
+                                                            oid=9))
+
+        self.assertEqual(owner.get_resource("Iron"), 25,
+                         "manifested resources return to the owner")
+        self.assertFalse(agent.db.reserve,
+                         "manifested agent must be un-reserved, not orphaned")
+
+
 class TestFireBurnDoT(unittest.TestCase):
     """Fire weapons apply a burn DoT on hit (Phase 3)."""
 
@@ -2956,7 +3066,7 @@ class TestBlastArmorShred(unittest.TestCase):
     """Blast weapons shred target's physical armor, stacking per hit."""
 
     def test_blast_hit_adds_shred(self):
-        """A blast weapon hit increments db.armor_shred on the target."""
+        """A blast weapon hit increments db.armor_shred on an armored target."""
         registry = _make_registry()
         registry.balance.blast_shred_per_hit = 5
         engine, _ = _make_engine(registry=registry)
@@ -2964,7 +3074,7 @@ class TestBlastArmorShred(unittest.TestCase):
         weapon = FakeWeapon(damage=30)
         weapon.damage_type = "blast"
         attacker = FakePlayer(name="A")
-        target = FakePlayer(name="T")
+        target = FakePlayer(name="T", armor=FakeArmor(damage_reduction=20))
         target.db.armor_shred = 0
 
         engine.pending_actions.append({
@@ -2974,7 +3084,7 @@ class TestBlastArmorShred(unittest.TestCase):
         self.assertEqual(target.db.armor_shred, 5)
 
     def test_shred_stacks(self):
-        """Multiple blast hits stack the shred."""
+        """Multiple blast hits stack the shred (up to the target's base DR)."""
         registry = _make_registry()
         registry.balance.blast_shred_per_hit = 5
         engine, _ = _make_engine(registry=registry)
@@ -2982,7 +3092,7 @@ class TestBlastArmorShred(unittest.TestCase):
         weapon = FakeWeapon(damage=30)
         weapon.damage_type = "blast"
         attacker = FakePlayer(name="A")
-        target = FakePlayer(name="T")
+        target = FakePlayer(name="T", armor=FakeArmor(damage_reduction=20))
         target.db.armor_shred = 0
 
         for _ in range(3):
@@ -2991,6 +3101,37 @@ class TestBlastArmorShred(unittest.TestCase):
             })
             engine.resolve_tick()
         self.assertEqual(target.db.armor_shred, 15)
+
+    def test_shred_capped_at_base_dr(self):
+        """Shred never exceeds the target's pre-shred DR: there is nothing
+        beyond that to strip. Sustained blast fire on an 8-DR target caps the
+        pool at 8 — and an unarmored target accumulates NO shred at all."""
+        registry = _make_registry()
+        registry.balance.blast_shred_per_hit = 5
+        engine, _ = _make_engine(registry=registry)
+
+        # Low damage so the target survives all four hits — death clears
+        # shred on respawn (by design), which is not what this test probes.
+        weapon = FakeWeapon(damage=5)
+        weapon.damage_type = "blast"
+        attacker = FakePlayer(name="A")
+        armored = FakePlayer(name="T", armor=FakeArmor(damage_reduction=8))
+        armored.db.armor_shred = 0
+        for _ in range(4):  # 4 × 5 = 20 raw shred, but only 8 DR exists
+            engine.pending_actions.append({
+                "attacker": attacker, "target": armored, "weapon_item": weapon,
+            })
+            engine.resolve_tick()
+        self.assertEqual(armored.db.armor_shred, 8, "shred caps at base DR")
+
+        bare = FakePlayer(name="Bare")
+        bare.db.armor_shred = 0
+        engine.pending_actions.append({
+            "attacker": attacker, "target": bare, "weapon_item": weapon,
+        })
+        engine.resolve_tick()
+        self.assertEqual(bare.db.armor_shred, 0,
+                         "an unarmored target has nothing to shred")
 
     def test_shred_reduces_physical_dr(self):
         """Accumulated shred reduces the target's effective DR for physical hits."""
