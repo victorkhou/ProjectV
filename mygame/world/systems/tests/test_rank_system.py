@@ -432,6 +432,73 @@ class TestSubLevelNotification(unittest.TestCase):
         self.assertNotIn("_", messages[0])
 
 
+class TestPlanetUnlockAnnouncement(unittest.TestCase):
+    """When a level-up crosses a planet gate, the notification includes it."""
+
+    def test_planet_unlock_announced_on_level_up(self):
+        from mygame.world.definitions import CoordinateSpaceDef
+        spaces = {
+            "terra": CoordinateSpaceDef(
+                planet_key="terra", planet_type="earth",
+                width=500, height=500, terrain_seed=42,
+                rank_requirement=1,
+            ),
+            "forge": CoordinateSpaceDef(
+                planet_key="forge", planet_type="industrial",
+                width=400, height=400, terrain_seed=7,
+                rank_requirement=11,
+            ),
+        }
+        planet_registry = FakePlanetRegistry(spaces)
+        registry = _make_registry()
+        bus = EventBus()
+        system = RankSystem(registry=registry, event_bus=bus,
+                            planet_registry=planet_registry)
+        system._rebuild_thresholds()
+        from mygame.world.presenters.test_support import attach_presenter
+        attach_presenter(bus)
+
+        messages = []
+        # Level 10 (XP 832) → 11 (XP 1038) crosses the Forge gate (rank_requirement=11)
+        player = FakePlayer(combat_xp=832, level=10)
+        player.msg = lambda m: messages.append(m)
+        system.award_xp(player, 210, "test")  # XP=1042 → level 11
+        # Verify the unlock message appears
+        found = any("Forge" in m and "unlocked" in m.lower() for m in messages)
+        self.assertTrue(found, f"Expected Forge unlock in messages: {messages}")
+
+    def test_no_unlock_when_no_gate_crossed(self):
+        from mygame.world.definitions import CoordinateSpaceDef
+        spaces = {
+            "terra": CoordinateSpaceDef(
+                planet_key="terra", planet_type="earth",
+                width=500, height=500, terrain_seed=42,
+                rank_requirement=1,
+            ),
+            "forge": CoordinateSpaceDef(
+                planet_key="forge", planet_type="industrial",
+                width=400, height=400, terrain_seed=7,
+                rank_requirement=21,
+            ),
+        }
+        planet_registry = FakePlanetRegistry(spaces)
+        registry = _make_registry()
+        bus = EventBus()
+        system = RankSystem(registry=registry, event_bus=bus,
+                            planet_registry=planet_registry)
+        system._rebuild_thresholds()
+        from mygame.world.presenters.test_support import attach_presenter
+        attach_presenter(bus)
+
+        messages = []
+        # Level 5 (XP 215) → 6 (XP 298) does NOT cross Forge gate (21)
+        player = FakePlayer(combat_xp=215, level=5)
+        player.msg = lambda m: messages.append(m)
+        system.award_xp(player, 85, "test")  # XP=300 → level 6
+        found = any("unlocked" in m.lower() for m in messages)
+        self.assertFalse(found, f"No unlock expected: {messages}")
+
+
 class TestAgentCapInEvents(unittest.TestCase):
     def _make_ranks_with_caps(self):
         return [
@@ -481,6 +548,8 @@ class FakePlanetRegistry:
         if planet_key not in self._spaces:
             raise KeyError(planet_key)
         return self._spaces[planet_key]
+    def list_planets(self):
+        return list(self._spaces.keys())
 
 
 class TestPlanetAccessGating(unittest.TestCase):
