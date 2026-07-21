@@ -878,7 +878,7 @@ and shipped before any new content.
   puts Forge at **L21**, not the earlier-draft L11; and only `energy_cell` is
   futuristic — `combat_stim` is a modern consumable.)*
 
-### Phase 1 — New-player protection *(PARTIAL; depends on Phase 0)*
+### Phase 1 — New-player protection *(✅ SHIPPED)*
 - **[S] ✅ DONE — Rank-gap attack penalty** (§3c, `294ca7a`) — the owner-attributed
   version with base-defense exemption; floored (never zero → self-defense
   preserved).
@@ -894,7 +894,7 @@ and shipped before any new content.
   accessors (see Open-questions light-aggregate-cap). Largely belt-and-suspenders
   now that the chip floor is shipped.
 
-### Phase 2 — Planet re-map + travel *(medium; the structural backbone)*
+### Phase 2 — Planet re-map + travel *(✅ SHIPPED)*
 Do the re-map as ONE coordinated change (gates + resources + recipe audit move together).
 - **[S] Resolve gate conflict** — planets.yaml level = source of truth; regen
   ranks.yaml `planet_access`.
@@ -913,18 +913,22 @@ Do the re-map as ONE coordinated change (gates + resources + recipe audit move t
   (§5, verified). Courier auto-routing + Space's signature resource are deferred
   (courier → Phase 4; Space resource → build-time).
 
-### Phase 3 — Damage-type system *(medium–large; depends on Phase 0 floor)*
+### Phase 3 — Damage-type system *(PARTIAL — backbone shipped, DoT/Blast remaining)*
 Ship incrementally, physical-first (default `physical` = zero-risk migration).
-- **[M] Type-aware backbone** — branch `_calculate_damage`, typed
-  `_get_target_resist` calling `get_stat_total('<type>_resist')` (any key sums
-  across gear for free; **no `AGGREGATED_STATS` edit needed** — that tuple is
-  inert docs). Fold the **aggregate permanent-bonus cap** in here (same accessors;
-  the unbuilt Phase-1 anti-snowball item). **Enforce (SETTLED):** 50% per-axis cap
-  (NO global budget), baseline resist for ALL at spawn, and a loadout-scouting
-  readout / on-hit effectiveness so type choice is informed.
-- **[M] Fire + burn DoT** (needs a small EffectSystem tick) — pairs w/ Magmite.
-- **[S] Psychic** (physical-armor bypass) · **[L] Blast** (armor-durability;
-  building SHIELD stays the blast defense). *Sound is NOT shipped (no crit system).*
+- **[M] ✅ DONE — Type-aware backbone** (`8fa4864`, `7cf88e9`) — branch
+  `_calculate_damage` on `weapon.damage_type`; `_get_target_typed_resist` reads
+  `<type>_resist` via `get_stat_total` (ignores physical DR entirely). 50% cap
+  enforced by the existing chip floor. `baseline_resist` (2.0) for all. Typed
+  weapons: Incendiary Rifle (fire, Magmite-costed L46) + Psi Blade (psychic,
+  Aether-costed L58). `damage_type` field on `ItemDef` + DataRegistry loader.
+- **[S] ✅ DONE — Aggregate permanent-bonus cap** (`d48e210`) — `perm_bonus_cap_
+  damage` / `perm_bonus_cap_dr` (both 6.0) clamp tech+alliance flat bonuses in
+  `_get_attacker_bonus` / `_get_target_armor_reduction`. The unbuilt Phase-1 anti-
+  snowball item, now shipped alongside the damage-type accessors.
+- **[M] ❌ Fire + burn DoT** (needs a small EffectSystem tick) — pairs w/ Magmite.
+- **[S] ✅ Psychic DONE (data + backbone)** · **[L] ❌ Blast** (armor-durability
+  degradation; building SHIELD stays the blast defense). *Sound NOT shipped (no
+  crit system).*
 
 ### Phase 4 — Graduation economy *(medium; depends on Phase 2)*
 - **[S] Signature resource sinks** — make each planet's new resource *pull* the
