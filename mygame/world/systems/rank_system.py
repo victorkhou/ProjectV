@@ -257,6 +257,31 @@ class RankSystem(BaseSystem):
             return False
         return self._get_level(player) >= space.rank_requirement
 
+    def _check_planet_unlocks(self, old_level: int, new_level: int) -> list[dict]:
+        """Return planets unlocked between old_level (exclusive) and new_level.
+
+        Each entry is ``{"name": "Forge", "type": "industrial", "key": "forge"}``.
+        Only includes planets whose ``rank_requirement`` falls in the
+        ``(old_level, new_level]`` range — i.e. planets the player just gained
+        access to at this level-up.
+        """
+        if self.planet_registry is None:
+            return []
+        unlocked = []
+        for key in self.planet_registry.list_planets():
+            try:
+                space = self.planet_registry.get_space(key)
+            except KeyError:
+                continue
+            req = space.rank_requirement
+            if old_level < req <= new_level:
+                unlocked.append({
+                    "name": key.capitalize(),
+                    "type": getattr(space, "planet_type", "unknown"),
+                    "key": key,
+                })
+        return unlocked
+
     # ------------------------------------------------------------------ #
     #  Agent cap
     # ------------------------------------------------------------------ #
@@ -299,7 +324,13 @@ class RankSystem(BaseSystem):
             rank_name = rank_def.name.replace("_", " ") if rank_def else f"Rank {new_rank_num}"
             band_low, _ = level_range_for_rank(new_rank_num)
             sub = new_level - band_low + 1
-            self.notify(player, "rank_level_up", level=new_level, rank_name=rank_name, sub=sub)
+            # Check for planet unlocks at this new level.
+            planets_unlocked = self._check_planet_unlocks(old_level, new_level)
+            self.notify(
+                player, "rank_level_up",
+                level=new_level, rank_name=rank_name, sub=sub,
+                planets_unlocked=planets_unlocked,
+            )
 
         # Fire rank events if rank boundary crossed
         if new_rank_num > old_rank_num:

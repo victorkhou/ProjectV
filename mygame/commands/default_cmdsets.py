@@ -23,7 +23,7 @@ from commands.game_commands import (
     CmdSetFuse, CmdArm, CmdDisarm,
     CmdDeposit, CmdWithdraw, CmdCollect,
     CmdResearch, CmdPowerup,
-    CmdLaunch, CmdRecall,
+    CmdLaunch, CmdRecall, CmdLoad, CmdUnload,
     CmdScore, CmdDirectives, CmdEquipment, CmdBuildings, CmdScan, CmdTechnology,
     CmdInventory, CmdChat, CmdMessage, CmdSay, CmdLook, CmdMap,
     CmdLeave, CmdEnter, CmdCloseExit, CmdOpenExit, CmdExit, CmdStop, CmdWho, CmdGet,
@@ -151,6 +151,8 @@ class CharacterCmdSet(default_cmds.CharacterCmdSet):
         # Cross-planet travel
         self.add(CmdLaunch())
         self.add(CmdRecall())
+        self.add(CmdLoad())
+        self.add(CmdUnload())
         self.add(CmdScore())
         self.add(CmdDirectives())
         self.add(CmdEquipment())

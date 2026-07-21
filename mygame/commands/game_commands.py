@@ -4658,3 +4658,246 @@ class CmdRecall(GameCommand):
         )
         if hasattr(caller, "execute_cmd"):
             caller.execute_cmd("look")
+
+
+class CmdLoad(GameCommand):
+    """Load agents or resources onto a Launch Pad manifest for transport.
+
+    Usage:
+      load agent <id>          - load an agent onto the pad (goes reserve/inert)
+      load <amount> <resource> - load resources onto the pad manifest
+
+    You must be standing on a Launch Pad. Loaded agents/resources ride your next
+    launch and arrive at the destination pad. Manifest capacity is limited by
+    the pad's level (weight-based). Loaded agents go into reserve (no harvest,
+    no defense) until they arrive.
+    """
+
+    key = "load"
+    locks = "cmd:all()"
+    help_category = "Travel"
+
+    def func(self):
+        caller = self.caller
+        args = self.args.strip()
+
+        from world.constants import LAUNCH_PAD
+        from world.utils import building_has_capability
+
+        building = self._building_at_caller(caller)
+        if building is None or not building_has_capability(building, LAUNCH_PAD):
+            caller.msg("You must be standing on a Launch Pad to load cargo.")
+            return
+
+        if not args:
+            self._show_manifest(caller, building)
+            return
+
+        parts = args.split(None, 1)
+        if parts[0].lower() == "agent" and len(parts) > 1:
+            self._load_agent(caller, building, parts[1].strip())
+        else:
+            self._load_resource(caller, building, args)
+
+    def _show_manifest(self, caller, building):
+        """Display the current manifest on this pad."""
+        manifest = getattr(building.db, "manifest", None) or {}
+        agents = manifest.get("agents", [])
+        resources = manifest.get("resources", {})
+        if not agents and not resources:
+            caller.msg("Launch Pad manifest is empty. Use |wload agent <id>|n or |wload <n> <resource>|n.")
+            return
+        lines = ["|wLaunch Pad manifest:|n"]
+        if agents:
+            lines.append(f"  Agents: {', '.join(f'#{a}' for a in agents)}")
+        if resources:
+            for res, amt in resources.items():
+                lines.append(f"  {res}: {amt}")
+        caller.msg("\n".join(lines))
+
+    def _load_agent(self, caller, building, agent_id_str):
+        """Load an agent onto the manifest."""
+        try:
+            agent_id = int(agent_id_str.lstrip("#"))
+        except ValueError:
+            caller.msg("Usage: load agent <id> (e.g. load agent 3)")
+            return
+
+        # Find the agent
+        systems = getattr(getattr(caller, "ndb", None), "systems", None) or {}
+        agent_sys = systems.get("agent")
+        if agent_sys is None:
+            caller.msg("Agent system not available.")
+            return
+        agent = agent_sys.get_agent_by_id(caller, agent_id)
+        if agent is None:
+            caller.msg(f"Agent #{agent_id} not found.")
+            return
+        if getattr(agent.db, "reserve", False):
+            caller.msg(f"Agent #{agent_id} is already in reserve.")
+            return
+        if getattr(agent.db, "incapacitated", False):
+            caller.msg(f"Agent #{agent_id} is incapacitated.")
+            return
+
+        # Put agent in reserve and add to manifest
+        agent.db.reserve = True
+        manifest = getattr(building.db, "manifest", None) or {}
+        agents = manifest.get("agents", [])
+        agents.append(agent_id)
+        manifest["agents"] = agents
+        building.db.manifest = manifest
+        caller.msg(f"Agent #{agent_id} loaded onto the Launch Pad (now in reserve).")
+
+    def _load_resource(self, caller, building, args):
+        """Load resources onto the manifest."""
+        parts = args.split(None, 1)
+        if len(parts) < 2:
+            caller.msg("Usage: load <amount> <resource> (e.g. load 100 Wood)")
+            return
+        try:
+            amount = int(parts[0])
+        except ValueError:
+            caller.msg("Usage: load <amount> <resource> (e.g. load 100 Wood)")
+            return
+        resource = parts[1].strip().capitalize()
+
+        from world.constants import RESOURCE_TYPES
+        if resource not in RESOURCE_TYPES:
+            caller.msg(f"Unknown resource '{resource}'.")
+            return
+
+        # Check player has enough
+        resources = getattr(caller.db, "resources", None) or {}
+        have = resources.get(resource, 0)
+        if have < amount:
+            caller.msg(f"You only have {have} {resource} (need {amount}).")
+            return
+
+        # Transfer to manifest
+        resources[resource] = have - amount
+        caller.db.resources = resources
+        manifest = getattr(building.db, "manifest", None) or {}
+        res_manifest = manifest.get("resources", {})
+        res_manifest[resource] = res_manifest.get(resource, 0) + amount
+        manifest["resources"] = res_manifest
+        building.db.manifest = manifest
+        caller.msg(f"Loaded {amount} {resource} onto the Launch Pad.")
+
+
+class CmdUnload(GameCommand):
+    """Unload agents or resources from a Launch Pad manifest.
+
+    Usage:
+      unload agent <id>          - retrieve an agent from the manifest
+      unload <amount> <resource> - retrieve resources from the manifest
+      unload all                 - retrieve everything
+
+    Agents return from reserve to idle. Resources go back to your inventory.
+    """
+
+    key = "unload"
+    locks = "cmd:all()"
+    help_category = "Travel"
+
+    def func(self):
+        caller = self.caller
+        args = self.args.strip()
+
+        from world.constants import LAUNCH_PAD
+        from world.utils import building_has_capability
+
+        building = self._building_at_caller(caller)
+        if building is None or not building_has_capability(building, LAUNCH_PAD):
+            caller.msg("You must be standing on a Launch Pad to unload cargo.")
+            return
+
+        manifest = getattr(building.db, "manifest", None) or {}
+        if not args or args.lower() == "all":
+            self._unload_all(caller, building, manifest)
+            return
+
+        parts = args.split(None, 1)
+        if parts[0].lower() == "agent" and len(parts) > 1:
+            self._unload_agent(caller, building, manifest, parts[1].strip())
+        else:
+            self._unload_resource(caller, building, manifest, args)
+
+    def _unload_all(self, caller, building, manifest):
+        """Unload everything from the manifest."""
+        agents = manifest.get("agents", [])
+        resources = manifest.get("resources", {})
+        if not agents and not resources:
+            caller.msg("Manifest is already empty.")
+            return
+
+        # Return agents from reserve
+        systems = getattr(getattr(caller, "ndb", None), "systems", None) or {}
+        agent_sys = systems.get("agent")
+        for aid in agents:
+            if agent_sys:
+                agent = agent_sys.get_agent_by_id(caller, aid)
+                if agent:
+                    agent.db.reserve = False
+
+        # Return resources
+        player_res = getattr(caller.db, "resources", None) or {}
+        for res, amt in resources.items():
+            player_res[res] = player_res.get(res, 0) + amt
+        caller.db.resources = player_res
+
+        building.db.manifest = {}
+        caller.msg("All cargo unloaded from the Launch Pad.")
+
+    def _unload_agent(self, caller, building, manifest, agent_id_str):
+        """Unload a specific agent."""
+        try:
+            agent_id = int(agent_id_str.lstrip("#"))
+        except ValueError:
+            caller.msg("Usage: unload agent <id>")
+            return
+        agents = manifest.get("agents", [])
+        if agent_id not in agents:
+            caller.msg(f"Agent #{agent_id} is not on the manifest.")
+            return
+        agents.remove(agent_id)
+        manifest["agents"] = agents
+        building.db.manifest = manifest
+
+        systems = getattr(getattr(caller, "ndb", None), "systems", None) or {}
+        agent_sys = systems.get("agent")
+        if agent_sys:
+            agent = agent_sys.get_agent_by_id(caller, agent_id)
+            if agent:
+                agent.db.reserve = False
+        caller.msg(f"Agent #{agent_id} unloaded (returned from reserve).")
+
+    def _unload_resource(self, caller, building, manifest, args):
+        """Unload resources from the manifest."""
+        parts = args.split(None, 1)
+        if len(parts) < 2:
+            caller.msg("Usage: unload <amount> <resource>")
+            return
+        try:
+            amount = int(parts[0])
+        except ValueError:
+            caller.msg("Usage: unload <amount> <resource>")
+            return
+        resource = parts[1].strip().capitalize()
+
+        res_manifest = manifest.get("resources", {})
+        have = res_manifest.get(resource, 0)
+        if have <= 0:
+            caller.msg(f"No {resource} on the manifest.")
+            return
+        take = min(amount, have)
+        res_manifest[resource] = have - take
+        if res_manifest[resource] <= 0:
+            del res_manifest[resource]
+        manifest["resources"] = res_manifest
+        building.db.manifest = manifest
+
+        player_res = getattr(caller.db, "resources", None) or {}
+        player_res[resource] = player_res.get(resource, 0) + take
+        caller.db.resources = player_res
+        caller.msg(f"Unloaded {take} {resource} from the Launch Pad.")

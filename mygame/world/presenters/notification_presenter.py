@@ -23,7 +23,16 @@ logger = logging.getLogger("evennia.world.presenters.notification")
 
 
 def _fmt_rank_level_up(d: dict) -> str:
-    return f"You are now Level {d['level']} ({d['rank_name']} {d['sub']})"
+    msg = f"You are now Level {d['level']} ({d['rank_name']} {d['sub']})"
+    # Announce planet unlocks when the new level crosses a gate.
+    unlocked = d.get("planets_unlocked")
+    if unlocked:
+        for p in unlocked:
+            msg += (
+                f"\n|g→ New planet unlocked: |w{p['name']}|g ({p['type']})"
+                f" — build a Launch Pad to travel there.|n"
+            )
+    return msg
 
 
 def _fmt_building_progress(d: dict) -> str:
