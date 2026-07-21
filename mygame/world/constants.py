@@ -389,6 +389,12 @@ SHIELD_GENERATOR = "shield_generator"
 #: EquipmentSystem.apply_death_loss + RESPAWN_RECOVERY_BY_LEVEL.
 RESPAWN_POINT = "respawn_point"
 
+#: A Launch Pad enables cross-planet travel: the player `launch`es from here,
+#: consuming fuel, routing through Space, and arriving at their Beacon/HQ on the
+#: destination planet (or public spawn). Also supports manifest loading
+#: (agents/cargo for cross-planet transport). See steering doc §7.
+LAUNCH_PAD = "launch_pad"
+
 BUILDING_CAPABILITIES: frozenset[str] = frozenset({
     HARVESTABLE,
     UPGRADABLE,
@@ -400,6 +406,7 @@ BUILDING_CAPABILITIES: frozenset[str] = frozenset({
     TURRET,
     SHIELD_GENERATOR,
     RESPAWN_POINT,
+    LAUNCH_PAD,
 })
 
 #: Fraction of carried items/resources a Respawn building recovers, by BUILDING

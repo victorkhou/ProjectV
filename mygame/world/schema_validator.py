@@ -574,6 +574,9 @@ class SchemaValidator:
             "chip_damage_min_fraction",
             "rank_gap_penalty_threshold", "rank_gap_full_penalty_span",
             "rank_gap_min_damage_mult", "rank_gap_xp_loot_mult",
+            "travel_cooldown_ticks", "travel_cooldown_owned_ticks",
+            "travel_manifest_weight_per_level",
+            "travel_fuel_per_agent", "travel_fuel_per_hop",
         ]
         for field in non_negative_fields:
             val = data.get(field)

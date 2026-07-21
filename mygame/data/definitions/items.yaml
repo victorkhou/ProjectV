@@ -260,6 +260,32 @@ items:
     required_rank: Staff_Sergeant
 
   # ------------------------------------------------------------------ #
+  #  Fuel Cells (Supply — consumed by Launch Pad for cross-planet travel)
+  # ------------------------------------------------------------------ #
+  - key: basic_fuel_cell
+    name: Basic Fuel Cell
+    category: ammo
+    craft_cost:
+      Wood: 10
+      Stone: 5
+      Iron: 5
+    weight: 2.0
+    max_stack: 20
+    classification: modern
+    required_rank: null
+
+  - key: premium_fuel_cell
+    name: Premium Fuel Cell
+    category: ammo
+    craft_cost:
+      Energy: 10
+      Circuits: 5
+    weight: 2.0
+    max_stack: 20
+    classification: futuristic
+    required_rank: Staff_Sergeant
+
+  # ------------------------------------------------------------------ #
   #  Consumables (Supply)
   # ------------------------------------------------------------------ #
   - key: medkit

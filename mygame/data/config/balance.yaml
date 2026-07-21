@@ -274,3 +274,10 @@ alliance_level_thresholds:
   100: 3    # tier 3 — a small active roster
   180: 4    # tier 4 — a mid-size active roster
   280: 5    # tier 5 (max) — a large, active, high-level roster
+
+# --- Cross-planet travel (§7) ------------------------------------------
+travel_cooldown_ticks: 300        # 5 min standard cooldown between launches
+travel_cooldown_owned_ticks: 120  # 2 min when you own a base on both ends
+travel_manifest_weight_per_level: 200  # carry-weight per pad level (L1=200 L5=1000)
+travel_fuel_per_agent: 1          # extra fuel cells per agent in manifest
+travel_fuel_per_hop: 1            # base fuel cells per single-rung hop

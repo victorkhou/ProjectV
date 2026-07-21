@@ -559,3 +559,15 @@ class BalanceConfig:
     shield_hp_fraction: float = 0.25     # shield = frac * level * building hp_max
     shield_regen_percent: float = 1.0    # % of shield_max restored per interval
     shield_regen_interval_ticks: int = 5 # ticks between shield-regen ticks
+
+    # --- Cross-planet travel (§7) ---------------------------------------- #
+    #: Cooldown in ticks between successive launches from a pad.
+    travel_cooldown_ticks: int = 300       # 5 min at 1 tick/s
+    #: Reduced cooldown when you own a base (HQ/Beacon) on both endpoints.
+    travel_cooldown_owned_ticks: int = 120  # 2 min — rewards established routes
+    #: Manifest carry-weight capacity per Launch Pad level.
+    travel_manifest_weight_per_level: int = 200  # L1=200, L5=1000
+    #: Extra fuel cells consumed per agent in the manifest.
+    travel_fuel_per_agent: int = 1
+    #: Base fuel cells consumed per single-rung hop (Basic Fuel).
+    travel_fuel_per_hop: int = 1

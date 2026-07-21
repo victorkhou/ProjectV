@@ -291,8 +291,11 @@ class TestDataclassContracts:
         #  + 4 rank-gap PvP protection (rank_gap_penalty_threshold,
         #    rank_gap_full_penalty_span, rank_gap_min_damage_mult,
         #    rank_gap_xp_loot_mult).
+        #  + 5 cross-planet travel (travel_cooldown_ticks,
+        #    travel_cooldown_owned_ticks, travel_manifest_weight_per_level,
+        #    travel_fuel_per_agent, travel_fuel_per_hop).
         # Bump this when adding a balance tunable.
-        assert len(fields(BalanceConfig)) == 113
+        assert len(fields(BalanceConfig)) == 118
 
     def test_coordinate_space_def_field_count(self):
         assert len(fields(CoordinateSpaceDef)) == 14

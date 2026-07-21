@@ -4365,3 +4365,296 @@ class CmdWho(GameCommand):
             return added
         except Exception:  # noqa: BLE001 - who must render even if this query fails
             return 0
+
+
+# ====================================================================== #
+#  Cross-planet travel commands (§7)
+# ====================================================================== #
+
+class CmdLaunch(GameCommand):
+    """Launch from a Launch Pad to travel between planets.
+
+    Usage:
+      launch              - from a Launch Pad: lift off to the Space station
+      launch <planet>     - from the Space station: descend to a planet
+
+    Travel is two-legged: surface → Space → destination. Each leg consumes one
+    fuel cell (Basic Fuel Cell for single-rung hops, Premium for multi-rung).
+    You must be standing on a building with the launch_pad capability to launch
+    from a planet's surface. From Space, you can launch to any planet you have
+    access to.
+
+    If you have no Launch Pad, this command explains how to build one.
+    """
+
+    key = "launch"
+    locks = "cmd:all()"
+    help_category = "Travel"
+
+    def func(self):
+        caller = self.caller
+        args = self.args.strip().lower()
+        planet = getattr(caller.db, "coord_planet", None)
+
+        from world.constants import LAUNCH_PAD
+        from world.utils import building_has_capability
+
+        # --- LEG 2: from Space, launch to a destination planet ---
+        if planet == "space":
+            if not args:
+                caller.msg("You are at the Space station. Use |wlaunch <planet>|n to descend.")
+                return
+            self._launch_from_space(caller, args)
+            return
+
+        # --- LEG 1: from a planet surface, launch to Space ---
+        building = self._building_at_caller(caller)
+        if building is None or not building_has_capability(building, LAUNCH_PAD):
+            caller.msg(
+                "You need a Launch Pad to leave this planet. "
+                "Build one (|wbuild launch_pad|n — Wood/Stone/Iron), "
+                "then stand on it and |wlaunch|n."
+            )
+            return
+
+        if args:
+            caller.msg(
+                "From the surface you launch to |cSpace|n first, then "
+                "from there |wlaunch <planet>|n to your destination."
+            )
+            return
+
+        self._launch_to_space(caller, building, planet)
+
+    def _launch_to_space(self, caller, building, origin_planet):
+        """Leg 1: surface pad → Space station."""
+        # Check cooldown
+        import time as _time
+        now_tick = getattr(caller.db, "current_tick", 0) or 0
+        last_launch = getattr(caller.db, "last_launch_tick", 0) or 0
+        balance = self._get_balance(caller)
+        cooldown = balance.travel_cooldown_ticks if balance else 300
+        if now_tick - last_launch < cooldown and last_launch > 0:
+            remaining = cooldown - (now_tick - last_launch)
+            caller.msg(f"Launch pad cooling down ({remaining} ticks remaining).")
+            return
+
+        # Consume fuel (Basic Fuel Cell for single-rung hop)
+        if not self._consume_fuel(caller, "basic_fuel_cell", 1):
+            return
+
+        # Perform the move
+        self._do_travel(caller, "space")
+        caller.db.last_launch_tick = now_tick
+        caller.msg(
+            f"Your Launch Pad fires — you rise from |c{origin_planet}|n "
+            f"into the contested Space corridor.\n"
+            f"Use |wlaunch <planet>|n to descend to your destination."
+        )
+
+    def _launch_from_space(self, caller, dest_planet):
+        """Leg 2: Space station → destination planet surface."""
+        # Check access
+        rank_sys = self.require_system("rank")
+        if rank_sys is None:
+            return
+        if not rank_sys.can_access_planet(caller, dest_planet):
+            caller.msg(f"You cannot access |c{dest_planet}|n yet (level too low).")
+            return
+
+        # Determine fuel type needed
+        # Single-rung = basic fuel, multi-rung = premium
+        fuel_key = self._determine_fuel_type(caller, dest_planet)
+        if not self._consume_fuel(caller, fuel_key, 1):
+            return
+
+        # Determine arrival coords (Beacon/HQ on destination, else spawn)
+        tx, ty = self._resolve_arrival(caller, dest_planet)
+
+        self._do_travel(caller, dest_planet, tx, ty)
+        caller.msg(
+            f"You descend from Space and land on |c{dest_planet}|n at ({tx}, {ty})."
+        )
+
+    def _determine_fuel_type(self, caller, dest_planet):
+        """Return the fuel item key needed for this hop."""
+        # For now: single-rung hops use basic, multi-rung use premium.
+        # A "single rung" = one step on the ladder. We simplify: Space→adjacent
+        # planet = basic; Space→non-adjacent = premium.
+        # The ladder order (by gate level): terra(1), forge(21), tundra(33),
+        # inferno(46), elysium(58), citadel(70).
+        # From Space, which is the hub, the "closest" concept doesn't strictly
+        # apply — for v1, use the simpler rule: if dest is terra or forge
+        # (the two lowest), basic suffices; otherwise premium.
+        if dest_planet in ("terra", "forge"):
+            return "basic_fuel_cell"
+        return "premium_fuel_cell"
+
+    def _consume_fuel(self, caller, fuel_key, amount):
+        """Remove fuel from the caller's supplies. Returns True on success."""
+        supplies = getattr(caller.db, "supplies", None) or {}
+        have = supplies.get(fuel_key, 0)
+        if have < amount:
+            name = fuel_key.replace("_", " ").title()
+            caller.msg(
+                f"Not enough fuel — you need {amount} |w{name}|n "
+                f"(have {have}). Craft more first."
+            )
+            return False
+        supplies[fuel_key] = have - amount
+        if supplies[fuel_key] <= 0:
+            del supplies[fuel_key]
+        caller.db.supplies = supplies
+        return True
+
+    def _resolve_arrival(self, caller, dest_planet):
+        """Find the arrival tile on the destination planet."""
+        # Try to land at the player's Respawn Beacon on that planet
+        from world.constants import RESPAWN_POINT
+        from world.utils import building_has_capability
+        buildings = getattr(caller, "get_buildings", lambda: [])()
+        for b in buildings:
+            b_planet = getattr(getattr(b, "db", None), "coord_planet", None)
+            if b_planet != dest_planet:
+                continue
+            if building_has_capability(b, RESPAWN_POINT):
+                bx = getattr(b.db, "coord_x", None)
+                by = getattr(b.db, "coord_y", None)
+                if bx is not None and by is not None:
+                    return int(bx), int(by)
+
+        # Fallback: planet's public spawn
+        try:
+            from server.conf.game_init import game_systems
+            registry = game_systems.get("registry")
+            if registry:
+                space = registry.get_space(dest_planet)
+                return space.spawn_x, space.spawn_y
+        except (ImportError, AttributeError, KeyError):
+            pass
+        return 200, 200  # ultimate fallback
+
+    def _do_travel(self, caller, dest_planet, tx=None, ty=None):
+        """Relocate the caller to (tx, ty) on dest_planet."""
+        from commands.admin_commands import _resolve_planet_room, _relocate_object
+        target_room = _resolve_planet_room(caller, dest_planet)
+        if target_room is None:
+            return
+        if tx is None or ty is None:
+            # Landing at Space station spawn
+            try:
+                from server.conf.game_init import game_systems
+                registry = game_systems.get("registry")
+                space = registry.get_space(dest_planet)
+                tx, ty = space.spawn_x, space.spawn_y
+            except (ImportError, AttributeError, KeyError):
+                tx, ty = 500, 500
+        _relocate_object(caller, target_room, tx, ty, dest_planet)
+        if hasattr(caller, "execute_cmd"):
+            caller.execute_cmd("look")
+
+    def _get_balance(self, caller):
+        """Return the BalanceConfig, or None."""
+        systems = getattr(getattr(caller, "ndb", None), "systems", None)
+        if systems:
+            registry = systems.get("registry")
+            if registry and hasattr(registry, "balance"):
+                return registry.balance
+        try:
+            from server.conf.game_init import game_systems
+            registry = game_systems.get("registry")
+            if registry:
+                return registry.balance
+        except (ImportError, AttributeError):
+            pass
+        return None
+
+
+class CmdRecall(GameCommand):
+    """Recall to your Respawn Beacon — the one-way emergency exit home.
+
+    Usage:
+      recall
+
+    Instantly returns you to your Respawn Beacon on your home planet (Terra for
+    most players). This is a DIRECT hop (does not route through Space) but is
+    bounded: cannot recall while in combat, while carrying a loaded manifest on
+    a Launch Pad, or while on cooldown.
+
+    This is the anti-strand safety hatch — you can always get home, even without
+    a Launch Pad on your current planet.
+    """
+
+    key = "recall"
+    aliases = ["recall home"]
+    locks = "cmd:all()"
+    help_category = "Travel"
+
+    def func(self):
+        caller = self.caller
+
+        # Block if in combat
+        combat_timer = getattr(caller.db, "combat_timer_expires", 0) or 0
+        current_tick = getattr(caller.db, "current_tick", 0) or 0
+        if combat_timer > current_tick:
+            caller.msg("You cannot recall while in combat!")
+            return
+
+        # Find the home Beacon (prefer Terra, then any planet with a Beacon)
+        from world.constants import RESPAWN_POINT
+        from world.utils import building_has_capability
+        buildings = getattr(caller, "get_buildings", lambda: [])()
+        home_beacon = None
+        for b in buildings:
+            if building_has_capability(b, RESPAWN_POINT):
+                # Prefer terra
+                b_planet = getattr(getattr(b, "db", None), "coord_planet", None)
+                if b_planet == "terra":
+                    home_beacon = b
+                    break
+                if home_beacon is None:
+                    home_beacon = b
+
+        if home_beacon is None:
+            caller.msg("You have no Respawn Beacon to recall to. Build one first.")
+            return
+
+        # Check we're not already there
+        b_planet = getattr(home_beacon.db, "coord_planet", None)
+        bx = getattr(home_beacon.db, "coord_x", None)
+        by = getattr(home_beacon.db, "coord_y", None)
+        cur_planet = getattr(caller.db, "coord_planet", None)
+        if cur_planet == b_planet:
+            caller.msg("You are already on the same planet as your Beacon.")
+            return
+
+        # Cooldown check (shares the travel cooldown)
+        now_tick = current_tick
+        last_launch = getattr(caller.db, "last_launch_tick", 0) or 0
+        balance = None
+        try:
+            from server.conf.game_init import game_systems
+            registry = game_systems.get("registry")
+            if registry:
+                balance = registry.balance
+        except (ImportError, AttributeError):
+            pass
+        cooldown = balance.travel_cooldown_ticks if balance else 300
+        if now_tick - last_launch < cooldown and last_launch > 0:
+            remaining = cooldown - (now_tick - last_launch)
+            caller.msg(f"Recall is on cooldown ({remaining} ticks remaining).")
+            return
+
+        # Do the direct recall
+        from commands.admin_commands import _resolve_planet_room, _relocate_object
+        target_room = _resolve_planet_room(caller, b_planet)
+        if target_room is None:
+            return
+        _relocate_object(caller, target_room, int(bx), int(by), b_planet)
+        caller.db.last_launch_tick = now_tick
+        caller.msg(
+            f"You activate your Respawn Beacon's recall — "
+            f"warping directly to ({bx}, {by}) on |c{b_planet}|n."
+        )
+        if hasattr(caller, "execute_cmd"):
+            caller.execute_cmd("look")

@@ -53,6 +53,8 @@ EXPECTED_ITEM_KEYS = {
     "scope", "jetpack", "hauler_pack",
     # ammo (2)
     "rifle_rounds", "energy_cell",
+    # fuel cells (2)
+    "basic_fuel_cell", "premium_fuel_cell",
     # consumables (2)
     "medkit", "combat_stim",
     # throwables / grenades (2)
@@ -108,7 +110,7 @@ class TestRealContentLoadsClean:
     def test_all_expected_items_present(self, real_registry):
         """Every seeded/migrated item is present — no more, no less."""
         assert set(real_registry.items.keys()) == EXPECTED_ITEM_KEYS
-        assert len(real_registry.items) == 22
+        assert len(real_registry.items) == 24
 
     def test_every_item_has_valid_category(self, real_registry):
         for key, idef in real_registry.items.items():

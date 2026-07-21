@@ -288,3 +288,28 @@
     - respawn_point
     - upgradable
   map_symbol: RB
+
+# Cross-planet travel infrastructure. The player launches from a Launch Pad,
+# consuming fuel, routing through Space (contested PvP corridor), and arriving
+# at their Beacon/HQ on the destination planet. Upgradable: higher levels
+# increase the manifest capacity for agents and cargo. See steering doc §7.
+- name: Launch Pad
+  abbreviation: LP
+  cost:
+    Wood: 30
+    Stone: 25
+    Iron: 20
+  build_time_seconds: 40
+  max_level: 5
+  rank_requirement: 15
+  max_health: 300
+  requires_hq: true
+  required_terrain: null
+  category: utility
+  produces: null
+  requires_agent: false
+  storage_capacity: 0
+  capabilities:
+    - launch_pad
+    - upgradable
+  map_symbol: LP
