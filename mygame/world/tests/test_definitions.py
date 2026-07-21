@@ -296,8 +296,9 @@ class TestDataclassContracts:
         #    travel_fuel_per_agent, travel_fuel_per_hop).
         #  + 1 damage-type baseline (baseline_resist).
         #  + 2 permanent-bonus caps (perm_bonus_cap_damage, perm_bonus_cap_dr).
+        #  + 2 fire burn DoT (fire_burn_fraction, fire_burn_ticks).
         # Bump this when adding a balance tunable.
-        assert len(fields(BalanceConfig)) == 121
+        assert len(fields(BalanceConfig)) == 123
 
     def test_coordinate_space_def_field_count(self):
         assert len(fields(CoordinateSpaceDef)) == 14

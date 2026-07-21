@@ -534,6 +534,12 @@ class GameTickScript(DefaultScript):
                     active_owner_ids=_active_hq_owner_ids(),
                 )
             )
+            registered["effect_ticks"] = (
+                lambda: [
+                    combat_engine.tick_effects_on_entity(p)
+                    for p in tick_data["online_players"]
+                ]
+            )
 
         bomb_system = systems.get("bomb_system")
         if bomb_system:

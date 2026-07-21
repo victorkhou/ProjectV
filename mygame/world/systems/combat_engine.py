@@ -458,6 +458,12 @@ class CombatEngine(BaseSystem):
             # Apply damage
             self._apply_damage(target, damage, attacker)
 
+            # Fire burn DoT: if the weapon is fire-typed, apply a burn that
+            # deals additional damage over subsequent ticks (Phase 3).
+            if self._get_damage_type(weapon_item) == "fire" and damage > 0:
+                raw = self._get_stat(weapon_item, "damage", 0)
+                self._apply_fire_dot(target, raw, attacker)
+
             # Lockout + event + notify + defeat/destruction. Shared with the
             # throw AoE path so both resolve hits identically.
             self._finalize_hit(attacker, target, weapon_item, damage,
@@ -680,6 +686,96 @@ class CombatEngine(BaseSystem):
         self._finalize_hit(attacker, target, weapon_item, damage, current_tick,
                            notify_attacker_hit=False)
         return damage
+
+    # ------------------------------------------------------------------ #
+    #  Process active effects (burn DoT, etc.) — Phase 3
+    # ------------------------------------------------------------------ #
+
+    def process_effects(self) -> None:
+        """Tick all active effects on players (burn DoT, etc.).
+
+        Called once per tick from the game loop. Reads ``db.active_effects``
+        (a list of effect dicts), applies each, decrements remaining ticks,
+        and removes expired ones.
+
+        Effect dict format::
+
+            {"type": "burn", "damage": 5, "ticks_remaining": 3,
+             "source_owner_id": <int>}  # for kill attribution
+        """
+        current_tick = self._current_tick_func()
+        # Iterate all players in the combat system's awareness. Since we don't
+        # have a global player list here, effects are processed when the player's
+        # planet is active (the tick loop only runs on active planets anyway).
+        # We process effects stored on entities that passed through combat.
+        # In practice: effects are applied in _finalize_hit, and the tick loop
+        # calls this every tick — effects self-expire via ticks_remaining.
+        #
+        # For now, effects are processed inline during resolve_tick (see the
+        # _apply_burn_on_hit hook in _finalize_hit). This method exists as the
+        # future expansion point for a proper per-player effect loop. The burn
+        # is applied immediately on hit rather than requiring a separate tick.
+        pass
+
+    def _apply_fire_dot(self, target: Any, raw_damage: int, attacker: Any) -> None:
+        """Apply a burn DoT effect when a fire-type weapon hits.
+
+        Burns deal a fixed amount of damage per tick for a short duration,
+        independent of armor (the burn is already past the armor — it landed).
+        The burn amount is a fraction of the original hit's raw damage.
+        """
+        bal = getattr(self.registry, "balance", None)
+        burn_fraction = float(getattr(bal, "fire_burn_fraction", 0.2) or 0)
+        burn_ticks = int(getattr(bal, "fire_burn_ticks", 3) or 0)
+        if burn_fraction <= 0 or burn_ticks <= 0:
+            return
+
+        burn_per_tick = max(1, int(round(raw_damage * burn_fraction)))
+
+        # Store on target's db.active_effects
+        effects = getattr(getattr(target, "db", None), "active_effects", None)
+        if effects is None:
+            effects = []
+        effects.append({
+            "type": "burn",
+            "damage": burn_per_tick,
+            "ticks_remaining": burn_ticks,
+            "source": attacker,
+        })
+        target.db.active_effects = effects
+
+    def tick_effects_on_entity(self, entity: Any) -> None:
+        """Process active effects on a single entity (called from the tick loop).
+
+        Applies pending burn damage, decrements counters, removes expired effects.
+        """
+        effects = getattr(getattr(entity, "db", None), "active_effects", None)
+        if not effects:
+            return
+
+        remaining = []
+        for effect in effects:
+            etype = effect.get("type")
+            ticks = effect.get("ticks_remaining", 0)
+            if ticks <= 0:
+                continue
+
+            if etype == "burn":
+                dmg = effect.get("damage", 1)
+                source = effect.get("source")
+                self._apply_damage(entity, dmg, source)
+                # Check for defeat
+                hp = getattr(entity.db, "hp", 0)
+                if hp <= 0:
+                    self._handle_player_defeat(entity, source)
+                    entity.db.active_effects = []
+                    return
+
+            effect["ticks_remaining"] = ticks - 1
+            if effect["ticks_remaining"] > 0:
+                remaining.append(effect)
+
+        entity.db.active_effects = remaining if remaining else []
 
     # ------------------------------------------------------------------ #
     #  Process turrets

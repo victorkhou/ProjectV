@@ -567,6 +567,11 @@ class BalanceConfig:
     #: damage isn't a veteran-only wall. Small (2–3 is appropriate at the current
     #: weapon scale). Applies to all non-physical types equally.
     baseline_resist: float = 2.0
+    #: Fire burn DoT: fraction of the hit's raw damage dealt per tick as burn.
+    fire_burn_fraction: float = 0.2  # 20% of raw per burn tick
+    #: Number of ticks the burn lasts after a fire hit.
+    fire_burn_ticks: int = 3
+
     #: Aggregate permanent-bonus cap (§2a anti-snowball): the maximum total flat
     #: bonus from tech + alliance perks on the DAMAGE axis. Gear bonus is
     #: UNCAPPED (loseable power). 0 = no cap (disabled). At the current weapon

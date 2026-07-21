@@ -2863,6 +2863,95 @@ class TestDamageTypes(unittest.TestCase):
         self.assertEqual(result, 15)  # 25 - 10 = 15 (physical path)
 
 
+class TestFireBurnDoT(unittest.TestCase):
+    """Fire weapons apply a burn DoT on hit (Phase 3)."""
+
+    def test_fire_hit_applies_burn_effect(self):
+        """A fire weapon hit adds a burn entry to target.db.active_effects."""
+        registry = _make_registry()
+        registry.balance.fire_burn_fraction = 0.2
+        registry.balance.fire_burn_ticks = 3
+        engine, _ = _make_engine(registry=registry)
+
+        weapon = FakeWeapon(damage=20)
+        weapon.damage_type = "fire"
+        attacker = FakePlayer(name="A")
+        target = FakePlayer(name="T")
+        target.db.active_effects = []
+
+        # Queue and resolve a fire attack
+        engine.pending_actions.append({
+            "attacker": attacker,
+            "target": target,
+            "weapon_item": weapon,
+        })
+        engine.resolve_tick()
+
+        effects = target.db.active_effects
+        self.assertEqual(len(effects), 1)
+        self.assertEqual(effects[0]["type"], "burn")
+        self.assertEqual(effects[0]["damage"], 4)  # ceil(20 * 0.2) = 4
+        self.assertEqual(effects[0]["ticks_remaining"], 3)
+
+    def test_burn_ticks_deal_damage(self):
+        """tick_effects_on_entity applies burn damage each tick."""
+        registry = _make_registry()
+        engine, _ = _make_engine(registry=registry)
+
+        target = FakePlayer(name="T", hp=100)
+        target.db.active_effects = [
+            {"type": "burn", "damage": 5, "ticks_remaining": 2, "source": None}
+        ]
+
+        engine.tick_effects_on_entity(target)
+        self.assertEqual(target.db.hp, 95)  # 100 - 5
+        self.assertEqual(len(target.db.active_effects), 1)
+        self.assertEqual(target.db.active_effects[0]["ticks_remaining"], 1)
+
+        engine.tick_effects_on_entity(target)
+        self.assertEqual(target.db.hp, 90)  # 95 - 5
+        self.assertEqual(target.db.active_effects, [])  # expired
+
+    def test_burn_can_defeat_target(self):
+        """A burn tick that drops HP to 0 triggers defeat (respawn resets HP)."""
+        registry = _make_registry()
+        engine, _ = _make_engine(registry=registry)
+
+        target = FakePlayer(name="T", hp=3)
+        target.db.active_effects = [
+            {"type": "burn", "damage": 5, "ticks_remaining": 2, "source": None}
+        ]
+
+        engine.tick_effects_on_entity(target)
+        # Defeat was triggered (effects cleared = the defeat handler ran and
+        # the burn loop exited early). HP is reset by the respawn handler.
+        self.assertEqual(target.db.active_effects, [])
+        # HP was reset to max by the defeat/respawn handler (100).
+        self.assertEqual(target.db.hp, target.db.hp_max)
+
+    def test_physical_weapon_no_burn(self):
+        """A physical weapon does NOT apply a burn."""
+        registry = _make_registry()
+        registry.balance.fire_burn_fraction = 0.2
+        registry.balance.fire_burn_ticks = 3
+        engine, _ = _make_engine(registry=registry)
+
+        weapon = FakeWeapon(damage=20)  # no damage_type = physical
+        attacker = FakePlayer(name="A")
+        target = FakePlayer(name="T")
+        target.db.active_effects = []
+
+        engine.pending_actions.append({
+            "attacker": attacker,
+            "target": target,
+            "weapon_item": weapon,
+        })
+        engine.resolve_tick()
+
+        effects = target.db.active_effects
+        self.assertEqual(effects, [])
+
+
 class TestPermanentBonusCap(unittest.TestCase):
     """The aggregate permanent-bonus cap (§2a anti-snowball): tech + alliance
     perk bonuses are capped so no combo approaches 2× without counterplay."""

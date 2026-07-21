@@ -279,6 +279,10 @@ alliance_level_thresholds:
 # Baseline typed resist for all players at spawn (flat points). A small innate
 # resist so typed damage is a veteran EDGE, not a wall newbies can't touch.
 baseline_resist: 2.0
+# Fire burn DoT: fraction of raw damage per tick + duration.
+fire_burn_fraction: 0.2       # 20% of raw per burn tick
+fire_burn_ticks: 3            # burn lasts 3 ticks after hit
+
 # Aggregate permanent-bonus cap (anti-snowball, S2a): max total flat bonus from
 # tech + alliance perks per axis. Gear is UNCAPPED (loseable). 0 = disabled.
 perm_bonus_cap_damage: 6.0   # max non-gear flat damage bonus
