@@ -2863,5 +2863,58 @@ class TestDamageTypes(unittest.TestCase):
         self.assertEqual(result, 15)  # 25 - 10 = 15 (physical path)
 
 
+class TestPermanentBonusCap(unittest.TestCase):
+    """The aggregate permanent-bonus cap (§2a anti-snowball): tech + alliance
+    perk bonuses are capped so no combo approaches 2× without counterplay."""
+
+    def test_damage_bonus_capped(self):
+        """Tech damage bonus exceeding the cap is clamped."""
+        registry = _make_registry()
+        registry.balance.perm_bonus_cap_damage = 6.0
+        engine, _ = _make_engine(registry=registry)
+        # Fake a player with 10 tech damage bonus (exceeds cap of 6)
+        attacker = FakePlayer(name="A")
+        attacker.db.tech_bonuses = {"damage": 10}
+        bonus = engine._get_attacker_bonus(attacker)
+        # Gear=0, powerup=0, alliance=0, tech=10 → capped at 6
+        self.assertEqual(bonus, 6.0)
+
+    def test_dr_bonus_capped(self):
+        """Tech DR bonus exceeding the cap is clamped."""
+        registry = _make_registry()
+        registry.balance.perm_bonus_cap_dr = 6.0
+        engine, _ = _make_engine(registry=registry)
+        target = FakePlayer(name="T")
+        target.db.tech_bonuses = {"damage_reduction": 10}
+        dr = engine._get_target_armor_reduction(target)
+        # Gear=0, alliance=0, tech=10 → capped at 6
+        self.assertEqual(dr, 6.0)
+
+    def test_gear_bonus_uncapped(self):
+        """Gear damage_bonus is NOT subject to the permanent cap."""
+        registry = _make_registry()
+        registry.balance.perm_bonus_cap_damage = 6.0
+        engine, _ = _make_engine(registry=registry)
+        # Gear with 20 damage_bonus (way over the perm cap — but gear is exempt)
+        big_gloves = FakeArmor(damage_reduction=0)
+        big_gloves.stat_modifiers = {"damage_bonus": 20}
+        big_gloves.slot = "hands"
+        attacker = FakePlayer(name="A")
+        attacker.equipment.equip(big_gloves)
+        bonus = engine._get_attacker_bonus(attacker)
+        # Gear=20 (uncapped) + perm=0 (nothing to cap) = 20
+        self.assertEqual(bonus, 20.0)
+
+    def test_cap_disabled_when_zero(self):
+        """Setting cap to 0 disables it (no limit on permanent bonuses)."""
+        registry = _make_registry()
+        registry.balance.perm_bonus_cap_damage = 0
+        engine, _ = _make_engine(registry=registry)
+        attacker = FakePlayer(name="A")
+        attacker.db.tech_bonuses = {"damage": 15}
+        bonus = engine._get_attacker_bonus(attacker)
+        self.assertEqual(bonus, 15.0)
+
+
 if __name__ == "__main__":
     unittest.main()

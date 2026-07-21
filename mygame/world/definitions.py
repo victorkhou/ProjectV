@@ -566,6 +566,14 @@ class BalanceConfig:
     #: damage isn't a veteran-only wall. Small (2–3 is appropriate at the current
     #: weapon scale). Applies to all non-physical types equally.
     baseline_resist: float = 2.0
+    #: Aggregate permanent-bonus cap (§2a anti-snowball): the maximum total flat
+    #: bonus from tech + alliance perks on the DAMAGE axis. Gear bonus is
+    #: UNCAPPED (loseable power). 0 = no cap (disabled). At the current weapon
+    #: scale (10–50 base), a cap of 6 keeps the permanent edge under ~25% of
+    #: base and well below the 2× violation threshold.
+    perm_bonus_cap_damage: float = 6.0
+    #: Same cap for the DEFENSE (damage_reduction) axis.
+    perm_bonus_cap_dr: float = 6.0
 
     # --- Cross-planet travel (§7) ---------------------------------------- #
     #: Cooldown in ticks between successive launches from a pad.

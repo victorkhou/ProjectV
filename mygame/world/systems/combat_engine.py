@@ -1624,7 +1624,7 @@ class CombatEngine(BaseSystem):
         # and read LIVE (never copied onto db.active_powerups, so it vanishes the
         # moment the attacker's owning player leaves the alliance). Attributed to
         # the OWNING PLAYER so a turret/agent shot benefits from its owner's perk.
-        bonus += self._alliance_combat_bonus(attacker, "combat_damage", "damage_bonus")
+        perm_bonus = self._alliance_combat_bonus(attacker, "combat_damage", "damage_bonus")
 
         # Researched-tech damage bonus (R13.3): read from the OWNING PLAYER's
         # db.tech_bonuses so a turret/agent attack benefits from its owner's
@@ -1632,7 +1632,17 @@ class CombatEngine(BaseSystem):
         from world.utils import get_tech_bonus
         owner = self._owning_player(attacker)
         if owner is not None:
-            bonus += get_tech_bonus(owner, "damage")
+            perm_bonus += get_tech_bonus(owner, "damage")
+
+        # Aggregate permanent-bonus cap (Phase 3, §2a anti-snowball): clamp the
+        # total non-gear flat contribution (tech + alliance perk) to a small
+        # ceiling so no upgrade combo pushes a player to ~2× damage vs a newbie.
+        # Gear bonus is UNCAPPED (loseable power); only permanent bonuses cap.
+        bal = getattr(self.registry, "balance", None)
+        cap = float(getattr(bal, "perm_bonus_cap_damage", 0) or 0)
+        if cap > 0 and perm_bonus > cap:
+            perm_bonus = cap
+        bonus += perm_bonus
         return bonus
 
     @staticmethod
@@ -1694,14 +1704,24 @@ class CombatEngine(BaseSystem):
         # Alliance combat_armor perk: a FLAT additive reduction, read LIVE here
         # (this site never consults db.active_powerups, so the perk MUST be added
         # directly rather than routed through a powerup that would be ignored).
-        reduction += self._alliance_combat_bonus(target, "combat_armor", "damage_reduction")
+        perm_dr = self._alliance_combat_bonus(target, "combat_armor", "damage_reduction")
 
         # Researched-tech damage_reduction (R13.3): attributed to the target's
         # OWNING PLAYER so an agent is protected by its owner's research.
         from world.utils import get_tech_bonus
         owner = self._owning_player(target)
         if owner is not None:
-            reduction += get_tech_bonus(owner, "damage_reduction")
+            perm_dr += get_tech_bonus(owner, "damage_reduction")
+
+        # Aggregate permanent-bonus cap (Phase 3, §2a anti-snowball): clamp the
+        # total non-gear flat DR contribution (tech + alliance perk) so no combo
+        # re-creates the immunity wall behind gear-based DR. Gear DR stays
+        # uncapped (it's loseable — the design's preferred power form).
+        bal = getattr(self.registry, "balance", None)
+        cap = float(getattr(bal, "perm_bonus_cap_dr", 0) or 0)
+        if cap > 0 and perm_dr > cap:
+            perm_dr = cap
+        reduction += perm_dr
         return reduction
 
     def _alliance_combat_bonus(self, entity: Any, category: str, field: str) -> float:

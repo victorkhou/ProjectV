@@ -295,8 +295,9 @@ class TestDataclassContracts:
         #    travel_cooldown_owned_ticks, travel_manifest_weight_per_level,
         #    travel_fuel_per_agent, travel_fuel_per_hop).
         #  + 1 damage-type baseline (baseline_resist).
+        #  + 2 permanent-bonus caps (perm_bonus_cap_damage, perm_bonus_cap_dr).
         # Bump this when adding a balance tunable.
-        assert len(fields(BalanceConfig)) == 119
+        assert len(fields(BalanceConfig)) == 121
 
     def test_coordinate_space_def_field_count(self):
         assert len(fields(CoordinateSpaceDef)) == 14
