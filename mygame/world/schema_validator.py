@@ -170,8 +170,8 @@ class SchemaValidator:
                 item_keys.add(key)
 
             # stat_modifiers values must be numeric; no key allowlist is applied.
-            # `max_hp` is now a wired effect (raises hp_max — task 6.4); `accuracy`
-            # remains an accepted numeric key with no wired effect (D6).
+            # `max_hp` is a wired effect (raises hp_max — task 6.4); `accuracy`
+            # is an accepted numeric key with no wired effect (D6).
             sm = entry.get("stat_modifiers")
             if sm is not None:
                 if not isinstance(sm, dict):
@@ -874,8 +874,8 @@ class SchemaValidator:
 
         # Resource-name references → the canonical RESOURCE_TYPES set.
         # 'Resource' has no definition file (it's just string keys), so a
-        # typo in any cost/ammo/tech-cost/terrain-yield previously loaded
-        # silently and only surfaced at runtime. Validate them here.
+        # typo in any cost/ammo/tech-cost/terrain-yield would load silently
+        # and only surface at runtime. Validate them here.
         from world.constants import RESOURCE_TYPES
 
         valid_resources = set(RESOURCE_TYPES)

@@ -18,7 +18,7 @@ from world.coordinate.tile_render import (
     building_is_occupied,
     partition_tile_objects,
 )
-from world.utils import get_system
+from world.utils import coords_of, get_system
 
 if TYPE_CHECKING:
     from world.coordinate.fog_of_war import FogOfWarSystem
@@ -100,9 +100,9 @@ class MapDataProvider:
         objects_by_coord: dict[tuple[int, int], list] = {}
         if planet_room is not None and hasattr(planet_room, "get_objects_in_area"):
             for obj in planet_room.get_objects_in_area(min_x, min_y, max_x, max_y):
-                cx = getattr(getattr(obj, "db", None), "coord_x", None)
-                cy = getattr(getattr(obj, "db", None), "coord_y", None)
-                if cx is not None and cy is not None:
+                obj_coords = coords_of(obj)
+                if obj_coords is not None:
+                    cx, cy, _planet = obj_coords
                     objects_by_coord.setdefault((int(cx), int(cy)), []).append(obj)
 
         gen = self._terrain_generators.get(planet)

@@ -133,9 +133,11 @@ def _route_player_death(victim: Any) -> bool:
             return False
         from world import player_lifecycle as pl
         db = getattr(victim, "db", None)
-        x = getattr(db, "coord_x", None) if db else None
-        y = getattr(db, "coord_y", None) if db else None
-        planet = getattr(db, "coord_planet", None) if db else None
+        # x/y/planet are recorded independently (a partial position is passed
+        # through as-is), so this read stays per-coordinate.
+        x = db.coord_x if db else None
+        y = db.coord_y if db else None
+        planet = db.coord_planet if db else None
         pl.record_death(victim, x, y, planet)
         # Pull the slain player OUT of the world while they re-choose class +
         # spawn (SPAWNING is OOC): otherwise they sit at full HP on the death
@@ -758,6 +760,11 @@ def initialize_game() -> dict:
     # ---------------------------------------------------------- #
     _start_scripts(game_systems)
 
+    # Publish the fully-populated systems dict through the services facade —
+    # the single source of truth for system lookup (get_system, tick script).
+    from world import services
+    services.install(game_systems)
+
     logger.info("RTS Combat Overworld initialization complete.")
     return game_systems
 
@@ -788,10 +795,6 @@ def _start_scripts(systems: dict) -> None:
                 persistent=True,
             )
             logger.error("Created new GameTickScript.")
-
-        # Wire systems into the tick script
-        if tick_script:
-            tick_script.ndb.systems = systems
 
         # AutoSaveScript
         existing = search_script("auto_save")

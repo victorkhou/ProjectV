@@ -19,7 +19,7 @@ router's own dispatch:
 from __future__ import annotations
 
 from commands.command_router import GameSubcommandRouter
-from world.utils import get_system, format_section
+from world.utils import get_system, format_section, resolve_player
 
 
 # Verbs usable while OOC in the LOBBY (they mutate state, so NOT in SPAWNING).
@@ -37,21 +37,6 @@ READONLY_OOC_VERBS = frozenset({"info", "board", "leaderboard", "invites"})
 COMBAT_GATED_VERBS = frozenset({
     "leave", "transfer", "disband", "kick", "accept", "join",
 })
-
-
-def _resolve_player(caller, name):
-    """Resolve a player character by name near the caller, or msg + return None.
-
-    Uses Evennia's search (which reports its own not-found/multi-match message)
-    when available; falls back to a simple contents scan for test doubles.
-    """
-    if not name:
-        caller.msg("Specify a player by name.")
-        return None
-    if hasattr(caller, "search"):
-        target = caller.search(name, global_search=True)
-        return target  # search() already messaged on miss/ambiguity
-    return None
 
 
 class CmdAlliance(GameSubcommandRouter):
@@ -176,7 +161,10 @@ class CmdAlliance(GameSubcommandRouter):
         system = self._system()
         if system is None:
             return
-        target = _resolve_player(self.caller, args.strip())
+        target = resolve_player(
+            self.caller, args.strip(), global_search=True,
+            not_found_msg=None, empty_name_msg="Specify a player by name.",
+        )
         if target is None:
             return
         system.invite(self.caller, target)
@@ -240,7 +228,10 @@ class CmdAlliance(GameSubcommandRouter):
         system = self._system()
         if system is None:
             return
-        target = _resolve_player(self.caller, args.strip())
+        target = resolve_player(
+            self.caller, args.strip(), global_search=True,
+            not_found_msg=None, empty_name_msg="Specify a player by name.",
+        )
         if target is None:
             return
         system.kick(self.caller, target)
@@ -249,7 +240,10 @@ class CmdAlliance(GameSubcommandRouter):
         system = self._system()
         if system is None:
             return
-        target = _resolve_player(self.caller, args.strip())
+        target = resolve_player(
+            self.caller, args.strip(), global_search=True,
+            not_found_msg=None, empty_name_msg="Specify a player by name.",
+        )
         if target is None:
             return
         system.promote(self.caller, target)
@@ -258,7 +252,10 @@ class CmdAlliance(GameSubcommandRouter):
         system = self._system()
         if system is None:
             return
-        target = _resolve_player(self.caller, args.strip())
+        target = resolve_player(
+            self.caller, args.strip(), global_search=True,
+            not_found_msg=None, empty_name_msg="Specify a player by name.",
+        )
         if target is None:
             return
         system.demote(self.caller, target)
@@ -267,7 +264,10 @@ class CmdAlliance(GameSubcommandRouter):
         system = self._system()
         if system is None:
             return
-        target = _resolve_player(self.caller, args.strip())
+        target = resolve_player(
+            self.caller, args.strip(), global_search=True,
+            not_found_msg=None, empty_name_msg="Specify a player by name.",
+        )
         if target is None:
             return
         system.transfer(self.caller, target)
@@ -304,7 +304,10 @@ class CmdAlliance(GameSubcommandRouter):
         if target_arg.lower() == "all":
             system.ignore(self.caller, "all")
             return
-        target = _resolve_player(self.caller, target_arg)
+        target = resolve_player(
+            self.caller, target_arg, global_search=True,
+            not_found_msg=None, empty_name_msg="Specify a player by name.",
+        )
         if target is None:
             return
         system.ignore(self.caller, target)

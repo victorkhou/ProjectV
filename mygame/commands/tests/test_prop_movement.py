@@ -69,6 +69,27 @@ def _ensure_evennia_stubs():
 _ensure_evennia_stubs()
 
 from mygame.commands.game_commands import CmdMove  # noqa: E402
+from world import services  # noqa: E402
+
+
+class _ServicesTestCase(unittest.TestCase):
+    """TestCase giving each test a private, empty facade state.
+
+    setUp runs once per test method (not per Hypothesis example), so the
+    override dict is shared across examples; each FakeCaller installs the
+    systems it needs, overwriting the previous example's entries.
+    """
+
+    def setUp(self):
+        ctx = services.override({})
+        ctx.__enter__()
+        self.addCleanup(ctx.__exit__, None, None, None)
+
+
+def _install_systems(systems):
+    """Register fake *systems* for the current test through the facade."""
+    services.get_systems().update(systems)
+
 
 # -------------------------------------------------------------- #
 #  Fakes
@@ -129,7 +150,9 @@ class FakeCaller:
                  systems=None):
         self.key = "TestPlayer"
         self.db = FakeDB(coord_x, coord_y, coord_planet)
-        self.ndb = FakeNDB(systems)
+        self.ndb = FakeNDB()
+        if systems:
+            _install_systems(systems)
         self.location = FakeLocation(coord_x, coord_y)
         self._messages = []
         self._moved_to = None
@@ -204,7 +227,7 @@ DIRECTION_DELTAS = {
 #  **Validates: Requirements 1.1, 1.2, 1.3**
 # -------------------------------------------------------------- #
 
-class TestProperty8MovementBounds(unittest.TestCase):
+class TestProperty8MovementBounds(_ServicesTestCase):
     """Property 8: Movement respects coordinate space bounds.
 
     For any player position (x, y) and direction, if the target
@@ -305,7 +328,7 @@ class TestProperty8MovementBounds(unittest.TestCase):
 #  **Validates: Requirements 1.4**
 # -------------------------------------------------------------- #
 
-class TestProperty9CoordAttributesAfterMove(unittest.TestCase):
+class TestProperty9CoordAttributesAfterMove(_ServicesTestCase):
     """Property 9: Player coordinate attributes match location after movement.
 
     For any successful movement to coordinate (tx, ty), the
@@ -357,7 +380,7 @@ class TestProperty9CoordAttributesAfterMove(unittest.TestCase):
 #  **Validates: Requirements 1.1, 1.3, 1.6**
 # -------------------------------------------------------------- #
 
-class TestCmdMoveDirections(unittest.TestCase):
+class TestCmdMoveDirections(_ServicesTestCase):
     """Test movement in all four cardinal directions — coordinates update."""
 
     def _move(self, direction, start_x=50, start_y=50):
@@ -395,7 +418,7 @@ class TestCmdMoveDirections(unittest.TestCase):
         self.assertEqual(caller.db.coord_x, 49)
         self.assertEqual(caller.db.coord_y, 50)
 
-class TestCmdMoveEdgeRejection(unittest.TestCase):
+class TestCmdMoveEdgeRejection(_ServicesTestCase):
     """Test that movement at map edges is rejected."""
 
     def _move_at_edge(self, x, y, direction):
@@ -432,7 +455,7 @@ class TestCmdMoveEdgeRejection(unittest.TestCase):
         self.assertIsNone(caller._moved_to)
         self.assertTrue(any("edge" in m.lower() for m in caller._messages))
 
-class TestCmdMoveOfflineBuildingBlocking(unittest.TestCase):
+class TestCmdMoveOfflineBuildingBlocking(_ServicesTestCase):
     """Test that offline buildings block movement."""
 
     def test_offline_building_blocks_move(self):

@@ -12,6 +12,9 @@ import sys
 import types
 import unittest
 import logging
+from unittest import mock
+
+import pytest
 
 # -------------------------------------------------------------- #
 #  Bootstrap: stub out Evennia modules
@@ -112,6 +115,28 @@ from mygame.commands.admin_commands import (  # noqa: E402
     CmdTransfer,
 )
 
+from world import services  # noqa: E402
+
+
+# -------------------------------------------------------------- #
+#  Per-test system injection via the services facade
+# -------------------------------------------------------------- #
+
+@pytest.fixture(autouse=True)
+def _services_sandbox():
+    """Give every test a private, empty facade state, restored on exit.
+
+    Tests inject fake systems through ``services.override`` (via
+    ``_install_systems``); all system lookup reads the facade.
+    """
+    with services.override({}):
+        yield
+
+
+def _install_systems(systems):
+    """Register fake *systems* for the current test through the facade."""
+    services.get_systems().update(systems)
+
 
 # -------------------------------------------------------------- #
 #  Helpers / Fakes
@@ -145,7 +170,9 @@ class FakeCaller:
     def __init__(self, name="Admin", perm_level="Admin", systems=None):
         self.key = name
         self._perm_level = perm_level
-        self.ndb = FakeNDB(systems)
+        self.ndb = FakeNDB()
+        if systems:
+            _install_systems(systems)
         self.db = FakeDB()
         self._messages = []
         self._executed = []  # records execute_cmd calls (e.g. the post-transfer look)
@@ -1039,16 +1066,10 @@ class TestTeleportSuppressesNotifications(unittest.TestCase):
         caller.db.coord_planet = "earth"
         caller.location = room  # same-planet -> no move_to needed
 
-        # Patch the game_systems dict CmdTeleport imports for planet_rooms.
-        from server.conf import game_init
-        original = getattr(game_init, "game_systems", None)
-        game_init.game_systems = {"planet_rooms": {"earth": room}}
-        try:
-            cmd = _make_cmd(CmdTeleport, caller, " 25 25 earth")
-            cmd.func()
-        finally:
-            if original is not None:
-                game_init.game_systems = original
+        # Install the planet_rooms CmdTeleport resolves via the facade.
+        _install_systems({"planet_rooms": {"earth": room}})
+        cmd = _make_cmd(CmdTeleport, caller, " 25 25 earth")
+        cmd.func()
 
         self.assertEqual(len(room.calls), 1)
         _obj, tx, ty, notify = room.calls[0]
@@ -1069,34 +1090,22 @@ class TestTeleportSuppressesNotifications(unittest.TestCase):
         caller.db.coord_planet = "earth"
         caller.location = room
 
-        from server.conf import game_init
-        original = getattr(game_init, "game_systems", None)
-        game_init.game_systems = {"planet_rooms": {"earth": room}}
-        try:
-            cmd = _make_cmd(CmdTeleport, caller, " 50 50 2")
-            cmd.cmdstring = "goto"  # invoked via the alias
-            cmd.func()
-        finally:
-            if original is not None:
-                game_init.game_systems = original
+        _install_systems({"planet_rooms": {"earth": room}})
+        cmd = _make_cmd(CmdTeleport, caller, " 50 50 2")
+        cmd.cmdstring = "goto"  # invoked via the alias
+        cmd.func()
 
         self.assertEqual(len(room.calls), 1)
         _obj, tx, ty, _notify = room.calls[0]
         self.assertEqual((tx, ty), (50, 50))
 
     def _entity_goto(self, caller, arg, room, search_results):
-        """Run 'goto <arg>' with the given search results, patching planet_rooms."""
+        """Run 'goto <arg>' with the given search results, installing planet_rooms."""
         caller._search_results = search_results
-        from server.conf import game_init
-        original = getattr(game_init, "game_systems", None)
-        game_init.game_systems = {"planet_rooms": {"earth": room}}
-        try:
-            cmd = _make_cmd(CmdTeleport, caller, arg)
-            cmd.cmdstring = "goto"
-            cmd.func()
-        finally:
-            if original is not None:
-                game_init.game_systems = original
+        _install_systems({"planet_rooms": {"earth": room}})
+        cmd = _make_cmd(CmdTeleport, caller, arg)
+        cmd.cmdstring = "goto"
+        cmd.func()
 
     def test_goto_name_jumps_to_entity_tile(self):
         """'goto <name>' teleports the caller to that entity's coordinates."""
@@ -1248,15 +1257,9 @@ class TestTransfer(unittest.TestCase):
 
     def _run(self, caller, args, room, search_results=None):
         caller._search_results = search_results or {}
-        from server.conf import game_init
-        original = getattr(game_init, "game_systems", None)
-        game_init.game_systems = {"planet_rooms": {"earth": room}}
-        try:
-            cmd = _make_cmd(CmdTransfer, caller, args)
-            cmd.func()
-        finally:
-            if original is not None:
-                game_init.game_systems = original
+        _install_systems({"planet_rooms": {"earth": room}})
+        cmd = _make_cmd(CmdTransfer, caller, args)
+        cmd.func()
 
     def test_registers_expected_aliases(self):
         self.assertIn("summon", CmdTransfer.aliases)
@@ -1499,7 +1502,7 @@ class TestCmdAdminOutpost(unittest.TestCase):
 
     def _caller_with_tiers(self, spawner, tiers=("fortress", "outpost")):
         caller = self._caller(spawner)
-        caller.ndb.systems["registry"] = self._FakeTierRegistry(tiers)
+        _install_systems({"registry": self._FakeTierRegistry(tiers)})
         return caller
 
     def test_spawn_by_tier_index(self):

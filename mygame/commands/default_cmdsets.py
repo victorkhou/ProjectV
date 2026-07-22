@@ -25,7 +25,7 @@ from commands.game_commands import (
     CmdResearch, CmdPowerup,
     CmdLaunch, CmdRecall, CmdLoad, CmdUnload,
     CmdScore, CmdDirectives, CmdEquipment, CmdBuildings, CmdScan, CmdTechnology,
-    CmdInventory, CmdChat, CmdMessage, CmdSay, CmdLook, CmdMap,
+    CmdTerrain, CmdInventory, CmdChat, CmdMessage, CmdSay, CmdLook, CmdMap,
     CmdLeave, CmdEnter, CmdCloseExit, CmdOpenExit, CmdExit, CmdStop, CmdWho, CmdGet,
     CmdDrop, CmdSell, CmdJunk,
 )
@@ -90,11 +90,11 @@ class CharacterCmdSet(default_cmds.CharacterCmdSet):
         self.remove(CmdOpen)
         # Stock @teleport/@tel is a room-based teleport with the SAME key and
         # alias as our coordinate CmdTeleport — remove it so ours is the only
-        # match (previously it was silently shadowed).
+        # match (otherwise one silently shadows the other).
         self.remove(CmdBuiltinTeleport)
         # Stock admin 'wall' (broadcast-to-all-sessions) has key "wall", which
-        # collides with the Wall building's 'help wall' entry — typing 'wall'
-        # or 'help wall' hit the admin command instead of the building topic.
+        # collides with the Wall building's 'help wall' entry — typing 'wall' or
+        # 'help wall' would hit the admin command instead of the building topic.
         # This game has no all-session broadcast need, so remove it and let
         # 'wall' resolve cleanly to the building help.
         self.remove(CmdWall)
@@ -159,6 +159,7 @@ class CharacterCmdSet(default_cmds.CharacterCmdSet):
         self.add(CmdBuildings())
         self.add(CmdScan())
         self.add(CmdTechnology())
+        self.add(CmdTerrain())
         self.add(CmdInventory())
         self.add(CmdChat())
         self.add(CmdMessage())

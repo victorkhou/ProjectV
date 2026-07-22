@@ -64,9 +64,9 @@ class AgentProgressionMixin:
         """Return the agent's Cap_Ceiling = ``max(1, owner_level)``.
 
         The maximum Effective_Level the owner cap permits. Equal to the
-        owner's level (early-game rebalance R3.1 — previously owner_level - 1,
-        which froze a level-1 player's first agent at level 1 with no XP gain).
-        Floors at 1 for an orphaned agent.
+        owner's level (early-game rebalance R3.1 — a cap of owner_level - 1
+        would freeze a level-1 player's first agent at level 1 with no XP
+        gain). Floors at 1 for an orphaned agent.
         """
         return max(1, self.get_owner_level(agent))
 

@@ -12,13 +12,14 @@ import logging
 
 from evennia.commands.command import Command as BaseCommand
 from commands.command_router import AdminSubcommandRouter
-# Aliased to the old private names: 'goto'/'transfer' below use them, and
+# Aliased to private names: 'goto'/'transfer' below use them, and
 # they stay importable from here for backward compatibility.
 from world.adapters.relocation import (
     relocate_object as _relocate_object,
     resolve_planet_room as _resolve_planet_room,
 )
-from world.utils import get_system as _get_system
+from world.utils import coords_of
+from world.utils import get_system as _get_system, resolve_player
 
 logger = logging.getLogger("mygame.admin")
 
@@ -287,12 +288,11 @@ class CmdAdminBuilding(AdminSubcommandRouter):
             caller.msg("You have no location.")
             return
 
-        cx = getattr(caller.db, "coord_x", None)
-        cy = getattr(caller.db, "coord_y", None)
-
-        if cx is None or cy is None:
+        coords = coords_of(caller)
+        if coords is None:
             caller.msg("You have no coordinates set.")
             return
+        cx, cy, _planet = coords
 
         # Create the building in PlanetRoom at caller's coordinates
         try:
@@ -313,7 +313,7 @@ class CmdAdminBuilding(AdminSubcommandRouter):
             building.attributes.add("hp_max", hp)
             building.attributes.add("offline", False)
             # Stamp coords + register in the coordinate index (at_object_receive
-            # saw coord_x=None during create_object).
+            # runs during create_object before coords are set).
             from world.utils import place_on_tile
             place_on_tile(building, planet_room, cx, cy)
 
@@ -359,12 +359,11 @@ class CmdAdminBuilding(AdminSubcommandRouter):
             caller.msg("You have no location.")
             return
 
-        cx = getattr(caller.db, "coord_x", None)
-        cy = getattr(caller.db, "coord_y", None)
-
-        if cx is None or cy is None:
+        coords = coords_of(caller)
+        if coords is None:
             caller.msg("You have no coordinates set.")
             return
+        cx, cy, _planet = coords
 
         if not hasattr(planet_room, "get_objects_at"):
             caller.msg("Current location does not support coordinate queries.")
@@ -399,11 +398,11 @@ class CmdAdminBuilding(AdminSubcommandRouter):
         caller = self.caller
 
         planet_room = caller.location
-        cx = getattr(caller.db, "coord_x", None)
-        cy = getattr(caller.db, "coord_y", None)
-        if planet_room is None or cx is None or cy is None:
+        coords = coords_of(caller)
+        if planet_room is None or coords is None:
             caller.msg("You have no coordinates set.")
             return
+        cx, cy, _planet = coords
         if not hasattr(planet_room, "get_objects_at"):
             caller.msg("Current location does not support coordinate queries.")
             return
@@ -505,7 +504,7 @@ class CmdAdminAgent(AdminSubcommandRouter):
                 caller.msg("Count must be at least 1.")
                 return
 
-        target = self.resolve_player(player_name)
+        target = resolve_player(self.caller, player_name)
         if target is None:
             return
 
@@ -557,7 +556,7 @@ class CmdAdminAgent(AdminSubcommandRouter):
         player_name = parts[1]
 
         # Find the target player
-        target = self.resolve_player(player_name)
+        target = resolve_player(self.caller, player_name)
         if target is None:
             return
 
@@ -675,7 +674,7 @@ class CmdAdminAgent(AdminSubcommandRouter):
             caller.msg("Usage: @agent list <player>")
             return
 
-        target = self.resolve_player(player_name)
+        target = resolve_player(self.caller, player_name)
         if target is None:
             return
 
@@ -797,8 +796,8 @@ class CmdAdminResource(AdminSubcommandRouter):
         # Resolve which resource(s) to grant. 'all' grants every canonical
         # resource; otherwise the token must match a known resource type
         # (case-insensitively) — an unknown name is REJECTED rather than
-        # silently minting a junk resource like a literal "all" (the reported
-        # bug), which would then pollute the player's resource dict forever.
+        # silently minting a junk resource (e.g. a literal "all"), which would
+        # then pollute the player's resource dict forever.
         canonical = {r.lower(): r for r in RESOURCE_TYPES}
         if resource_token.lower() == "all":
             resources = list(RESOURCE_TYPES)
@@ -815,7 +814,7 @@ class CmdAdminResource(AdminSubcommandRouter):
 
         # Resolve target: specified player or self
         if player_name:
-            target = self.resolve_player(player_name)
+            target = resolve_player(self.caller, player_name)
             if target is None:
                 return
         else:
@@ -858,7 +857,7 @@ class CmdAdminResource(AdminSubcommandRouter):
 
         if player_name:
             # Reset a single player
-            target = self.resolve_player(player_name)
+            target = resolve_player(self.caller, player_name)
             if target is None:
                 return
 
@@ -996,7 +995,7 @@ class CmdAdminItem(AdminSubcommandRouter):
 
         # Resolve recipient: named player or self.
         if player_name:
-            target = self.resolve_player(player_name)
+            target = resolve_player(self.caller, player_name)
             if target is None:
                 return
         else:
@@ -1159,7 +1158,7 @@ class CmdAdminPlayer(AdminSubcommandRouter):
 
         # Resolve target: specified player or self
         if player_name:
-            target = self.resolve_player(player_name)
+            target = resolve_player(self.caller, player_name)
             if target is None:
                 return
         else:
@@ -1228,7 +1227,7 @@ class CmdAdminPlayer(AdminSubcommandRouter):
 
         # Resolve target: specified player or self
         if player_name:
-            target = self.resolve_player(player_name)
+            target = resolve_player(self.caller, player_name)
             if target is None:
                 return
         else:
@@ -1441,8 +1440,11 @@ class CmdTeleport(BaseCommand):
         # Multiple hits — pick the nearest with coordinates.
         from world.utils import get_coords, chebyshev_distance
 
-        cx = getattr(caller.db, "coord_x", None)
-        cy = getattr(caller.db, "coord_y", None)
+        c_coords = coords_of(caller)
+        if c_coords is None:
+            cx = cy = None
+        else:
+            cx, cy, _planet = c_coords
 
         def _rank(obj):
             c = get_coords(obj)
@@ -1679,12 +1681,11 @@ class CmdTransfer(BaseCommand):
 
     def _pull_to_caller(self, caller, target):
         """Move *target* to the caller's tile + planet, then re-render for both."""
-        planet = getattr(caller.db, "coord_planet", None)
-        tx = getattr(caller.db, "coord_x", None)
-        ty = getattr(caller.db, "coord_y", None)
-        if not planet or tx is None or ty is None:
+        coords = coords_of(caller)
+        if coords is None or not coords[2]:
             caller.msg("You have no overworld position to transfer a unit to.")
             return
+        tx, ty, planet = coords
 
         target_room = _resolve_planet_room(caller, planet)
         if target_room is None:
@@ -1945,10 +1946,9 @@ class CmdAdminOutpost(AdminSubcommandRouter):
                 return
             coords = (x, y)
         else:
-            cx = getattr(caller.db, "coord_x", None)
-            cy = getattr(caller.db, "coord_y", None)
-            if cx is not None and cy is not None:
-                coords = (int(cx), int(cy))
+            c_coords = coords_of(caller)
+            if c_coords is not None:
+                coords = (int(c_coords[0]), int(c_coords[1]))
 
         base = spawner.spawn_base(planet, tier, coords=coords)
         if base is None:

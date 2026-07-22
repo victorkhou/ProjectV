@@ -2,8 +2,8 @@
 Evennia-backed :class:`PlayerNotifier` implementation.
 
 Sends a message to a single player via its Evennia ``msg`` sink, absorbing the
-defensive guarding (``None`` player, missing ``msg``, transport errors) that
-was previously repeated inline at every domain call site.
+defensive guarding (``None`` player, missing ``msg``, transport errors) so
+domain call sites need none of it inline.
 """
 
 from __future__ import annotations

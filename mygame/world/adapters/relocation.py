@@ -12,6 +12,9 @@ import from each other — ``game_commands`` importing ``admin_commands`` just
 to reach a shared helper inverted the dependency direction.
 """
 
+from world.services import get_service
+from world.utils import coords_of
+
 
 def resolve_planet_room(caller, planet):
     """Return the shared PlanetRoom for *planet*, or None (after messaging).
@@ -21,12 +24,7 @@ def resolve_planet_room(caller, planet):
     object into. Messages the caller on any failure so callers just bail on
     None.
     """
-    planet_rooms = None
-    try:
-        from server.conf.game_init import game_systems
-        planet_rooms = game_systems.get("planet_rooms", {})
-    except (ImportError, AttributeError):
-        pass
+    planet_rooms = get_service("planet_rooms") or {}
 
     if not planet_rooms:
         caller.msg("Planet rooms not available.")
@@ -60,15 +58,15 @@ def relocate_object(obj, target_room, tx, ty, planet):
     players.
     """
     origin_room = obj.location
-    old_x = getattr(obj.db, "coord_x", None)
-    old_y = getattr(obj.db, "coord_y", None)
+    old_coords = coords_of(obj)
 
     obj.db.coord_planet = planet
 
     if obj.location is not target_room:
         # Skipping at_object_leave means the origin room's coordinate index
         # still holds the object — remove it explicitly so it doesn't leak.
-        if origin_room is not None and old_x is not None and old_y is not None:
+        if origin_room is not None and old_coords is not None:
+            old_x, old_y, _planet = old_coords
             idx = getattr(getattr(origin_room, "ndb", None), "_coord_index", None)
             if idx is not None:
                 try:

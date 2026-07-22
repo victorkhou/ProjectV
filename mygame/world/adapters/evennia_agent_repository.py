@@ -114,8 +114,8 @@ class EvenniaAgentFactory(AgentFactory):
 
         spawn_x, spawn_y = self._resolve_spawn_coords(owner)
         if spawn_x is not None and spawn_y is not None:
-            # at_object_receive saw coord_x=None during create_object, so
-            # place_on_tile stamps coords and registers in the index now.
+            # at_object_receive runs during create_object before coords are set,
+            # so place_on_tile must stamp coords and register in the index here.
             from world.utils import place_on_tile
             place_on_tile(npc, planet_room, spawn_x, spawn_y)
 
@@ -130,16 +130,20 @@ class EvenniaAgentFactory(AgentFactory):
         but without coordinates yet — fall back to the owner's own position so
         the agent is still placed and indexed.
         """
+        from world.utils import coords_of
+
         try:
             buildings = owner.get_buildings() if hasattr(owner, "get_buildings") else []
             for b in buildings:
                 if getattr(b.db, "building_type", "") == "HQ":
-                    hx = getattr(b.db, "coord_x", None)
-                    hy = getattr(b.db, "coord_y", None)
-                    if hx is not None and hy is not None:
+                    hq_coords = coords_of(b)
+                    if hq_coords is not None:
+                        hx, hy, _planet = hq_coords
                         return hx, hy
                     break
         except Exception:
             pass
         db = getattr(owner, "db", None)
-        return getattr(db, "coord_x", None), getattr(db, "coord_y", None)
+        if db is None:
+            return None, None
+        return db.coord_x, db.coord_y

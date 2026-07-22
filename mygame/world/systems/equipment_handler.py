@@ -8,6 +8,8 @@ Adapted from EvAdventure's EquipmentHandler pattern.
 
 from __future__ import annotations
 
+from world.utils import coords_of
+
 
 class EquipmentHandler:
     """Manages equipment slots on a character. One item per slot.
@@ -163,11 +165,10 @@ class EquipmentHandler:
         """Remove *item* from *room*'s coordinate index at its current tile."""
         if room is None or not hasattr(room, "coord_index"):
             return
-        db = getattr(item, "db", None)
-        cx = getattr(db, "coord_x", None) if db is not None else None
-        cy = getattr(db, "coord_y", None) if db is not None else None
-        if cx is None or cy is None:
+        coords = coords_of(item)
+        if coords is None:
             return
+        cx, cy, _planet = coords
         try:
             room.coord_index.remove(item, int(cx), int(cy))
         except Exception:

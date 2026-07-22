@@ -14,7 +14,8 @@ import logging
 from typing import Any
 
 from world.constants import DeliveryState
-from world.utils import resting_activity_status
+from world.services import get_service
+from world.utils import coords_of, resting_activity_status
 
 try:
     from evennia.scripts.scripts import DefaultScript
@@ -54,14 +55,13 @@ def _set_attr(obj: Any, key: str, value: Any) -> None:
 def _award_agent_xp(npc: Any, source: str) -> None:
     """Award agent XP for an earning *source* via the AgentSystem.
 
-    Looks up the agent system lazily from the global ``game_systems`` dict so
-    the script stays decoupled from system construction/ordering. The lookup
-    and award are wrapped defensively so a missing system, an uninitialised
-    game state, or any award-side error never breaks the per-tick agent loop.
+    Looks up the agent system through the services facade so the script
+    stays decoupled from system construction/ordering. The lookup and award
+    are wrapped defensively so a missing system, an uninitialised game
+    state, or any award-side error never breaks the per-tick agent loop.
     """
     try:
-        from server.conf.game_init import game_systems
-        agent_system = game_systems.get("agent_system")
+        agent_system = get_service("agent_system")
         if agent_system is None:
             return
         agent_system.award_agent_xp(npc, source)
@@ -74,16 +74,15 @@ def _engineer_repair_step(npc: Any, building: Any) -> bool:
 
     Delegates to ``BuildingSystem.apply_repair_step`` (the shared per-tick
     repair the owner's active-presence path also uses), paying from the
-    building OWNER's resources. Looked up lazily from the global
-    ``game_systems`` dict and wrapped defensively so a missing system or a
-    None owner never breaks the per-tick agent loop.
+    building OWNER's resources. Looked up through the services facade and
+    wrapped defensively so a missing system or a None owner never breaks
+    the per-tick agent loop.
 
     Returns:
         True only when this tick brought the building to full HP.
     """
     try:
-        from server.conf.game_init import game_systems
-        building_system = game_systems.get("building_system")
+        building_system = get_service("building_system")
         if building_system is None:
             return False
         owner = _get_attr(building, "owner", None)
@@ -100,16 +99,15 @@ def _notify_owner(npc: Any, kind: str, **data: Any) -> None:
     Routes the structured ``(owner, kind, data)`` through a live system's
     ``notify`` (all world systems share ``BaseSystem.notify``, which publishes
     the ``PLAYER_NOTIFICATION`` event the presenter renders) so the script
-    composes no player-facing text itself. Looked up lazily from the global
-    ``game_systems`` dict and wrapped defensively so a missing system or a
-    None owner never breaks the per-tick agent loop.
+    composes no player-facing text itself. Looked up through the services
+    facade and wrapped defensively so a missing system or a None owner
+    never breaks the per-tick agent loop.
     """
     owner = getattr(getattr(npc, "db", None), "owner", None)
     if owner is None:
         return
     try:
-        from server.conf.game_init import game_systems
-        system = game_systems.get("resource_system") or game_systems.get("agent_system")
+        system = get_service("resource_system") or get_service("agent_system")
         if system is None:
             return
         system.notify(owner, kind, **data)
@@ -196,18 +194,18 @@ class HarvesterScript(DefaultScript):
         production = production * (1 + bal.extractor_level_bonus * (level - 1))
         # Owner's researched production_multiplier tech (R13.3) scales
         # autonomous extractor output multiplicatively (1.0 when unresearched).
-        # This is the LIVE extractor producer — process_extractor_production was
-        # removed from the tick loop, so the multiplier must be read here.
+        # This is the LIVE extractor producer (process_extractor_production is
+        # not in the tick loop), so the multiplier must be read here.
         from world.utils import get_tech_bonus
         production *= get_tech_bonus(owner, "production_multiplier", default=1.0)
         production = max(1, int(production))
 
         # Drop resources at building coordinates in PlanetRoom
         from world.systems.resource_system import ResourceSystem
-        bx = getattr(getattr(building, "db", None), "coord_x", None)
-        by = getattr(getattr(building, "db", None), "coord_y", None)
+        b_coords = coords_of(building)
         drop_location = getattr(building, "location", building)
-        if bx is not None and by is not None:
+        if b_coords is not None:
+            bx, by, _planet = b_coords
             ResourceSystem._spawn_resource_drop(
                 drop_location, resource_type, production, x=int(bx), y=int(by)
             )
@@ -251,9 +249,9 @@ class HarvesterScript(DefaultScript):
             return rt
 
         # Try TerrainGenerator using building's coordinates
-        bx = getattr(getattr(building, "db", None), "coord_x", None)
-        by = getattr(getattr(building, "db", None), "coord_y", None)
-        if bx is not None and by is not None:
+        b_coords = coords_of(building)
+        if b_coords is not None:
+            bx, by, _planet = b_coords
             try:
                 # Get planet from the building's PlanetRoom location
                 loc = getattr(building, "location", None)
@@ -263,8 +261,7 @@ class HarvesterScript(DefaultScript):
                     if planet is None or planet == "unknown":
                         planet = getattr(getattr(loc, "db", None), "planet", None)
                 if planet:
-                    from server.conf.game_init import game_systems
-                    generators = game_systems.get("_terrain_generators", {})
+                    generators = get_service("_terrain_generators") or {}
                     gen = generators.get(planet)
                     if gen:
                         _terrain_type, resource_type = gen.get_terrain_and_resource(
@@ -272,7 +269,7 @@ class HarvesterScript(DefaultScript):
                         )
                         if resource_type:
                             return resource_type
-            except (ImportError, AttributeError):
+            except AttributeError:
                 pass
 
         # Legacy fallback: read from the terrain tile the building sits on
@@ -566,10 +563,10 @@ class DeliveryBehavior(DefaultScript):
         if building is None:
             return
 
-        bx = getattr(getattr(building, "db", None), "coord_x", None)
-        by = getattr(getattr(building, "db", None), "coord_y", None)
-        if bx is None or by is None:
+        b_coords = coords_of(building)
+        if b_coords is None:
             return
+        bx, by, _planet = b_coords
 
         bx, by = int(bx), int(by)
 
@@ -702,13 +699,13 @@ class DeliveryBehavior(DefaultScript):
             npc.db.activity_status = resting_activity_status(npc)
             return
 
-        bx = getattr(getattr(building, "db", None), "coord_x", None)
-        by = getattr(getattr(building, "db", None), "coord_y", None)
-        if bx is None or by is None:
+        b_coords = coords_of(building)
+        if b_coords is None:
             npc.db.delivery_state = DeliveryState.IDLE
             npc.db.activity_status = resting_activity_status(npc)
             return
 
+        bx, by, _planet = b_coords
         bx, by = int(bx), int(by)
         npc_x = int(getattr(npc.db, "coord_x", 0) or 0)
         npc_y = int(getattr(npc.db, "coord_y", 0) or 0)
@@ -808,10 +805,10 @@ class DeliveryBehavior(DefaultScript):
             return None
 
         # Use Extractor coordinates as the reference point
-        bx = getattr(getattr(building, "db", None), "coord_x", None)
-        by = getattr(getattr(building, "db", None), "coord_y", None)
-        if bx is None or by is None:
+        b_coords = coords_of(building)
+        if b_coords is None:
             return None
+        bx, by, _planet = b_coords
         bx, by = int(bx), int(by)
 
         # Find all storage buildings owned by the same player
@@ -865,10 +862,10 @@ class DeliveryBehavior(DefaultScript):
                 if owner_id is None or bld_owner_id is None or owner_id != bld_owner_id:
                     continue
 
-            cx = getattr(getattr(bld, "db", None), "coord_x", None)
-            cy = getattr(getattr(bld, "db", None), "coord_y", None)
-            if cx is None or cy is None:
+            c_coords = coords_of(bld)
+            if c_coords is None:
                 continue
+            cx, cy, _planet = c_coords
 
             cx, cy = int(cx), int(cy)
             dist = abs(cx - bx) + abs(cy - by)
@@ -897,10 +894,10 @@ class DeliveryBehavior(DefaultScript):
             return
 
         room = getattr(npc, "location", None)
-        npc_x = getattr(npc.db, "coord_x", None)
-        npc_y = getattr(npc.db, "coord_y", None)
+        npc_coords = coords_of(npc)
 
-        if room is not None and npc_x is not None and npc_y is not None:
+        if room is not None and npc_coords is not None:
+            npc_x, npc_y, _planet = npc_coords
             from world.systems.resource_system import ResourceSystem
             for rtype, amount in carried.items():
                 if amount > 0:

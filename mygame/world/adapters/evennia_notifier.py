@@ -2,8 +2,8 @@
 Evennia-backed :class:`Notifier` implementation.
 
 Wraps ``evennia.SESSION_HANDLER`` so the domain can broadcast without importing
-Evennia. This is the single home for the session-iteration I/O that previously
-lived inline in ``world.utils.broadcast``.
+Evennia. This is the single home for the session-iteration I/O behind
+``world.utils.broadcast``.
 """
 
 from __future__ import annotations

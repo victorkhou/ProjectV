@@ -14,6 +14,7 @@ import logging
 from typeclasses.combat_entity import CombatEntity
 from typeclasses.objects import GameEntity
 from world.constants import compute_effective_delay
+from world.services import get_service
 
 logger = logging.getLogger("evennia.typeclasses.npcs")
 
@@ -201,12 +202,8 @@ class NPC(CombatEntity, GameEntity):
     # ------------------------------------------------------------------ #
 
     def _get_movement_system(self):
-        """Return the MovementSystem from game_systems, or None."""
-        try:
-            from server.conf.game_init import game_systems
-            return game_systems.get("movement_system")
-        except (ImportError, AttributeError):
-            return None
+        """Return the installed MovementSystem, or None."""
+        return get_service("movement_system")
 
     # ``_get_move_speed_modifier`` is inherited from CombatEntity so players
     # and agents derive the equipment ``move_speed`` bonus identically.

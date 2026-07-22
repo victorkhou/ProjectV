@@ -34,16 +34,13 @@ class _FakePlayer:
 
 
 def _install_registry(spaces):
-    """Install a fake planet registry into game_systems; return a teardown."""
-    from server.conf import game_init
-    prev = game_init.game_systems.get("planet_registry")
-    game_init.game_systems["planet_registry"] = _FakePlanetRegistry(spaces)
+    """Install a fake planet registry into the services facade; return a teardown."""
+    from world import services
+    cm = services.override({"planet_registry": _FakePlanetRegistry(spaces)})
+    cm.__enter__()
 
     def teardown():
-        if prev is None:
-            game_init.game_systems.pop("planet_registry", None)
-        else:
-            game_init.game_systems["planet_registry"] = prev
+        cm.__exit__(None, None, None)
     return teardown
 
 
@@ -105,10 +102,10 @@ class TestOutgrownFactor(unittest.TestCase):
     def test_no_registry_returns_full(self):
         """No planet registry available → factor 1.0 (safe default)."""
         self._teardown()  # remove the registry
-        from server.conf import game_init
-        game_init.game_systems.pop("planet_registry", None)
-        p = _FakePlayer(level=99, planet="terra")
-        self.assertEqual(outgrown_factor(p), 1.0)
+        from world import services
+        with services.override({}):
+            p = _FakePlayer(level=99, planet="terra")
+            self.assertEqual(outgrown_factor(p), 1.0)
         self._teardown = _install_registry(_LADDER)  # restore for tearDown
 
 

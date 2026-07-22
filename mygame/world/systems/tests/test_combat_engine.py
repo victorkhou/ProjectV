@@ -2937,12 +2937,15 @@ class TestPadManifestRecovery(unittest.TestCase):
 
     Regression for the wrong system key ("agent" instead of "agent_system"):
     the agent lookup always missed, silently orphaning manifested agents in
-    reserve. Recovery now resolves the AgentSystem via the shared get_system
-    helper — this test drives it through the ndb.systems path a live boot
-    populates."""
+    reserve. Recovery resolves the AgentSystem via the shared get_system
+    helper — this test injects it through the services facade, the mapping a
+    live boot installs."""
 
     def test_destroyed_pad_returns_resources_and_unreserves_agents(self):
         import types as _types
+
+        from world import services
+
         engine, _ = _make_engine()
 
         owner = FakePlayer(name="Owner", oid=7)
@@ -2953,8 +2956,7 @@ class TestPadManifestRecovery(unittest.TestCase):
             def get_agent_by_id(self, player, agent_id):
                 return agent if agent_id == 77 else None
 
-        owner.ndb = _types.SimpleNamespace(
-            systems={"agent_system": _AgentSys()})
+        systems = {"agent_system": _AgentSys()}
 
         pad = FakeBuilding(building_type="LP", owner=owner,
                            hp=0, hp_max=300,
@@ -2964,8 +2966,9 @@ class TestPadManifestRecovery(unittest.TestCase):
         pad.db = _types.SimpleNamespace(
             manifest={"agents": [77], "resources": {"Iron": 25}})
 
-        engine._handle_building_destruction(pad, FakePlayer(name="Raider",
-                                                            oid=9))
+        with services.override(systems):
+            engine._handle_building_destruction(
+                pad, FakePlayer(name="Raider", oid=9))
 
         self.assertEqual(owner.get_resource("Iron"), 25,
                          "manifested resources return to the owner")

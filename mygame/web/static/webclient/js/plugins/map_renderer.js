@@ -34,6 +34,10 @@ let map_renderer_plugin = (function () {
         "Void":"#0a0a1a","Nebula":"#6a2c8a","Asteroid":"#777777",
         "Debris":"#8b6914","Ice_Field":"#88ccdd","Wormhole":"#8844aa",
         "Radiation_Zone":"#aa3333","Derelict_Ship":"#555555",
+        // Elysium (paradise)
+        "Aether_Spring":"#6fd0c0","Crystal_Grove":"#4aa88a","Marble_Terrace":"#ddd8e8",
+        "Starfall_Crater":"#b0a0c8","Ley_Nexus":"#a060c8","Arcane_Relay":"#3ab0a0",
+        "Cloud_Meadow":"#9fd4a8","Shimmer_Lake":"#7fd8e8",
         "unknown":"#333333",
     };
     const TERRAIN_SYMBOLS = {
@@ -55,6 +59,9 @@ let map_renderer_plugin = (function () {
         // Space
         "Void":"  ","Nebula":"**","Asteroid":"<>","Debris":"%%",
         "Ice_Field":"><","Wormhole":"@@","Radiation_Zone":"!!","Derelict_Ship":"[]",
+        // Elysium
+        "Aether_Spring":"**","Crystal_Grove":"&&","Marble_Terrace":"##","Starfall_Crater":"<>",
+        "Ley_Nexus":"++","Arcane_Relay":"::","Cloud_Meadow":"..","Shimmer_Lake":"><",
     };
 
     let canvas = null, ctx = null, lastMapData = null;
@@ -143,6 +150,10 @@ let map_renderer_plugin = (function () {
         "Power_Grid":"energy","Magma_Vent":"energy","Generator_Room":"energy","Nebula":"energy",
         "Circuit_Field":"circuits","Control_Room":"circuits","Debris":"circuits",
         "Vault_Room":"nexium",
+        // Elysium — Aether_Spring yields Aether, which has no badge sprite, so it
+        // is intentionally omitted (renders as plain terrain, no corner badge).
+        "Crystal_Grove":"wood","Marble_Terrace":"stone","Starfall_Crater":"iron",
+        "Ley_Nexus":"energy","Arcane_Relay":"circuits",
     };
 
     function loadAllSprites(){

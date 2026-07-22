@@ -47,6 +47,21 @@ from commands.lifecycle_commands import (  # noqa: E402
     CmdSpawn,
     require_in_game,
 )
+from world import services  # noqa: E402
+
+import pytest  # noqa: E402
+
+
+@pytest.fixture(autouse=True)
+def _services_sandbox():
+    """Give every test a private, empty facade state, restored on exit."""
+    with services.override({}):
+        yield
+
+
+def _install_systems(systems):
+    """Register fake *systems* for the current test through the facade."""
+    services.get_systems().update(systems)
 
 
 # -------------------------------------------------------------- #
@@ -79,7 +94,8 @@ class _Caller:
             pending_spawn_choice=None, coord_planet="terra",
             coord_x=1, coord_y=1,
         )
-        self.ndb = _NDB({"registry": _Registry(classes or [])})
+        self.ndb = _NDB({})
+        _install_systems({"registry": _Registry(classes or [])})
         self._messages = []
         self._executed = []
 

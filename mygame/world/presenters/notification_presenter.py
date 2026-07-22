@@ -2,12 +2,12 @@
 NotificationPresenter — formats and delivers player-facing notifications.
 
 Subscribes to the ``PLAYER_NOTIFICATION`` event that domain systems emit and is
-the single owner of the per-player message strings that used to live inline in
-the systems. Each event carries ``player``, ``kind``, and a ``data`` dict; the
+the single owner of the per-player message strings — none live inline in the
+systems. Each event carries ``player``, ``kind``, and a ``data`` dict; the
 presenter looks the ``kind`` up in its format table, builds the line, and
 delivers it via the injected :class:`PlayerNotifier`.
 
-Adding or restyling a player message is now a one-line change to
+Adding or restyling a player message is a one-line change to
 ``_FORMATTERS`` here, with no edit to the use-case systems.
 """
 

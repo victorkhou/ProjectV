@@ -15,7 +15,9 @@ from world.constants import HARVESTABLE
 from world.data_registry import DataRegistry
 from world.definitions import BalanceConfig
 from world.event_bus import RESOURCE_GATHERED, EventBus
+from world.services import get_service
 from world.systems.base_system import BaseSystem
+from world.utils import coords_of
 from world.utils import get_building_attr as _get_building_attr_shared
 from world.utils import set_building_attr as _set_building_attr_shared
 
@@ -131,9 +133,9 @@ class ResourceSystem(BaseSystem):
 
         if hasattr(tile, "is_node_depleted") and hasattr(player, "db"):
             # PlanetRoom path: use player coordinates + TerrainGenerator
-            px = getattr(player.db, "coord_x", None)
-            py = getattr(player.db, "coord_y", None)
-            if px is not None and py is not None:
+            p_coords = coords_of(player)
+            if p_coords is not None:
+                px, py, _planet = p_coords
                 is_depleted = tile.is_node_depleted(px, py)
                 if not is_depleted:
                     # Get resource type from TerrainGenerator
@@ -163,8 +165,11 @@ class ResourceSystem(BaseSystem):
         player.db.activity_progress = 0
 
         # Tell the player what rate they'll get
-        hx = getattr(player.db, "coord_x", None)
-        hy = getattr(player.db, "coord_y", None)
+        h_coords = coords_of(player)
+        if h_coords is None:
+            hx = hy = None
+        else:
+            hx, hy, _planet = h_coords
         bal = self.registry.balance
         extractor = self._get_tile_extractor(tile, px=hx, py=hy)
         if extractor is not None:
@@ -217,8 +222,11 @@ class ResourceSystem(BaseSystem):
         # Determine resource info — PlanetRoom path or legacy path
         resource_type = None
         is_depleted = False
-        px = getattr(player.db, "coord_x", None)
-        py = getattr(player.db, "coord_y", None)
+        p_coords = coords_of(player)
+        if p_coords is None:
+            px = py = None
+        else:
+            px, py, _planet = p_coords
 
         if hasattr(tile, "is_node_depleted") and px is not None and py is not None:
             # PlanetRoom path
@@ -466,8 +474,11 @@ class ResourceSystem(BaseSystem):
             # None: production is skipped this cycle (nothing generated, nothing
             # lost) — the RESOURCE_GATHERED event only fires on an actual drop.
             drop_location = getattr(building, "location", building)
-            bx = getattr(getattr(building, "db", None), "coord_x", None)
-            by = getattr(getattr(building, "db", None), "coord_y", None)
+            b_coords = coords_of(building)
+            if b_coords is None:
+                bx = by = None
+            else:
+                bx, by, _planet = b_coords
             drop = self._spawn_resource_drop(
                 drop_location, resource_type, production_int, x=bx, y=by
             )
@@ -665,11 +676,23 @@ class ResourceSystem(BaseSystem):
         if hasattr(player, "location") and player.location is tile:
             return True
 
-        # Coordinate-based check
-        px = getattr(getattr(player, "db", None), "coord_x", None)
-        py = getattr(getattr(player, "db", None), "coord_y", None)
-        tx = getattr(tile, "x", getattr(getattr(tile, "db", None), "coord_x", None))
-        ty = getattr(tile, "y", getattr(getattr(tile, "db", None), "coord_y", None))
+        # Coordinate-based check. The tile's x/y are read independently of
+        # each other (plain attribute first, then its db coordinate), so the
+        # tile side deliberately does not go through coords_of.
+        p_coords = coords_of(player)
+        if p_coords is None:
+            px = py = None
+        else:
+            px, py, _planet = p_coords
+        tile_db = getattr(tile, "db", None)
+        if hasattr(tile, "x"):
+            tx = tile.x
+        else:
+            tx = tile_db.coord_x if tile_db is not None else None
+        if hasattr(tile, "y"):
+            ty = tile.y
+        else:
+            ty = tile_db.coord_y if tile_db is not None else None
 
         if px is not None and py is not None and tx is not None and ty is not None:
             return px == tx and py == ty
@@ -686,14 +709,13 @@ class ResourceSystem(BaseSystem):
         if not planet:
             return None
         try:
-            # Try to get terrain generators from game_systems
-            from server.conf.game_init import game_systems
-            generators = game_systems.get("_terrain_generators", {})
+            # Terrain generators come from the installed services facade.
+            generators = get_service("_terrain_generators") or {}
             gen = generators.get(planet)
             if gen:
                 _terrain_type, resource_type = gen.get_terrain_and_resource(x, y)
                 return resource_type
-        except (ImportError, AttributeError):
+        except AttributeError:
             pass
         return None
 

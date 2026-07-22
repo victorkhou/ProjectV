@@ -42,9 +42,9 @@ class EvenniaBuildingFactory(BuildingFactory):
             location=tile,
         )
         if x is not None and y is not None:
-            # create_object added the building to PlanetRoom.contents, but
-            # at_object_receive saw coord_x=None; place_on_tile stamps coords
-            # and registers it now that they are set.
+            # create_object adds the building to PlanetRoom.contents, but
+            # at_object_receive runs before coords are set; place_on_tile
+            # stamps coords and registers it once they are.
             from world.utils import place_on_tile
             place_on_tile(building, tile, x, y)
         building.attributes.add("building_type", building_def.abbreviation)

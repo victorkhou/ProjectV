@@ -5,7 +5,7 @@ Verifies verb routing to the AllianceSystem, the verb-aware lobby gate
 (MUTATING-lobby verbs refused in SPAWNING, read-only trio allowed OOC, other
 verbs refused from the lobby), the combat gate on side-changing verbs, and that
 the info/board/leaderboard views render. Drives the command with fakes and a
-fake AllianceSystem installed in the global ``game_systems`` dict.
+fake AllianceSystem installed through the services facade.
 """
 
 import sys
@@ -50,7 +50,6 @@ def _ensure_evennia_stubs():
 
 _ensure_evennia_stubs()
 
-import server.conf.game_init as game_init  # noqa: E402
 from commands.alliance_commands import CmdAlliance  # noqa: E402
 
 
@@ -113,14 +112,12 @@ def _make(caller, args):
 
 class _AllianceCmdBase(unittest.TestCase):
     def setUp(self):
-        self.system = _RecordingAllianceSystem()
-        self._saved = dict(game_init.game_systems)
-        game_init.game_systems.clear()
-        game_init.game_systems["alliance_system"] = self.system
+        from world import services
 
-    def tearDown(self):
-        game_init.game_systems.clear()
-        game_init.game_systems.update(self._saved)
+        self.system = _RecordingAllianceSystem()
+        ctx = services.override({"alliance_system": self.system})
+        ctx.__enter__()
+        self.addCleanup(ctx.__exit__, None, None, None)
 
 
 # -------------------------------------------------------------- #

@@ -146,17 +146,15 @@ class GameTickScript(DefaultScript):
             pass
 
     def _get_systems(self):
-        """Retrieve game system references from script attributes.
-
-        Systems are stored on the script's ndb (non-persistent) or db
-        attributes by the server startup initialization code.
+        """Retrieve the installed game systems from the services facade.
 
         Returns:
-            dict of system name -> system instance, or None if not set up.
+            dict of system name -> system instance, or None if not installed.
         """
-        return getattr(self.ndb, "systems", None) or getattr(
-            self.db, "systems", None
-        )
+        from world.services import get_systems
+
+        systems = get_systems()
+        return systems or None
 
     def _get_online_players(self):
         """Return a list of puppeted characters from all connected sessions.
@@ -464,11 +462,10 @@ class GameTickScript(DefaultScript):
 
         # NOTE: Harvester-agent production is driven by HarvesterScript
         # (one script per agent, run in the agent_processing step), per the
-        # agent-ai spec. The old
-        # process_extractor_production tick step was a second, faster driver
-        # for the same (extractor, agent) pairs and produced resources twice
-        # per tick — it has been removed. process_extractor_production remains
-        # for direct unit/integration test use but is no longer in the loop.
+        # agent-ai spec. process_extractor_production must NOT run as a tick
+        # step: it would be a second, faster driver for the same
+        # (extractor, agent) pairs, producing resources twice per tick. It
+        # exists for direct unit/integration test use only.
 
         if building_system or resource_system:
             def process_active_presence():

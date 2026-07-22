@@ -11,6 +11,8 @@ from __future__ import annotations
 
 from typing import Any
 
+from world.utils import coords_of
+
 
 class WorldChunkManager:
     """Manages world chunks for tick processing optimization.
@@ -141,12 +143,10 @@ class WorldChunkManager:
         # Real coordinate model: position lives on the entity's db
         # (coord_x/coord_y), NOT on the room. (Reading loc.x/loc.y off the
         # PlanetRoom always yielded None, so no chunk was ever active.)
-        db = getattr(player, "db", None)
-        if db is not None:
-            x = getattr(db, "coord_x", None)
-            y = getattr(db, "coord_y", None)
-            if x is not None and y is not None:
-                return (int(x), int(y))
+        coords = coords_of(player)
+        if coords is not None:
+            x, y, _planet = coords
+            return (int(x), int(y))
 
         return None
 
@@ -156,12 +156,10 @@ class WorldChunkManager:
         # Real coordinate model: a building's tile is on its db (coord_x/coord_y),
         # not on the PlanetRoom it lives in. (Reading loc.x/loc.y always gave
         # None, so buildings were never matched into any active chunk.)
-        db = getattr(building, "db", None)
-        if db is not None:
-            x = getattr(db, "coord_x", None)
-            y = getattr(db, "coord_y", None)
-            if x is not None and y is not None:
-                return (int(x), int(y))
+        coords = coords_of(building)
+        if coords is not None:
+            x, y, _planet = coords
+            return (int(x), int(y))
 
         if hasattr(building, "position"):
             pos = building.position

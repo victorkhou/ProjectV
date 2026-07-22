@@ -7,6 +7,8 @@ import sys
 import types
 import unittest
 
+import pytest
+
 
 def _ensure_evennia_stubs():
     if "evennia" in sys.modules and getattr(sys.modules["evennia"], "__file__", None):
@@ -50,6 +52,37 @@ def _fake_building_has_capability(building, capability, provider=None):
 world.utils.building_has_capability = _fake_building_has_capability
 
 from commands.game_commands import CmdLaunch, CmdRecall, CmdLoad, CmdUnload  # noqa: E402
+from world import services  # noqa: E402
+
+
+# -------------------------------------------------------------- #
+#  Per-test system injection via the services facade
+# -------------------------------------------------------------- #
+
+@pytest.fixture(autouse=True)
+def _services_sandbox():
+    """Give every test a private, empty facade state, restored on exit.
+
+    Tests inject fake systems through ``services.override`` (via
+    ``_install_systems``); all system lookup reads the facade.
+    """
+    with services.override({}):
+        yield
+
+
+def _install_systems(systems):
+    """Register fake *systems* for the current test through the facade."""
+    services.get_systems().update(systems)
+
+
+def _install_agent_system(caller, agent_sys):
+    """Inject the agent roster for the load/unload tests via the facade.
+
+    Registered under ``agent_system`` — the key the load/unload commands look
+    up (matching game_init). Using any other key here would let a key-mismatch
+    regression pass silently, as the earlier ``agent`` key did.
+    """
+    _install_systems({"agent_system": agent_sys})
 
 
 # -------------------------------------------------------------- #
@@ -151,7 +184,9 @@ class _Caller:
             resources=resources or {},
             inside_building=False,
         )
-        self.ndb = _NDB(systems or {})
+        self.ndb = _NDB({})
+        if systems:
+            _install_systems(systems)
         self._messages = []
         self._executed = []
         self._buildings = buildings or []
@@ -182,12 +217,12 @@ def _run(cmd_cls, caller, args="", building=None):
     # Patch _building_at_caller to return our fake building
     cmd._building_at_caller = lambda c, **kw: building
 
-    # Patch require_system to return from caller.ndb.systems
+    # Patch require_system to resolve from the services facade
     def _require(name, label=None):
-        sys = caller.ndb.systems.get(name)
-        if sys is None:
+        system = services.get_service(name)
+        if system is None:
             caller.msg(f"{label or name} not available.")
-        return sys
+        return system
     cmd.require_system = _require
 
     cmd.func()
@@ -292,18 +327,39 @@ class TestCmdLaunch(unittest.TestCase):
             ct._get_current_tick = orig
 
     def test_from_space_with_arg_checks_access(self):
-        """From Space, launch <planet> checks can_access_planet."""
+        """From Space, launch <planet> checks can_access_planet.
+
+        The rank system is registered under the key ``rank_system`` (see
+        game_init); this drives the real ``_run`` key-based lookup so a
+        regression to the wrong key surfaces as "unavailable" instead of the
+        access check.
+        """
         rank_sys = _FakeRankSystem(accessible={"terra"})
-        c = _Caller(planet="space", systems={"rank": rank_sys},
+        c = _Caller(planet="space", systems={"rank_system": rank_sys},
                     supplies={"basic_fuel_cell": 5})
         # Try to launch to forge (not accessible)
         _run(CmdLaunch, c, "forge", building=None)
         self.assertIn("cannot access", c.last().lower())
 
+    def test_from_space_wrong_key_would_report_unavailable(self):
+        """A rank system installed under the WRONG key is not found.
+
+        Regression guard for the system-key mismatch behind the user-reported
+        "Rank unavailable." bug: the launch code must look the rank system up
+        under its registered key ``rank_system``. Installed under a wrong key
+        (here ``rank``), the facade lookup misses and the player is told the
+        system is unavailable instead of the access being checked.
+        """
+        rank_sys = _FakeRankSystem(accessible={"terra"})
+        c = _Caller(planet="space", systems={"rank": rank_sys},
+                    supplies={"basic_fuel_cell": 5})
+        _run(CmdLaunch, c, "terra", building=None)
+        self.assertIn("not available", c.last().lower())
+
     def test_from_space_launch_succeeds(self):
         """From Space with access + fuel, launch to destination works."""
         rank_sys = _FakeRankSystem(accessible={"terra", "forge"})
-        c = _Caller(planet="space", systems={"rank": rank_sys},
+        c = _Caller(planet="space", systems={"rank_system": rank_sys},
                     supplies={"basic_fuel_cell": 5})
 
         cmd = CmdLaunch()
@@ -312,7 +368,8 @@ class TestCmdLaunch(unittest.TestCase):
         cmd.session = None
         cmd.cmdstring = "launch"
         cmd._building_at_caller = lambda caller, **kw: None
-        cmd.require_system = lambda n, **kw: rank_sys
+        # Honor the registered key via the facade so this also guards a mismatch.
+        cmd.require_system = lambda n, **kw: services.get_service(n)
         travel_log = []
         cmd._do_travel = lambda caller, dest, tx=None, ty=None: travel_log.append(dest)
         cmd._resolve_arrival = lambda caller, dest: (200, 200)
@@ -389,7 +446,8 @@ class TestCmdLoad(unittest.TestCase):
         agent = _FakeAgent(3)
         agent_sys = _FakeAgentSystem([agent])
         pad = _FakeBuilding(capabilities=["launch_pad"])
-        c = _Caller(systems={"agent": agent_sys})
+        c = _Caller()
+        _install_agent_system(c, agent_sys)
         _run(CmdLoad, c, "agent 3", building=pad)
         self.assertTrue(agent.db.reserve)
         self.assertIn(3, pad.db.manifest["agents"])
@@ -400,7 +458,8 @@ class TestCmdLoad(unittest.TestCase):
         agent.db.reserve = True
         agent_sys = _FakeAgentSystem([agent])
         pad = _FakeBuilding(capabilities=["launch_pad"])
-        c = _Caller(systems={"agent": agent_sys})
+        c = _Caller()
+        _install_agent_system(c, agent_sys)
         _run(CmdLoad, c, "agent 3", building=pad)
         self.assertIn("already in reserve", c.last().lower())
 
@@ -429,7 +488,8 @@ class TestCmdUnload(unittest.TestCase):
         agent_sys = _FakeAgentSystem([agent])
         pad = _FakeBuilding(capabilities=["launch_pad"])
         pad.db.manifest = {"agents": [3], "resources": {}}
-        c = _Caller(systems={"agent": agent_sys})
+        c = _Caller()
+        _install_agent_system(c, agent_sys)
         _run(CmdUnload, c, "agent 3", building=pad)
         self.assertFalse(agent.db.reserve)
         self.assertNotIn(3, pad.db.manifest["agents"])
@@ -441,7 +501,8 @@ class TestCmdUnload(unittest.TestCase):
         agent_sys = _FakeAgentSystem([agent])
         pad = _FakeBuilding(capabilities=["launch_pad"])
         pad.db.manifest = {"agents": [2], "resources": {"Iron": 50}}
-        c = _Caller(resources={"Iron": 10}, systems={"agent": agent_sys})
+        c = _Caller(resources={"Iron": 10})
+        _install_agent_system(c, agent_sys)
         _run(CmdUnload, c, "all", building=pad)
         self.assertEqual(c.db.resources["Iron"], 60)
         self.assertFalse(agent.db.reserve)

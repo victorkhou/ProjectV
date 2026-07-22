@@ -65,8 +65,7 @@ def default_balance() -> Any:
     the hot-tunable balance (not the full provider). Routes through the same
     single ``get_instance()`` choke point; falls back to a default
     ``BalanceConfig()`` when no registry is registered (e.g. the fast unit-test
-    suite), matching the semantics callers previously got from the retired
-    ``BalanceConfig.current()``.
+    suite).
     """
     provider = default_definitions_provider()
     if provider is not None:

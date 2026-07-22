@@ -17,7 +17,7 @@ never puppeted, never in ``who``, never an online player, never notified
 (Requirement 5.6). A never-puppeted Character satisfies all of that for free —
 ``has_account`` is False (so target acquisition, which filters on it, never
 fires at a sentinel), and Evennia's ``who``/online-player scans only list
-connected sessions — with ``msg`` overridden to a hard no-op as belt-and-braces.
+connected sessions — with ``msg`` overridden to a hard no-op as a redundant safeguard.
 """
 
 from __future__ import annotations

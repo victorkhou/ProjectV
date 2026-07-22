@@ -7,6 +7,8 @@ from __future__ import annotations
 import logging
 from typing import Any
 
+from world import services
+
 logger = logging.getLogger("evennia.world.utils")
 
 
@@ -15,28 +17,17 @@ logger = logging.getLogger("evennia.world.utils")
 # ------------------------------------------------------------------ #
 
 def get_system(caller: Any, system_name: str) -> Any | None:
-    """Look up a game system by name.
+    """Look up a game system by name via the services facade.
 
-    Checks caller.ndb.systems first (set during game init),
-    then falls back to the module-level game_systems dict.
+    *caller* is unused and retained for signature compatibility with the
+    existing call sites (the previous implementation read caller.ndb.systems).
     """
-    systems = getattr(getattr(caller, "ndb", None), "systems", None)
-    if systems and isinstance(systems, dict):
-        return systems.get(system_name)
-    try:
-        from server.conf.game_init import game_systems
-        return game_systems.get(system_name)
-    except (ImportError, AttributeError):
-        return None
+    return services.get_service(system_name)
 
 
 def get_game_systems() -> dict:
-    """Return the global game_systems dict directly."""
-    try:
-        from server.conf.game_init import game_systems
-        return game_systems
-    except (ImportError, AttributeError):
-        return {}
+    """Return the installed systems dict (empty dict before install)."""
+    return services.get_systems()
 
 
 def require_system(caller: Any, name: str, label: str | None = None) -> Any | None:
@@ -55,6 +46,44 @@ def require_system(caller: Any, name: str, label: str | None = None) -> Any | No
         caller.msg(f"{pretty} unavailable.")
         return None
     return system
+
+
+# ------------------------------------------------------------------ #
+#  Player resolution
+# ------------------------------------------------------------------ #
+
+def resolve_player(
+    caller: Any,
+    name: str,
+    *,
+    global_search: bool = False,
+    not_found_msg: str | None = "Could not find player '{name}'.",
+    empty_name_msg: str | None = None,
+) -> Any | None:
+    """Resolve a player character by name, or msg the caller and return None.
+
+    The single player-by-name resolution routine (Player_Resolver). Evennia's
+    ``caller.search`` self-messages on miss/ambiguity; ``not_found_msg`` is an
+    *additional* message this helper sends on a None result ("{name}" is
+    formatted in), or None to rely on search's own messaging alone.
+    ``empty_name_msg``, when set, short-circuits falsy names with that message
+    and no search; when None, a falsy name is passed to search unchanged. The
+    ``hasattr`` guard keeps the helper working under command test doubles that
+    do not provide ``search``.
+    """
+    if not name and empty_name_msg is not None:
+        caller.msg(empty_name_msg)
+        return None
+    if hasattr(caller, "search"):
+        if global_search:
+            target = caller.search(name, global_search=True)
+        else:
+            target = caller.search(name)
+    else:
+        target = None
+    if target is None and not_found_msg is not None:
+        caller.msg(not_found_msg.format(name=name))
+    return target
 
 
 # ------------------------------------------------------------------ #
@@ -120,17 +149,33 @@ def resting_activity_status(agent: Any) -> str:
 #  Coordinates
 # ------------------------------------------------------------------ #
 
-def get_coords(obj: Any) -> tuple[int, int] | None:
-    """Extract (x, y) coordinates from an object.
+def coords_of(entity: Any) -> tuple[int, int, str | None] | None:
+    """Return *entity*'s overworld coordinates as ``(x, y, planet)``, or None.
 
-    Checks coord_x/coord_y attributes on the object.
+    The single coordinate-read implementation (Coordinate_Accessor). Returns
+    None when the entity has no ``db`` handler or when either ``coord_x`` or
+    ``coord_y`` is absent/None — never raises. ``planet`` is the stored
+    ``coord_planet`` value or None when unset. Values are returned as stored
+    (no coercion); every write path int-coerces via ``place_on_tile``, so x/y
+    are ints in practice. This function is the one sanctioned home of the
+    defensive nested-getattr coordinate read; all other sites call it.
     """
-    if hasattr(obj, "db"):
-        cx = getattr(obj.db, "coord_x", None)
-        cy = getattr(obj.db, "coord_y", None)
-        if cx is not None and cy is not None:
-            return (int(cx), int(cy))
-    return None
+    db = getattr(entity, "db", None)
+    if db is None:
+        return None
+    cx = getattr(db, "coord_x", None)
+    cy = getattr(db, "coord_y", None)
+    if cx is None or cy is None:
+        return None
+    return (cx, cy, getattr(db, "coord_planet", None))
+
+
+def get_coords(obj: Any) -> tuple[int, int] | None:
+    """Extract (x, y) from an object. Delegates to coords_of."""
+    coords = coords_of(obj)
+    if coords is None:
+        return None
+    return (int(coords[0]), int(coords[1]))
 
 
 def place_on_tile(obj: Any, room: Any, x: Any, y: Any) -> None:
@@ -172,7 +217,7 @@ def nearby_players(location: Any, x: int, y: int, radius: int) -> list:
     """Return players near ``(x, y)`` within *radius* via *location*.
 
     The single spatial-targeting helper shared by turret fire (CombatEngine) and
-    guard combat AI (GuardCombatSystem) — previously copy-pasted in both. Prefers
+    guard combat AI (GuardCombatSystem). Prefers
     the PlanetRoom's ``get_nearby_players(x, y, radius)`` spatial query; falls
     back to a ``_nearby_players`` attribute for lightweight test doubles. Returns
     ``[]`` when *location* is ``None`` or exposes neither.
@@ -330,9 +375,9 @@ def ensure_coords(caller: Any) -> tuple[Any, Any, str | None]:
 
     Returns (x, y, planet) or (None, None, None) if unresolvable.
     """
-    x = getattr(caller.db, "coord_x", None)
-    y = getattr(caller.db, "coord_y", None)
-    planet = getattr(caller.db, "coord_planet", None)
+    x = caller.db.coord_x
+    y = caller.db.coord_y
+    planet = caller.db.coord_planet
 
     if x is not None and y is not None and planet:
         return x, y, planet
@@ -347,9 +392,9 @@ def ensure_coords(caller: Any) -> tuple[Any, Any, str | None]:
 
     if hasattr(caller, "_ensure_overworld_position"):
         caller._ensure_overworld_position()
-        x = getattr(caller.db, "coord_x", None)
-        y = getattr(caller.db, "coord_y", None)
-        planet = getattr(caller.db, "coord_planet", None)
+        x = caller.db.coord_x
+        y = caller.db.coord_y
+        planet = caller.db.coord_planet
 
     return x, y, planet
 
@@ -477,8 +522,8 @@ def find_linkdead_characters() -> list:
     Correctness note (the reason this is a function, not an inline ORM filter):
     a plain ``db.player_state = "..."`` assignment stores the value PICKLED in
     ``db_value`` with ``db_strvalue`` left ``None``, so a ``db_strvalue`` ORM
-    filter matches NOTHING on a real DB (the "grace timer effectively infinite"
-    regression). ``search_object_attribute`` matches on the actual stored value.
+    filter matches NOTHING on a real DB — which would make the grace timer
+    effectively infinite. ``search_object_attribute`` matches the stored value.
     Best-effort — returns ``[]`` if the search is unavailable (e.g. stubbed test
     env) so neither caller breaks.
     """
@@ -518,8 +563,8 @@ def get_player_level(entity: Any, default: int = 1) -> int:
 
     Prefers ``db.level``. Falls back to the legacy ``db.rank_level`` (a 1-12
     rank number) by mapping it to the first level of that rank's band via
-    ``RANK_BANDS`` (R14.5: widening bands replaced the retired uniform
-    5-levels-per-rank width); a ``rank_level`` already above the rank range is
+    ``RANK_BANDS`` (R14.5: band widths vary per rank, so the mapping must go
+    through the table); a ``rank_level`` already above the rank range is
     treated as an actual level. Returns ``default`` when the entity has no
     ``db`` or neither attribute is set.
 
@@ -641,10 +686,10 @@ def player_is_sheltered(player: Any) -> bool:
     if not getattr(db, "inside_building", False):
         return False
     room = getattr(player, "location", None)
-    x = getattr(db, "coord_x", None)
-    y = getattr(db, "coord_y", None)
-    if room is None or x is None or y is None:
+    coords = coords_of(player)
+    if room is None or coords is None:
         return False
+    x, y, _planet = coords
     building = _building_on_tile(room, int(x), int(y))
     if building is None:
         return False
@@ -670,10 +715,10 @@ def target_inside_building(target: Any) -> bool:
     if not getattr(db, "inside_building", False):
         return False
     room = getattr(target, "location", None)
-    x = getattr(db, "coord_x", None)
-    y = getattr(db, "coord_y", None)
-    if room is None or x is None or y is None:
+    coords = coords_of(target)
+    if room is None or coords is None:
         return False
+    x, y, _planet = coords
     return _building_on_tile(room, int(x), int(y)) is not None
 
 
@@ -755,31 +800,37 @@ def player_at_building(player: Any, building: Any) -> bool:
     properties for backward compatibility with test fakes.
     """
     # Get player coordinates — try db attrs, then location object
-    px = getattr(getattr(player, "db", None), "coord_x", None)
-    py = getattr(getattr(player, "db", None), "coord_y", None)
-    if px is None or py is None:
+    px = py = None
+    player_coords = coords_of(player)
+    if player_coords is not None:
+        px, py, _planet = player_coords
+    else:
         player_loc = getattr(player, "location", None)
         if player_loc is not None:
             px = getattr(player_loc, "x", None)
             py = getattr(player_loc, "y", None)
-            if px is None and hasattr(player_loc, "db"):
-                px = getattr(player_loc.db, "coord_x", None)
-                py = getattr(player_loc.db, "coord_y", None)
+            if px is None:
+                loc_coords = coords_of(player_loc)
+                if loc_coords is not None:
+                    px, py, _planet = loc_coords
     if px is None or py is None:
         return False
 
     # Get building coordinates — prefer db.coord_x/coord_y
-    bx = getattr(getattr(building, "db", None), "coord_x", None)
-    by = getattr(getattr(building, "db", None), "coord_y", None)
-    if bx is None or by is None:
+    bx = by = None
+    building_coords = coords_of(building)
+    if building_coords is not None:
+        bx, by, _planet = building_coords
+    else:
         # Fallback: try building.location for legacy rooms / test fakes
         loc = getattr(building, "location", None)
         if loc is not None:
             bx = getattr(loc, "x", None)
             by = getattr(loc, "y", None)
-            if bx is None and hasattr(loc, "db"):
-                bx = getattr(loc.db, "coord_x", None)
-                by = getattr(loc.db, "coord_y", None)
+            if bx is None:
+                loc_coords = coords_of(loc)
+                if loc_coords is not None:
+                    bx, by, _planet = loc_coords
     if bx is None or by is None:
         return False
 
@@ -856,7 +907,7 @@ def is_owner(caller: Any, owner: Any) -> bool:
 def _is_real_player(entity: Any) -> bool:
     """Return True if *entity* is a real player character (not an NPC/Sentinel).
 
-    The belt-and-braces guard behind the alliance real-player invariant (C8):
+    The defense-in-depth guard behind the alliance real-player invariant (C8):
     an alliance member must be a genuine player character — not a Sentinel (the
     never-puppeted NPC-base owner) and not an ``npc_type`` unit (agents / enemy
     guards). Even if a stray ``player_alliance`` pointer were somehow written
@@ -1389,18 +1440,14 @@ def planet_scale(planet_key: str | None, attr: str, default: float = 1.0,
     dicts, so adding a planet is a YAML-only change.
 
     Pass *planet_registry* when the caller holds one (DI); otherwise the
-    global game_systems registry is consulted. Unknown planets, a missing
+    installed planet registry is consulted. Unknown planets, a missing
     registry, or a missing field all resolve to *default* (1.0 = no scaling).
     """
     if not planet_key:
         return default
     reg = planet_registry
     if reg is None:
-        try:
-            from server.conf.game_init import game_systems
-            reg = game_systems.get("planet_registry")
-        except (ImportError, AttributeError):
-            return default
+        reg = services.get_service("planet_registry")
     if reg is None:
         return default
     try:
@@ -1443,14 +1490,10 @@ def outgrown_factor(player: Any, planet_key: str | None = None) -> float:
     if not planet_key:
         return 1.0
 
-    try:
-        from server.conf.game_init import game_systems
-        # PlanetRegistry is a top-level game_systems key (NOT an attribute of the
-        # DataRegistry). This mirrors characters.py's planet lookup.
-        planet_reg = game_systems.get("planet_registry")
-        if planet_reg is None:
-            return 1.0
-    except (ImportError, AttributeError):
+    # PlanetRegistry is a top-level installed system (NOT an attribute of the
+    # DataRegistry). This mirrors characters.py's planet lookup.
+    planet_reg = services.get_service("planet_registry")
+    if planet_reg is None:
         return 1.0
 
     # Off-ladder hub (Space): never throttled — it's not part of progression.

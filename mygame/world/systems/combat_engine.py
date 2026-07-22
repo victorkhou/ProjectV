@@ -21,6 +21,7 @@ from world.event_bus import (
     PLAYER_ELIMINATED,
     EventBus,
 )
+from world.services import get_service
 from world.systems.base_system import BaseSystem
 
 
@@ -217,8 +218,8 @@ class CombatEngine(BaseSystem):
         (a target can take cover between lock-on and fire) and their
         within-tick ordering guarantee. Because ``resolve_now`` validates and
         resolves in the same synchronous call there is NO queue→resolve gap, so
-        no TOCTOU re-check and no ammo refund are needed (a resolved shot always
-        fired).
+        no between-queue-and-resolve re-check and no ammo refund are needed (a
+        resolved shot always fired).
 
         Returns:
             (ok, message): ``(False, reason)`` if rejected (nothing consumed);
@@ -894,7 +895,7 @@ class CombatEngine(BaseSystem):
             # (coordless) PlanetRoom. Read the building's coords first, then
             # fall back to the location (for test doubles that carry coords on
             # the tile). Reading only the location would leave b_coords None for
-            # every real turret — the same silent no-fire the "VV" bug caused.
+            # every real turret — a silent no-fire.
             b_coords = self._get_coords(building)
             if b_coords is None:
                 b_coords = self._get_coords(building_loc)
@@ -962,8 +963,7 @@ class CombatEngine(BaseSystem):
                 # base defenses must improve with investment or they're trivially
                 # out-scaled by any progressed raider. Reuses the single
                 # ResourceSystem.get_turret_damage formula (base × (1 +
-                # turret_level_bonus × (level−1))), which was previously dead
-                # code — never called from the tick. At the default 0.20/level a
+                # turret_level_bonus × (level−1))). At the default 0.20/level a
                 # L5 turret deals 15 × 1.8 = 27 (1.8×, under the 2× ceiling), and
                 # is a resource-costed, losable, wall/LOS-counterable building.
                 level = max(1, get_building_level(building))
@@ -1614,8 +1614,8 @@ class CombatEngine(BaseSystem):
         if owner is None:
             return None
         # Resolve via the shared system-lookup helper — the registered key is
-        # "agent_system" (game_init), NOT "agent"; the old literal always
-        # missed, silently orphaning manifested agents in reserve.
+        # "agent_system" (game_init), NOT "agent"; a wrong literal misses
+        # silently, orphaning manifested agents in reserve.
         from world.utils import get_system
         agent_sys = get_system(owner, "agent_system")
         if agent_sys and hasattr(agent_sys, "get_agent_by_id"):
@@ -1768,7 +1768,7 @@ class CombatEngine(BaseSystem):
 
         Handles both a live ``GameItem`` (named property accessors) and a
         dict-shaped test weapon. A missing field resolves to *default*, which is
-        how legacy/synthetic weapons (no ``weapon_type``) keep their old
+        how legacy/synthetic weapons (no ``weapon_type``) get default-driven
         behavior.
         """
         if isinstance(weapon_item, dict):
@@ -2167,7 +2167,7 @@ class CombatEngine(BaseSystem):
         """Resolve the agent XP-awarder (the AgentSystem).
 
         Prefers the injected late-bound provider; falls back to the
-        game_systems-global lookup for un-injected/legacy contexts. Guarded so
+        services-facade lookup for un-injected/legacy contexts. Guarded so
         combat never breaks if the agent system is unavailable (e.g. in tests
         or before initialization).
         """
@@ -2177,12 +2177,7 @@ class CombatEngine(BaseSystem):
                 return provider()
             except Exception:  # noqa: BLE001 - never let resolution break combat
                 return None
-        try:
-            from server.conf.game_init import game_systems
-
-            return game_systems.get("agent_system")
-        except Exception:  # noqa: BLE001 - never let a missing system break combat
-            return None
+        return get_service("agent_system")
 
     def _apply_agent_death_loss(self, agent: Any) -> None:
         """Apply agent death-loss XP via the AgentSystem.
@@ -2203,7 +2198,7 @@ class CombatEngine(BaseSystem):
         """Resolve the player XP-awarder (the RankSystem).
 
         Prefers the injected late-bound provider; falls back to the
-        game_systems-global lookup for un-injected/legacy contexts. Guarded so
+        services-facade lookup for un-injected/legacy contexts. Guarded so
         combat never breaks if the rank system is unavailable.
         """
         provider = self._player_xp_awarder_provider
@@ -2212,12 +2207,7 @@ class CombatEngine(BaseSystem):
                 return provider()
             except Exception:  # noqa: BLE001 - never let resolution break combat
                 return None
-        try:
-            from server.conf.game_init import game_systems
-
-            return game_systems.get("rank_system")
-        except Exception:  # noqa: BLE001 - never let a missing system break combat
-            return None
+        return get_service("rank_system")
 
     def _award_player_combat_xp(self, player: Any, amount: int) -> None:
         """Award combat/kill/base XP to a *player* through the progression path.

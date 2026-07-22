@@ -411,13 +411,6 @@ class TestPermissionDenied(unittest.TestCase):
 # -------------------------------------------------------------- #
 
 
-class _Ndb:
-    """Minimal ndb holder so world.utils.get_system can read .systems."""
-
-    def __init__(self, systems=None):
-        self.systems = systems
-
-
 class TestRequireSystemHelper(unittest.TestCase):
     """SubcommandDispatchMixin.require_system resolves a system or msgs+None.
 
@@ -426,8 +419,12 @@ class TestRequireSystemHelper(unittest.TestCase):
     """
 
     def _make_with_systems(self, systems):
+        from world import services
+
         cmd = _make_router("")
-        cmd.caller.ndb = _Ndb(systems)
+        ctx = services.override(dict(systems))
+        ctx.__enter__()
+        self.addCleanup(ctx.__exit__, None, None, None)
         return cmd
 
     def test_returns_system_when_present(self):

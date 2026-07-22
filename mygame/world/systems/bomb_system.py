@@ -46,6 +46,7 @@ from world.constants import (
 from world.data_registry import DataRegistry
 from world.event_bus import EventBus
 from world.systems.base_system import BaseSystem
+from world.utils import coords_of
 
 logger = logging.getLogger("evennia.world.systems.bomb_system")
 
@@ -514,14 +515,14 @@ class BombSystem(BaseSystem):
         location = getattr(bomb, "location", None)
         item_name = getattr(bomb, "key", "bomb")
         player = getattr(db, "disarm_by", None) if db is not None else None
-        bx = getattr(db, "coord_x", None) if db is not None else None
-        by = getattr(db, "coord_y", None) if db is not None else None
+        b_coords = coords_of(bomb)
 
         if self._rng_func() < self._disarm_success_chance(player):
             # Success: remove it from the world with no explosion.
             if player is not None:
                 self.notify(player, "disarm_success", item_name=item_name)
-            if location is not None and bx is not None and by is not None:
+            if location is not None and b_coords is not None:
+                bx, by, _planet = b_coords
                 self._broadcast_tile(location, int(bx), int(by),
                                      "disarm_success_tile", exclude=player,
                                      item_name=item_name)
@@ -557,12 +558,11 @@ class BombSystem(BaseSystem):
         for bomb in self._live_bombs:
             if getattr(bomb, "pk", True) is None:
                 continue
-            db = getattr(bomb, "db", None)
-            if db is None:
+            b_coords = coords_of(bomb)
+            if b_coords is None:
                 continue
-            bx = getattr(db, "coord_x", None)
-            by = getattr(db, "coord_y", None)
-            if bx is not None and by is not None and int(bx) == int(x) and int(by) == int(y):
+            bx, by, _planet = b_coords
+            if int(bx) == int(x) and int(by) == int(y):
                 return bomb
         return None
 
@@ -680,8 +680,7 @@ class BombSystem(BaseSystem):
         remaining = int(getattr(db, "fuse_remaining", 0) or 0) - 1
         db.fuse_remaining = remaining
         location = getattr(bomb, "location", None)
-        bx = getattr(db, "coord_x", None)
-        by = getattr(db, "coord_y", None)
+        b_coords = coords_of(bomb)
         if remaining <= 0:
             self._detonate(bomb)
             return False
@@ -695,7 +694,8 @@ class BombSystem(BaseSystem):
                 return self._resolve_disarm(bomb)
         item_name = getattr(bomb, "key", "bomb")
         # Still ticking — show the countdown to everyone on the tile.
-        if location is not None and bx is not None and by is not None:
+        if location is not None and b_coords is not None:
+            bx, by, _planet = b_coords
             self._broadcast_tile(location, int(bx), int(by), "bomb_tick",
                                  exclude=None, item_name=item_name,
                                  seconds=remaining)
@@ -717,15 +717,15 @@ class BombSystem(BaseSystem):
         if db is None or location is None:
             self._delete_bomb(bomb)
             return
-        bx = getattr(db, "coord_x", None)
-        by = getattr(db, "coord_y", None)
+        b_coords = coords_of(bomb)
         owner = getattr(db, "owner", None)
         amount = int(getattr(db, "amount", 0) or 0)
         radius = int(getattr(db, "radius", 0) or 0)
         item_name = getattr(bomb, "key", "bomb")
-        if bx is None or by is None:
+        if b_coords is None:
             self._delete_bomb(bomb)
             return
+        bx, by, _planet = b_coords
         bx, by = int(bx), int(by)
 
         targets = self._blast_targets(location, bx, by, radius)

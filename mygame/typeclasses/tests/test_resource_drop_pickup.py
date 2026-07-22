@@ -14,6 +14,10 @@ import sys
 import types
 import unittest
 
+import pytest
+
+from world import services
+
 
 # -------------------------------------------------------------- #
 #  Bootstrap: stub out Evennia modules
@@ -120,12 +124,26 @@ class _NDB:
         self.systems = systems or {}
 
 
+@pytest.fixture(autouse=True)
+def _services_sandbox():
+    """Give every test a private, empty facade state, restored on exit."""
+    with services.override({}):
+        yield
+
+
+def _install_systems(systems):
+    """Register fake *systems* for the current test through the facade."""
+    services.get_systems().update(systems)
+
+
 class FakeGetter:
     """Minimal player-ish holder with a resource pool."""
 
     def __init__(self, systems=None):
         self._resources = {}
-        self.ndb = _NDB(systems=systems)
+        self.ndb = _NDB()
+        if systems:
+            _install_systems(systems)
         self.messages = []
 
     def add_resource(self, rtype, amt):

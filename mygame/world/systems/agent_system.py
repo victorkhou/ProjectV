@@ -20,7 +20,7 @@ from world.systems.agent_behavior import AgentBehaviorMixin
 from world.systems.agent_progression import AgentProgressionMixin
 from world.utils import get_building_attr as _get_building_attr_shared
 from world.utils import set_building_attr as _set_building_attr_shared
-from world.utils import resting_activity_status
+from world.utils import coords_of, resting_activity_status
 from world.constants import (
     TRAINING_PROGRESS_INTERVAL,
     DEFAULT_CARRY_CAPACITY,
@@ -319,9 +319,9 @@ class AgentSystem(AgentProgressionMixin, AgentBehaviorMixin, BaseSystem):
 
         # Path agent to building coordinates instead of teleporting
         if target_building is not None:
-            bx = getattr(getattr(target_building, "db", None), "coord_x", None)
-            by = getattr(getattr(target_building, "db", None), "coord_y", None)
-            if bx is not None and by is not None:
+            b_coords = coords_of(target_building)
+            if b_coords is not None:
+                bx, by, _planet = b_coords
                 bx, by = int(bx), int(by)
 
                 # Ensure agent is in the PlanetRoom (old agents may lack location)
@@ -330,9 +330,9 @@ class AgentSystem(AgentProgressionMixin, AgentBehaviorMixin, BaseSystem):
                     if planet_room is not None:
                         agent.location = planet_room
                         # Set initial coords to player position
-                        px = getattr(player.db, "coord_x", None)
-                        py = getattr(player.db, "coord_y", None)
-                        if px is not None and py is not None:
+                        p_coords = coords_of(player)
+                        if p_coords is not None:
+                            px, py, _planet = p_coords
                             from world.utils import place_on_tile
                             place_on_tile(agent, planet_room, px, py)
 
@@ -414,9 +414,9 @@ class AgentSystem(AgentProgressionMixin, AgentBehaviorMixin, BaseSystem):
         # already cleared above, so the derived resting status resolves to Idle.
         hq = self._find_hq(player)
         if hq is not None:
-            hx = getattr(getattr(hq, "db", None), "coord_x", None)
-            hy = getattr(getattr(hq, "db", None), "coord_y", None)
-            if hx is not None and hy is not None:
+            hq_coords = coords_of(hq)
+            if hq_coords is not None:
+                hx, hy, _planet = hq_coords
                 # Walk back to HQ, or snap there if no path/already there.
                 self._move_agent_to(
                     agent, int(hx), int(hy),
@@ -837,19 +837,19 @@ class AgentSystem(AgentProgressionMixin, AgentBehaviorMixin, BaseSystem):
         """Path *agent* toward ``(gx, gy)``; on no-path/arrival, place it there.
 
         The shared "walk there, else snap to the tile" move used by both
-        assign_agent (to the building) and unassign_agent (back to HQ) — was
-        duplicated between them. While walking, sets a transient
-        ``"{moving_status} (N tiles)"`` status; once placed, the *resting*
-        status is left to the single authority (``resting_activity_status``,
-        applied by ``NPC.advance_movement`` on arrival, or set directly here on
-        the snap branch). Callers no longer pass an arrival status — deriving it
-        removes the old "the mover guesses the status" split that let the
-        movement engine overwrite an engineer's "Working" with "Idle".
+        assign_agent (to the building) and unassign_agent (back to HQ). While
+        walking, sets a transient ``"{moving_status} (N tiles)"`` status; once
+        placed, the *resting* status is left to the single authority
+        (``resting_activity_status``, applied by ``NPC.advance_movement`` on
+        arrival, or set directly here on the snap branch). Callers do not pass
+        an arrival status — deriving it here keeps status a single authority,
+        so the movement engine cannot overwrite an engineer's "Working" with
+        "Idle".
         """
-        ax = getattr(agent.db, "coord_x", None)
-        ay = getattr(agent.db, "coord_y", None)
+        a_coords = coords_of(agent)
         path = []
-        if ax is not None and ay is not None:
+        if a_coords is not None:
+            ax, ay, _planet = a_coords
             path = self._compute_path_to(agent, int(ax), int(ay), gx, gy)
 
         if path and hasattr(agent, "set_movement_queue"):

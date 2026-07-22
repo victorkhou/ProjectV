@@ -10,9 +10,11 @@ self.caller.msg().
 from __future__ import annotations
 
 from evennia.commands.command import Command as BaseCommand
+from world.services import get_balance, get_registry
 from world.utils import (
     get_system as _get_system,
     get_game_systems,
+    coords_of,
     ensure_coords,
     get_building_info,
     get_building_attr,
@@ -46,10 +48,9 @@ def _send_map_update(caller):
             data["discovered_count"] = len(fog.get_discovered_tile_set(caller))
         # Add current terrain info for the webclient header
         try:
-            x = getattr(caller.db, "coord_x", None)
-            y = getattr(caller.db, "coord_y", None)
-            planet = getattr(caller.db, "coord_planet", None)
-            if x is not None and y is not None and planet:
+            coords = coords_of(caller)
+            if coords is not None and coords[2]:
+                x, y, planet = coords
                 terrain_generators = get_game_systems().get("_terrain_generators", {})
                 gen = terrain_generators.get(planet)
                 if gen:
@@ -203,8 +204,7 @@ class GameCommand(BaseCommand):
     def _building_at_caller(self, caller, inside_only: bool = False):
         """Return the Building at the caller's coordinates, or None.
 
-        Coordinate-based lookup via the PlanetRoom spatial index — the
-        replacement for the removed per-tile ``building`` attribute. Used by
+        Coordinate-based lookup via the PlanetRoom spatial index. Used by
         commands that act on the building the player is standing inside.
 
         When ``inside_only`` is True, returns None unless the caller is actually
@@ -216,10 +216,10 @@ class GameCommand(BaseCommand):
         planet_room = getattr(caller, "location", None)
         if planet_room is None or not hasattr(planet_room, "get_buildings_at"):
             return None
-        x = getattr(caller.db, "coord_x", None)
-        y = getattr(caller.db, "coord_y", None)
-        if x is None or y is None:
+        coords = coords_of(caller)
+        if coords is None:
             return None
+        x, y, _planet = coords
         buildings = planet_room.get_buildings_at(int(x), int(y))
         return buildings[0] if buildings else None
 
@@ -248,11 +248,11 @@ class GameCommand(BaseCommand):
         ``coords = self.require_coords(); if coords is None: return; x, y = coords``.
         """
         caller = self.caller
-        x = getattr(caller.db, "coord_x", None)
-        y = getattr(caller.db, "coord_y", None)
-        if x is None or y is None:
+        coords = coords_of(caller)
+        if coords is None:
             caller.msg("Cannot determine your position.")
             return None
+        x, y, _planet = coords
         return int(x), int(y)
 
     def buildings_here(self, x=None, y=None):
@@ -435,8 +435,8 @@ class CmdMove(GameCommand):
             if building_has_capability(building, COMBAT_BARRIER) and is_owner(
                 caller, get_building_attr(building, "owner")
             ):
-                combat_expires = getattr(caller.db, "combat_timer_expires", 0) or 0
-                if combat_expires > 0:
+                from world.combat_timer import player_in_combat
+                if player_in_combat(caller):
                     caller.msg(
                         "You cannot pass through your own Wall during combat."
                     )
@@ -478,7 +478,7 @@ class CmdMove(GameCommand):
         # only exclusion is a closed exit on the crossing face (the OPPOSITE of
         # the move direction): you can't enter through a sealed side. The
         # step-onto-tile check above already blocks that face for non-admins, so
-        # this guard mainly covers admins (who bypass it) and is belt-and-braces.
+        # this guard mainly covers admins (who bypass it) as defense-in-depth.
         if buildings_at_target:
             building = buildings_at_target[0]
             if not getattr(building, "is_offline", False):
@@ -514,15 +514,15 @@ class CmdMove(GameCommand):
         happens in :meth:`_commit_leave_building`, called right before the move
         is applied, so an early-return that aborts the move does NOT strip the
         player's shelter while they are still standing on the building tile
-        (a TOCTOU that briefly un-sheltered a stationary player).
+        (clearing before the move commits would briefly un-shelter them).
         """
         if not getattr(caller.db, "inside_building", False):
             return True
         if not is_admin(caller):
             planet_room = caller.location
-            cx = getattr(caller.db, "coord_x", None)
-            cy = getattr(caller.db, "coord_y", None)
-            if cx is not None and cy is not None and hasattr(planet_room, "get_buildings_at"):
+            coords = coords_of(caller)
+            if coords is not None and hasattr(planet_room, "get_buildings_at"):
+                cx, cy, _planet = coords
                 buildings = planet_room.get_buildings_at(int(cx), int(cy))
                 for bld in buildings:
                     if is_exit_closed(bld, direction):
@@ -560,7 +560,7 @@ class CmdMove(GameCommand):
         modifier of 0 (``_get_move_speed_modifier``), so the base lag applies.
         """
         from world.constants import COMBAT_MOVE_LAG_TICKS, compute_effective_delay
-        from world.combat_timer import _get_current_tick
+        from world.combat_timer import _get_current_tick, player_in_combat
 
         # Admins move freely — no combat move-lag (parity with Wall passage and
         # closed-exit bypass). Clear any stale pending lag while we're here.
@@ -570,10 +570,9 @@ class CmdMove(GameCommand):
             return True
 
         current_tick = _get_current_tick()
-        combat_expires = getattr(caller.db, "combat_timer_expires", 0) or 0
 
         # Out of combat: instant movement. Clear any stale pending lag.
-        if combat_expires <= current_tick:
+        if not player_in_combat(caller):
             if getattr(caller.db, "next_move_tick", 0):
                 caller.db.next_move_tick = 0
             return True
@@ -1025,10 +1024,10 @@ def _attackables_in_view(caller):
     from world.utils import is_player, is_building
 
     loc = getattr(caller, "location", None)
-    cx = getattr(caller.db, "coord_x", None)
-    cy = getattr(caller.db, "coord_y", None)
-    if loc is None or cx is None or cy is None:
+    c_coords = coords_of(caller)
+    if loc is None or c_coords is None:
         return []
+    cx, cy, _planet = c_coords
     cx, cy = int(cx), int(cy)
     radius = _attack_reach(caller)
 
@@ -1043,10 +1042,10 @@ def _attackables_in_view(caller):
     for obj in candidates:
         if obj is caller:
             continue
-        ox = getattr(getattr(obj, "db", None), "coord_x", None)
-        oy = getattr(getattr(obj, "db", None), "coord_y", None)
-        if ox is None or oy is None:
+        o_coords = coords_of(obj)
+        if o_coords is None:
             continue
+        ox, oy, _planet = o_coords
         dist = max(abs(int(ox) - cx), abs(int(oy) - cy))  # Chebyshev reach
         if dist > radius:
             continue
@@ -1240,10 +1239,10 @@ def _first_target_along_ray(caller, dx, dy, weapon_range):
     from world.utils import is_player, is_building
 
     loc = getattr(caller, "location", None)
-    cx = getattr(caller.db, "coord_x", None)
-    cy = getattr(caller.db, "coord_y", None)
-    if loc is None or cx is None or cy is None or not hasattr(loc, "get_objects_at"):
+    c_coords = coords_of(caller)
+    if loc is None or c_coords is None or not hasattr(loc, "get_objects_at"):
         return None
+    cx, cy, _planet = c_coords
     cx, cy = int(cx), int(cy)
     for step in range(1, weapon_range + 1):
         tx, ty = cx + dx * step, cy + dy * step
@@ -1265,10 +1264,10 @@ def _enclosing_building(caller):
     the building on the caller's own tile via the room's building index.
     """
     loc = getattr(caller, "location", None)
-    cx = getattr(caller.db, "coord_x", None)
-    cy = getattr(caller.db, "coord_y", None)
-    if loc is None or cx is None or cy is None or not hasattr(loc, "get_buildings_at"):
+    c_coords = coords_of(caller)
+    if loc is None or c_coords is None or not hasattr(loc, "get_buildings_at"):
         return None
+    cx, cy, _planet = c_coords
     buildings = loc.get_buildings_at(int(cx), int(cy))
     return buildings[0] if buildings else None
 
@@ -2982,8 +2981,11 @@ class CmdBuildings(GameCommand):
         for b in buildings:
             info = get_building_info(b)
             # Read coordinates from the building's own attributes
-            bx = getattr(getattr(b, "db", None), "coord_x", None)
-            by = getattr(getattr(b, "db", None), "coord_y", None)
+            b_coords = coords_of(b)
+            if b_coords is None:
+                bx = by = None
+            else:
+                bx, by, _planet = b_coords
             if bx is None and hasattr(b, "attributes"):
                 bx = b.attributes.get("coord_x", default=None)
                 by = b.attributes.get("coord_y", default=None)
@@ -3025,11 +3027,11 @@ class CmdScan(GameCommand):
             caller.msg("You have no location.")
             return
 
-        cx = getattr(caller.db, "coord_x", None)
-        cy = getattr(caller.db, "coord_y", None)
-        if cx is None or cy is None:
+        c_coords = coords_of(caller)
+        if c_coords is None:
             caller.msg("Cannot determine your position.")
             return
+        cx, cy, _planet = c_coords
         cx, cy = int(cx), int(cy)
 
         radius = self._vision_radius(caller)
@@ -3048,10 +3050,10 @@ class CmdScan(GameCommand):
         for obj in candidates:
             if obj is caller:
                 continue
-            ox = getattr(getattr(obj, "db", None), "coord_x", None)
-            oy = getattr(getattr(obj, "db", None), "coord_y", None)
-            if ox is None or oy is None:
+            o_coords = coords_of(obj)
+            if o_coords is None:
                 continue
+            ox, oy, _planet = o_coords
             dist = max(abs(int(ox) - cx), abs(int(oy) - cy))  # Chebyshev
             if dist > radius:
                 continue
@@ -3151,6 +3153,71 @@ class CmdTechnology(GameCommand):
             lines.extend(format_section("Available", avail_names, empty="none"))
 
         self.caller.msg("\n".join(lines))
+
+
+def _terrain_listing(caller) -> str:
+    """Build the full terrain reference, grouped by planet in ladder order.
+
+    Reads the live registry so the listing never drifts from terrain.yaml.
+    Each row is the colored 2-char map symbol, the terrain name, and the
+    resource it yields (or "—" for cosmetic tiles). Shared by ``CmdTerrain``'s
+    ``func`` (typing ``terrain``) and its ``get_help`` (``help terrain``).
+    """
+    from world.coordinate.procedural_map_renderer import _TERRAIN_COLORS
+
+    registry = _get_system(caller, "registry")
+    if registry is None:
+        return "Terrain data unavailable."
+
+    lines = [
+        "|wTerrain Types|n",
+        "Every tile belongs to a planet. Symbol, name, and the resource it "
+        "yields:",
+        "",
+    ]
+    # registry.planets is insertion-ordered by terrain.yaml, which follows the
+    # progression ladder (Terra → … → Elysium → Citadel → Space).
+    for pname, pdef in registry.planets.items():
+        rows = []
+        for ttype in pdef.terrain_types:
+            try:
+                tdef = registry.get_terrain(ttype)
+            except KeyError:
+                continue
+            color = _TERRAIN_COLORS.get(ttype, "|w")
+            symbol = f"{color}{tdef.map_symbol}|n"
+            name = ttype.replace("_", " ")
+            resource = tdef.resource_type or "—"
+            rows.append(f"  {symbol}  |c{name}|n — {resource}")
+        header = f"|w{pname}|n (|x{pdef.planet_type}|n)"
+        lines.append(header)
+        lines.extend(rows)
+        lines.append("")
+    return "\n".join(lines).rstrip()
+
+
+class CmdTerrain(GameCommand):
+    """List every terrain type across all planets.
+
+    Usage:
+      terrain
+
+    Notes:
+      Alias: terrains. Also available as 'help terrain'. Shows each terrain's
+      map symbol, name, and the resource it yields, grouped by planet in
+      progression order. Cosmetic tiles (no resource) show a dash.
+    """
+
+    key = "terrain"
+    aliases = ["terrains"]
+    help_category = "Game"
+
+    def func(self):
+        self.caller.msg(_terrain_listing(self.caller))
+
+    def get_help(self, caller, cmdset):
+        """Render the live terrain listing for 'help terrain'."""
+        return _terrain_listing(caller)
 
 
 class CmdInventory(GameCommand):
@@ -3411,10 +3478,10 @@ def _show_tile_summary(caller, planet_room):
     """Show buildings, resource drops, and other players at the caller's tile."""
     if not hasattr(planet_room, "get_objects_at"):
         return
-    x = getattr(caller.db, "coord_x", None)
-    y = getattr(caller.db, "coord_y", None)
-    if x is None or y is None:
+    coords = coords_of(caller)
+    if coords is None:
         return
+    x, y, _planet = coords
     x, y = int(x), int(y)
     parts = []
 
@@ -3453,7 +3520,7 @@ def _show_tile_summary(caller, planet_room):
 
     # Dropped items (gear + supply GameItems on the ground). A supply drop
     # carries a count; gear is a single unique object. Both are pickupable with
-    # 'get'. (Previously omitted, so dropped items were invisible to 'look'.)
+    # 'get', so 'look' must list them.
     items = planet_room.get_objects_at(x, y, type_tag="item")
     item_strs = []
     for it in items:
@@ -3899,8 +3966,11 @@ class CmdGet(GameCommand):
         # Info-only commands (score, look, …) never call this.
         self._interrupt_activity(caller)
 
-        cx = getattr(caller.db, "coord_x", None)
-        cy = getattr(caller.db, "coord_y", None)
+        c_coords = coords_of(caller)
+        if c_coords is None:
+            cx = cy = None
+        else:
+            cx, cy, _planet = c_coords
 
         # Handle "get all" — pick up everything at the player's tile
         if obj_name.lower() == "all":
@@ -4018,8 +4088,11 @@ class CmdDrop(GameCommand):
         # Dropping is a physical action — interrupt active-presence work.
         self._interrupt_activity(caller)
 
-        cx = getattr(caller.db, "coord_x", None)
-        cy = getattr(caller.db, "coord_y", None)
+        c_coords = coords_of(caller)
+        if c_coords is None:
+            cx = cy = None
+        else:
+            cx, cy, _planet = c_coords
 
         if self.args.strip().lower() == "all":
             self._drop_all(caller, loc, cx, cy)
@@ -4076,7 +4149,8 @@ class CmdDrop(GameCommand):
             target.at_drop(caller)
         if cx is not None and cy is not None:
             # at_drop normally sets coords; set defensively for no-op at_drops.
-            if getattr(target.db, "coord_x", None) is None:
+            # coord_x alone signals whether at_drop stamped the position.
+            if target.db.coord_x is None:
                 target.db.coord_x = int(cx)
                 target.db.coord_y = int(cy)
             if hasattr(loc, "coord_index"):
@@ -4177,12 +4251,7 @@ class CmdWho(GameCommand):
         )
 
         # Resolve rank names from registry
-        registry = None
-        try:
-            from server.conf.game_init import game_systems
-            registry = game_systems.get("registry")
-        except Exception:
-            pass
+        registry = get_registry()
 
         rank_map = {}
         if registry and hasattr(registry, "ranks"):
@@ -4458,7 +4527,7 @@ class CmdLaunch(GameCommand):
     def _launch_from_space(self, caller, dest_planet):
         """Leg 2: Space station → destination planet surface."""
         # Check access
-        rank_sys = self.require_system("rank")
+        rank_sys = self.require_system("rank_system")
         if rank_sys is None:
             return
         if not rank_sys.can_access_planet(caller, dest_planet):
@@ -4517,23 +4586,22 @@ class CmdLaunch(GameCommand):
         from world.utils import building_has_capability
         buildings = getattr(caller, "get_buildings", lambda: [])()
         for b in buildings:
-            b_planet = getattr(getattr(b, "db", None), "coord_planet", None)
+            b_coords = coords_of(b)
+            if b_coords is None:
+                continue
+            bx, by, b_planet = b_coords
             if b_planet != dest_planet:
                 continue
             if building_has_capability(b, RESPAWN_POINT):
-                bx = getattr(b.db, "coord_x", None)
-                by = getattr(b.db, "coord_y", None)
-                if bx is not None and by is not None:
-                    return int(bx), int(by)
+                return int(bx), int(by)
 
         # Fallback: planet's public spawn
         try:
-            from server.conf.game_init import game_systems
-            registry = game_systems.get("registry")
+            registry = get_registry()
             if registry:
                 space = registry.get_space(dest_planet)
                 return space.spawn_x, space.spawn_y
-        except (ImportError, AttributeError, KeyError):
+        except (AttributeError, KeyError):
             pass
         return 200, 200  # ultimate fallback
 
@@ -4546,11 +4614,10 @@ class CmdLaunch(GameCommand):
         if tx is None or ty is None:
             # Landing at Space station spawn
             try:
-                from server.conf.game_init import game_systems
-                registry = game_systems.get("registry")
+                registry = get_registry()
                 space = registry.get_space(dest_planet)
                 tx, ty = space.spawn_x, space.spawn_y
-            except (ImportError, AttributeError, KeyError):
+            except (AttributeError, KeyError):
                 tx, ty = 500, 500
         relocate_object(caller, target_room, tx, ty, dest_planet)
         if hasattr(caller, "execute_cmd"):
@@ -4558,19 +4625,7 @@ class CmdLaunch(GameCommand):
 
     def _get_balance(self, caller):
         """Return the BalanceConfig, or None."""
-        systems = getattr(getattr(caller, "ndb", None), "systems", None)
-        if systems:
-            registry = systems.get("registry")
-            if registry and hasattr(registry, "balance"):
-                return registry.balance
-        try:
-            from server.conf.game_init import game_systems
-            registry = game_systems.get("registry")
-            if registry:
-                return registry.balance
-        except (ImportError, AttributeError):
-            pass
-        return None
+        return get_balance()
 
 
 class CmdRecall(GameCommand):
@@ -4596,13 +4651,12 @@ class CmdRecall(GameCommand):
     def func(self):
         caller = self.caller
 
-        # Block if in combat — compare against the REAL game tick (db.current_
-        # tick does not exist on players; combat_timer._get_current_tick reads
-        # GameTickScript.db.tick_count, the same clock the combat timer uses).
-        from world.combat_timer import _get_current_tick
+        # Block if in combat — player_in_combat is the single shared in-combat
+        # check. The tick is still read here for the cooldown check below
+        # (combat_timer._get_current_tick reads GameTickScript.db.tick_count).
+        from world.combat_timer import _get_current_tick, player_in_combat
         current_tick = _get_current_tick()
-        combat_timer = getattr(caller.db, "combat_timer_expires", 0) or 0
-        if combat_timer > current_tick:
+        if player_in_combat(caller):
             caller.msg("You cannot recall while in combat!")
             return
 
@@ -4625,11 +4679,13 @@ class CmdRecall(GameCommand):
             caller.msg("You have no Respawn Beacon to recall to. Build one first.")
             return
 
-        # Check we're not already there
-        b_planet = getattr(home_beacon.db, "coord_planet", None)
-        bx = getattr(home_beacon.db, "coord_x", None)
-        by = getattr(home_beacon.db, "coord_y", None)
-        cur_planet = getattr(caller.db, "coord_planet", None)
+        # Check we're not already there. The beacon's planet/x/y are used
+        # independently (there is no shared miss path), so these stay
+        # per-attribute reads.
+        b_planet = home_beacon.db.coord_planet
+        bx = home_beacon.db.coord_x
+        by = home_beacon.db.coord_y
+        cur_planet = caller.db.coord_planet
         if cur_planet == b_planet:
             caller.msg("You are already on the same planet as your Beacon.")
             return
@@ -4637,14 +4693,7 @@ class CmdRecall(GameCommand):
         # Cooldown check (shares the travel cooldown)
         now_tick = current_tick
         last_launch = getattr(caller.db, "last_launch_tick", 0) or 0
-        balance = None
-        try:
-            from server.conf.game_init import game_systems
-            registry = game_systems.get("registry")
-            if registry:
-                balance = registry.balance
-        except (ImportError, AttributeError):
-            pass
+        balance = get_balance()
         cooldown = balance.travel_cooldown_ticks if balance else 300
         if now_tick - last_launch < cooldown and last_launch > 0:
             remaining = cooldown - (now_tick - last_launch)
@@ -4730,8 +4779,7 @@ class CmdLoad(GameCommand):
             return
 
         # Find the agent
-        systems = getattr(getattr(caller, "ndb", None), "systems", None) or {}
-        agent_sys = systems.get("agent")
+        agent_sys = _get_system(caller, "agent_system")
         if agent_sys is None:
             caller.msg("Agent system not available.")
             return
@@ -4838,8 +4886,7 @@ class CmdUnload(GameCommand):
             return
 
         # Return agents from reserve
-        systems = getattr(getattr(caller, "ndb", None), "systems", None) or {}
-        agent_sys = systems.get("agent")
+        agent_sys = _get_system(caller, "agent_system")
         for aid in agents:
             if agent_sys:
                 agent = agent_sys.get_agent_by_id(caller, aid)
@@ -4870,8 +4917,7 @@ class CmdUnload(GameCommand):
         manifest["agents"] = agents
         building.db.manifest = manifest
 
-        systems = getattr(getattr(caller, "ndb", None), "systems", None) or {}
-        agent_sys = systems.get("agent")
+        agent_sys = _get_system(caller, "agent_system")
         if agent_sys:
             agent = agent_sys.get_agent_by_id(caller, agent_id)
             if agent:

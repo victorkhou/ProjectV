@@ -209,40 +209,24 @@ class TestHarvesterScript(unittest.TestCase):
 
     @contextmanager
     def _capture_owner_notifications(self):
-        """Inject a fake ``server.conf.game_init`` so ``_notify_owner`` fires.
+        """Install a recording system in the facade so ``_notify_owner`` fires.
 
         ``HarvesterScript.at_repeat`` calls the module-level ``_notify_owner``
-        helper, which does ``from server.conf.game_init import game_systems``
-        and routes the owner notification through a live system's ``notify``.
-        We inject a fake module whose ``game_systems`` holds a recording system,
-        capturing ``(owner, kind, data)`` tuples without a running server.
+        helper, which resolves a live system through the services facade and
+        routes the owner notification through that system's ``notify``. We
+        install a recording system via ``services.override``, capturing
+        ``(owner, kind, data)`` tuples without a running server.
         """
+        from world import services
+
         captured = []
 
         class _RecordingSystem:
             def notify(self, player, kind, **data):
                 captured.append((player, kind, data))
 
-        fake_init = types.ModuleType("server.conf.game_init")
-        fake_init.game_systems = {"resource_system": _RecordingSystem()}
-        fake_conf = types.ModuleType("server.conf")
-        fake_conf.game_init = fake_init
-        fake_server = types.ModuleType("server")
-        fake_server.conf = fake_conf
-
-        saved = {name: sys.modules.get(name)
-                 for name in ("server", "server.conf", "server.conf.game_init")}
-        sys.modules["server"] = fake_server
-        sys.modules["server.conf"] = fake_conf
-        sys.modules["server.conf.game_init"] = fake_init
-        try:
+        with services.override({"resource_system": _RecordingSystem()}):
             yield captured
-        finally:
-            for name, mod in saved.items():
-                if mod is not None:
-                    sys.modules[name] = mod
-                else:
-                    sys.modules.pop(name, None)
 
     def _run_until_production(self, script):
         """Drive at_repeat through the harvest cooldown until production fires."""

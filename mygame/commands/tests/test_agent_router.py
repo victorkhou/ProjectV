@@ -11,6 +11,10 @@ import sys
 import types
 import unittest
 
+import pytest
+
+from world import services
+
 # -------------------------------------------------------------- #
 #  Bootstrap: stub out Evennia modules
 # -------------------------------------------------------------- #
@@ -157,6 +161,18 @@ def tearDownModule():
 #  Helpers / Fakes
 # -------------------------------------------------------------- #
 
+@pytest.fixture(autouse=True)
+def _services_sandbox():
+    """Give every test a private, empty facade state, restored on exit."""
+    with services.override({}):
+        yield
+
+
+def _install_systems(systems):
+    """Register fake *systems* for the current test through the facade."""
+    services.get_systems().update(systems)
+
+
 class FakeNDB:
     def __init__(self, systems=None):
         self.systems = systems or {}
@@ -196,7 +212,9 @@ class FakeCaller:
 
     def __init__(self, name="Player1", systems=None):
         self.key = name
-        self.ndb = FakeNDB(systems)
+        self.ndb = FakeNDB()
+        if systems:
+            _install_systems(systems)
         self.db = FakeDB()
         self._messages = []
         self.location = None
@@ -928,7 +946,7 @@ class TestAgentAbilityEndToEnd(unittest.TestCase):
         for agent in agents:
             agent.db.owner = caller
         system = _make_real_ability_system(agents)
-        caller.ndb = FakeNDB({"agent_system": system})
+        _install_systems({"agent_system": system})
         return caller, system
 
     # -- Req 16.2: enable at/above gate attaches + records ----------- #

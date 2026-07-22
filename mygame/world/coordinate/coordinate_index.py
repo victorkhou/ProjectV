@@ -78,10 +78,12 @@ class CoordinateIndex:
         Each object is expected to expose ``db.coord_x`` and ``db.coord_y``.
         Objects without valid coordinates are silently skipped.
         """
+        from world.utils import coords_of
+
         idx = cls()
         for obj in contents:
-            cx = getattr(getattr(obj, "db", None), "coord_x", None)
-            cy = getattr(getattr(obj, "db", None), "coord_y", None)
-            if cx is not None and cy is not None:
+            obj_coords = coords_of(obj)
+            if obj_coords is not None:
+                cx, cy, _planet = obj_coords
                 idx.add(obj, int(cx), int(cy))
         return idx

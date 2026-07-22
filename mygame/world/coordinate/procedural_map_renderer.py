@@ -25,11 +25,12 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any
 
 from world.coordinate.fog_of_war import _get_planet, _get_coord
+from world.services import get_registry
 from world.coordinate.tile_render import (
     building_is_occupied,
     partition_tile_objects,
 )
-from world.utils import player_is_present
+from world.utils import coords_of, player_is_present
 
 if TYPE_CHECKING:
     from world.coordinate.fog_of_war import FogOfWarSystem
@@ -91,6 +92,15 @@ _TERRAIN_COLORS: dict[str, str] = {
     "Wormhole":      "|m",   # magenta
     "Radiation_Zone":"|R",   # dark red
     "Derelict_Ship": "|x",   # dark grey
+    # Elysium (paradise)
+    "Aether_Spring": "|C",   # bright cyan
+    "Crystal_Grove": "|M",   # bright magenta
+    "Marble_Terrace":"|W",   # bright white
+    "Starfall_Crater":"|Y",  # bright yellow
+    "Ley_Nexus":     "|c",   # cyan
+    "Arcane_Relay":  "|m",   # magenta
+    "Cloud_Meadow":  "|w",   # white
+    "Shimmer_Lake":  "|C",   # bright cyan
 }
 
 _FOG_COLOR = "|x"  # grey for fog-of-war tiles
@@ -115,12 +125,8 @@ class ProceduralMapRenderer:
         self._symbol_cache: dict[str, str] = {}
         reg = data_registry
         if reg is None:
-            try:
-                from server.conf.game_init import game_systems
-                reg = game_systems.get("registry")
-                self._data_registry = reg
-            except (ImportError, AttributeError):
-                pass
+            reg = get_registry()
+            self._data_registry = reg
         if reg is not None:
             for gen in terrain_generators.values():
                 for _, terrain_type in gen._terrain_thresholds:
@@ -183,9 +189,9 @@ class ProceduralMapRenderer:
         objects_by_coord: dict[tuple[int, int], list] = {}
         if planet_room is not None and hasattr(planet_room, "get_objects_in_area"):
             for obj in planet_room.get_objects_in_area(min_x, min_y, max_x, max_y):
-                cx = getattr(getattr(obj, "db", None), "coord_x", None)
-                cy = getattr(getattr(obj, "db", None), "coord_y", None)
-                if cx is not None and cy is not None:
+                obj_coords = coords_of(obj)
+                if obj_coords is not None:
+                    cx, cy, _planet = obj_coords
                     objects_by_coord.setdefault((int(cx), int(cy)), []).append(obj)
 
         # 4. Render — inlined visibility check for speed
@@ -350,7 +356,7 @@ class ProceduralMapRenderer:
             return "|r**|n"
 
         # Overworld NPCs — priority: own > enemy > neutral. Agents keep tile
-        # order, so the first own/enemy/neutral matches the old first-seen pick.
+        # order, so the first own/enemy/neutral is the first-seen pick.
         own_agent = next((a for a in occ.agents if a[1]), None)
         enemy_agent = next(
             (a for a in occ.agents

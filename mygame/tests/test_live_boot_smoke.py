@@ -119,6 +119,16 @@ class LiveBootSmokeTest(EvenniaTest):
     rolled back in ``tearDown`` — so object creation works and nothing persists.
     """
 
+    def setUp(self):
+        super().setUp()
+        # Sandbox the services facade: ``initialize_game()`` installs the
+        # boot's systems dict into it, so snapshot/restore per test to keep
+        # that install from leaking past this test.
+        from world import services
+        self._services_cm = services.override({})
+        self._services_cm.__enter__()
+        self.addCleanup(self._services_cm.__exit__, None, None, None)
+
     # -------------------------------------------------------------- #
     #  Helpers
     # -------------------------------------------------------------- #
@@ -365,7 +375,8 @@ class LiveBootSmokeTest(EvenniaTest):
                 room = self._make_planet_room("terra")
                 systems["planet_rooms"]["terra"] = room
                 player = self._make_player(x=1, y=1, planet="terra", location=room)
-                player.ndb.systems = systems  # so require_system finds the registry
+                # require_system finds the registry through the boot-installed
+                # systems mapping (services facade / game_systems dict).
 
                 # Fresh login routing → SPAWNING with the prompt.
                 player._route_lifecycle_on_login()
@@ -650,6 +661,29 @@ class LiveBootSmokeTest(EvenniaTest):
                 # And it must NOT be a hard-frozen zero closure: the injected
                 # function reads the GameTickScript, so identity differs from a
                 # fresh `lambda: 0`. We assert it is callable + wired, above.
+        finally:
+            _teardown_game(systems)
+
+    # -------------------------------------------------------------- #
+    #  Services facade — the composition root installs the systems dict
+    # -------------------------------------------------------------- #
+
+    def test_initialize_game_installs_into_services_facade(self):
+        """``initialize_game()`` publishes the fully-populated systems dict
+        through the services facade before returning, so consumers reading
+        through ``services.get_service``/``get_systems`` see the boot's
+        systems (the setUp override keeps the install from leaking)."""
+        from server.conf.game_init import initialize_game
+        from world import services
+
+        systems = initialize_game()
+        try:
+            self.assertTrue(systems, "boot must return a non-empty systems dict")
+            self.assertIs(
+                services.get_systems(), systems,
+                "initialize_game must install its systems dict into the facade",
+            )
+            self.assertIs(services.get_service("registry"), systems["registry"])
         finally:
             _teardown_game(systems)
 

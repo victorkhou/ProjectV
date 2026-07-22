@@ -10,6 +10,8 @@ from __future__ import annotations
 
 from typing import Any
 
+from world.services import get_registry
+
 
 def format_building_interior(looker: Any, building: Any, registry: Any = None) -> str:
     """Format a building's interior view as a string for ``look``/appearance.
@@ -17,11 +19,11 @@ def format_building_interior(looker: Any, building: Any, registry: Any = None) -
     Shows owner, level/HP, category, production, construction/training progress,
     the assigned agent's status, resource drops on the tile, other agents
     present, and the building's open/closed exits. ``registry`` is looked up
-    from the global game systems when not supplied.
+    from the installed game systems when not supplied.
     """
     from world.utils import (
-        get_building_info, get_building_attr, get_closed_exits, get_obj_attr,
-        format_list_block,
+        coords_of, get_building_info, get_building_attr, get_closed_exits,
+        get_obj_attr, format_list_block,
     )
 
     info = get_building_info(building)
@@ -32,11 +34,7 @@ def format_building_interior(looker: Any, building: Any, registry: Any = None) -
     produces = "—"
     unlocks_str = "—"
     if registry is None:
-        try:
-            from server.conf.game_init import game_systems
-            registry = game_systems.get("registry")
-        except Exception:
-            pass
+        registry = get_registry()
     try:
         if registry:
             bdef = registry.get_building(info["type"])
@@ -98,8 +96,11 @@ def format_building_interior(looker: Any, building: Any, registry: Any = None) -
         lines.append(f"  |c[Training] Agent #{training_agent_id} — {training_remaining}s remaining|n")
 
     # Building coordinates (used by assigned-agent check and resource drops)
-    bx = getattr(getattr(building, "db", None), "coord_x", None)
-    by = getattr(getattr(building, "db", None), "coord_y", None)
+    b_coords = coords_of(building)
+    if b_coords is None:
+        bx = by = None
+    else:
+        bx, by, _planet = b_coords
     tile = getattr(building, "location", None)
 
     # Show assigned agent
@@ -110,12 +111,11 @@ def format_building_interior(looker: Any, building: Any, registry: Any = None) -
         activity = getattr(getattr(assigned, "db", None), "activity_status", None) or "Idle"
 
         # Check if the agent is physically at this building's tile
-        agent_x = getattr(getattr(assigned, "db", None), "coord_x", None)
-        agent_y = getattr(getattr(assigned, "db", None), "coord_y", None)
+        agent_coords = coords_of(assigned)
         at_building = (
-            agent_x is not None and agent_y is not None
+            agent_coords is not None
             and bx is not None and by is not None
-            and int(agent_x) == int(bx) and int(agent_y) == int(by)
+            and int(agent_coords[0]) == int(bx) and int(agent_coords[1]) == int(by)
         )
 
         if at_building:

@@ -134,7 +134,7 @@ class PowerupSystem(BaseSystem):
     ) -> int:
         """Register a timed stat effect on *player* using the powerup machinery.
 
-        This is the shared entry point extracted from :meth:`activate`. It
+        This is the shared entry point for all timed stat effects. It
         writes an entry into ``player.db.active_powerups`` in the real shape
         (``{expires_tick, effect: {effect_type, effect_value}}``) and registers
         the player in :attr:`_active_players` so :meth:`process_tick` visits and

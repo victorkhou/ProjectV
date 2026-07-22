@@ -9,6 +9,8 @@ import logging
 
 from evennia.objects.objects import DefaultRoom
 
+from world.services import get_systems
+
 from .objects import ObjectParent
 
 _log = logging.getLogger("mygame.rooms")
@@ -202,8 +204,10 @@ class PlanetRoom(DefaultRoom):
         ``old_x/old_y`` are the ORIGIN planet's coordinates and would notify
         unrelated players who merely share those coords on the destination room.
         """
-        old_x = getattr(getattr(obj, "db", None), "coord_x", None)
-        old_y = getattr(getattr(obj, "db", None), "coord_y", None)
+        # old_x/old_y are used independently downstream (dx/dy in
+        # _notify_tile_change), so this read stays per-coordinate.
+        old_x = obj.db.coord_x
+        old_y = obj.db.coord_y
         self.coord_index.move(obj, old_x, old_y, new_x, new_y)
         obj.db.coord_x = new_x
         obj.db.coord_y = new_y
@@ -279,16 +283,19 @@ class PlanetRoom(DefaultRoom):
 
     @property
     def _game_systems(self):
-        """Cached reference to the game_systems dict."""
+        """Cached reference to the installed game-systems dict.
+
+        Caches only a non-empty dict: pre-install the facade returns an
+        empty dict, and caching that would pin the room to an empty view
+        after the systems are installed.
+        """
         systems = getattr(self, "_cached_game_systems", None)
         if systems is not None:
             return systems
-        try:
-            from server.conf.game_init import game_systems
-            self._cached_game_systems = game_systems
-            return game_systems
-        except (ImportError, AttributeError):
-            return {}
+        systems = get_systems()
+        if systems:
+            self._cached_game_systems = systems
+        return systems
 
     def return_appearance(self, looker, **kwargs):
         """Return the room's appearance.
@@ -310,9 +317,10 @@ class PlanetRoom(DefaultRoom):
         # If inside a building, show building interior first
         if getattr(looker.db, "inside_building", False):
             try:
-                x = getattr(looker.db, "coord_x", None)
-                y = getattr(looker.db, "coord_y", None)
-                if x is not None and y is not None:
+                from world.utils import coords_of
+                l_coords = coords_of(looker)
+                if l_coords is not None:
+                    x, y, _planet = l_coords
                     buildings = self.get_buildings_at(int(x), int(y))
                     if buildings:
                         building = buildings[0]
@@ -368,17 +376,18 @@ class PlanetRoom(DefaultRoom):
         to messaging all contents.
         """
         if from_obj is not None and hasattr(from_obj, "db"):
-            sx = getattr(from_obj.db, "coord_x", None)
-            sy = getattr(from_obj.db, "coord_y", None)
-            if sx is not None and sy is not None:
+            from world.utils import coords_of
+            s_coords = coords_of(from_obj)
+            if s_coords is not None:
+                sx, sy, _planet = s_coords
                 exclude = exclude or []
                 for obj in self.contents:
                     if obj in exclude:
                         continue
                     if hasattr(obj, "db"):
-                        ox = getattr(obj.db, "coord_x", None)
-                        oy = getattr(obj.db, "coord_y", None)
-                        if ox == sx and oy == sy:
+                        o_coords = coords_of(obj)
+                        if (o_coords is not None
+                                and o_coords[0] == sx and o_coords[1] == sy):
                             if hasattr(obj, "msg"):
                                 obj.msg(text, **kwargs)
                 return
@@ -403,21 +412,22 @@ class PlanetRoom(DefaultRoom):
         """
         super().at_object_receive(moved_obj, source_location, **kwargs)
 
+        from world.utils import coords_of
+
         # Update coordinate index for any object with coordinates
-        cx = getattr(getattr(moved_obj, "db", None), "coord_x", None)
-        cy = getattr(getattr(moved_obj, "db", None), "coord_y", None)
-        if cx is not None and cy is not None:
+        m_coords = coords_of(moved_obj)
+        if m_coords is not None:
+            cx, cy, _planet = m_coords
             self.coord_index.add(moved_obj, int(cx), int(cy))
 
         if not (hasattr(moved_obj, "has_account") and moved_obj.has_account):
             return
 
         # Read coordinates from the player, not the room
-        x = getattr(moved_obj.db, "coord_x", None) if hasattr(moved_obj, "db") else None
-        y = getattr(moved_obj.db, "coord_y", None) if hasattr(moved_obj, "db") else None
-        planet = getattr(moved_obj.db, "coord_planet", None) if hasattr(moved_obj, "db") else None
-
-        if x is None or y is None or not planet:
+        if m_coords is None:
+            return
+        x, y, planet = m_coords
+        if not planet:
             return
 
         # Get terrain info from the terrain generator
@@ -443,9 +453,8 @@ class PlanetRoom(DefaultRoom):
             if obj is moved_obj:
                 continue
             if hasattr(obj, "has_account") and obj.has_account and hasattr(obj, "db"):
-                ox = getattr(obj.db, "coord_x", None)
-                oy = getattr(obj.db, "coord_y", None)
-                if ox == x and oy == y:
+                o_coords = coords_of(obj)
+                if o_coords is not None and o_coords[0] == x and o_coords[1] == y:
                     other_names.append(obj.key)
         if other_names:
             parts.append(f"Players: {', '.join(other_names)}")
@@ -455,9 +464,10 @@ class PlanetRoom(DefaultRoom):
     def at_object_leave(self, moved_obj, target_location, **kwargs):
         """Remove departing object from the coordinate index."""
         super().at_object_leave(moved_obj, target_location, **kwargs)
-        cx = getattr(getattr(moved_obj, "db", None), "coord_x", None)
-        cy = getattr(getattr(moved_obj, "db", None), "coord_y", None)
-        if cx is not None and cy is not None:
+        from world.utils import coords_of
+        m_coords = coords_of(moved_obj)
+        if m_coords is not None:
+            cx, cy, _planet = m_coords
             idx = self.ndb._coord_index
             if idx is not None:
                 idx.remove(moved_obj, int(cx), int(cy))

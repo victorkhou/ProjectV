@@ -6,7 +6,7 @@ Level-based progression with cosmetic ranks.
 Players have a **level** (1-100).  Rank is derived from the widening
 ``RANK_BANDS`` mapping in ``world/constants.py`` (Recruit L1-5,
 Private L6-10, …, General L85-99), with Marshal as the L100 capstone.
-Bands are no longer a uniform 5 levels wide.
+Band widths vary by rank.
 
 All feature gates (buildings, planets, agent caps) use the player's
 **level** directly.  Rank is a cosmetic title.  Ranks never grant or
@@ -194,10 +194,10 @@ class RankSystem(BaseSystem):
         rank_def = self._get_rank_by_level(rank_num)
         if rank_def is None:
             # ranks.yaml lacks an entry for this rank number (data gap). Fall
-            # back to the highest defined rank at or below it — NOT to the
-            # legacy get_rank_for_xp, whose ranks.yaml xp_thresholds are stale
-            # display data under the R14 formula-derived curve and would
-            # disagree with the band-derived rank.
+            # back to the highest defined rank at or below it — NOT to an
+            # xp_threshold ranking: ranks.yaml xp_thresholds are stale display
+            # data under the R14 formula-derived curve and would disagree with
+            # the band-derived rank.
             candidates = [r for r in self.registry.ranks if r.level <= rank_num]
             if candidates:
                 return max(candidates, key=lambda r: r.level)
@@ -346,7 +346,7 @@ class RankSystem(BaseSystem):
             old_rank_def = self._get_rank_by_level(old_rank_num)
             new_rank_def = self._get_rank_by_level(new_rank_num)
             if new_rank_def:
-                # NOTE: promotion no longer auto-grants technologies (R13.1) —
+                # NOTE: promotion does NOT auto-grant technologies (R13.1) —
                 # research at a Lab is the only tech-acquisition path.
                 logger.info(
                     "Promoted %s from %s to %s (level %d→%d)",
@@ -366,7 +366,7 @@ class RankSystem(BaseSystem):
             old_rank_def = self._get_rank_by_level(old_rank_num)
             new_rank_def = self._get_rank_by_level(new_rank_num)
             if new_rank_def:
-                # NOTE: demotion no longer revokes researched technologies
+                # NOTE: demotion does NOT revoke researched technologies
                 # (R13.2) — a paid-for tech is never taken away by rank churn.
                 logger.info(
                     "Demoted %s from %s to %s (level %d→%d)",

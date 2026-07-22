@@ -11,6 +11,7 @@ changes each epoch, causing the terrain to reshuffle periodically.
 from __future__ import annotations
 
 from world.definitions import CoordinateSpaceDef
+from world.services import get_registry
 
 # Large prime used to map Python's hash output into [0, 1).
 _LARGE_PRIME = 2_147_483_647  # 2^31 - 1 (Mersenne prime)
@@ -48,12 +49,8 @@ class TerrainGenerator:
         self._resource_map: dict[str, str | None] = {}
         reg = data_registry
         if reg is None:
-            # Try the game_systems dict (available after game_init runs)
-            try:
-                from server.conf.game_init import game_systems
-                reg = game_systems.get("registry")
-            except (ImportError, AttributeError):
-                pass
+            # Fall back to the installed registry (available after game init)
+            reg = get_registry()
         if reg is not None:
             for _, terrain_type in self._terrain_thresholds:
                 try:

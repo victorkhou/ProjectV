@@ -25,6 +25,7 @@ from world.event_bus import (
     CONSTRUCTION_COMPLETED,
     EventBus,
 )
+from world.services import get_service
 from world.systems.base_system import BaseSystem
 from world.utils import get_building_attr as _get_building_attr_shared
 from world.utils import set_building_attr as _set_building_attr_shared
@@ -237,11 +238,10 @@ class BuildingSystem(BaseSystem):
         """Shared validation for both upgrade paths (timed + instant).
 
         Runs the ownership / building-type / max-level / cost / resource checks
-        that ``start_upgrade`` and ``upgrade`` used to duplicate (with drifting
-        details — one read ``getattr(building, "owner")`` and hardcoded the
-        max-level string, the other used ``_get_building_attr``). Both now share
-        this single source, always using ``_get_building_attr`` and the
-        ``MAX_BUILDING_LEVEL`` constant.
+        for ``start_upgrade`` and ``upgrade``. Both paths share this single
+        source, always using ``_get_building_attr`` and the
+        ``MAX_BUILDING_LEVEL`` constant, so the check details cannot drift
+        between them.
 
         Returns ``(ok, building_def, target_level, upgrade_cost, error)``. When
         ``ok`` is False, *error* holds the player-facing reason and the other
@@ -295,8 +295,7 @@ class BuildingSystem(BaseSystem):
         """
         # Resume path: an upgrade already under way (under_construction with a
         # stored target level) is resumed, never restarted. Charging again here
-        # was the bug — 'upgrade' after a pause re-deducted the full cost and
-        # reset progress to 0.
+        # would re-deduct the full cost and reset progress to 0.
         if (self._get_building_attr(building, "under_construction", False)
                 and self._get_building_attr(building, "upgrade_target_level")
                 is not None):
@@ -914,11 +913,11 @@ class BuildingSystem(BaseSystem):
         if x is None:
             x = getattr(tile, "x", None)
             if x is None and hasattr(tile, "db"):
-                x = getattr(tile.db, "coord_x", None) or getattr(tile.db, "x", None)
+                x = tile.db.coord_x or tile.db.x
         if y is None:
             y = getattr(tile, "y", None)
             if y is None and hasattr(tile, "db"):
-                y = getattr(tile.db, "coord_y", None) or getattr(tile.db, "y", None)
+                y = tile.db.coord_y or tile.db.y
 
         # Try planet from tile tags or db
         planet = None
@@ -1231,20 +1230,19 @@ class BuildingSystem(BaseSystem):
 
     @staticmethod
     def _legacy_terrain_provider() -> Any | None:
-        """Build a TerrainProvider from the game_systems global (fallback).
+        """Build a TerrainProvider from the installed systems (fallback).
 
         Used only when no ``terrain_provider`` was injected — preserves the
-        prior behavior of reading ``game_systems["_terrain_generators"]`` so
+        prior behavior of reading the installed ``_terrain_generators`` so
         Extractor validation still works in contexts that predate injection.
-        Returns ``None`` if the global is unavailable.
+        Returns ``None`` if the generators are unavailable.
         """
         try:
-            from server.conf.game_init import game_systems
             from world.adapters.game_systems_terrain_provider import (
                 GameSystemsTerrainProvider,
             )
 
-            generators = game_systems.get("_terrain_generators", {})
+            generators = get_service("_terrain_generators") or {}
             return GameSystemsTerrainProvider(generators)
         except Exception:
             return None

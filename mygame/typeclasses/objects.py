@@ -76,10 +76,12 @@ class GameEntity(DefaultObject):
 
         Returns True to allow deletion to proceed.
         """
+        from world.utils import coords_of
+
         room = self.location
-        cx = getattr(self.db, "coord_x", None)
-        cy = getattr(self.db, "coord_y", None)
-        if room is not None and cx is not None and cy is not None:
+        coords = coords_of(self)
+        if room is not None and coords is not None:
+            cx, cy, _planet = coords
             idx = getattr(getattr(room, "ndb", None), "_coord_index", None)
             if idx is not None:
                 try:
@@ -90,12 +92,14 @@ class GameEntity(DefaultObject):
 
     def at_pre_get(self, getter, **kwargs):
         """Block pickup if getter is not at the same coordinates."""
+        from world.utils import coords_of
+
         if self.db.coord_x is None:
             return True  # not placed, allow
-        gx = getattr(getattr(getter, "db", None), "coord_x", None)
-        gy = getattr(getattr(getter, "db", None), "coord_y", None)
-        if gx is None or gy is None:
+        g_coords = coords_of(getter)
+        if g_coords is None:
             return False
+        gx, gy, _planet = g_coords
         if int(gx) != int(self.db.coord_x) or int(gy) != int(self.db.coord_y):
             getter.msg("That's not here.")
             return False
@@ -205,8 +209,10 @@ class GameItem(GameEntity):
     def at_drop(self, dropper, **kwargs):
         """Set coordinates to dropper's position when dropped."""
         if hasattr(dropper, "db"):
-            self.db.coord_x = getattr(dropper.db, "coord_x", None)
-            self.db.coord_y = getattr(dropper.db, "coord_y", None)
+            # The dropper's x/y are copied through independently (a partial
+            # position is copied as-is), so this stays a per-coordinate read.
+            self.db.coord_x = dropper.db.coord_x
+            self.db.coord_y = dropper.db.coord_y
 
     @property
     def item_def(self):
@@ -615,8 +621,8 @@ def spawn_resource_drop(location, resource_type, amount, x=None, y=None):
     drop.db.resource_type = resource_type
     drop.db.amount = amount
     if x is not None and y is not None:
-        # at_object_receive saw coord_x=None during create_object, so
-        # place_on_tile stamps coords and registers in the index now.
+        # at_object_receive runs during create_object before coords are set,
+        # so place_on_tile must stamp coords and register in the index here.
         from world.utils import place_on_tile
         place_on_tile(drop, location, x, y)
     return drop
@@ -720,8 +726,8 @@ def spawn_gear_drop(location, item_def, x=None, y=None):
     )
     _apply_item_def(item, item_def)
     if x is not None and y is not None:
-        # at_object_receive saw coord_x=None during create_object, so
-        # place_on_tile stamps coords and registers in the index now.
+        # at_object_receive runs during create_object before coords are set,
+        # so place_on_tile must stamp coords and register in the index here.
         from world.utils import place_on_tile
         place_on_tile(item, location, x, y)
     return item
@@ -794,8 +800,8 @@ def spawn_supply_drop(location, item_key, count, x=None, y=None):
     drop.db.item_key = item_key
     drop.db.count = count
     if x is not None and y is not None:
-        # at_object_receive saw coord_x=None during create_object, so
-        # place_on_tile stamps coords and registers in the index now.
+        # at_object_receive runs during create_object before coords are set,
+        # so place_on_tile must stamp coords and register in the index here.
         from world.utils import place_on_tile
         place_on_tile(drop, location, x, y)
     return drop

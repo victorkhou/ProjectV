@@ -865,11 +865,10 @@ class DataRegistry:
         self._items_for_building_cache[building_abbr] = result
         return result
 
-    # NOTE: get_rank_for_xp was removed (early-game rebalance, task 6.5
-    # completion). It ranked players by ranks.yaml xp_threshold values, which
-    # are legacy display data under the R14 formula-derived curve — its answer
-    # could disagree with the authoritative RANK_BANDS lookup
-    # (rank_system.rank_from_level). Zero production callers remained.
+    # NOTE: no rank-from-XP lookup is provided here. ranks.yaml xp_threshold
+    # values are legacy display data under the R14 formula-derived curve — a
+    # ranking based on them could disagree with the authoritative RANK_BANDS
+    # lookup (rank_system.rank_from_level). Zero production callers remained.
 
     def get_rank_by_name(self, name: str) -> RankDef:
         """Get a rank definition by name.

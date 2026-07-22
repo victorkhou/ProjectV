@@ -404,6 +404,18 @@ planets:
       - Ember_Field
       - Basalt_Ridge
 
+  - name: Elysium
+    planet_type: paradise
+    terrain_types:
+      - Aether_Spring
+      - Crystal_Grove
+      - Marble_Terrace
+      - Starfall_Crater
+      - Ley_Nexus
+      - Arcane_Relay
+      - Cloud_Meadow
+      - Shimmer_Lake
+
   - name: Citadel
     planet_type: fortress
     terrain_types:
@@ -427,15 +439,3 @@ planets:
       - Wormhole
       - Radiation_Zone
       - Derelict_Ship
-
-  - name: Elysium
-    planet_type: paradise
-    terrain_types:
-      - Aether_Spring
-      - Crystal_Grove
-      - Marble_Terrace
-      - Starfall_Crater
-      - Ley_Nexus
-      - Arcane_Relay
-      - Cloud_Meadow
-      - Shimmer_Lake

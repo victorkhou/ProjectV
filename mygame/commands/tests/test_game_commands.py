@@ -8,10 +8,13 @@ Requirements: 1.6, 1.10, 2.5, 3.4, 6.8, 6.12, 16.1, 16.2, 16.3,
               16.4, 16.5
 """
 
+import os
 import sys
 import types
 import unittest
 from unittest.mock import patch
+
+import pytest
 
 # -------------------------------------------------------------- #
 #  Bootstrap: stub out Evennia modules
@@ -103,10 +106,33 @@ from mygame.commands.game_commands import (  # noqa: E402
     CmdDeposit, CmdWithdraw,
     CmdResearch, CmdPowerup,
     CmdScore, CmdEquipment, CmdBuildings, CmdScan, CmdTechnology,
-    CmdInventory, CmdMessage, CmdSay, CmdMap,
+    CmdTerrain, CmdInventory, CmdMessage, CmdSay, CmdMap,
     CmdCloseExit, CmdOpenExit, CmdExit, CmdGet, CmdEnter, CmdLeave, CmdDrop,
     CmdSell, CmdJunk,
 )
+
+from world import services  # noqa: E402
+
+
+# -------------------------------------------------------------- #
+#  Per-test system injection via the services facade
+# -------------------------------------------------------------- #
+
+@pytest.fixture(autouse=True)
+def _services_sandbox():
+    """Give every test a private, empty facade state, restored on exit.
+
+    Tests inject fake systems through ``services.override`` (via
+    ``_install_systems``); all system lookup reads the facade.
+    """
+    with services.override({}):
+        yield
+
+
+def _install_systems(systems):
+    """Register fake *systems* for the current test through the facade."""
+    services.get_systems().update(systems)
+
 
 # -------------------------------------------------------------- #
 #  Helpers / Fakes
@@ -209,7 +235,9 @@ class FakeCaller:
     def __init__(self, name="TestPlayer", location=None, systems=None):
         self.key = name
         self.db = FakeDB()
-        self.ndb = FakeNDB(systems)
+        self.ndb = FakeNDB()
+        if systems:
+            _install_systems(systems)
         self.location = location or FakeLocation()
         self._messages = []
         self._moved_to = None
@@ -1968,7 +1996,7 @@ class TestCmdCraft(unittest.TestCase):
                 raise AssertionError("should not craft on bare command")
 
         caller, _b = self._caller_in_building(FakeEquipmentSystem())
-        caller.ndb.systems["registry"] = registry
+        _install_systems({"registry": registry})
         _make_cmd(CmdCraft, caller, "").func()
         output = "\n".join(caller._messages)
         self.assertIn("assault_rifle", output)
@@ -2658,6 +2686,65 @@ class TestCmdTechnology(unittest.TestCase):
         cmd.func()
         output = "\n".join(caller._messages)
         self.assertIn("basic_armor", output)
+
+class TestCmdTerrain(unittest.TestCase):
+    """The terrain reference lists every terrain, grouped by planet."""
+
+    def setUp(self):
+        # Load the real DataRegistry from the YAML so the listing reflects the
+        # shipped terrain data (not a hand-built fake that could drift).
+        from world.data_registry import DataRegistry
+        data_dir = os.path.normpath(
+            os.path.join(os.path.dirname(__file__), "..", "..", "data")
+        )
+        registry = DataRegistry()
+        registry.load_all(data_dir)
+        self._registry = registry
+        self._cm = services.override({"registry": registry})
+        self._cm.__enter__()
+        self.addCleanup(self._cm.__exit__, None, None, None)
+
+    def _output(self):
+        caller = FakeCaller()
+        cmd = _make_cmd(CmdTerrain, caller)
+        cmd.func()
+        return "\n".join(caller._messages)
+
+    def test_lists_every_terrain(self):
+        output = self._output()
+        # Every terrain_type from every planet appears (spaces for underscores).
+        for tdef in self._registry.terrain.values():
+            self.assertIn(tdef.terrain_type.replace("_", " "), output)
+
+    def test_groups_by_planet_in_ladder_order(self):
+        output = self._output()
+        # Elysium is listed after Inferno and before Citadel (the new ladder).
+        i_inferno = output.index("Inferno")
+        i_elysium = output.index("Elysium")
+        i_citadel = output.index("Citadel")
+        self.assertLess(i_inferno, i_elysium)
+        self.assertLess(i_elysium, i_citadel)
+
+    def test_shows_resource_and_cosmetic_dash(self):
+        output = self._output()
+        self.assertIn("Aether", output)   # Aether_Spring yields Aether
+        self.assertIn("—", output)         # cosmetic tiles (Cloud_Meadow) show a dash
+
+    def test_help_terrain_returns_same_listing(self):
+        # 'help terrain' resolves to CmdTerrain.get_help, not func().
+        caller = FakeCaller()
+        cmd = _make_cmd(CmdTerrain, caller)
+        help_text = cmd.get_help(caller, None)
+        self.assertIn("Terrain Types", help_text)
+        self.assertIn("Elysium", help_text)
+
+    def test_missing_registry_is_graceful(self):
+        with services.override({}):
+            caller = FakeCaller()
+            cmd = _make_cmd(CmdTerrain, caller)
+            cmd.func()
+            self.assertIn("unavailable", "\n".join(caller._messages).lower())
+
 
 class TestCmdInventory(unittest.TestCase):
     def test_shows_resources(self):

@@ -317,7 +317,8 @@ class TestEnsureOverworldPosition(unittest.TestCase):
             "planet_rooms": {"earth": mock_room},
         }
 
-        with patch("server.conf.game_init.game_systems", mock_systems):
+        from world import services
+        with services.override(mock_systems):
             char._ensure_overworld_position()
 
         char.move_to.assert_called_once_with(mock_room, quiet=True)
@@ -410,24 +411,28 @@ class TestAtCoordChangeBreaksLock(unittest.TestCase):
     """Moving (in any direction) breaks the mover's ranged lock immediately."""
 
     def test_move_clears_active_lock(self):
+        from world import services
+
         char = _make_char()
         tg = _FakeTargeting(target=object())
-        with patch("server.conf.game_init.game_systems",
-                   {"targeting_system": tg}):
+        with services.override({"targeting_system": tg}):
             char.at_coord_change(1, 1, 1, 2)
         self.assertEqual(tg.cleared, ["moved"])
 
     def test_move_without_lock_is_noop(self):
+        from world import services
+
         char = _make_char()
         tg = _FakeTargeting(target=None)  # no active lock
-        with patch("server.conf.game_init.game_systems",
-                   {"targeting_system": tg}):
+        with services.override({"targeting_system": tg}):
             char.at_coord_change(1, 1, 2, 1)
         self.assertEqual(tg.cleared, [])
 
     def test_move_never_raises_without_targeting_system(self):
+        from world import services
+
         char = _make_char()
-        with patch("server.conf.game_init.game_systems", {}):
+        with services.override({}):
             char.at_coord_change(1, 1, 2, 2)  # must not raise
 
 

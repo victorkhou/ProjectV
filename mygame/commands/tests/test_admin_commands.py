@@ -12,6 +12,10 @@ import types
 import unittest
 import logging
 
+import pytest
+
+from world import services
+
 # -------------------------------------------------------------- #
 #  Bootstrap: stub out Evennia modules
 # -------------------------------------------------------------- #
@@ -104,6 +108,19 @@ from mygame.commands.admin_commands import CmdAdminResource  # noqa: E402
 
 RESOURCE_TYPES = ("Iron", "Wood", "Stone")
 
+
+@pytest.fixture(autouse=True)
+def _services_sandbox():
+    """Give every test a private, empty facade state, restored on exit."""
+    with services.override({}):
+        yield
+
+
+def _install_systems(systems):
+    """Register fake *systems* for the current test through the facade."""
+    services.get_systems().update(systems)
+
+
 class FakeNDB:
     def __init__(self, systems=None):
         self.systems = systems or {}
@@ -116,7 +133,9 @@ class FakeCaller:
     def __init__(self, name="Admin", permissions=None, systems=None):
         self.key = name
         self.permissions = permissions or set()
-        self.ndb = FakeNDB(systems)
+        self.ndb = FakeNDB()
+        if systems:
+            _install_systems(systems)
         self.db = FakeDB()
         self._messages = []
         self._search_results = {}

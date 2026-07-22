@@ -16,6 +16,7 @@ import logging
 from evennia.objects.objects import DefaultCharacter
 
 from world.constants import RESOURCE_TYPES
+from world.services import get_service
 from .combat_entity import CombatEntity
 from .objects import ObjectParent
 
@@ -76,22 +77,24 @@ def _delete_objects_at_building(building) -> None:
 
     Silently skips buildings with no valid coordinates or location.
     """
-    bx = getattr(getattr(building, "db", None), "coord_x", None)
-    by = getattr(getattr(building, "db", None), "coord_y", None)
+    from world.utils import coords_of
+
+    b_coords = coords_of(building)
     room = getattr(building, "location", None)
 
-    if bx is None or by is None or room is None:
+    if b_coords is None or room is None:
         return
+    bx, by, _planet = b_coords
 
     if hasattr(room, "get_objects_at"):
         objs = list(room.get_objects_at(int(bx), int(by)))
     else:
         # Fallback: match coordinates from room.contents.
-        objs = [
-            o for o in list(getattr(room, "contents", []))
-            if getattr(getattr(o, "db", None), "coord_x", None) == bx
-            and getattr(getattr(o, "db", None), "coord_y", None) == by
-        ]
+        objs = []
+        for o in list(getattr(room, "contents", [])):
+            o_coords = coords_of(o)
+            if o_coords is not None and o_coords[0] == bx and o_coords[1] == by:
+                objs.append(o)
 
     for obj in objs:
         if not _is_preserved(obj, building) and hasattr(obj, "delete"):
@@ -270,9 +273,9 @@ class CombatCharacter(CombatEntity, DefaultCharacter):
         for key, default in PLAYER_DEFAULTS.items():
             if self.attributes.get(key) is None:
                 if key == "level":
-                    # Migrate from old rank_level (1-12) to new level (1-100)
-                    # via the band-start mapping (R14.5) — NOT the retired
-                    # uniform (rank-1)*LEVELS_PER_RANK+1 math, which diverges
+                    # Migrate a legacy rank_level (1-12) to a level (1-100)
+                    # via the band-start mapping (R14.5) — NOT uniform
+                    # (rank-1)*LEVELS_PER_RANK+1 math, which diverges
                     # from the widened bands for rank >= 5 and would land a
                     # legacy player one rank below their stored rank.
                     from world.constants import NUM_RANKS, RANK_BANDS
@@ -603,28 +606,17 @@ class CombatCharacter(CombatEntity, DefaultCharacter):
                 # If sync succeeded or coords were already set, ensure
                 # we're in the correct PlanetRoom for our planet
                 if self.db.coord_planet:
-                    try:
-                        from server.conf.game_init import game_systems
-                        planet_rooms = game_systems.get("planet_rooms", {})
-                        expected_room = planet_rooms.get(self.db.coord_planet)
-                        if expected_room and self.location is not expected_room:
-                            self.move_to(expected_room, quiet=True)
-                    except (ImportError, AttributeError):
-                        pass
+                    planet_rooms = get_service("planet_rooms") or {}
+                    expected_room = planet_rooms.get(self.db.coord_planet)
+                    if expected_room and self.location is not expected_room:
+                        self.move_to(expected_room, quiet=True)
                     return
                 # Otherwise fall through to spawn logic (room has no coords)
 
             # Case 1: in Limbo — move to spawn on the shared planet room
-            # Try shared systems first (initialised in game_init)
-            registry = None
-            planet_rooms = None
-            try:
-                from server.conf.game_init import game_systems
-
-                registry = game_systems.get("planet_registry")
-                planet_rooms = game_systems.get("planet_rooms", {})
-            except (ImportError, AttributeError):
-                pass
+            # Try shared systems first (installed by the composition root)
+            registry = get_service("planet_registry")
+            planet_rooms = get_service("planet_rooms") or {}
 
             # Fallback: create local instances if game_init hasn't run yet
             if registry is None:
@@ -838,13 +830,15 @@ class CombatCharacter(CombatEntity, DefaultCharacter):
         the location. Best-effort — never raises.
         """
         try:
+            from world.utils import coords_of
+
             room = self.location
             if room is None:
                 return
-            cx = getattr(self.db, "coord_x", None)
-            cy = getattr(self.db, "coord_y", None)
+            coords = coords_of(self)
             idx = getattr(getattr(room, "ndb", None), "_coord_index", None)
-            if idx is not None and cx is not None and cy is not None:
+            if idx is not None and coords is not None:
+                cx, cy, _planet = coords
                 idx.remove(self, int(cx), int(cy))
             self.db.prelogout_location = room
             self.location = None

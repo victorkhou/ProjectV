@@ -19,8 +19,8 @@ from typing import Any
 class AgentRepository(ABC):
     """Read-side port for player-owned NPC agents.
 
-    Replaces the direct ``ObjectDB.objects.filter(...)`` /
-    ``search_object_by_tag(...)`` queries previously embedded in
+    The single home for the direct ``ObjectDB.objects.filter(...)`` /
+    ``search_object_by_tag(...)`` queries, keeping ORM access out of
     ``AgentSystem``.
     """
 

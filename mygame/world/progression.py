@@ -11,18 +11,16 @@ place without duplicating the curve logic.
 anchored at ``xp_curve_base_delta`` (40) for L1→L2, grows by
 ``xp_curve_early_ratio`` (+20%) per level through ``xp_curve_knee_level``
 (L20), then by ``xp_curve_late_ratio`` (+5%) per level to ``MAX_LEVEL``
-(100). This replaces the old ranks.yaml ``xp_threshold`` interpolation and
-the ``FINAL_RANK_XP_PER_LEVEL`` constant: pure +20% compounding to L100 was
-evaluated and rejected (a ×69M growth factor — a mathematical wall around
-L45–50 given roughly flat XP income), while the hybrid lands L100 at ~1.09M
-XP (~360 hours at sustained combat income). The L2 delta of 40 XP is
-deliberately identical to the old curve, so all economy-XP calibration
-carries over unchanged.
+(100). ranks.yaml ``xp_threshold`` values do NOT feed this curve. Pure +20%
+compounding to L100 is deliberately avoided (a ×69M growth factor — a
+mathematical wall around L45–50 given roughly flat XP income); the hybrid
+lands L100 at ~1.09M XP (~360 hours at sustained combat income). The L2
+delta is fixed at 40 XP — all economy-XP calibration is tuned against it.
 
-``build_thresholds(ranks)`` keeps its historical signature (every composition
-root and hot-reload path calls it with ``DataRegistry.ranks``) but now reads
-curve TUNABLES from the live balance config when available — the *ranks*
-argument only trips a rebuild, it no longer supplies thresholds.
+``build_thresholds(ranks)`` keeps its signature (every composition root and
+hot-reload path calls it with ``DataRegistry.ranks``) but reads curve
+TUNABLES from the live balance config when available — the *ranks* argument
+only trips a rebuild; it supplies no thresholds.
 
 This module must stay free of Evennia imports and must not import
 ``RankSystem`` at module load time. To avoid a circular import
@@ -97,12 +95,12 @@ def xp_delta(level: int, *, base_delta: int | None = None,
 def build_thresholds(ranks: Any = None) -> list[int]:
     """Build and cache the level->XP threshold table from the hybrid formula.
 
-    The *ranks* argument is accepted for backward compatibility with every
+    The *ranks* argument is accepted for signature compatibility with every
     composition-root / hot-reload call site (``build_thresholds(registry
-    .ranks)``) but no longer supplies threshold data — the curve is the
+    .ranks)``) but supplies no threshold data — the curve is the
     R14/D11 formula, parameterized by the live balance tunables
     (``xp_curve_base_delta`` / ``early_ratio`` / ``late_ratio`` /
-    ``knee_level``). Rank definitions now carry only names/agent-caps/planet
+    ``knee_level``). Rank definitions carry only names/agent-caps/planet
     access; rank membership derives from ``RANK_BANDS``.
 
     Idempotent for fixed tunables. Call once at server start and again on

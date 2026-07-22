@@ -5,8 +5,13 @@
 # Phase 1: 6 planets with level-gated progression
 #
 # rank_requirement is now a LEVEL requirement (1-100).
-# Final ladder (2026-07-20): Terra=1, Forge=21, Tundra=33, Inferno=46,
+# Final ladder (2026-07-21): Terra=1, Forge=21, Tundra=33, Inferno=46,
 # Elysium=58, Citadel=70, Space=1 (off-ladder hub).
+#
+# z_level ordering follows the progression ladder: Terra=0, Forge=1, Tundra=2,
+# Inferno=3, Elysium=4, Citadel=5, Space=6 (hub last). z_level is only a
+# teleport shorthand; runtime planet identity is planet_key, and terrain is
+# seed-derived, so renumbering z_level never regenerates maps or moves data.
 
 planets:
   - planet_key: "terra"
@@ -102,9 +107,43 @@ planets:
     yield_scale: 1.6
     npc_scale: 2.0
 
+  - planet_key: "elysium"
+    planet_type: "paradise"
+    z_level: 4
+    width: 400
+    height: 400
+    terrain_seed: 117
+    terrain_noise_cell_size: 8
+    # Elysium is an earth-like paradise: an Earth-terrain base (~60%) with the
+    # arcane paradise tiles scattered as accents (~40%). The Terra types are
+    # shared terrain defs, so they reuse Terra's sprites/colors/resources.
+    terrain_weights:
+      Plains: 0.16
+      Forest: 0.12
+      Dirt: 0.08
+      Rock: 0.08
+      Mountain: 0.06
+      River: 0.05
+      Sand: 0.03
+      Snow: 0.02
+      Aether_Spring: 0.06
+      Crystal_Grove: 0.07
+      Marble_Terrace: 0.06
+      Starfall_Crater: 0.05
+      Ley_Nexus: 0.06
+      Arcane_Relay: 0.04
+      Cloud_Meadow: 0.04
+      Shimmer_Lake: 0.02
+    persistence_type: "static"
+    spawn_x: 200
+    spawn_y: 200
+    rank_requirement: 58
+    yield_scale: 1.8
+    npc_scale: 2.5
+
   - planet_key: "citadel"
     planet_type: "fortress"
-    z_level: 4
+    z_level: 5
     width: 200
     height: 200
     terrain_seed: 88
@@ -127,7 +166,7 @@ planets:
 
   - planet_key: "space"
     planet_type: "space"
-    z_level: 5
+    z_level: 6
     width: 1000
     height: 1000
     terrain_seed: 99
@@ -147,26 +186,3 @@ planets:
     rank_requirement: 1
     yield_scale: 1.0   # off-ladder hub — no yield bonus
     npc_scale: 1.0
-
-  - planet_key: "elysium"
-    planet_type: "paradise"
-    z_level: 6
-    width: 400
-    height: 400
-    terrain_seed: 117
-    terrain_noise_cell_size: 8
-    terrain_weights:
-      Aether_Spring: 0.12
-      Crystal_Grove: 0.15
-      Marble_Terrace: 0.14
-      Starfall_Crater: 0.12
-      Ley_Nexus: 0.10
-      Arcane_Relay: 0.09
-      Cloud_Meadow: 0.15
-      Shimmer_Lake: 0.13
-    persistence_type: "static"
-    spawn_x: 200
-    spawn_y: 200
-    rank_requirement: 58
-    yield_scale: 1.8
-    npc_scale: 2.5

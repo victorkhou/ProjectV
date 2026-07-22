@@ -3,8 +3,8 @@ Storage_Building resource pool (D8).
 
 Gives ``storage``-capability buildings (Vault ``VT``, HQ) a real, persistent
 stored-resource pool — ``db.stored_resources: dict[str, int]`` — bounded by the
-building's ``storage_capacity`` (a ``BuildingDef`` field that was previously
-cosmetic and is now the enforced upper bound).
+building's ``storage_capacity`` (a ``BuildingDef`` field enforced here as the
+upper bound).
 
 This module is deliberately framework-free: it reads and writes the building's
 persistent attribute through :func:`world.utils.get_building_attr` /

@@ -10,14 +10,13 @@ Verifies, driving ``CombatEngine`` directly with fakes:
 * the cosmetic ``db.kills`` tally still increments for a betrayal;
 * razing an ally's building grants no XP.
 
-``are_allied`` is resolved through a fake AllianceSystem installed in the global
-``game_systems`` dict (the same path ``world.utils.are_allied`` uses).
+``are_allied`` is resolved through a fake AllianceSystem installed through
+the services facade (the same path ``world.utils.are_allied`` uses).
 """
 
 import types
 import unittest
 
-import server.conf.game_init as game_init
 from world.event_bus import EventBus
 from world.definitions import BalanceConfig
 from world.data_registry import DataRegistry
@@ -118,13 +117,12 @@ class _CombatSeamBase(unittest.TestCase):
             player_xp_awarder_provider=lambda: self.awarder,
         )
         # Install a fake AllianceSystem so are_allied resolves.
-        self._saved_systems = dict(game_init.game_systems)
-        self.alliance = _FakeAllianceSystem(live_ids={1})
-        game_init.game_systems["alliance_system"] = self.alliance
+        from world import services
 
-    def tearDown(self):
-        game_init.game_systems.clear()
-        game_init.game_systems.update(self._saved_systems)
+        self.alliance = _FakeAllianceSystem(live_ids={1})
+        ctx = services.override({"alliance_system": self.alliance})
+        ctx.__enter__()
+        self.addCleanup(ctx.__exit__, None, None, None)
 
 
 # -------------------------------------------------------------- #

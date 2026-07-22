@@ -96,21 +96,19 @@ class _Building:
 
 class DirectiveTestBase(unittest.TestCase):
     def setUp(self):
+        from world import services
+
         self.bus = EventBus()
         self.registry = _Registry(list(_CHAIN))
         self.system = DirectiveSystem(self.registry, self.bus)
         self.rank_system = _RankSystem()
-        # Patch get_system so _grant_reward finds the rank system.
-        import server.conf.game_init as gi
-        self._saved = dict(gi.game_systems)
-        gi.game_systems.clear()
-        gi.game_systems["rank_system"] = self.rank_system
-        gi.game_systems["directive_system"] = self.system
-
-    def tearDown(self):
-        import server.conf.game_init as gi
-        gi.game_systems.clear()
-        gi.game_systems.update(self._saved)
+        # Install through the facade so _grant_reward's get_system finds them.
+        ctx = services.override({
+            "rank_system": self.rank_system,
+            "directive_system": self.system,
+        })
+        ctx.__enter__()
+        self.addCleanup(ctx.__exit__, None, None, None)
 
 
 # -------------------------------------------------------------- #

@@ -300,8 +300,8 @@ class EquipmentSystem(CarryWeightMixin, StorageMixin, BaseSystem):
                     owner.add_resource(res, amt)
                 continue
 
-            # Tell the owner what their building made (previously silent, which
-            # read as "it never produced anything").
+            # Tell the owner what their building made — without this message,
+            # production reads as "it never produced anything".
             self.notify(
                 owner, "produced",
                 item_name=item_def.name,
