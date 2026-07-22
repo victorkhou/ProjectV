@@ -36,7 +36,7 @@ xp_curve_late_ratio: 1.05
 xp_curve_knee_level: 20
 
 gather_amount: 1
-player_default_health: 100
+player_default_health: 500
 
 resource_respawn_ticks: 30
 combat_lockout_ticks: 5

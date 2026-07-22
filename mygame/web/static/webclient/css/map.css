@@ -76,7 +76,12 @@ html, body { height: 100%; width: 100%; margin: 0; padding: 0; overflow: hidden;
     color: #888; font-family: 'DejaVu Sans Mono', Consolas, monospace;
     font-size: 11px; padding: 3px 8px; text-align: center;
     background: #111; border-top: 1px solid #222; flex-shrink: 0;
+    /* Keep the status line to a single row; a long line (HP + level + position
+       + terrain + discovered) truncates rather than wrapping and pushing the
+       map up. */
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
+#map-info .mi-hp { font-weight: bold; }
 
 /* -- Right panel: vertical split (chat top, output bottom) -- */
 #right-panel {
@@ -196,4 +201,7 @@ html, body { height: 100%; width: 100%; margin: 0; padding: 0; overflow: hidden;
     cursor: pointer; height: auto !important;
 }
 #inputsend:hover { background: #444; }
-.prompt { max-height: 2rem; overflow: hidden; }
+/* The status prompt is shown in the map footer (#map-info), so the dedicated
+   prompt bar above the input is redundant on this client — hide it to avoid
+   duplicating/overlapping the same HP/level/position info. */
+#prompt, .prompt { display: none !important; }

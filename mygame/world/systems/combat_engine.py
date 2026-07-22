@@ -443,6 +443,19 @@ class CombatEngine(BaseSystem):
                 self._refund_ammo(action)
                 continue
 
+            # Re-check RANGE at resolution, not just at queue time. A turret (or
+            # any queued shot) locks on one tick and resolves the next, so a
+            # target that stepped out of range in that gap must not still be hit
+            # by the in-flight shot. A melee weapon's effective range is always
+            # 1; a ranged weapon reads its `range` stat, matching the queue-time
+            # check. Out of range → drop the shot and refund its ammo.
+            weapon_range = 1 if is_melee else int(
+                self._get_stat(weapon_item, "range", 1)
+            )
+            if not self._validate_range(attacker, target, weapon_range):
+                self._refund_ammo(action)
+                continue
+
             # Accuracy roll for probabilistic ranged fire ('shoot'/'target').
             # accuracy is None for melee/guard/turret/throw — those always land.
             # A miss deals no damage but the shot was still fired (ammo already

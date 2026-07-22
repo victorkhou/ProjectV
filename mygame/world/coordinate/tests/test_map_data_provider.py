@@ -70,6 +70,7 @@ class _FakePlayer:
         self.id = 1
         self.db = _FakeDB(
             coord_x=x, coord_y=y, coord_planet=planet,
+            hp=350, hp_max=500, level=7,
             discovered_tiles=DiscoveryBitfield(),
             discovered_buildings={},
             discovery_memory={"discovered": {}, "buildings": {}},
@@ -130,6 +131,16 @@ class TestMapDataProvider:
         assert "tiles" in data
         assert "vision_radius" in data
         assert data["vision_radius"] == 2
+
+    def test_player_payload_includes_hp_and_level(self):
+        """The player sub-dict carries hp/hp_max/level for the webclient's map
+        footer (the graphical equivalent of the telnet status prompt)."""
+        provider, _ = self._make_provider()
+        player = _FakePlayer()
+        data = provider.get_map_data(player, [])
+        assert data["player"]["hp"] == 350
+        assert data["player"]["hp_max"] == 500
+        assert data["player"]["level"] == 7
 
     def test_tile_states(self):
         provider, _ = self._make_provider(pvr=1)

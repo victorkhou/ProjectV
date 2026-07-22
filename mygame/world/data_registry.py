@@ -403,9 +403,12 @@ class DataRegistry:
                 map_symbol=entry["map_symbol"],
                 resource_type=entry.get("resource_type"),
                 passable=entry.get("passable", True),
+                buildable=entry.get("buildable", True),
                 vision_modifier=raw_mods["vision_modifier"] or 0,
                 movement_modifier=raw_mods["movement_modifier"] or 0.0,
                 defense_modifier=raw_mods["defense_modifier"] or 0.0,
+                latitude_bias=entry.get("latitude_bias") or 0.0,
+                latitude_min=entry.get("latitude_min") or 0.0,
             )
             self.terrain[tdef.terrain_type] = tdef
         for entry in data.get("planets", []):

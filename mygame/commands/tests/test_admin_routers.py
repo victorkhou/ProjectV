@@ -111,6 +111,9 @@ from mygame.commands.admin_commands import (  # noqa: E402
     CmdAdminPlayer,
     CmdAdminOutpost,
     CmdAdminAlliance,
+    CmdAdminStat,
+    CmdPeace,
+    CmdRestore,
     CmdTeleport,
     CmdTransfer,
 )
@@ -1667,6 +1670,159 @@ class TestAdminAlliance(unittest.TestCase):
         _make_cmd(CmdAdminAlliance, caller, " kick WLV Grunt").func()
         self.assertIn(("_remove_from_roster", 200), system.calls)
         self.assertIn(("_clear_pointer", 200), system.calls)
+
+
+# -------------------------------------------------------------- #
+#  CmdPeace tests — clear a player's combat state
+# -------------------------------------------------------------- #
+
+class TestPeace(unittest.TestCase):
+    """@peace zeroes the combat timer + build-gate lockout."""
+
+    def test_peace_clears_self(self):
+        caller = FakeCaller(perm_level="Builder")
+        caller.db.combat_timer_expires = 120
+        caller.db.combat_lockout_tick = 55
+        _make_cmd(CmdPeace, caller, "").func()
+        self.assertEqual(caller.db.combat_timer_expires, 0)
+        self.assertEqual(caller.db.combat_lockout_tick, 0)
+        self.assertTrue(any("Cleared combat state" in m for m in caller._messages))
+
+    def test_peace_clears_named_target(self):
+        target = FakeTarget(name="Bob")
+        target.db.combat_timer_expires = 99
+        caller = FakeCaller(perm_level="Builder")
+        caller._search_results["Bob"] = target
+        _make_cmd(CmdPeace, caller, "Bob").func()
+        self.assertEqual(target.db.combat_timer_expires, 0)
+        # The target is notified.
+        self.assertTrue(any("out of combat" in m for m in target._messages))
+
+    def test_peace_unknown_target(self):
+        caller = FakeCaller(perm_level="Builder")
+        _make_cmd(CmdPeace, caller, "Ghost").func()
+        self.assertTrue(any("Ghost" in m for m in caller._messages))
+
+    def test_peace_requires_builder(self):
+        # The lock string gates the command; verify it's Builder-scoped.
+        self.assertIn("Builder", CmdPeace.locks)
+
+
+# -------------------------------------------------------------- #
+#  CmdRestore tests — heal / revive
+# -------------------------------------------------------------- #
+
+class TestRestore(unittest.TestCase):
+    """@restore heals to hp_max and revives a downed unit."""
+
+    def test_restore_self_to_full(self):
+        caller = FakeCaller(perm_level="Builder")
+        caller.db.hp = 3
+        caller.db.hp_max = 500
+        _make_cmd(CmdRestore, caller, "").func()
+        self.assertEqual(caller.db.hp, 500)
+        self.assertTrue(any("full health" in m for m in caller._messages))
+
+    def test_restore_revives_downed_target(self):
+        target = FakeTarget(name="Bob")
+        target.db.hp = 0
+        target.db.hp_max = 100
+        target.db.incapacitated = True
+        target.db.respawn_timer = 8
+        caller = FakeCaller(perm_level="Builder")
+        caller._search_results["Bob"] = target
+        _make_cmd(CmdRestore, caller, "Bob").func()
+        self.assertEqual(target.db.hp, 100)
+        self.assertFalse(target.db.incapacitated)
+        self.assertEqual(target.db.respawn_timer, 0)
+
+    def test_restore_no_max_health(self):
+        caller = FakeCaller(perm_level="Builder")
+        # hp_max unset -> 0 -> refuse rather than heal to 0.
+        _make_cmd(CmdRestore, caller, "").func()
+        self.assertTrue(any("maximum health" in m for m in caller._messages))
+
+    def test_restore_heal_alias(self):
+        self.assertIn("@heal", CmdRestore.aliases)
+
+
+# -------------------------------------------------------------- #
+#  CmdAdminStat tests — set hp / maxhp / xp / arbitrary fields
+# -------------------------------------------------------------- #
+
+class TestAdminStat(unittest.TestCase):
+    """@stat sets combat/progression fields on a player or NPC."""
+
+    def test_hp_clamped_to_max(self):
+        caller = FakeCaller(perm_level="Admin")
+        caller.db.hp_max = 100
+        _make_cmd(CmdAdminStat, caller, " hp 9999").func()
+        self.assertEqual(caller.db.hp, 100)  # clamped
+
+    def test_hp_revives_downed(self):
+        target = FakeTarget(name="Bob")
+        target.db.hp_max = 100
+        target.db.incapacitated = True
+        target.db.respawn_timer = 5
+        caller = FakeCaller(perm_level="Admin")
+        caller._search_results["Bob"] = target
+        _make_cmd(CmdAdminStat, caller, " hp 50 Bob").func()
+        self.assertEqual(target.db.hp, 50)
+        self.assertFalse(target.db.incapacitated)
+
+    def test_maxhp_tops_up_full_unit(self):
+        caller = FakeCaller(perm_level="Admin")
+        caller.db.hp = 100
+        caller.db.hp_max = 100
+        _make_cmd(CmdAdminStat, caller, " maxhp 1000").func()
+        self.assertEqual(caller.db.hp_max, 1000)
+        self.assertEqual(caller.db.hp, 1000)  # full unit topped up
+
+    def test_maxhp_clamps_overmax(self):
+        caller = FakeCaller(perm_level="Admin")
+        caller.db.hp = 900
+        caller.db.hp_max = 1000
+        _make_cmd(CmdAdminStat, caller, " maxhp 500").func()
+        self.assertEqual(caller.db.hp_max, 500)
+        self.assertEqual(caller.db.hp, 500)  # clamped down
+
+    def test_xp_sets_value(self):
+        caller = FakeCaller(perm_level="Admin")
+        _make_cmd(CmdAdminStat, caller, " xp 1234").func()
+        self.assertEqual(caller.db.combat_xp, 1234)
+
+    def test_set_allowlisted_field(self):
+        caller = FakeCaller(perm_level="Admin")
+        _make_cmd(CmdAdminStat, caller, " set kills 42").func()
+        self.assertEqual(caller.db.kills, 42)
+
+    def test_set_rejects_unlisted_field(self):
+        caller = FakeCaller(perm_level="Admin")
+        _make_cmd(CmdAdminStat, caller, " set coord_x 5").func()
+        self.assertIsNone(caller.db.coord_x)
+        self.assertTrue(any("not settable" in m for m in caller._messages))
+
+    def test_show_lists_stats(self):
+        caller = FakeCaller(perm_level="Builder")
+        caller.db.hp = 50
+        caller.db.hp_max = 500
+        _make_cmd(CmdAdminStat, caller, " show").func()
+        self.assertTrue(any("Stats:" in m for m in caller._messages))
+
+    def test_hp_denied_for_builder(self):
+        caller = FakeCaller(perm_level="Builder")
+        _make_cmd(CmdAdminStat, caller, " hp 50").func()
+        self.assertTrue(any("Permission denied" in m for m in caller._messages))
+
+    def test_show_allowed_for_builder(self):
+        caller = FakeCaller(perm_level="Builder")
+        _make_cmd(CmdAdminStat, caller, " show").func()
+        self.assertFalse(any("Permission denied" in m for m in caller._messages))
+
+    def test_hp_no_args_shows_usage(self):
+        caller = FakeCaller(perm_level="Admin")
+        _make_cmd(CmdAdminStat, caller, " hp").func()
+        self.assertTrue(any("Usage" in m for m in caller._messages))
 
 
 if __name__ == "__main__":

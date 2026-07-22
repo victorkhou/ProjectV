@@ -20,16 +20,26 @@ planets:
     width: 500
     height: 500
     terrain_seed: 42
-    terrain_noise_cell_size: 8
+    # terrain_noise_cell_size is the biome scale: the coarse-noise cell edge in
+    # tiles. Larger = bigger, more coherent contiguous biomes (regions of one
+    # terrain) rather than fine per-tile scatter. 14 gives readable biomes at
+    # the ~30-tile viewport while still varying across a 400-500 wide map.
+    terrain_noise_cell_size: 14
+    # Unified terrain template (terrain-strategy): 3 COMMON buildable tiles at
+    # ~15% each (~45% total) are the baseline biome that supplies Wood/Stone/
+    # Iron; the remaining ~55% is one tile of each archetype — SIGHT, COVER,
+    # OPEN, FORTRESS — plus a rare TREACHEROUS hazard tile. Same shape on every
+    # planet; only the biome skin, payoff tiles, and unique resource differ.
+    # Weights are relative (the generator normalizes the sum).
     terrain_weights:
-      Plains: 0.25
-      Forest: 0.20
+      Plains: 0.15
       Dirt: 0.15
       Rock: 0.15
-      Mountain: 0.08
-      River: 0.07
-      Sand: 0.05
-      Snow: 0.05
+      Mountain: 0.12
+      Sand: 0.12
+      Snow: 0.13
+      Forest: 0.1
+      River: 0.08
     persistence_type: "static"
     spawn_x: 250
     spawn_y: 250
@@ -44,16 +54,17 @@ planets:
     width: 400
     height: 400
     terrain_seed: 7
-    terrain_noise_cell_size: 8
+    terrain_noise_cell_size: 14
+    # ~50% neutral basic (Factory_Floor); rest inverse to benefit magnitude.
     terrain_weights:
-      Power_Grid: 0.20
-      Scrapyard: 0.15
-      Circuit_Field: 0.18
-      Factory_Floor: 0.12
-      Ruins: 0.10
+      Factory_Floor: 0.15
+      Warehouse: 0.15
+      Pipeline: 0.15
+      Circuit_Field: 0.12
+      Power_Grid: 0.12
+      Ruins: 0.13
+      Scrapyard: 0.1
       Toxic_Waste: 0.08
-      Pipeline: 0.10
-      Warehouse: 0.07
     persistence_type: "static"
     spawn_x: 200
     spawn_y: 200
@@ -67,16 +78,17 @@ planets:
     width: 400
     height: 400
     terrain_seed: 13
-    terrain_noise_cell_size: 8
+    terrain_noise_cell_size: 14
+    # ~50% neutral basic (Tundra_Moss); rest inverse to benefit magnitude.
     terrain_weights:
-      Snowfield: 0.25
-      Frozen_Lake: 0.10
-      Pine_Forest: 0.15
-      Ice_Cave: 0.08
-      Permafrost: 0.18
-      Glacier: 0.08
-      Hot_Spring: 0.08
-      Tundra_Moss: 0.08
+      Tundra_Moss: 0.15
+      Permafrost: 0.15
+      Snowfield: 0.15
+      Glacier: 0.12
+      Hot_Spring: 0.12
+      Pine_Forest: 0.13
+      Ice_Cave: 0.1
+      Frozen_Lake: 0.08
     persistence_type: "static"
     spawn_x: 200
     spawn_y: 200
@@ -90,16 +102,17 @@ planets:
     width: 300
     height: 300
     terrain_seed: 66
-    terrain_noise_cell_size: 8
+    terrain_noise_cell_size: 14
+    # ~50% neutral basic (Ash_Wastes); rest inverse to benefit magnitude.
     terrain_weights:
-      Ash_Wastes: 0.20
-      Lava_Flow: 0.10
+      Ash_Wastes: 0.15
+      Scorched_Rock: 0.15
       Obsidian_Plain: 0.15
-      Magma_Vent: 0.12
-      Scorched_Rock: 0.18
-      Sulfur_Pit: 0.08
-      Ember_Field: 0.10
-      Basalt_Ridge: 0.07
+      Basalt_Ridge: 0.12
+      Ember_Field: 0.12
+      Sulfur_Pit: 0.13
+      Magma_Vent: 0.1
+      Lava_Flow: 0.08
     persistence_type: "static"
     spawn_x: 150
     spawn_y: 150
@@ -113,25 +126,20 @@ planets:
     width: 400
     height: 400
     terrain_seed: 117
-    terrain_noise_cell_size: 8
-    # Elysium is an earth-like paradise: an Earth-terrain base (~75%) with the
-    # arcane paradise tiles (Aether_Spring, Ley_Nexus, Arcane_Relay, and the
-    # cosmetic Cloud_Meadow/Shimmer_Lake) scattered as accents (~25%). The Terra
-    # types are shared terrain defs, so they reuse Terra's sprites/colors/yields.
+    terrain_noise_cell_size: 14
+    # Elysium is an earth-like paradise: neutral Dirt is the ~50% basic biome
+    # (shared Terra def), with Earth terrain + arcane paradise tiles as the
+    # benefit-bearing minority, weighted inversely to benefit magnitude like
+    # every other planet. Terra/arcane types reuse their shared sprites/yields.
     terrain_weights:
-      Plains: 0.16
-      Forest: 0.19
-      Dirt: 0.08
-      Rock: 0.14
-      Mountain: 0.11
-      River: 0.05
-      Sand: 0.03
-      Snow: 0.02
-      Aether_Spring: 0.06
-      Ley_Nexus: 0.06
-      Arcane_Relay: 0.04
-      Cloud_Meadow: 0.04
-      Shimmer_Lake: 0.02
+      Plains: 0.15
+      Rock: 0.15
+      Cloud_Meadow: 0.15
+      Mountain: 0.12
+      Arcane_Relay: 0.12
+      Ley_Nexus: 0.13
+      Aether_Spring: 0.1
+      Shimmer_Lake: 0.08
     persistence_type: "static"
     spawn_x: 200
     spawn_y: 200
@@ -145,16 +153,17 @@ planets:
     width: 200
     height: 200
     terrain_seed: 88
-    terrain_noise_cell_size: 8
+    terrain_noise_cell_size: 14
+    # ~50% neutral basic (Corridor); rest inverse to benefit magnitude.
     terrain_weights:
-      Corridor: 0.25
-      Vault_Room: 0.05
-      Armory_Ruin: 0.12
-      Control_Room: 0.10
-      Open_Chamber: 0.20
+      Corridor: 0.15
+      Barracks_Ruin: 0.15
+      Open_Chamber: 0.15
+      Control_Room: 0.12
+      Generator_Room: 0.12
+      Armory_Ruin: 0.13
+      Vault_Room: 0.1
       Blast_Door: 0.08
-      Generator_Room: 0.10
-      Barracks_Ruin: 0.10
     persistence_type: "static"
     spawn_x: 100
     spawn_y: 100
@@ -168,16 +177,17 @@ planets:
     width: 1000
     height: 1000
     terrain_seed: 99
-    terrain_noise_cell_size: 8
+    terrain_noise_cell_size: 14
+    # ~50% neutral basic (Void — empty vacuum); rest inverse to benefit.
     terrain_weights:
-      Void: 0.30
+      Void: 0.15
+      Debris: 0.15
+      Ice_Field: 0.15
       Nebula: 0.12
-      Asteroid: 0.12
-      Debris: 0.10
-      Ice_Field: 0.10
-      Wormhole: 0.05
-      Radiation_Zone: 0.08
+      Wormhole: 0.12
       Derelict_Ship: 0.13
+      Asteroid: 0.1
+      Radiation_Zone: 0.08
     persistence_type: "static"
     spawn_x: 500
     spawn_y: 500

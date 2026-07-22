@@ -82,7 +82,13 @@ def _ensure_evennia_stubs():
     })
     _mod("evennia.commands")
     _mod("evennia.commands.command", {
-        "Command": type("Command", (), {"func": lambda self: None}),
+        # Mirror the real evennia Command's no-op pre/post hooks so overrides
+        # that call super().at_pre_cmd()/at_post_cmd() work under the stub.
+        "Command": type("Command", (), {
+            "func": lambda self: None,
+            "at_pre_cmd": lambda self: False,
+            "at_post_cmd": lambda self: None,
+        }),
     })
     _mod("evennia.commands.cmdset")
     _mod("evennia.utils")
@@ -240,10 +246,16 @@ class FakeCaller:
             _install_systems(systems)
         self.location = location or FakeLocation()
         self._messages = []
+        self._prompts = []  # captured prompt= kwargs (telnet status prompt text)
+        self._prompt_status = []  # captured prompt_status= kwargs (webclient OOB)
         self._moved_to = None
         self._search_results = {}
 
     def msg(self, text=None, **kwargs):
+        if "prompt" in kwargs:
+            self._prompts.append(kwargs["prompt"])
+        if "prompt_status" in kwargs:
+            self._prompt_status.append(kwargs["prompt_status"])
         if text is not None:
             # Handle tuple form: (text_str, kwargs_dict)
             if isinstance(text, tuple):
@@ -2894,6 +2906,27 @@ class TestCmdTerrain(unittest.TestCase):
         self.assertIn("Terrain Types", help_text)
         self.assertIn("Elysium", help_text)
 
+    def test_shows_combat_modifiers(self):
+        output = self._output()
+        # Forest carries movement -1 / defense +3 in terrain.yaml, so the row
+        # must surface the movement penalty and defense bonus tags.
+        self.assertIn("M-1", output)
+        self.assertIn("D+3", output)
+        # The legend names the three modifier kinds (highlight codes split the
+        # leading letter, e.g. "|wV|nision", so match the readable remainders).
+        self.assertIn("ision", output)
+        self.assertIn("ovement", output)
+        self.assertIn("efense", output)
+
+    def test_neutral_terrain_shows_no_modifier_tags(self):
+        # Dirt is fully neutral (all three modifiers zero) — its row must carry
+        # no V/M/D tag. Isolate Dirt's row and assert none appear on it.
+        output = self._output()
+        dirt_rows = [ln for ln in output.splitlines() if "Dirt" in ln]
+        self.assertTrue(dirt_rows, "Dirt row missing from listing")
+        for tag in ("V+", "V-", "M+", "M-", "D+", "D-"):
+            self.assertNotIn(tag, dirt_rows[0])
+
     def test_missing_registry_is_graceful(self):
         with services.override({}):
             caller = FakeCaller()
@@ -3809,6 +3842,95 @@ class TestCmdWhoLinkdeadRows(unittest.TestCase):
         table, added = self._run([char], show_admin=False, live_accounts=(acct,))
         self.assertEqual(added, 0)
         self.assertEqual(table.rows, [])
+
+
+# -------------------------------------------------------------- #
+#  Status prompt (classic MUD prompt after every command)
+# -------------------------------------------------------------- #
+
+class TestPlayerPrompt(unittest.TestCase):
+    """_player_prompt / send_prompt build and deliver the HP/level/position line."""
+
+    def test_prompt_contains_hp_level_coords(self):
+        from mygame.commands.game_commands import _player_prompt
+        caller = FakeCaller()
+        caller.db.hp = 80
+        caller.db.hp_max = 100
+        caller.db.level = 4
+        text = _player_prompt(caller)
+        self.assertIsNotNone(text)
+        self.assertIn("HP", text)
+        self.assertIn("80/100", text)
+        self.assertIn("Lv 4", text)
+        self.assertIn("(5,5)", text)
+
+    def test_prompt_none_without_coords(self):
+        from mygame.commands.game_commands import _player_prompt
+        caller = FakeCaller()
+        caller.db.coord_planet = ""  # not positioned
+        self.assertIsNone(_player_prompt(caller))
+
+    def test_hp_color_low_is_red(self):
+        from mygame.commands.game_commands import _player_prompt
+        caller = FakeCaller()
+        caller.db.hp = 10
+        caller.db.hp_max = 100
+        # |r is the red ANSI marker; low HP fraction (<30%) must use it.
+        self.assertIn("|r", _player_prompt(caller))
+
+    def test_hp_color_full_is_green(self):
+        from mygame.commands.game_commands import _player_prompt
+        caller = FakeCaller()
+        caller.db.hp = 100
+        caller.db.hp_max = 100
+        self.assertIn("|g", _player_prompt(caller))
+
+    def test_send_prompt_delivers_via_prompt_kwarg(self):
+        from mygame.commands.game_commands import send_prompt
+        caller = FakeCaller()
+        send_prompt(caller)
+        self.assertEqual(len(caller._prompts), 1)
+        self.assertIn("HP", caller._prompts[0])
+
+    def test_send_prompt_also_emits_structured_status(self):
+        # The webclient footer is refreshed from a structured prompt_status OOB
+        # sent alongside the telnet text prompt, so it updates every command.
+        from mygame.commands.game_commands import send_prompt
+        caller = FakeCaller()
+        caller.db.hp = 60
+        caller.db.hp_max = 100
+        caller.db.level = 9
+        send_prompt(caller)
+        self.assertEqual(len(caller._prompt_status), 1)
+        status = caller._prompt_status[0]
+        self.assertEqual(status["hp"], 60)
+        self.assertEqual(status["hp_max"], 100)
+        self.assertEqual(status["level"], 9)
+        self.assertEqual(status["x"], 5)
+        self.assertEqual(status["y"], 5)
+
+    def test_prompt_status_json_serializable(self):
+        import json
+        from mygame.commands.game_commands import _prompt_fields
+        caller = FakeCaller()
+        json.dumps(_prompt_fields(caller))  # must not raise
+
+    def test_send_prompt_noop_without_position(self):
+        from mygame.commands.game_commands import send_prompt
+        caller = FakeCaller()
+        caller.db.coord_planet = ""
+        send_prompt(caller)
+        self.assertEqual(caller._prompts, [])
+        self.assertEqual(caller._prompt_status, [])
+
+    def test_at_post_cmd_emits_prompt(self):
+        # A real GameCommand run should append a prompt via at_post_cmd — both
+        # the telnet text prompt and the webclient structured status.
+        caller = FakeCaller()
+        cmd = _make_cmd(CmdInventory, caller, "")
+        cmd.at_post_cmd()
+        self.assertEqual(len(caller._prompts), 1)
+        self.assertEqual(len(caller._prompt_status), 1)
 
 
 if __name__ == "__main__":

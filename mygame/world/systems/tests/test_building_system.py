@@ -238,6 +238,15 @@ def _make_registry_with_buildings() -> DataRegistry:
             capabilities=frozenset({"shield_generator", "upgradable"}),
         ),
     }
+    # Terrain defs for the buildable-gate check: Plains/Rock/Forest are
+    # buildable; River is a treacherous non-buildable tile.
+    from mygame.world.definitions import TerrainDef
+    registry.terrain = {
+        "Plains": TerrainDef("Plains", "..", buildable=True),
+        "Rock": TerrainDef("Rock", "##", buildable=True),
+        "Forest": TerrainDef("Forest", "&&", buildable=True),
+        "River": TerrainDef("River", "==", buildable=False),
+    }
     return registry
 
 def _make_building_system(
@@ -432,6 +441,52 @@ class TestConstructTerrainValidation(unittest.TestCase):
         player.db.rank_level = 3
         player.db.level = 3  # VV requires rank 3
         tile = FakeTile(terrain_type="Forest")  # VV has no terrain requirement
+        system, created, _ = _make_building_system()
+        ok, msg = system.construct(player, tile, "VV")
+        self.assertTrue(ok)
+
+
+class TestConstructBuildableTerrain(unittest.TestCase):
+    """Buildings cannot be placed on non-buildable (treacherous) terrain."""
+
+    def test_treacherous_terrain_rejected(self):
+        hq = FakeBuilding(building_type="HQ")
+        player = FakePlayer(
+            resources={"Iron": 100, "Stone": 100, "Wood": 100},
+            buildings=[hq],
+        )
+        player.db.rank_level = 3
+        player.db.level = 3
+        tile = FakeTile(terrain_type="River")  # buildable: false
+        system, created, _ = _make_building_system()
+        ok, msg = system.construct(player, tile, "VV")
+        self.assertFalse(ok)
+        self.assertIn("unstable", msg.lower())
+
+    def test_buildable_terrain_succeeds(self):
+        hq = FakeBuilding(building_type="HQ")
+        player = FakePlayer(
+            resources={"Iron": 100, "Stone": 100, "Wood": 100},
+            buildings=[hq],
+        )
+        player.db.rank_level = 3
+        player.db.level = 3
+        tile = FakeTile(terrain_type="Forest")  # buildable: true
+        system, created, _ = _make_building_system()
+        ok, msg = system.construct(player, tile, "VV")
+        self.assertTrue(ok)
+
+    def test_unknown_terrain_is_fail_open(self):
+        # A terrain with no TerrainDef in the registry is treated as buildable
+        # (legacy rooms / test fakes must not be blocked).
+        hq = FakeBuilding(building_type="HQ")
+        player = FakePlayer(
+            resources={"Iron": 100, "Stone": 100, "Wood": 100},
+            buildings=[hq],
+        )
+        player.db.rank_level = 3
+        player.db.level = 3
+        tile = FakeTile(terrain_type="Nonexistent_Tile")
         system, created, _ = _make_building_system()
         ok, msg = system.construct(player, tile, "VV")
         self.assertTrue(ok)

@@ -211,7 +211,7 @@ class TestBalanceConfig:
         assert bc.harvest_crit_multiplier == 5
         assert bc.scout_vision_radius == 5
         assert bc.gather_amount == 1
-        assert bc.player_default_health == 100
+        assert bc.player_default_health == 500
         assert bc.resource_respawn_ticks == 30
         assert bc.combat_lockout_ticks == 5
         assert bc.tick_interval == 1.0
@@ -255,9 +255,10 @@ class TestDataclassContracts:
         assert len(fields(PowerupDef)) == 7
 
     def test_terrain_def_field_count(self):
-        # 4 original + 3 terrain-strategy modifiers
-        # (vision_modifier, movement_modifier, defense_modifier).
-        assert len(fields(TerrainDef)) == 7
+        # 4 original + buildable (terrain rebalance) + 3 terrain-strategy
+        # modifiers (vision/movement/defense) + 2 latitude fields
+        # (latitude_bias, latitude_min).
+        assert len(fields(TerrainDef)) == 10
 
     def test_planet_def_field_count(self):
         assert len(fields(PlanetDef)) == 3

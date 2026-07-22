@@ -44,6 +44,7 @@ from commands.lifecycle_commands import (
 from commands.alliance_commands import CmdAlliance
 from commands.admin_commands import (
     CmdReboot, CmdPurgeRooms, CmdTeleport, CmdTransfer, CmdClearFog, CmdMigrate,
+    CmdPeace, CmdRestore, CmdAdminStat,
     CmdAdminBuilding, CmdAdminAgent, CmdAdminResource, CmdAdminItem,
     CmdAdminPlayer, CmdAdminOutpost, CmdAdminAlliance,
 )
@@ -190,12 +191,15 @@ class CharacterCmdSet(default_cmds.CharacterCmdSet):
         self.add(CmdTransfer())
         self.add(CmdClearFog())
         self.add(CmdMigrate())
+        self.add(CmdPeace())
+        self.add(CmdRestore())
         # Admin routers (replace old standalone admin commands)
         self.add(CmdAdminBuilding())
         self.add(CmdAdminAgent())
         self.add(CmdAdminResource())
         self.add(CmdAdminItem())
         self.add(CmdAdminPlayer())
+        self.add(CmdAdminStat())
         self.add(CmdAdminOutpost())
         self.add(CmdAdminAlliance())
         # Override Evennia's default who with rank/level display

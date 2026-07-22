@@ -562,7 +562,8 @@ class SchemaValidator:
         required = {"terrain_type", "map_symbol"}
         terrain_types: set[str] = set()
 
-        modifier_fields = ("vision_modifier", "movement_modifier", "defense_modifier")
+        modifier_fields = ("vision_modifier", "movement_modifier",
+                           "defense_modifier", "latitude_bias", "latitude_min")
 
         for prefix, entry in self._iter_dict_entries(terrain_list, "terrain", required, errors):
             ms = entry.get("map_symbol")
@@ -583,6 +584,13 @@ class SchemaValidator:
                     errors.append(
                         f"{prefix} ('{tt}'): {field} must be a number, got {val!r}"
                     )
+
+            # buildable, when present, must be a bool.
+            bld = entry.get("buildable")
+            if bld is not None and not isinstance(bld, bool):
+                errors.append(
+                    f"{prefix} ('{tt}'): buildable must be true/false, got {bld!r}"
+                )
 
         # Validate planet references to terrain types
         planets_list = data.get("planets", [])

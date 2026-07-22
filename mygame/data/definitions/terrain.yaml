@@ -1,35 +1,35 @@
 # Terrain and planet definitions for RTS Combat Overworld
-# Phase 1: 48 terrain types (8 per planet) with resource associations
-# Resources: Wood, Stone, Iron, Energy, Circuits, Nexium
-# ~40% of tiles produce resources; the rest are cosmetic/gameplay terrain.
+# Unified terrain template (terrain-strategy rebalance): every planet has
+# 3 COMMON buildable tiles (0/0/0, ~40-50% of the map) that supply the
+# Wood/Stone/Iron every building costs, plus one tile of each archetype:
+#   SIGHT (V+ M-), COVER (V- M+), FORTRESS (high D, low V), OPEN (V+ D-),
+#   and a TREACHEROUS tile (all-negative, buildable: false) reserved for
+# future special features. Planet-unique resources (Biomass/Cryogen/
+# Magmite/Aether/Nexium) sit on each planet's fortress/treacherous tiles as
+# the per-planet differentiator. Base-building philosophy is identical
+# everywhere; the payoff tiles and hazards differ by biome.
+#
+# Modifier fields: vision_modifier (int tiles), movement_modifier (ticks,
+# + = faster), defense_modifier (DR). buildable (default true) gates
+# construction. resource_type null = cosmetic/hazard tile.
 
 terrain:
-  # ── Terra (earth) — Rank 1+ ────────────────────────────────
-  # Basics: Wood, Stone, Iron
+  # ── Terra (earth) — Rank 1+ ──
   - terrain_type: Plains
     map_symbol: ".."
-    resource_type: Biomass
+    resource_type: null
     passable: true
     planet: terra
-    vision_modifier: 1       # open grassland: long sightlines
-    movement_modifier: 1     # easy footing: -1 tick of in-combat lag
-    defense_modifier: -1     # exposed: nowhere to hide
-
-  - terrain_type: Forest
-    map_symbol: "&&"
-    resource_type: Wood
-    passable: true
-    planet: terra
-    vision_modifier: -2      # dense canopy narrows sightlines
-    movement_modifier: -1    # slog: +1 tick of in-combat lag
-    defense_modifier: 3      # cover: +3 DR
+    vision_modifier: 0      # common — neutral buildable ground (~15% each)
+    movement_modifier: 0
+    defense_modifier: 0
 
   - terrain_type: Dirt
     map_symbol: "~~"
     resource_type: Biomass
     passable: true
     planet: terra
-    vision_modifier: 0       # unremarkable ground: intentionally neutral
+    vision_modifier: 0      # common — neutral buildable ground (~15% each)
     movement_modifier: 0
     defense_modifier: 0
 
@@ -38,528 +38,559 @@ terrain:
     resource_type: Stone
     passable: true
     planet: terra
-    movement_modifier: -1    # rough footing
-    defense_modifier: 2      # boulders provide cover
+    vision_modifier: 0      # common — neutral buildable ground (~15% each)
+    movement_modifier: 0
+    defense_modifier: 0
 
   - terrain_type: Mountain
     map_symbol: "/\\"
     resource_type: Iron
     passable: true
     planet: terra
-    vision_modifier: 2       # high ground: commanding view
-    movement_modifier: -2    # steep climb
-    defense_modifier: 2      # defensible slopes
-
-  - terrain_type: River
-    map_symbol: "=="
-    resource_type: null
-    passable: true
-    planet: terra
-    movement_modifier: -2    # wading slows movement
-    defense_modifier: -1     # exposed mid-crossing
+    vision_modifier: 2      # sight-hill — see far, move slow
+    movement_modifier: -2
+    defense_modifier: 1
+    latitude_bias: 1.5      # mountains cluster toward the poles (N/S edges)
 
   - terrain_type: Sand
     map_symbol: "::"
     resource_type: null
     passable: true
     planet: terra
-    vision_modifier: 1       # open dunes
-    movement_modifier: -1    # shifting sand drags feet
-    defense_modifier: -1     # no cover
+    vision_modifier: -2      # cover-fast — concealed, quick footing
+    movement_modifier: 1
+    defense_modifier: 1
+    latitude_bias: -1.5     # sand (desert) concentrates toward the equator
+
+  - terrain_type: Forest
+    map_symbol: "&&"
+    resource_type: Wood
+    passable: true
+    planet: terra
+    vision_modifier: -2      # fortress — best cover, poor sightlines
+    movement_modifier: -1
+    defense_modifier: 3
 
   - terrain_type: Snow
     map_symbol: "**"
     resource_type: null
     passable: true
     planet: terra
-    vision_modifier: 1       # white expanse: easy spotting
-    movement_modifier: -1    # deep drifts
+    vision_modifier: 1      # open — exposed but mobile
+    movement_modifier: 1
+    defense_modifier: -1
+    latitude_bias: 2.0      # snow packs hard toward the poles (N/S edges)
+    latitude_min: 0.3       # never in the central 30% of rows (no equator snow)
 
-  # ── Forge (industrial) — Rank 5+ ───────────────────────────
-  # Introduces Energy + Circuits for mid-game tech
-  - terrain_type: Power_Grid
-    map_symbol: "++"
-    resource_type: Energy
+  - terrain_type: River
+    map_symbol: "=="
+    resource_type: null
     passable: true
-    planet: forge
-    vision_modifier: -1      # towers and cabling clutter sightlines
-    defense_modifier: 1      # pylons offer partial cover
+    planet: terra
+    buildable: false
+    vision_modifier: -2      # treacherous — all-negative, NOT buildable (future features)
+    movement_modifier: -2
+    defense_modifier: -2
 
-  - terrain_type: Scrapyard
-    map_symbol: "%%"
+  # ── Forge (industrial) — Rank 21+ ──
+  - terrain_type: Factory_Floor
+    map_symbol: "=="
     resource_type: Iron
     passable: true
     planet: forge
-    vision_modifier: -2      # junk heaps block sightlines
-    movement_modifier: -1    # debris underfoot
-    defense_modifier: 3      # abundant hard cover
+    vision_modifier: 0      # common — neutral buildable ground (~15% each)
+    movement_modifier: 0
+    defense_modifier: 0
+
+  - terrain_type: Warehouse
+    map_symbol: "[]"
+    resource_type: Wood
+    passable: true
+    planet: forge
+    vision_modifier: 0      # common — neutral buildable ground (~15% each)
+    movement_modifier: 0
+    defense_modifier: 0
+
+  - terrain_type: Pipeline
+    map_symbol: "--"
+    resource_type: Energy
+    passable: true
+    planet: forge
+    vision_modifier: 0      # common — neutral buildable ground (~15% each)
+    movement_modifier: 0
+    defense_modifier: 0
 
   - terrain_type: Circuit_Field
     map_symbol: "::"
     resource_type: Circuits
     passable: true
     planet: forge
-    vision_modifier: 1       # low flat arrays: clear lines of sight
-    defense_modifier: -1     # nothing to hide behind
+    vision_modifier: 2      # sight-hill — see far, move slow
+    movement_modifier: -2
+    defense_modifier: 1
 
-  - terrain_type: Factory_Floor
-    map_symbol: "=="
-    resource_type: null
+  - terrain_type: Power_Grid
+    map_symbol: "++"
+    resource_type: Energy
     passable: true
     planet: forge
-    movement_modifier: 1     # smooth open floor: fast footing
-    defense_modifier: -1     # wide open interior
+    vision_modifier: -2      # cover-fast — concealed, quick footing
+    movement_modifier: 1
+    defense_modifier: 1
+
+  - terrain_type: Scrapyard
+    map_symbol: "%%"
+    resource_type: Iron
+    passable: true
+    planet: forge
+    vision_modifier: -2      # fortress — best cover, poor sightlines
+    movement_modifier: -1
+    defense_modifier: 3
 
   - terrain_type: Ruins
     map_symbol: ";;"
-    resource_type: null
+    resource_type: Stone
     passable: true
     planet: forge
-    vision_modifier: -1      # broken walls interrupt sightlines
-    movement_modifier: -1    # rubble underfoot
-    defense_modifier: 3      # walls make strong cover
+    vision_modifier: 1      # open — exposed but mobile
+    movement_modifier: 1
+    defense_modifier: -1
 
   - terrain_type: Toxic_Waste
     map_symbol: "!!"
     resource_type: null
     passable: true
     planet: forge
-    vision_modifier: -1      # chemical haze
-    movement_modifier: -2    # careful steps through sludge
-    defense_modifier: -1     # corrosive exposure
+    buildable: false
+    vision_modifier: -2      # treacherous — all-negative, NOT buildable (future features)
+    movement_modifier: -2
+    defense_modifier: -2
 
-  - terrain_type: Pipeline
-    map_symbol: "--"
-    resource_type: null
-    passable: true
-    planet: forge
-    movement_modifier: 1     # walkways speed travel
-    defense_modifier: 1      # pipes give partial cover
-
-  - terrain_type: Warehouse
-    map_symbol: "[]"
-    resource_type: null
-    passable: true
-    planet: forge
-    vision_modifier: -2      # stacked crates block view
-    defense_modifier: 2      # plenty of cover between shelves
-
-  # ── Tundra (frozen) — Rank 7+ ──────────────────────────────
-  # Alternate sources of Wood, Stone, Iron
-  - terrain_type: Snowfield
-    map_symbol: "**"
-    resource_type: null
-    passable: true
-    planet: tundra
-    vision_modifier: 2       # flat white expanse: spot anything
-    movement_modifier: -1    # deep snow
-    defense_modifier: -1     # nowhere to hide
-
-  - terrain_type: Frozen_Lake
-    map_symbol: "><"
-    resource_type: Cryogen
-    passable: true
-    planet: tundra
-    vision_modifier: 1       # open ice sheet
-    movement_modifier: -2    # treacherous slick footing
-    defense_modifier: -2     # totally exposed on the ice
-
-  - terrain_type: Pine_Forest
-    map_symbol: "&&"
+  # ── Tundra (frozen) — Rank 33+ ──
+  - terrain_type: Tundra_Moss
+    map_symbol: ",,"
     resource_type: Wood
     passable: true
     planet: tundra
-    vision_modifier: -2      # dense evergreens
-    movement_modifier: -1    # snow-laden underbrush
-    defense_modifier: 3      # thick trunks: strong cover
-
-  - terrain_type: Ice_Cave
-    map_symbol: "()"
-    resource_type: Iron
-    passable: true
-    planet: tundra
-    vision_modifier: -3      # dark enclosed tunnels
-    movement_modifier: -1    # slick narrow passages
-    defense_modifier: 4      # cave walls: excellent cover
+    vision_modifier: 0      # common — neutral buildable ground (~15% each)
+    movement_modifier: 0
+    defense_modifier: 0
 
   - terrain_type: Permafrost
     map_symbol: "##"
     resource_type: Stone
     passable: true
     planet: tundra
-    movement_modifier: -1    # frozen rutted ground
-    defense_modifier: 1      # frost heaves give slight cover
+    vision_modifier: 0      # common — neutral buildable ground (~15% each)
+    movement_modifier: 0
+    defense_modifier: 0
+
+  - terrain_type: Snowfield
+    map_symbol: "**"
+    resource_type: null
+    passable: true
+    planet: tundra
+    vision_modifier: 0      # common — neutral buildable ground (~15% each)
+    movement_modifier: 0
+    defense_modifier: 0
 
   - terrain_type: Glacier
     map_symbol: "/\\"
     resource_type: null
     passable: true
     planet: tundra
-    vision_modifier: 2       # elevated ice ridge: long views
-    movement_modifier: -2    # crevasses and sheer ice
-    defense_modifier: 1      # ice ridges break lines of fire
+    vision_modifier: 2      # sight-hill — see far, move slow
+    movement_modifier: -2
+    defense_modifier: 1
 
   - terrain_type: Hot_Spring
     map_symbol: "@@"
     resource_type: Cryogen
     passable: true
     planet: tundra
-    vision_modifier: -2      # steam clouds obscure vision
-    movement_modifier: -1    # scalding pools to skirt
-    defense_modifier: 1      # mist makes targets hard to hit
+    vision_modifier: -2      # cover-fast — concealed, quick footing
+    movement_modifier: 1
+    defense_modifier: 1
 
-  - terrain_type: Tundra_Moss
-    map_symbol: ",,"
-    resource_type: null
+  - terrain_type: Ice_Cave
+    map_symbol: "()"
+    resource_type: Iron
     passable: true
     planet: tundra
-    vision_modifier: 1       # low flat ground cover
-    movement_modifier: 1     # springy moss: easy going
+    vision_modifier: -2      # fortress — best cover, poor sightlines
+    movement_modifier: -1
+    defense_modifier: 3
 
-  # ── Inferno (volcanic) — Rank 9+ ───────────────────────────
-  # Alternate Stone, Iron + Energy
+  - terrain_type: Pine_Forest
+    map_symbol: "&&"
+    resource_type: Wood
+    passable: true
+    planet: tundra
+    vision_modifier: 1      # open — exposed but mobile
+    movement_modifier: 1
+    defense_modifier: -1
+
+  - terrain_type: Frozen_Lake
+    map_symbol: "><"
+    resource_type: Cryogen
+    passable: true
+    planet: tundra
+    buildable: false
+    vision_modifier: -2      # treacherous — all-negative, NOT buildable (future features)
+    movement_modifier: -2
+    defense_modifier: -2
+
+  # ── Inferno (volcanic) — Rank 46+ ──
   - terrain_type: Ash_Wastes
     map_symbol: "~~"
     resource_type: null
     passable: true
     planet: inferno
-    vision_modifier: -2      # drifting ash chokes visibility
-    movement_modifier: -1    # ankle-deep ash
-    defense_modifier: 1      # ash haze veils targets
-
-  - terrain_type: Lava_Flow
-    map_symbol: "!!"
-    resource_type: Magmite
-    passable: true
-    planet: inferno
-    vision_modifier: -1      # heat shimmer distorts sight
-    movement_modifier: -2    # picking a path over molten rock
-    defense_modifier: -2     # searing exposure
-
-  - terrain_type: Obsidian_Plain
-    map_symbol: "##"
-    resource_type: Stone
-    passable: true
-    planet: inferno
-    vision_modifier: 1       # flat glassy expanse
-    movement_modifier: 1     # smooth hard surface
-    defense_modifier: -1     # open ground
-
-  - terrain_type: Magma_Vent
-    map_symbol: "^^"
-    resource_type: Energy
-    passable: true
-    planet: inferno
-    vision_modifier: -2      # smoke and glare
-    movement_modifier: -1    # dodging vent bursts
-    defense_modifier: 1      # smoke screens defenders
+    vision_modifier: 0      # common — neutral buildable ground (~15% each)
+    movement_modifier: 0
+    defense_modifier: 0
 
   - terrain_type: Scorched_Rock
     map_symbol: ".."
     resource_type: Iron
     passable: true
     planet: inferno
-    movement_modifier: -1    # cracked uneven rock
-    defense_modifier: 2      # heat-split boulders give cover
+    vision_modifier: 0      # common — neutral buildable ground (~15% each)
+    movement_modifier: 0
+    defense_modifier: 0
 
-  - terrain_type: Sulfur_Pit
-    map_symbol: "%%"
-    resource_type: Magmite
+  - terrain_type: Obsidian_Plain
+    map_symbol: "##"
+    resource_type: Stone
     passable: true
     planet: inferno
-    vision_modifier: -2      # acrid yellow fumes
-    movement_modifier: -2    # sinking crusted ground
-    defense_modifier: -1     # choking exposure
-
-  - terrain_type: Ember_Field
-    map_symbol: "**"
-    resource_type: null
-    passable: true
-    planet: inferno
-    vision_modifier: -1      # glowing haze
-    movement_modifier: -1    # hopping between hot spots
+    vision_modifier: 0      # common — neutral buildable ground (~15% each)
+    movement_modifier: 0
+    defense_modifier: 0
 
   - terrain_type: Basalt_Ridge
     map_symbol: "/\\"
     resource_type: null
     passable: true
     planet: inferno
-    vision_modifier: 2       # elevated vantage
-    movement_modifier: -2    # jagged columns to scale
-    defense_modifier: 2      # rock columns break lines of fire
+    vision_modifier: 2      # sight-hill — see far, move slow
+    movement_modifier: -2
+    defense_modifier: 1
 
-  # ── Citadel (fortress) — Rank 11+ ──────────────────────────
-  # Nexium (only source), plus Iron, Circuits, Energy
-  - terrain_type: Corridor
-    map_symbol: ".."
-    resource_type: null
-    passable: true
-    planet: citadel
-    vision_modifier: -1      # walls limit sightlines
-    movement_modifier: 1     # clear straight run
-    defense_modifier: 1      # doorframes and corners
-
-  - terrain_type: Vault_Room
-    map_symbol: "[]"
-    resource_type: Nexium
-    passable: true
-    planet: citadel
-    vision_modifier: -2      # sealed chamber
-    movement_modifier: -1    # heavy vault fittings
-    defense_modifier: 4      # reinforced walls: fortress cover
-
-  - terrain_type: Armory_Ruin
-    map_symbol: "{}"
-    resource_type: Iron
-    passable: true
-    planet: citadel
-    vision_modifier: -1      # collapsed racks block view
-    movement_modifier: -1    # scattered wreckage
-    defense_modifier: 2      # armored debris for cover
-
-  - terrain_type: Control_Room
-    map_symbol: "<>"
-    resource_type: Circuits
-    passable: true
-    planet: citadel
-    vision_modifier: 1       # monitor banks reveal approaches
-    defense_modifier: 1      # consoles give partial cover
-
-  - terrain_type: Open_Chamber
-    map_symbol: "  "
-    resource_type: null
-    passable: true
-    planet: citadel
-    vision_modifier: 1       # wide open hall
-    movement_modifier: 1     # unobstructed floor
-    defense_modifier: -2     # nowhere to take cover
-
-  - terrain_type: Blast_Door
-    map_symbol: "||"
-    resource_type: null
-    passable: true
-    planet: citadel
-    vision_modifier: -2      # massive frame blocks sight
-    movement_modifier: -1    # squeezing through the threshold
-    defense_modifier: 3      # chokepoint armor plating
-
-  - terrain_type: Generator_Room
-    map_symbol: "++"
-    resource_type: Energy
-    passable: true
-    planet: citadel
-    vision_modifier: -1      # humming machinery crowds the room
-    movement_modifier: -1    # tight gaps between generators
-    defense_modifier: 2      # heavy machinery cover
-
-  - terrain_type: Barracks_Ruin
-    map_symbol: "=="
-    resource_type: null
-    passable: true
-    planet: citadel
-    vision_modifier: -1      # toppled bunks block view
-    defense_modifier: 2      # overturned furniture for cover
-
-  # ── Space — Rank 7+ ────────────────────────────────────────
-  # Energy, Iron, Circuits from space sources
-  - terrain_type: Void
-    map_symbol: "  "
-    resource_type: null
-    passable: true
-    planet: space
-    vision_modifier: 2       # nothing obstructs the view
-    movement_modifier: 1     # frictionless drift
-    defense_modifier: -2     # utterly exposed
-
-  - terrain_type: Nebula
+  - terrain_type: Ember_Field
     map_symbol: "**"
+    resource_type: Wood
+    passable: true
+    planet: inferno
+    vision_modifier: -2      # cover-fast — concealed, quick footing
+    movement_modifier: 1
+    defense_modifier: 1
+
+  - terrain_type: Magma_Vent
+    map_symbol: "^^"
     resource_type: Energy
     passable: true
-    planet: space
-    vision_modifier: -3      # dense gas clouds blind sensors
-    movement_modifier: -1    # navigating by instruments
-    defense_modifier: 2      # cloud cover hides targets
+    planet: inferno
+    vision_modifier: -2      # fortress — best cover, poor sightlines
+    movement_modifier: -1
+    defense_modifier: 3
 
-  - terrain_type: Asteroid
-    map_symbol: "<>"
-    resource_type: Iron
-    passable: true
-    planet: space
-    vision_modifier: -1      # tumbling rocks block sightlines
-    movement_modifier: -1    # weaving between rocks
-    defense_modifier: 3      # solid rock cover
-
-  - terrain_type: Debris
+  - terrain_type: Sulfur_Pit
     map_symbol: "%%"
-    resource_type: Circuits
+    resource_type: Magmite
     passable: true
-    planet: space
-    vision_modifier: -1      # drifting wreckage clutter
-    movement_modifier: -1    # dodging fragments
-    defense_modifier: 2      # wreckage makes decent cover
+    planet: inferno
+    vision_modifier: 1      # open — exposed but mobile
+    movement_modifier: 1
+    defense_modifier: -1
 
-  - terrain_type: Ice_Field
-    map_symbol: "><"
-    resource_type: null
-    passable: true
-    planet: space
-    vision_modifier: -1      # glinting ice scatters light
-    defense_modifier: 1      # ice chunks deflect some fire
-
-  - terrain_type: Wormhole
-    map_symbol: "@@"
-    resource_type: null
-    passable: true
-    planet: space
-    vision_modifier: -2      # spacetime distortion warps sight
-    movement_modifier: 2     # gravity slingshot: fast transit
-    defense_modifier: -1     # unstable footing for defense
-
-  - terrain_type: Radiation_Zone
+  - terrain_type: Lava_Flow
     map_symbol: "!!"
-    resource_type: null
+    resource_type: Magmite
     passable: true
-    planet: space
-    vision_modifier: -1      # sensor static
-    movement_modifier: -1    # shielded, cautious transit
-    defense_modifier: -1     # radiation stresses defenses
+    planet: inferno
+    buildable: false
+    vision_modifier: -2      # treacherous — all-negative, NOT buildable (future features)
+    movement_modifier: -2
+    defense_modifier: -2
 
-  - terrain_type: Derelict_Ship
-    map_symbol: "[]"
-    resource_type: null
-    passable: true
-    planet: space
-    vision_modifier: -2      # dark cramped hull interior
-    movement_modifier: -1    # buckled decks and hatches
-    defense_modifier: 3      # hull plating: strong cover
-
-  # -- Elysium (paradise) -- L58+ -----------------------------------------
-  # Aether (only source), plus the full resource ladder MINUS Biomass
-  - terrain_type: Aether_Spring
-    map_symbol: "**"
-    resource_type: Aether
+  # ── Elysium (paradise) — Rank 58+ ──
+  - terrain_type: Cloud_Meadow
+    map_symbol: ".."
+    resource_type: Wood
     passable: true
     planet: elysium
-    vision_modifier: -1      # shimmering aether haze
-    defense_modifier: 2      # aether currents deflect blows
-
-  - terrain_type: Ley_Nexus
-    map_symbol: "++"
-    resource_type: Energy
-    passable: true
-    planet: elysium
-    vision_modifier: 2       # ley light illuminates far
-    movement_modifier: 1     # energy currents quicken steps
-    defense_modifier: -1     # bright glow marks defenders
+    vision_modifier: 0      # common — neutral buildable ground (~15% each)
+    movement_modifier: 0
+    defense_modifier: 0
 
   - terrain_type: Arcane_Relay
     map_symbol: "::"
     resource_type: Circuits
     passable: true
     planet: elysium
-    vision_modifier: -1      # relay pillars crowd the field
-    defense_modifier: 1      # pillars offer partial cover
+    vision_modifier: -2      # cover-fast — concealed, quick footing
+    movement_modifier: 1
+    defense_modifier: 1
 
-  - terrain_type: Cloud_Meadow
-    map_symbol: ".."
-    resource_type: null
+  - terrain_type: Aether_Spring
+    map_symbol: "**"
+    resource_type: Aether
     passable: true
     planet: elysium
-    vision_modifier: 1       # open airy expanse
-    movement_modifier: 1     # soft springy ground
-    defense_modifier: -1     # exposed meadow
+    vision_modifier: -2      # fortress — best cover, poor sightlines
+    movement_modifier: -1
+    defense_modifier: 3
+
+  - terrain_type: Ley_Nexus
+    map_symbol: "++"
+    resource_type: Energy
+    passable: true
+    planet: elysium
+    vision_modifier: 1      # open — exposed but mobile
+    movement_modifier: 1
+    defense_modifier: -1
 
   - terrain_type: Shimmer_Lake
     map_symbol: "><"
     resource_type: null
     passable: true
     planet: elysium
-    vision_modifier: -1      # mirrored glare off the water
-    movement_modifier: -2    # wading through shallows
-    defense_modifier: -1     # exposed in open water
+    buildable: false
+    vision_modifier: -2      # treacherous — all-negative, NOT buildable (future features)
+    movement_modifier: -2
+    defense_modifier: -2
 
-# Legacy planet list for backward compatibility with DataRegistry._populate_terrain
+  # ── Citadel (fortress) — Rank 70+ ──
+  - terrain_type: Corridor
+    map_symbol: ".."
+    resource_type: null
+    passable: true
+    planet: citadel
+    vision_modifier: 0      # common — neutral buildable ground (~15% each)
+    movement_modifier: 0
+    defense_modifier: 0
+
+  - terrain_type: Barracks_Ruin
+    map_symbol: "=="
+    resource_type: Wood
+    passable: true
+    planet: citadel
+    vision_modifier: 0      # common — neutral buildable ground (~15% each)
+    movement_modifier: 0
+    defense_modifier: 0
+
+  - terrain_type: Open_Chamber
+    map_symbol: "  "
+    resource_type: Stone
+    passable: true
+    planet: citadel
+    vision_modifier: 0      # common — neutral buildable ground (~15% each)
+    movement_modifier: 0
+    defense_modifier: 0
+
+  - terrain_type: Control_Room
+    map_symbol: "<>"
+    resource_type: Circuits
+    passable: true
+    planet: citadel
+    vision_modifier: 2      # sight-hill — see far, move slow
+    movement_modifier: -2
+    defense_modifier: 1
+
+  - terrain_type: Generator_Room
+    map_symbol: "++"
+    resource_type: Energy
+    passable: true
+    planet: citadel
+    vision_modifier: -2      # cover-fast — concealed, quick footing
+    movement_modifier: 1
+    defense_modifier: 1
+
+  - terrain_type: Vault_Room
+    map_symbol: "[]"
+    resource_type: Nexium
+    passable: true
+    planet: citadel
+    vision_modifier: -2      # fortress — best cover, poor sightlines
+    movement_modifier: -1
+    defense_modifier: 3
+
+  - terrain_type: Armory_Ruin
+    map_symbol: "{}"
+    resource_type: Iron
+    passable: true
+    planet: citadel
+    vision_modifier: 1      # open — exposed but mobile
+    movement_modifier: 1
+    defense_modifier: -1
+
+  - terrain_type: Blast_Door
+    map_symbol: "||"
+    resource_type: null
+    passable: true
+    planet: citadel
+    buildable: false
+    vision_modifier: -2      # treacherous — all-negative, NOT buildable (future features)
+    movement_modifier: -2
+    defense_modifier: -2
+
+  # ── Space (hub) — off-ladder ──
+  - terrain_type: Void
+    map_symbol: "  "
+    resource_type: null
+    passable: true
+    planet: space
+    vision_modifier: 0      # common — neutral buildable ground (~15% each)
+    movement_modifier: 0
+    defense_modifier: 0
+
+  - terrain_type: Debris
+    map_symbol: "%%"
+    resource_type: Circuits
+    passable: true
+    planet: space
+    vision_modifier: 0      # common — neutral buildable ground (~15% each)
+    movement_modifier: 0
+    defense_modifier: 0
+
+  - terrain_type: Ice_Field
+    map_symbol: "><"
+    resource_type: Stone
+    passable: true
+    planet: space
+    vision_modifier: 0      # common — neutral buildable ground (~15% each)
+    movement_modifier: 0
+    defense_modifier: 0
+
+  - terrain_type: Nebula
+    map_symbol: "**"
+    resource_type: Energy
+    passable: true
+    planet: space
+    vision_modifier: 2      # sight-hill — see far, move slow
+    movement_modifier: -2
+    defense_modifier: 1
+
+  - terrain_type: Wormhole
+    map_symbol: "@@"
+    resource_type: null
+    passable: true
+    planet: space
+    vision_modifier: -2      # cover-fast — concealed, quick footing
+    movement_modifier: 1
+    defense_modifier: 1
+
+  - terrain_type: Asteroid
+    map_symbol: "<>"
+    resource_type: Iron
+    passable: true
+    planet: space
+    vision_modifier: -2      # fortress — best cover, poor sightlines
+    movement_modifier: -1
+    defense_modifier: 3
+
+  - terrain_type: Derelict_Ship
+    map_symbol: "[]"
+    resource_type: Wood
+    passable: true
+    planet: space
+    vision_modifier: 1      # open — exposed but mobile
+    movement_modifier: 1
+    defense_modifier: -1
+
+  - terrain_type: Radiation_Zone
+    map_symbol: "!!"
+    resource_type: null
+    passable: true
+    planet: space
+    buildable: false
+    vision_modifier: -2      # treacherous — all-negative, NOT buildable (future features)
+    movement_modifier: -2
+    defense_modifier: -2
+
+# Legacy planet list for backward compat with DataRegistry._populate_terrain
 planets:
   - name: Terra
     planet_type: earth
     terrain_types:
       - Plains
-      - Forest
       - Dirt
       - Rock
       - Mountain
-      - River
       - Sand
+      - Forest
       - Snow
+      - River
 
   - name: Forge
     planet_type: industrial
     terrain_types:
+      - Factory_Floor
+      - Warehouse
+      - Pipeline
+      - Circuit_Field
       - Power_Grid
       - Scrapyard
-      - Circuit_Field
-      - Factory_Floor
       - Ruins
       - Toxic_Waste
-      - Pipeline
-      - Warehouse
 
   - name: Tundra
     planet_type: frozen
     terrain_types:
-      - Snowfield
-      - Frozen_Lake
-      - Pine_Forest
-      - Ice_Cave
+      - Tundra_Moss
       - Permafrost
+      - Snowfield
       - Glacier
       - Hot_Spring
-      - Tundra_Moss
+      - Ice_Cave
+      - Pine_Forest
+      - Frozen_Lake
 
   - name: Inferno
     planet_type: volcanic
     terrain_types:
       - Ash_Wastes
-      - Lava_Flow
-      - Obsidian_Plain
-      - Magma_Vent
       - Scorched_Rock
-      - Sulfur_Pit
-      - Ember_Field
+      - Obsidian_Plain
       - Basalt_Ridge
+      - Ember_Field
+      - Magma_Vent
+      - Sulfur_Pit
+      - Lava_Flow
 
   - name: Elysium
     planet_type: paradise
     terrain_types:
-      - Aether_Spring
-      - Forest
+      - Plains
       - Rock
-      - Mountain
-      - Ley_Nexus
-      - Arcane_Relay
       - Cloud_Meadow
+      - Mountain
+      - Arcane_Relay
+      - Aether_Spring
+      - Ley_Nexus
       - Shimmer_Lake
 
   - name: Citadel
     planet_type: fortress
     terrain_types:
       - Corridor
+      - Barracks_Ruin
+      - Open_Chamber
+      - Control_Room
+      - Generator_Room
       - Vault_Room
       - Armory_Ruin
-      - Control_Room
-      - Open_Chamber
       - Blast_Door
-      - Generator_Room
-      - Barracks_Ruin
 
   - name: Space
     planet_type: space
     terrain_types:
       - Void
-      - Nebula
-      - Asteroid
       - Debris
       - Ice_Field
+      - Nebula
       - Wormhole
-      - Radiation_Zone
+      - Asteroid
       - Derelict_Ship
+      - Radiation_Zone

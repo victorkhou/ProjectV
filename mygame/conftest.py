@@ -109,6 +109,10 @@ def _ensure_evennia_stubs():
             # Real Evennia's Command defines at_pre_cmd (returns falsy = proceed);
             # commands whose own at_pre_cmd calls super().at_pre_cmd() rely on it.
             return False
+        def at_post_cmd(self):
+            # Real Evennia's Command defines at_post_cmd (no-op); overrides that
+            # call super().at_post_cmd() (e.g. the status-prompt hook) rely on it.
+            pass
         def func(self):
             pass
 

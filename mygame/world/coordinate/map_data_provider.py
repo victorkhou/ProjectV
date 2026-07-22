@@ -131,8 +131,19 @@ class MapDataProvider:
 
                 tiles.append(tile_data)
 
+        # Health + level for the webclient's map footer (the graphical
+        # equivalent of the telnet status prompt). Read straight off the
+        # player's own attributes; defaults keep the payload well-formed for a
+        # half-built entity (0/0/1) rather than emitting nulls.
+        pdb = getattr(player, "db", None)
+        player_data = {"x": px, "y": py, "planet": planet}
+        if pdb is not None:
+            player_data["hp"] = int(getattr(pdb, "hp", 0) or 0)
+            player_data["hp_max"] = int(getattr(pdb, "hp_max", 0) or 0)
+            player_data["level"] = int(getattr(pdb, "level", 1) or 1)
+
         return {
-            "player": {"x": px, "y": py, "planet": planet},
+            "player": player_data,
             "bounds": {
                 "min_x": min_x, "max_x": max_x,
                 "min_y": min_y, "max_y": max_y,

@@ -121,7 +121,12 @@ class Character(ObjectParent, DefaultCharacter):
 # RESOURCE_TYPES is imported from world.constants (single source of truth) at
 # the top of this module and re-exported here for existing importers.
 
-DEFAULT_HEALTH = 100
+DEFAULT_HEALTH = 500
+
+# The pre-rebalance base ceiling. Used only by the one-time login migration
+# (:meth:`CombatCharacter._migrate_base_health`) to recognise a character still
+# sitting on the legacy base so it can be lifted to the current DEFAULT_HEALTH.
+_LEGACY_DEFAULT_HEALTH = 100
 
 # ------------------------------------------------------------------ #
 #  Player attribute schema
@@ -287,6 +292,7 @@ class CombatCharacter(CombatEntity, DefaultCharacter):
                 self.attributes.add(key, copy.deepcopy(default))
         self._migrate_level_curve()
         self._migrate_tech_bonuses()
+        self._migrate_base_health()
 
     def _migrate_level_curve(self):
         """Remap stored XP onto the live curve, never demoting (R14.8).
@@ -355,6 +361,81 @@ class CombatCharacter(CombatEntity, DefaultCharacter):
                 tech_system.recompute_tech_bonuses(self)
         except Exception:  # noqa: BLE001 - grandfathering must never block login
             logger.debug("Tech-bonus grandfathering skipped", exc_info=True)
+
+    def _migrate_base_health(self):
+        """Lift a character still on the legacy 100 base to the new DEFAULT_HEALTH.
+
+        The base player HP was raised from 100 to 500. A character created
+        before that carries ``hp_max == 100 + equipment_hp_bonus`` and must be
+        re-based so it doesn't stay on the old ceiling forever. Recognises the
+        legacy base by backing out the tracked equipment bonus: if the non-gear
+        portion equals the old default (100), rebase it to the new default,
+        preserving the gear bonus (``hp_max = DEFAULT_HEALTH + gear``). A
+        full-health character is topped up to the new ceiling; a wounded one
+        keeps its current ``hp`` (headroom only, no free heal).
+
+        Runs at most meaningfully once: after the rebase the non-gear portion is
+        ``DEFAULT_HEALTH``, so the legacy check no longer matches. Skips staff
+        characters entirely — their ceiling is owned by ``_ensure_admin_health``.
+        Guarded: a failure must never block login.
+        """
+        try:
+            if self._is_staff():
+                return  # admin ceiling handled separately; don't fight it
+            gear = self.attributes.get("equipment_hp_bonus") or 0
+            cur_max = self.db.hp_max or 0
+            base = cur_max - gear
+            if base != _LEGACY_DEFAULT_HEALTH:
+                return  # not on the legacy base (already rebased, or custom)
+            was_full = (self.db.hp or 0) >= cur_max
+            self.db.hp_max = DEFAULT_HEALTH + gear
+            if was_full:
+                self.db.hp = self.db.hp_max
+        except Exception:  # noqa: BLE001 - base-health migration must never block login
+            logger.debug("Base-health migration skipped", exc_info=True)
+
+    def _ensure_admin_health(self):
+        """Grant staff (Builder+) characters the raised admin HP ceiling on login.
+
+        Staff need to survive normal combat while testing, so a Builder+
+        character's ``hp_max`` is bumped to ``ADMIN_BASE_HEALTH`` (1000). Applied
+        idempotently on every login: only RAISES the ceiling from the ordinary
+        default, never lowers a character that has legitimately built past it
+        (gear/tech), and never touches a non-staff character. When the ceiling is
+        raised and the character is at (or above) its previous full health, it is
+        topped up to the new max so a freshly-promoted operator logs in at full
+        admin HP rather than 100/1000. Guarded — a permission-lookup or attribute
+        failure must never block login.
+        """
+        try:
+            from world.constants import ADMIN_BASE_HEALTH
+
+            if not self._is_staff():
+                return
+            cur_max = self.db.hp_max or 0
+            if cur_max >= ADMIN_BASE_HEALTH:
+                return  # already at/above the admin ceiling — don't lower it
+            was_full = (self.db.hp or 0) >= cur_max
+            self.db.hp_max = ADMIN_BASE_HEALTH
+            if was_full:
+                self.db.hp = ADMIN_BASE_HEALTH
+        except Exception:  # noqa: BLE001 - admin HP bump must never block login
+            logger.debug("Admin HP bump skipped", exc_info=True)
+
+    def _is_staff(self) -> bool:
+        """Return True if this character has Builder+ permissions.
+
+        Uses Evennia's ``check_permstring`` (the account/character permission
+        API); returns False when the check is unavailable or raises, so a
+        non-staff or half-built test character is never treated as staff.
+        """
+        check = getattr(self, "check_permstring", None)
+        if not callable(check):
+            return False
+        try:
+            return bool(check("Builder"))
+        except Exception:  # noqa: BLE001
+            return False
 
     # ------------------------------------------------------------------ #
     #  Resource helpers
@@ -494,6 +575,7 @@ class CombatCharacter(CombatEntity, DefaultCharacter):
         # Auto-migrate: ensure all PLAYER_DEFAULTS attributes exist, and ensure a
         # valid overworld position, BEFORE routing (routing may stow the char).
         self.ensure_attributes()
+        self._ensure_admin_health()
         self._ensure_overworld_position()
 
         # Player lifecycle routing (states 3-6). Returns the resume state when
@@ -543,6 +625,15 @@ class CombatCharacter(CombatEntity, DefaultCharacter):
             alliance = get_system(self, "alliance_system")
             if alliance is not None:
                 alliance.replay_invites(self)
+        except Exception:
+            pass
+
+        # Show the status prompt on login so it's present before the first
+        # command (every command re-emits it via GameCommand.at_post_cmd).
+        # Self-suppresses while staging (SPAWNING/LOBBY), so it's safe here.
+        try:
+            from commands.game_commands import send_prompt
+            send_prompt(self)
         except Exception:
             pass
 

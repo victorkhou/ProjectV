@@ -2406,6 +2406,46 @@ class TestClosedBuildingRangedImmunity(unittest.TestCase):
         # Target sheltered at resolution -> no damage applied.
         self.assertEqual(target.db.hp, 100)
 
+    def test_resolve_tick_rechecks_range_for_queued_ranged(self):
+        """A queued ranged (turret) action must NOT hit a target that stepped
+        out of range between queue and resolution — the reported turret bug:
+        a shot locked in range still landed after the player walked one tile
+        past the turret's radius."""
+        engine, _ = _make_engine()
+        # Turret coords come from its location tile (FakeBuilding has no db).
+        turret = FakeBuilding(building_type="TU", owner=_hq_owner(),
+                              location=FakeTile(xyz=(0, 0, "earth")))
+        # Target in range (dist 3, range 5) at queue time.
+        target = FakePlayer(name="Runner",
+                            location=FakeTile(xyz=(3, 0, "earth")))
+        target.db.hp = 100
+        engine.pending_actions.append({
+            "attacker": turret, "target": target,
+            "weapon_item": FakeWeapon(damage=50, weapon_range=5),
+        })
+        # Player steps out of range (dist 6 > range 5) before resolution.
+        target.db.coord_x = 6
+        engine.resolve_tick()
+        self.assertEqual(target.db.hp, 100, "out-of-range shot must be dropped")
+
+    def test_resolve_tick_hits_target_still_in_range(self):
+        """The range re-check must not drop a shot when the target is STILL in
+        range at resolution (regression guard against over-dropping)."""
+        engine, _ = _make_engine()
+        turret = FakeBuilding(building_type="TU", owner=_hq_owner(),
+                              location=FakeTile(xyz=(0, 0, "earth")))
+        target = FakePlayer(name="Stayer",
+                            location=FakeTile(xyz=(3, 0, "earth")))
+        target.db.hp = 100
+        engine.pending_actions.append({
+            "attacker": turret, "target": target,
+            "weapon_item": FakeWeapon(damage=50, weapon_range=5),
+        })
+        # Target moves but stays in range (dist 4 <= 5).
+        target.db.coord_x = 4
+        engine.resolve_tick()
+        self.assertLess(target.db.hp, 100, "in-range shot must still land")
+
     def test_breach_shot_damages_closed_building(self):
         """A breaching directional shot (breach=True) may damage a CLOSED
         building — that's how a wall/structure is shot down from range."""

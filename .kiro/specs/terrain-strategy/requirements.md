@@ -141,3 +141,29 @@ The feature builds on existing systems: the deterministic per-coordinate Terrain
 3. WHEN the balance configuration omits the bound for one or more terrain modifier kinds, THE DataRegistry SHALL use the default bound for each omitted kind: 5 tiles for vision, 3 ticks for movement, and 6 damage-reduction points for defense.
 4. IF a terrain modifier bound value in the balance configuration is non-numeric or negative, THEN THE DataRegistry SHALL report a validation error identifying the offending field, and THE DataRegistry SHALL fail the load, consistent with the existing balance configuration validation. (The defaults in criterion 3 apply only to omitted bounds; invalid values fail fast rather than falling back to defaults.)
 5. THE Terrain_Modifier_System SHALL return only clamped adjustments to all consumers (FogOfWarSystem, movement gate, CombatEngine, and inspection displays) so that no consumer observes a terrain adjustment exceeding its kind's bound.
+
+### Requirement 10: Unified Terrain Template
+
+**User Story:** As a game designer, I want every planet built from the same terrain archetypes, so that base-building philosophy is consistent across planets while each planet keeps a distinct biome skin and signature resource.
+
+#### Acceptance Criteria
+
+1. THE terrain definitions SHALL give every planet at least three COMMON terrains whose vision, movement, and defense modifiers are all zero, and whose combined map weight is 40–50% of that planet's terrain distribution.
+2. THE COMMON terrains of each planet, taken together, SHALL supply the Wood, Stone, and Iron resources that building construction costs consume, so that a base can be built on every planet.
+3. THE terrain definitions SHALL give every planet one SIGHT terrain (positive vision, negative movement), one COVER terrain (negative vision, positive movement), one FORTRESS terrain (high positive defense, negative vision), one OPEN terrain (positive vision, negative defense), and at least one TREACHEROUS terrain (negative vision, movement, and defense).
+4. THE Biomass resource SHALL be produced only by the Terra Dirt terrain and by no other terrain on any planet.
+5. WHERE a terrain type is shared across more than one planet (a single TerrainDef referenced by multiple planets), THE shared TerrainDef SHALL carry a single set of modifiers and a single resource assignment used identically on every planet that references it.
+6. THE resource assigned to each terrain SHALL be thematically consistent with that terrain (for example, Stone from rock/masonry tiles, Iron from ore/scrap/mountain tiles, Wood from forest/timber/salvage tiles) and SHALL NOT assign a resource that contradicts the terrain's nature.
+
+### Requirement 11: Terrain Build Restriction
+
+**User Story:** As a player, I want most buildings blocked from hostile terrain, so that hazardous tiles are a real placement constraint rather than free ground.
+
+#### Acceptance Criteria
+
+1. THE TerrainDef structure SHALL carry a boolean ``buildable`` field, defaulting to true when the terrain definitions file omits it, and loaded via the registry facade like other TerrainDef fields.
+2. IF a terrain definition's ``buildable`` field is present and is not a boolean, THEN THE DataRegistry SHALL report a validation error identifying the terrain type and fail the load, consistent with the existing terrain validation.
+3. WHEN a player attempts to construct a building on a tile whose resolved terrain has ``buildable`` false, THE BuildingSystem SHALL reject the construction with a message naming the terrain, and SHALL make no resource deduction or state change.
+4. WHEN a player attempts to construct a building on a tile whose resolved terrain has ``buildable`` true, THE BuildingSystem SHALL apply its existing validation chain unchanged (the buildable check adds a restriction, never relaxes one).
+5. IF the terrain type at the target tile cannot be resolved, or has no TerrainDef in the registry, THEN THE BuildingSystem SHALL treat the tile as buildable (fail-open), so legacy rooms and test doubles are unaffected.
+6. THE TREACHEROUS terrain of every planet (Requirement 10 criterion 3) SHALL have ``buildable`` false, and every COMMON, SIGHT, COVER, FORTRESS, and OPEN terrain SHALL have ``buildable`` true.

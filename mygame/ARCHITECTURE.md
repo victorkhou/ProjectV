@@ -775,8 +775,9 @@ flowchart LR
 | `CmdAdminAgent` | `@agent` | create, destroy, list | Character (perm‑locked) |
 | `CmdAdminResource` | `@resource` | give, reset | Character (perm‑locked) |
 | `CmdAdminPlayer` | `@player` | level, rank | Character (perm‑locked) |
+| `CmdAdminStat` | `@stat` | hp, maxhp, xp, set, show | Character (perm‑locked) |
 | Game commands | — | move/n/s/e/w, harvest, build, upgrade, demolish, attack, equip, research, score, map, scan, chat, … | Character |
-| Standalone admin | — | `@reload`, `@teleport`, `@clearfog`, `@purgerooms`, `@migrate` | Character (perm‑locked) |
+| Standalone admin | — | `@reload`, `@teleport`, `@clearfog`, `@purgerooms`, `@migrate`, `@peace`, `@restore`/`@heal` | Character (perm‑locked) |
 
 **CmdSets** (`commands/default_cmdsets.py`): `CharacterCmdSet` (all game + routers,
 attached to the puppeted character), `AccountCmdSet` (OOC), `UnloggedinCmdSet`,

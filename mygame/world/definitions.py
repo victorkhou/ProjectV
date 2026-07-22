@@ -168,12 +168,30 @@ class TerrainDef:
     map_symbol: str
     resource_type: str | None = None
     passable: bool = True
+    #: Whether buildings may be constructed on this terrain. Treacherous tiles
+    #: (River, Toxic_Waste, Lava_Flow, …) set this False so bases can't sit on
+    #: hazardous ground; reserved for future special-feature placement.
+    buildable: bool = True
     #: Vision-radius adjustment in tiles: + widens fog-of-war reveal, - narrows it.
     vision_modifier: int = 0
     #: In-combat movement-lag adjustment in ticks: + reduces lag, - increases it.
     movement_modifier: float = 0.0
     #: Damage-reduction adjustment: + adds DR, - subtracts it.
     defense_modifier: float = 0.0
+    #: Latitude bias for map generation: positive concentrates this terrain
+    #: toward the poles (top/bottom map edges), negative toward the equator
+    #: (vertical middle); 0 = evenly distributed. Magnitude ~0.5-1.5 is a mild
+    #: nudge, ~2+ a strong band. Scales the terrain's local weight by
+    #: (1 + bias * signal), where signal is +1 at the poles and -1 at the
+    #: equator, so the global weight is preserved on average across latitudes.
+    latitude_bias: float = 0.0
+    #: Hard latitude cutoff: the minimum absolute latitude (0 = equator/middle
+    #: row, 1 = pole/edge) at which this terrain may appear. The terrain's
+    #: weight is forced to zero below it. E.g. 0.4 excludes the terrain from the
+    #: central 40% of the map's rows (it spawns only in the outer 60%). 0 = no
+    #: cutoff (may appear anywhere). Its weight there is redistributed to the
+    #: other terrains at that latitude.
+    latitude_min: float = 0.0
 
 
 @dataclass
@@ -294,7 +312,7 @@ class BalanceConfig:
     xp_harvest_action: int = 1
     xp_agent_trained: int = 40
     gather_amount: int = 1
-    player_default_health: int = 100
+    player_default_health: int = 500
     resource_respawn_ticks: int = 30
     combat_lockout_ticks: int = 5
     #: Chip-floor fraction: a landed hit always deals at least this fraction of

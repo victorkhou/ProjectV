@@ -172,6 +172,7 @@ class BuildingSystem(BaseSystem):
             lambda: self._validate_rank_requirement(player, building_def),
             lambda: self._validate_deed_requirement(player, building_def),
             lambda: self._validate_terrain(tile, building_def),
+            lambda: self._validate_buildable(tile, building_def, x=x, y=y),
             lambda: self._validate_extractor_terrain(tile, building_def, x=x, y=y),
             lambda: self._validate_tile_empty(tile, x=x, y=y),
             lambda: self._validate_build_range(player, tile, x=x, y=y),
@@ -1017,6 +1018,64 @@ class BuildingSystem(BaseSystem):
             return None
 
         return "Extractor must be placed on terrain with a resource."
+
+    def _resolve_terrain_type(
+        self, tile: Any, x: int | None, y: int | None
+    ) -> str | None:
+        """Resolve the terrain-type string at *tile* / (x, y), or None.
+
+        Prefers the terrain generator at the coordinate (PlanetRooms are
+        coordless, so a room attribute isn't authoritative), falling back to a
+        ``tile.terrain_type`` attribute for test fakes / legacy rooms. Returns
+        None (and "unknown") when the terrain can't be determined, so callers
+        treat an unresolved tile as unconstrained.
+        """
+        # Coordinate resolution mirrors _validate_extractor_terrain.
+        if x is None:
+            x = getattr(tile, "x", None)
+            if x is None and hasattr(tile, "db"):
+                x = getattr(tile.db, "coord_x", None) or getattr(tile.db, "x", None)
+        if y is None:
+            y = getattr(tile, "y", None)
+            if y is None and hasattr(tile, "db"):
+                y = getattr(tile.db, "coord_y", None) or getattr(tile.db, "y", None)
+        planet = self._tile_planet(tile, x=x, y=y)
+        if x is not None and y is not None and planet:
+            provider = self._terrain_provider or self._legacy_terrain_provider()
+            if provider is not None:
+                try:
+                    terrain, _res = provider.get_terrain_and_resource(
+                        planet, int(x), int(y)
+                    )
+                    if terrain and terrain != "unknown":
+                        return terrain
+                except Exception:  # noqa: BLE001 - fall through to attr
+                    pass
+        # Fallback for test fakes / legacy rooms.
+        return getattr(tile, "terrain_type", None)
+
+    def _validate_buildable(
+        self, tile: Any, building_def: BuildingDef,
+        x: int | None = None, y: int | None = None,
+    ) -> str | None:
+        """Reject construction on non-buildable (treacherous) terrain.
+
+        A terrain whose TerrainDef sets ``buildable: false`` (River, Toxic_
+        Waste, Lava_Flow, …) cannot host a building — the unified terrain
+        template reserves those hazard tiles for future special features.
+        Unresolvable terrain, or a terrain with no TerrainDef, is treated as
+        buildable (fail-open) so legacy rooms and test fakes are unaffected.
+        """
+        terrain = self._resolve_terrain_type(tile, x, y)
+        if terrain is None:
+            return None
+        tdef = self.registry.terrain.get(terrain)
+        if tdef is None:
+            return None
+        if getattr(tdef, "buildable", True):
+            return None
+        pretty = terrain.replace("_", " ")
+        return f"Cannot build on {pretty} — the ground is too unstable."
 
     # ------------------------------------------------------------------ #
     #  Repair

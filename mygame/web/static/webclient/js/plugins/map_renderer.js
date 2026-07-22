@@ -501,16 +501,52 @@ let map_renderer_plugin = (function () {
         var vr=data.vision_radius;
         ctx.strokeStyle="rgba(255,255,100,0.12)";ctx.lineWidth=1;ctx.beginPath();
         ctx.arc(psx+HALF,psy+HALF,(vr+0.5)*TILE_SIZE,0,Math.PI*2);ctx.stroke();
-        // Info
-        var info=document.getElementById("map-info");
-        if(info) {
-            var terrainStr=data.player.terrain||"";
-            if(data.player.resource) terrainStr+=" ("+data.player.resource+")";
-            var parts=["("+px+", "+py+") "+(data.player.planet||"?")];
-            if(terrainStr) parts.push(terrainStr);
-            parts.push((data.discovered_count||0)+" discovered");
-            info.textContent=parts.join(" | ");
+        // Info footer — refreshed here on every map_update and, between map
+        // updates, by the prompt_status OOB (see below) so HP/level/position
+        // stay live after non-movement commands too.
+        updateInfoFooter({
+            hp: data.player.hp, hp_max: data.player.hp_max,
+            level: data.player.level, x: px, y: py, planet: data.player.planet,
+            terrain: data.player.terrain, resource: data.player.resource,
+            discovered_count: data.discovered_count,
+        });
+    }
+
+    // The last status shown in the footer, merged across map_update payloads and
+    // prompt_status OOB messages so a partial update (e.g. a prompt with no
+    // discovered_count) doesn't blank fields the other source provided.
+    var lastStatus = {};
+
+    // Render the map footer — the graphical equivalent of the telnet status
+    // prompt: HP + level first, then position, terrain, and discovery count.
+    function updateInfoFooter(status) {
+        var info = document.getElementById("map-info");
+        if (!info) return;
+        // Merge so each source can update only the fields it knows.
+        for (var k in status) {
+            if (status[k] !== undefined && status[k] !== null) lastStatus[k] = status[k];
         }
+        var s = lastStatus;
+        var parts = [];
+        if (typeof s.hp === "number" && typeof s.hp_max === "number") {
+            var hpMax = s.hp_max || 0;
+            var frac = hpMax > 0 ? (s.hp / hpMax) : 0;
+            var hpCol = frac >= 0.6 ? "#33cc33" : (frac >= 0.3 ? "#ffe500" : "#ff3b30");
+            parts.push("<span class='mi-hp' style='color:" + hpCol + "'>HP "
+                + s.hp + "/" + hpMax + "</span>");
+        }
+        if (typeof s.level === "number") parts.push("Lv " + s.level);
+        if (typeof s.x === "number" && typeof s.y === "number") {
+            parts.push("(" + s.x + ", " + s.y + ") " + (s.planet || "?"));
+        }
+        var terrainStr = s.terrain || "";
+        if (s.resource) terrainStr += " (" + s.resource + ")";
+        if (terrainStr) parts.push(terrainStr);
+        if (typeof s.discovered_count === "number") {
+            parts.push(s.discovered_count + " discovered");
+        }
+        // innerHTML (not textContent) so the HP color span renders.
+        info.innerHTML = parts.join(" | ");
     }
 
     // ---- Resizable panels ----
@@ -708,6 +744,12 @@ let map_renderer_plugin = (function () {
             Evennia.emitter.on("map_update", function(args, kwargs) {
                 var data = kwargs || (args && args[0]) || null;
                 if (data) renderMap(data);
+            });
+            // Lightweight per-command status refresh (HP/level/position/terrain)
+            // so the footer stays live between full map_update renders.
+            Evennia.emitter.on("prompt_status", function(args, kwargs) {
+                var data = kwargs || (args && args[0]) || null;
+                if (data) updateInfoFooter(data);
             });
         }
 

@@ -436,5 +436,113 @@ class TestAtCoordChangeBreaksLock(unittest.TestCase):
             char.at_coord_change(1, 1, 2, 2)  # must not raise
 
 
+# -------------------------------------------------------------- #
+#  Base-health migration (100 -> 500) + admin HP bump
+# -------------------------------------------------------------- #
+
+class TestBaseHealthMigration(unittest.TestCase):
+    """_migrate_base_health lifts a legacy 100-base character to DEFAULT_HEALTH."""
+
+    def test_new_char_creates_at_default_health(self):
+        char = _make_char()
+        self.assertEqual(char.db.hp_max, DEFAULT_HEALTH)
+        self.assertEqual(char.db.hp, DEFAULT_HEALTH)
+
+    def test_legacy_full_char_rebased_and_topped_up(self):
+        char = _make_char()
+        char.db.hp_max = 100
+        char.db.hp = 100
+        char.db.equipment_hp_bonus = 0
+        char._migrate_base_health()
+        self.assertEqual(char.db.hp_max, DEFAULT_HEALTH)
+        self.assertEqual(char.db.hp, DEFAULT_HEALTH)  # full unit topped up
+
+    def test_legacy_wounded_char_keeps_current_hp(self):
+        char = _make_char()
+        char.db.hp_max = 100
+        char.db.hp = 40
+        char.db.equipment_hp_bonus = 0
+        char._migrate_base_health()
+        self.assertEqual(char.db.hp_max, DEFAULT_HEALTH)
+        self.assertEqual(char.db.hp, 40)  # headroom only, no free heal
+
+    def test_legacy_base_preserves_equipment_bonus(self):
+        char = _make_char()
+        # 100 base + 30 gear = 130 ceiling
+        char.db.hp_max = 130
+        char.db.hp = 130
+        char.db.equipment_hp_bonus = 30
+        char._migrate_base_health()
+        self.assertEqual(char.db.hp_max, DEFAULT_HEALTH + 30)
+
+    def test_already_rebased_char_untouched(self):
+        char = _make_char()  # hp_max already DEFAULT_HEALTH
+        char.db.hp = 250
+        char._migrate_base_health()
+        self.assertEqual(char.db.hp_max, DEFAULT_HEALTH)
+        self.assertEqual(char.db.hp, 250)  # not touched
+
+    def test_custom_ceiling_not_treated_as_legacy(self):
+        char = _make_char()
+        char.db.hp_max = 777
+        char.db.hp = 777
+        char.db.equipment_hp_bonus = 0
+        char._migrate_base_health()
+        self.assertEqual(char.db.hp_max, 777)  # non-legacy base left alone
+
+
+class TestAdminHealthBump(unittest.TestCase):
+    """_ensure_admin_health raises a staff character's ceiling to ADMIN_BASE_HEALTH."""
+
+    def _staff_char(self, name="Staff"):
+        char = _make_char(name)
+        char.check_permstring = lambda perm: True  # Builder+
+        return char
+
+    def test_non_staff_untouched(self):
+        char = _make_char()  # stub has no check_permstring -> not staff
+        char.db.hp_max = DEFAULT_HEALTH
+        char._ensure_admin_health()
+        self.assertEqual(char.db.hp_max, DEFAULT_HEALTH)
+
+    def test_staff_ceiling_raised_and_topped_up(self):
+        from world.constants import ADMIN_BASE_HEALTH
+
+        char = self._staff_char()
+        char.db.hp_max = DEFAULT_HEALTH
+        char.db.hp = DEFAULT_HEALTH
+        char._ensure_admin_health()
+        self.assertEqual(char.db.hp_max, ADMIN_BASE_HEALTH)
+        self.assertEqual(char.db.hp, ADMIN_BASE_HEALTH)
+
+    def test_staff_ceiling_not_lowered(self):
+        from world.constants import ADMIN_BASE_HEALTH
+
+        char = self._staff_char()
+        char.db.hp_max = ADMIN_BASE_HEALTH + 500  # built past the admin base
+        char.db.hp = ADMIN_BASE_HEALTH + 500
+        char._ensure_admin_health()
+        self.assertEqual(char.db.hp_max, ADMIN_BASE_HEALTH + 500)  # not lowered
+
+    def test_staff_wounded_not_force_healed(self):
+        from world.constants import ADMIN_BASE_HEALTH
+
+        char = self._staff_char()
+        char.db.hp_max = DEFAULT_HEALTH
+        char.db.hp = 10
+        char._ensure_admin_health()
+        self.assertEqual(char.db.hp_max, ADMIN_BASE_HEALTH)
+        self.assertEqual(char.db.hp, 10)  # ceiling raised, HP left as-is
+
+    def test_staff_migration_skips_base_rebase(self):
+        # A staff char on the legacy 100 base must NOT be rebased by
+        # _migrate_base_health (admin path owns its ceiling).
+        char = self._staff_char()
+        char.db.hp_max = 100
+        char.db.hp = 100
+        char._migrate_base_health()
+        self.assertEqual(char.db.hp_max, 100)  # left for _ensure_admin_health
+
+
 if __name__ == "__main__":
     unittest.main()

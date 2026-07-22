@@ -99,6 +99,119 @@ def _terrain_header_info(caller, planet, x, y):
         return ""
 
 
+def _prompt_fields(caller):
+    """Return the status fields for the prompt as a dict, or ``None``.
+
+    The single source of truth for the prompt's contents: current/max health,
+    level, coordinates + planet, and the terrain under the player's feet (the
+    player's own tile is always known, so terrain needs no discovery gate). Both
+    the telnet text prompt (:func:`_player_prompt`) and the webclient footer
+    payload (:func:`send_prompt`) are built from this, so they never drift.
+
+    Returns ``None`` when there is nothing meaningful to show — the caller isn't
+    a positioned player, or is still OOC in the spawning/lobby flow — so callers
+    skip the prompt in those states (a prompt during the spawn wizard is noise).
+    """
+    db = getattr(caller, "db", None)
+    if db is None:
+        return None
+
+    # Suppress while the player is staging (SPAWNING/LOBBY) — a prompt only makes
+    # sense once they're deployed. A no-op when the lobby flow is off or the
+    # character is legacy (state None), matching player_is_present's gate.
+    try:
+        from world.lobby_flow import lobby_flow_enabled
+        if lobby_flow_enabled():
+            from world import player_lifecycle as pl
+            from world.constants import PLAYER_STATE_PLAYING
+            if pl.get_state(caller) not in (PLAYER_STATE_PLAYING, None):
+                return None
+    except Exception:  # noqa: BLE001 - gate never blocks the prompt
+        pass
+
+    coords = coords_of(caller)
+    if coords is None or not coords[2]:
+        return None
+    x, y, planet = coords
+
+    terrain = ""
+    try:
+        gens = get_game_systems().get("_terrain_generators", {})
+        gen = gens.get(planet)
+        if gen:
+            terrain = gen.get_terrain(int(x), int(y)) or ""
+    except Exception:  # noqa: BLE001 - terrain is optional in the prompt
+        terrain = ""
+
+    return {
+        "hp": int(getattr(db, "hp", 0) or 0),
+        "hp_max": int(getattr(db, "hp_max", 0) or 0),
+        "level": int(getattr(db, "level", None) or 1),
+        "x": x,
+        "y": y,
+        "planet": planet,
+        "terrain": terrain,
+    }
+
+
+def _format_prompt(fields):
+    """Format the telnet status prompt text from :func:`_prompt_fields` output.
+
+    e.g. ``[HP 100/500] [Lv 5] [(25,25) terra] [Plains]`` — each field in white
+    brackets, HP colored by fraction (green >=60%, yellow >=30%, red below).
+    """
+    hp, hp_max = fields["hp"], fields["hp_max"]
+    frac = (hp / hp_max) if hp_max > 0 else 0.0
+    hp_col = "|g" if frac >= 0.6 else ("|y" if frac >= 0.3 else "|r")
+    segs = [
+        f"HP {hp_col}{hp}/{hp_max}|n",
+        f"Lv {fields['level']}",
+        f"({fields['x']},{fields['y']}) {fields['planet']}",
+    ]
+    terrain = fields.get("terrain")
+    if terrain:
+        segs.append(terrain.replace("_", " "))
+    return " ".join(f"|w[|n{s}|w]|n" for s in segs)
+
+
+def _player_prompt(caller):
+    """Build the telnet status-prompt text for *caller*, or ``None``.
+
+    Thin wrapper over :func:`_prompt_fields` + :func:`_format_prompt` — the
+    classic MUD prompt shown after each command.
+    """
+    fields = _prompt_fields(caller)
+    if fields is None:
+        return None
+    return _format_prompt(fields)
+
+
+def send_prompt(caller):
+    """Refresh *caller*'s status prompt after a command (telnet + webclient).
+
+    Sends two things, both best-effort, from one field snapshot so they agree:
+
+    * ``prompt=`` — the ANSI text prompt. Telnet renders it as the input-line
+      prompt (the classic MUD prompt). The webclient receives it too, but hides
+      the duplicate ``.prompt`` bar via CSS (the info lives in the map footer).
+    * ``prompt_status=`` — a structured OOB payload the webclient's map_renderer
+      folds into the map footer, so HP/level/position refresh on EVERY command
+      (a ``map_update`` is only sent on moves/builds). Telnet ignores it.
+
+    A no-op when there's no prompt to show (see :func:`_prompt_fields`) or the
+    caller can't be messaged. Never raises — a prompt hiccup must not surface as
+    a command error.
+    """
+    try:
+        fields = _prompt_fields(caller)
+        if fields is None or not hasattr(caller, "msg"):
+            return
+        caller.msg(prompt=_format_prompt(fields))
+        caller.msg(prompt_status=fields)
+    except Exception:  # noqa: BLE001 - prompt must never break a command
+        pass
+
+
 def _send_map_update(caller):
     """Send structured map data to the webclient via OOB.
 
@@ -247,6 +360,17 @@ class GameCommand(BaseCommand):
         except Exception:  # noqa: BLE001 - gate must never hard-block a command
             pass
         return super().at_pre_cmd()
+
+    def at_post_cmd(self):
+        """Emit the status prompt after every game command (classic MUD prompt).
+
+        Runs for the whole GameCommand family (movement, combat, agents,
+        alliances, …), so the player always sees an up-to-date HP/level/position/
+        terrain line after acting. ``send_prompt`` is fully guarded and self-
+        suppresses while the player is staging, so this is safe on every command.
+        """
+        super().at_post_cmd()
+        send_prompt(self.caller)
 
     def match(self, cmdname, include_prefixes=True):
         """Override to add prefix matching: if the command key starts
@@ -3282,12 +3406,34 @@ class CmdTechnology(GameCommand):
         self.caller.msg("\n".join(lines))
 
 
+def _terrain_mod_summary(tdef) -> str:
+    """Compact colored summary of a terrain's V/M/D base modifiers, or ''.
+
+    Shows only the non-zero modifiers, each colored green (favorable, +) or
+    red (unfavorable, -): e.g. ``|gV+2|n |rM-2|n |gD+2|n``. A fully neutral
+    terrain (all three zero) returns an empty string so the row stays clean.
+    These are the terrain's BASE values from terrain.yaml; per-player class and
+    technology adjustments show on ``score`` and tile inspection instead.
+    """
+    parts = []
+    for label, value in (
+        ("V", tdef.vision_modifier),
+        ("M", tdef.movement_modifier),
+        ("D", tdef.defense_modifier),
+    ):
+        if value:
+            color = "|g" if value > 0 else "|r"
+            parts.append(f"{color}{label}{value:+g}|n")
+    return " ".join(parts)
+
+
 def _terrain_listing(caller) -> str:
     """Build the full terrain reference, grouped by planet in ladder order.
 
     Reads the live registry so the listing never drifts from terrain.yaml.
-    Each row is the colored 2-char map symbol, the terrain name, and the
-    resource it yields (or "—" for cosmetic tiles). Shared by ``CmdTerrain``'s
+    Each row is the colored 2-char map symbol, the terrain name, the resource
+    it yields (or "—" for cosmetic tiles), and its combat modifiers — Vision,
+    Movement, and Defense — shown only when non-zero. Shared by ``CmdTerrain``'s
     ``func`` (typing ``terrain``) and its ``get_help`` (``help terrain``).
     """
     from world.coordinate.procedural_map_renderer import _TERRAIN_COLORS
@@ -3298,8 +3444,10 @@ def _terrain_listing(caller) -> str:
 
     lines = [
         "|wTerrain Types|n",
-        "Every tile belongs to a planet. Symbol, name, and the resource it "
-        "yields:",
+        "Symbol, name, resource, and combat modifiers per tile. Modifiers: "
+        "|wV|nision (fog radius), |wM|novement (in-combat lag), "
+        "|wD|nefense (damage reduction) — |gfavorable|n / |runfavorable|n, "
+        "hidden when zero.",
         "",
     ]
     # registry.planets is insertion-ordered by terrain.yaml, which follows the
@@ -3315,7 +3463,11 @@ def _terrain_listing(caller) -> str:
             symbol = f"{color}{tdef.map_symbol}|n"
             name = ttype.replace("_", " ")
             resource = tdef.resource_type or "—"
-            rows.append(f"  {symbol}  |c{name}|n — {resource}")
+            mods = _terrain_mod_summary(tdef)
+            row = f"  {symbol}  |c{name}|n — {resource}"
+            if mods:
+                row += f"  {mods}"
+            rows.append(row)
         header = f"|w{pname}|n (|x{pdef.planet_type}|n)"
         lines.append(header)
         lines.extend(rows)
@@ -3331,8 +3483,11 @@ class CmdTerrain(GameCommand):
 
     Notes:
       Alias: terrains. Also available as 'help terrain'. Shows each terrain's
-      map symbol, name, and the resource it yields, grouped by planet in
-      progression order. Cosmetic tiles (no resource) show a dash.
+      map symbol, name, the resource it yields, and its combat modifiers
+      (Vision / Movement / Defense, shown only when non-zero), grouped by
+      planet in progression order. Cosmetic tiles (no resource) show a dash.
+      Modifiers listed are terrain base values; your class and researched
+      technologies adjust them — see 'score' for your resolved modifiers.
     """
 
     key = "terrain"

@@ -1854,6 +1854,358 @@ class CmdMigrate(BaseCommand):
         caller.msg(f"Migrated {updated} player(s). {attrs_added} missing attribute(s) filled in.")
 
 
+class CmdPeace(BaseCommand):
+    """Clear a player's combat timer — take them out of combat now.
+
+    Usage:
+        @peace [player]
+
+    Zeroes the combat timer (``combat_timer_expires``) and the build-gate
+    lockout (``combat_lockout_tick``) so the target is immediately out of
+    combat: Wall passage, builds, and quitting are no longer blocked and the
+    on-screen combat clock clears. Any pending ranged lock-on the target holds
+    is also dropped. If no player is named, targets you.
+
+    Note: this does not stop hostiles already shooting the target — it clears
+    the target's own combat state. Restricted to Builder+.
+    """
+
+    key = "@peace"
+    locks = "cmd:perm(Builder);view:perm(Builder)"
+    help_category = "Admin"
+
+    def func(self):
+        caller = self.caller
+        target_name = self.args.strip()
+
+        if target_name:
+            target = resolve_player(caller, target_name)
+            if target is None:
+                return
+        else:
+            target = caller
+
+        db = getattr(target, "db", None)
+        if db is None:
+            caller.msg(f"{getattr(target, 'key', 'target')} has no combat state.")
+            return
+
+        db.combat_timer_expires = 0
+        db.combat_lockout_tick = 0
+        # Drop any held ranged lock-on so the target isn't left mid-aim.
+        try:
+            targeting = _get_system(caller, "targeting_system")
+            if targeting is not None and targeting.get_target(target) is not None:
+                targeting.clear_lock(target, reason="peace")
+        except Exception:  # noqa: BLE001 - lock clear is best-effort
+            pass
+
+        name = getattr(target, "key", "?")
+        logger.info("Admin %s cleared combat state for %s", caller.key, name)
+        caller.msg(f"|gCleared combat state for {name}.|n")
+        if target is not caller and hasattr(target, "msg"):
+            target.msg("|gAn administrator has taken you out of combat.|n")
+
+
+class CmdRestore(BaseCommand):
+    """Heal a player (or NPC) to full health and revive if downed.
+
+    Usage:
+        @restore [target]
+
+    Sets ``hp`` to the target's ``hp_max`` and clears any incapacitation /
+    respawn timer, so a downed unit is instantly revived at full HP. Works on
+    players and NPCs (agents, guards). If no target is named, restores you.
+
+    Restricted to Builder+.
+    """
+
+    key = "@restore"
+    aliases = ["@heal"]
+    locks = "cmd:perm(Builder);view:perm(Builder)"
+    help_category = "Admin"
+
+    def func(self):
+        caller = self.caller
+        target_name = self.args.strip()
+
+        if target_name:
+            # Any combat unit (player OR NPC), so use the shared entity search
+            # rather than resolve_player (which is player-scoped messaging).
+            target = _resolve_combat_unit(caller, target_name)
+            if target is None:
+                return
+        else:
+            target = caller
+
+        db = getattr(target, "db", None)
+        if db is None:
+            caller.msg(f"{getattr(target, 'key', 'target')} has no health to restore.")
+            return
+
+        hp_max = getattr(db, "hp_max", None) or 0
+        if hp_max <= 0:
+            caller.msg(f"{getattr(target, 'key', '?')} has no maximum health set.")
+            return
+
+        db.hp = hp_max
+        # Revive a downed unit: clear incapacitation and cancel the respawn timer.
+        if getattr(db, "incapacitated", False):
+            db.incapacitated = False
+        db.respawn_timer = 0
+
+        name = getattr(target, "key", "?")
+        logger.info("Admin %s restored %s to full health (%d)", caller.key, name, hp_max)
+        caller.msg(f"|gRestored {name} to full health ({hp_max}/{hp_max}).|n")
+        if target is not caller and hasattr(target, "msg"):
+            target.msg("|gAn administrator has restored you to full health.|n")
+
+
+def _resolve_combat_unit(caller, name):
+    """Resolve *name* to a single combat unit (player or NPC), or msg + None.
+
+    Shared by the stat/restore admin commands: unlike ``resolve_player`` (which
+    is player-scoped), this accepts any movable combat unit — a player, an
+    agent, or an enemy NPC — since staff set stats and heal on all of them. Uses
+    the same name/prefix search as ``transfer``; on no match or ambiguity it
+    messages the caller (listing co-named candidates) and returns ``None``.
+    """
+    candidates = _search_entities(caller, name)
+    if not candidates:
+        caller.msg(f"No unit named '{name}' found. Use a name or unambiguous prefix.")
+        return None
+    if len(candidates) == 1:
+        return candidates[0]
+    # Ambiguous — list the matches with owners/coords so the op can disambiguate.
+    from world.utils import get_coords
+    lines = [f"|yMultiple units match '{name}'|n:"]
+    for c in candidates:
+        owner = _owner_label(c)
+        owner_tag = f" owner={owner}" if owner else ""
+        coords = get_coords(c)
+        loc = f" at ({coords[0]}, {coords[1]})" if coords else ""
+        lines.append(f"  |c{getattr(c, 'key', '?')}|n{owner_tag}{loc}")
+    caller.msg("\n".join(lines))
+    return None
+
+
+class CmdAdminStat(AdminSubcommandRouter):
+    """Set health, XP, and other combat stats on a player or NPC.
+
+    Usage:
+        @stat hp <N> [target]
+        @stat maxhp <N> [target]
+        @stat xp <N> [target]
+        @stat set <field> <value> [target]
+        @stat show [target]
+
+    Options:
+        <target>   a player, agent, or NPC by name/prefix; defaults to you.
+
+    Subcommands:
+        hp     — Set current health (clamped to the target's max) (Admin+)
+        maxhp  — Set maximum health; also tops current HP up to it (Admin+)
+        xp     — Set combat XP; recomputes level/rank from the curve (Admin+)
+        set    — Set an arbitrary numeric db attribute by name (Admin+)
+        show   — Print the target's core combat stats (Builder+)
+
+    ``@stat set`` writes any allowlisted numeric attribute (hp, hp_max,
+    combat_xp, level, rank_level, kills, deaths) — a general escape hatch; the
+    named subcommands are the safe, recomputing paths for the common fields.
+    """
+
+    key = "@stat"
+
+    # Numeric attributes @stat set may write. Restricted to combat/progression
+    # fields so a typo can't clobber structural attrs (coords, owner, alliance
+    # pointers, etc.); the named subcommands cover the common cases with
+    # recompute logic.
+    _SETTABLE = {
+        "hp", "hp_max", "combat_xp", "level", "rank_level", "kills", "deaths",
+    }
+
+    # ------------------------------------------------------------------ #
+    #  Target resolution
+    # ------------------------------------------------------------------ #
+
+    def _target_from_tail(self, tail_name):
+        """Resolve a trailing target name (player OR NPC), or msg + return None."""
+        if not tail_name:
+            return self.caller
+        return _resolve_combat_unit(self.caller, tail_name)
+
+    # ------------------------------------------------------------------ #
+    #  Subcommands
+    # ------------------------------------------------------------------ #
+
+    def sub_hp(self, args):
+        """Set current HP: ``@stat hp <N> [target]`` (clamped to hp_max)."""
+        self._set_health(args, which="hp")
+
+    def sub_maxhp(self, args):
+        """Set max HP: ``@stat maxhp <N> [target]`` (tops current HP up to it)."""
+        self._set_health(args, which="maxhp")
+
+    def _set_health(self, args, which):
+        caller = self.caller
+        parts = args.split()
+        if not parts:
+            caller.msg(f"Usage: @stat {which} <N> [target]")
+            return
+        value = self.parse_int(parts[0], "Value")
+        if value is None:
+            return
+        if value < 0:
+            caller.msg("Value must be 0 or greater.")
+            return
+        target = self._target_from_tail(parts[1] if len(parts) >= 2 else None)
+        if target is None:
+            return
+        db = getattr(target, "db", None)
+        if db is None:
+            caller.msg(f"{getattr(target, 'key', 'target')} has no health.")
+            return
+
+        name = getattr(target, "key", "?")
+        if which == "maxhp":
+            old_max = getattr(db, "hp_max", 0) or 0
+            cur_hp = getattr(db, "hp", 0) or 0
+            db.hp_max = value
+            # Top a full unit up to the new ceiling (so "maxhp 1000" on a
+            # full-HP target reads 1000/1000), and clamp an over-max unit down.
+            if cur_hp >= old_max or cur_hp > value:
+                db.hp = value
+            self._log_admin("maxhp", f"{name} hp_max={value}")
+            caller.msg(f"|gSet {name} max health to {value} ({db.hp}/{value}).|n")
+        else:
+            hp_max = getattr(db, "hp_max", None) or value
+            clamped = min(value, hp_max)
+            db.hp = clamped
+            # Setting positive HP on a downed unit revives it.
+            if clamped > 0 and getattr(db, "incapacitated", False):
+                db.incapacitated = False
+                db.respawn_timer = 0
+            self._log_admin("hp", f"{name} hp={clamped}")
+            caller.msg(f"|gSet {name} health to {clamped}/{hp_max}.|n")
+
+    def sub_xp(self, args):
+        """Set combat XP: ``@stat xp <N> [target]`` — recomputes level/rank."""
+        caller = self.caller
+        parts = args.split()
+        if not parts:
+            caller.msg("Usage: @stat xp <N> [target]")
+            return
+        value = self.parse_int(parts[0], "XP")
+        if value is None:
+            return
+        if value < 0:
+            caller.msg("XP must be 0 or greater.")
+            return
+        target = self._target_from_tail(parts[1] if len(parts) >= 2 else None)
+        if target is None:
+            return
+        db = getattr(target, "db", None)
+        if db is None:
+            caller.msg(f"{getattr(target, 'key', 'target')} has no XP.")
+            return
+
+        db.combat_xp = value
+        # Recompute level/rank from the curve so they stay consistent with XP.
+        # CombatEntity.recompute_progression is the owner-agnostic path (players
+        # AND NPCs); fall back to the rank system, then leave as-is.
+        level = None
+        if hasattr(target, "recompute_progression"):
+            try:
+                target.recompute_progression()
+                level = getattr(db, "level", None)
+            except Exception:  # noqa: BLE001
+                logger.debug("recompute_progression failed", exc_info=True)
+        if level is None:
+            rank_system = _get_system(caller, "rank_system")
+            if rank_system is not None and hasattr(rank_system, "check_promotion"):
+                try:
+                    rank_system.check_promotion(target)
+                    level = getattr(db, "level", None)
+                except Exception:  # noqa: BLE001
+                    logger.debug("check_promotion failed", exc_info=True)
+
+        name = getattr(target, "key", "?")
+        self._log_admin("xp", f"{name} combat_xp={value} (level {level})")
+        lvl_str = f", level {level}" if level is not None else ""
+        caller.msg(f"|gSet {name} XP to {value}{lvl_str}.|n")
+
+    def sub_set(self, args):
+        """Set an allowlisted numeric attr: ``@stat set <field> <value> [target]``."""
+        caller = self.caller
+        parts = args.split()
+        if len(parts) < 2:
+            caller.msg("Usage: @stat set <field> <value> [target]")
+            return
+        field = parts[0].lower()
+        if field not in self._SETTABLE:
+            allowed = ", ".join(sorted(self._SETTABLE))
+            caller.msg(f"Field '{field}' is not settable. Allowed: {allowed}.")
+            return
+        value = self.parse_int(parts[1], "Value")
+        if value is None:
+            return
+        target = self._target_from_tail(parts[2] if len(parts) >= 3 else None)
+        if target is None:
+            return
+        db = getattr(target, "db", None)
+        if db is None:
+            caller.msg(f"{getattr(target, 'key', 'target')} has no attributes.")
+            return
+
+        setattr(db, field, value)
+        # If XP or a progression field was set directly, re-derive level/rank so
+        # they don't drift from the curve.
+        if field in ("combat_xp", "level", "rank_level") and hasattr(
+            target, "recompute_progression"
+        ):
+            # Only recompute from XP — setting level/rank directly is an explicit
+            # override the operator asked for, so leave those as written.
+            if field == "combat_xp":
+                try:
+                    target.recompute_progression()
+                except Exception:  # noqa: BLE001
+                    logger.debug("recompute_progression failed", exc_info=True)
+
+        name = getattr(target, "key", "?")
+        self._log_admin("set", f"{name} {field}={value}")
+        caller.msg(f"|gSet {name} {field} to {value}.|n")
+
+    def sub_show(self, args):
+        """Print core combat stats: ``@stat show [target]``."""
+        caller = self.caller
+        target = self._target_from_tail(args.strip() or None)
+        if target is None:
+            return
+        db = getattr(target, "db", None)
+        if db is None:
+            caller.msg(f"{getattr(target, 'key', 'target')} has no stats.")
+            return
+        name = getattr(target, "key", "?")
+        lines = [
+            f"|w=== Stats: {name} ===|n",
+            f"  HP:      {getattr(db, 'hp', '?')}/{getattr(db, 'hp_max', '?')}",
+            f"  XP:      {getattr(db, 'combat_xp', 0) or 0}",
+            f"  Level:   {getattr(db, 'level', '?')}  (rank {getattr(db, 'rank_level', '?')})",
+            f"  Kills:   {getattr(db, 'kills', 0) or 0}   Deaths: {getattr(db, 'deaths', 0) or 0}",
+        ]
+        if getattr(db, "incapacitated", False):
+            lines.append(f"  |rIncapacitated|n (respawn in {getattr(db, 'respawn_timer', 0) or 0})")
+        caller.msg("\n".join(lines))
+
+    subcommands = {
+        "hp": (sub_hp, "Set current health", "Admin"),
+        "maxhp": (sub_maxhp, "Set maximum health", "Admin"),
+        "xp": (sub_xp, "Set combat XP (recomputes level/rank)", "Admin"),
+        "set": (sub_set, "Set an allowlisted numeric attribute", "Admin"),
+        "show": (sub_show, "Show a target's combat stats", "Builder"),
+    }
+
+
 class CmdAdminOutpost(AdminSubcommandRouter):
     """Spawn and inspect NPC bases (outposts/fortresses).
 

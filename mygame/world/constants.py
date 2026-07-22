@@ -179,6 +179,14 @@ MAX_BUILDING_LEVEL = 5
 #: active, the player cannot pass through Walls (set by world.combat_timer).
 COMBAT_TIMER_DURATION = 60
 
+#: Raised HP ceiling granted to staff (Builder+) characters. Applied on login
+#: (``CombatCharacter._ensure_admin_health``) so a staff operator can wade into
+#: combat while testing without being downed by normal damage. Ordinary players
+#: keep ``BalanceConfig.player_default_health`` (100). Not a balance tunable —
+#: it's a fixed operator affordance, so it lives here, not in balance.yaml.
+#: Ordinary players keep ``BalanceConfig.player_default_health`` (500).
+ADMIN_BASE_HEALTH = 1000
+
 # ------------------------------------------------------------------ #
 #  NPC Movement & Agent AI
 # ------------------------------------------------------------------ #

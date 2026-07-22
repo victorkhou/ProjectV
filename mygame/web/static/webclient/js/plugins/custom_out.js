@@ -50,18 +50,17 @@ let custom_out_plugin = (function () {
     };
 
     var onPrompt = function (args, kwargs) {
-        var prompts = document.querySelectorAll(".prompt");
-        for (var i = 0; i < prompts.length; i++) {
-            prompts[i].classList.add("out");
-            prompts[i].innerHTML = args[0] || "";
-            prompts[i].style.height = "1.5em";
-        }
+        // The status prompt is shown in the map footer (see map_renderer's
+        // prompt_status handler), so the dedicated .prompt bar is redundant here
+        // and would duplicate/overlap the same info. Claim the event and drop it
+        // so nothing renders in the bar (it's also hidden via CSS).
         return true;
     };
 
     var onUnknownCmd = function (cmdname, args, kwargs) {
-        // Silently ignore map_update — it's handled by map_renderer
+        // Silently ignore OOB messages handled by the map_renderer plugin.
         if (cmdname === "map_update") return true;
+        if (cmdname === "prompt_status") return true;
 
         var mwin = document.getElementById("messagewindow");
         if (mwin) {
