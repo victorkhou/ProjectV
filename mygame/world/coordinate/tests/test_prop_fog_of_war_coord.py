@@ -89,10 +89,17 @@ class _FakeDB:
 
 
 class _FakeBalance:
-    """Minimal stand-in for BalanceConfig."""
-    def __init__(self, pvr=10, bvr=7):
+    """Minimal stand-in for BalanceConfig.
+
+    ``min_vision_radius`` defaults to 0 here (unlike the real BalanceConfig's
+    1) so the pure circle-union geometry properties below keep exercising
+    radius-0 circles; the terrain-strategy minimum-radius behavior is covered
+    by its own tests.
+    """
+    def __init__(self, pvr=10, bvr=7, min_vision_radius=0):
         self.player_vision_radius = pvr
         self.building_vision_radius = bvr
+        self.min_vision_radius = min_vision_radius
 
 
 class _FakePlayer:

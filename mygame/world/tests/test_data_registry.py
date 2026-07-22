@@ -962,3 +962,168 @@ class TestPlayerClasses:
         ok, errors = reg.reload_all()
         assert ok, errors
         assert "vanguard" in reg.classes
+
+
+# ------------------------------------------------------------------ #
+#  Tests: all-three-missing terrain modifier warning (terrain-strategy)
+#  Requirements: 1.3
+# ------------------------------------------------------------------ #
+
+# Terrain set where exactly one entry (Plains) omits all three modifier
+# fields; Forest carries valid values so it must not trip the warning.
+_TERRAIN_ONE_NEUTRAL = {
+    "terrain": [
+        {"terrain_type": "Plains", "map_symbol": "PP",
+         "resource_type": "Stone", "passable": True},
+        {"terrain_type": "Forest", "map_symbol": "FF",
+         "resource_type": "Wood", "passable": True,
+         "vision_modifier": -2, "movement_modifier": -1,
+         "defense_modifier": 3},
+    ],
+    "planets": [
+        {"name": "Earth", "planet_type": "Earth_Planet",
+         "terrain_types": ["Plains", "Forest"]},
+    ],
+}
+
+
+class TestAllModifiersMissingWarning:
+    """A terrain entry omitting all three modifier fields loads with zeros
+    and logs exactly one warning naming the terrain type — a warning, not a
+    validation error (Req 1.3)."""
+
+    WARNING_FRAGMENT = "defines no modifier fields"
+
+    def _load(self, data_dir, caplog):
+        import logging
+
+        _write_yaml(
+            os.path.join(data_dir, "definitions", "terrain.yaml"),
+            _TERRAIN_ONE_NEUTRAL,
+        )
+        reg = DataRegistry()
+        with caplog.at_level(logging.WARNING, logger="mygame.data_registry"):
+            reg.load_all(data_dir)  # must not raise DataRegistryError
+        return reg
+
+    def test_loads_with_all_three_modifiers_zero(self, data_dir, caplog):
+        reg = self._load(data_dir, caplog)
+        plains = reg.get_terrain("Plains")
+        assert plains.vision_modifier == 0
+        assert plains.movement_modifier == 0.0
+        assert plains.defense_modifier == 0.0
+
+    def test_logs_exactly_one_warning_naming_the_terrain(self, data_dir, caplog):
+        self._load(data_dir, caplog)
+        warnings = [
+            rec for rec in caplog.records
+            if rec.levelname == "WARNING"
+            and self.WARNING_FRAGMENT in rec.getMessage()
+        ]
+        assert len(warnings) == 1
+        assert "Plains" in warnings[0].getMessage()
+
+    def test_terrain_with_modifiers_present_does_not_warn(self, data_dir, caplog):
+        reg = self._load(data_dir, caplog)
+        assert not any(
+            "Forest" in rec.getMessage()
+            for rec in caplog.records
+            if self.WARNING_FRAGMENT in rec.getMessage()
+        )
+        forest = reg.get_terrain("Forest")
+        assert forest.vision_modifier == -2
+        assert forest.movement_modifier == -1
+        assert forest.defense_modifier == 3
+
+    def test_no_validation_error_reported(self, data_dir, caplog):
+        import logging
+
+        self._load(data_dir, caplog)  # no DataRegistryError raised
+        errors = [rec for rec in caplog.records if rec.levelno >= logging.ERROR]
+        assert errors == []
+
+
+# ------------------------------------------------------------------ #
+#  Tests: terrain balance bounds and min vision radius (terrain-strategy)
+#  Requirements: 9.1, 9.3, 9.4, 3.6
+# ------------------------------------------------------------------ #
+
+class TestTerrainBalanceBounds:
+    """Omitted terrain bounds fall back to their documented defaults
+    (5 vision / 3.0 movement / 6.0 defense, min_vision_radius 1);
+    non-numeric or negative bound values fail the load with an error
+    naming the offending field (Req 9.1, 9.3, 9.4, 3.6)."""
+
+    BOUND_DEFAULTS = {
+        "terrain_vision_bound": 5,
+        "terrain_movement_bound": 3.0,
+        "terrain_defense_bound": 6.0,
+        "min_vision_radius": 1,
+    }
+
+    def _write_balance(self, data_dir, extra):
+        """Rewrite balance.yaml as VALID_BALANCE plus the given overrides."""
+        balance = dict(VALID_BALANCE)
+        balance.update(extra)
+        _write_yaml(os.path.join(data_dir, "config", "balance.yaml"), balance)
+
+    # -- defaults for omitted fields (VALID_BALANCE omits all four) -- #
+
+    def test_omitted_bounds_yield_defaults(self, data_dir):
+        reg = DataRegistry()
+        reg.load_all(data_dir)
+
+        for field, default in self.BOUND_DEFAULTS.items():
+            assert getattr(reg.balance, field) == default, field
+
+    def test_missing_balance_file_yields_default_bounds(self, data_dir_no_balance):
+        reg = DataRegistry()
+        reg.load_all(data_dir_no_balance)
+
+        for field, default in self.BOUND_DEFAULTS.items():
+            assert getattr(reg.balance, field) == default, field
+
+    def test_explicit_values_override_defaults(self, data_dir):
+        # Defaults apply only to omitted fields: explicit non-default values
+        # must be sourced from the loaded config.
+        self._write_balance(data_dir, {
+            "terrain_vision_bound": 8,
+            "terrain_movement_bound": 4.5,
+            "terrain_defense_bound": 9.0,
+            "min_vision_radius": 2,
+        })
+        reg = DataRegistry()
+        reg.load_all(data_dir)
+
+        assert reg.balance.terrain_vision_bound == 8
+        assert reg.balance.terrain_movement_bound == 4.5
+        assert reg.balance.terrain_defense_bound == 9.0
+        assert reg.balance.min_vision_radius == 2
+
+    # -- non-numeric bound values fail the load, naming the field -- #
+
+    @pytest.mark.parametrize("field,bad_value", [
+        ("terrain_vision_bound", "five"),
+        ("terrain_movement_bound", "fast"),
+        ("terrain_defense_bound", [6.0]),
+        ("min_vision_radius", "one"),
+    ])
+    def test_non_numeric_bound_fails_load_naming_field(self, data_dir, field, bad_value):
+        self._write_balance(data_dir, {field: bad_value})
+        reg = DataRegistry()
+        with pytest.raises(DataRegistryError, match=field):
+            reg.load_all(data_dir)
+
+    # -- negative bound values fail the load, naming the field -- #
+
+    @pytest.mark.parametrize("field,bad_value", [
+        ("terrain_vision_bound", -5),
+        ("terrain_movement_bound", -3.0),
+        ("terrain_defense_bound", -0.5),
+        ("min_vision_radius", -1),
+    ])
+    def test_negative_bound_fails_load_naming_field(self, data_dir, field, bad_value):
+        self._write_balance(data_dir, {field: bad_value})
+        reg = DataRegistry()
+        with pytest.raises(DataRegistryError, match=field):
+            reg.load_all(data_dir)

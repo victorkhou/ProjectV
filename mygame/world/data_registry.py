@@ -26,10 +26,11 @@ from world.definitions import (
     RankDef,
     TemplateBuildingDef,
     TemplateGuardDef,
+    TerrainAffinity,
     TerrainDef,
     TechnologyDef,
 )
-from world.schema_validator import SchemaValidator
+from world.schema_validator import SchemaValidator, _AFFINITY_KINDS
 
 logger = logging.getLogger("mygame.data_registry")
 
@@ -380,11 +381,31 @@ class DataRegistry:
         self.terrain = {}
         self.planets = {}
         for entry in data.get("terrain", []):
+            # Modifier fields: missing or null defaults to zero. A terrain with
+            # all three absent is legal data (a fully neutral terrain), so that
+            # case warns rather than erroring and still loads with zeros.
+            raw_mods = {
+                field: entry.get(field)
+                for field in (
+                    "vision_modifier",
+                    "movement_modifier",
+                    "defense_modifier",
+                )
+            }
+            if all(value is None for value in raw_mods.values()):
+                logger.warning(
+                    "Terrain '%s' defines no modifier fields; defaulting "
+                    "vision/movement/defense modifiers to zero.",
+                    entry["terrain_type"],
+                )
             tdef = TerrainDef(
                 terrain_type=entry["terrain_type"],
                 map_symbol=entry["map_symbol"],
                 resource_type=entry.get("resource_type"),
                 passable=entry.get("passable", True),
+                vision_modifier=raw_mods["vision_modifier"] or 0,
+                movement_modifier=raw_mods["movement_modifier"] or 0.0,
+                defense_modifier=raw_mods["defense_modifier"] or 0.0,
             )
             self.terrain[tdef.terrain_type] = tdef
         for entry in data.get("planets", []):
@@ -623,6 +644,13 @@ class DataRegistry:
         offers a single default), so a class-content problem never blocks server
         start. Each entry has a ``key`` (persisted on the character), a display
         ``name``, and an optional ``description``.
+
+        Contract escalation (terrain-strategy): the optional
+        ``terrain_affinities`` list is validated FAIL-FAST — invalid affinity
+        entries and sidegrade-rule violations are collected across ALL classes
+        and raised as a single :class:`DataRegistryError` (Req 6.5, 6.6). The
+        lenient "malformed → skip" contract above applies only to the
+        pre-existing class fields (key/name/description/stat_modifiers).
         """
         self.classes = {}
         raw = self._read_optional_yaml(
@@ -631,6 +659,7 @@ class DataRegistry:
         )
         if raw is None:
             return
+        affinity_errors: list[str] = []
         for entry in raw.get("classes", []) or []:
             try:
                 key = entry["key"]
@@ -646,13 +675,112 @@ class DataRegistry:
                 continue
             name = entry.get("name")
             description = entry.get("description")
+            desc = (description if isinstance(description, str) else "").strip()
+            affinities = self._parse_terrain_affinities(key, entry, affinity_errors)
+            self._check_affinity_sidegrade(key, entry, affinities, desc, affinity_errors)
             self.classes[key] = ClassDef(
                 key=key,
                 name=name if isinstance(name, str) and name else key.title(),
-                description=(description if isinstance(description, str) else "").strip(),
+                description=desc,
                 stat_modifiers=entry.get("stat_modifiers") or {},
+                terrain_affinities=affinities,
             )
+        if affinity_errors:
+            msg = ("Class terrain affinity validation failed:\n"
+                   + "\n".join(affinity_errors))
+            logger.error(msg)
+            raise DataRegistryError(msg)
         logger.info("Loaded %d player class(es).", len(self.classes))
+
+    def _parse_terrain_affinities(
+        self, class_key: str, entry: dict, errors: list[str],
+    ) -> list[TerrainAffinity]:
+        """Parse and validate one class's optional ``terrain_affinities`` list.
+
+        Per entry (Req 6.6): ``terrain_type`` must exist in ``self.terrain``
+        (classes load after terrain populates), ``kind`` must be one of
+        vision/movement/defense, and ``adjustment`` must be numeric (non-bool).
+        Violations append to *errors* (fail-fast, collected across all classes);
+        only valid entries are returned.
+        """
+        raw_list = entry.get("terrain_affinities")
+        if raw_list is None:
+            return []
+        if not isinstance(raw_list, list):
+            errors.append(
+                f"Class '{class_key}': terrain_affinities must be a list, "
+                f"got {type(raw_list).__name__}."
+            )
+            return []
+        affinities: list[TerrainAffinity] = []
+        for idx, spec in enumerate(raw_list):
+            if not isinstance(spec, dict):
+                errors.append(
+                    f"Class '{class_key}': terrain_affinities[{idx}] must be a "
+                    f"mapping, got {spec!r}."
+                )
+                continue
+            terrain_type = spec.get("terrain_type")
+            kind = spec.get("kind")
+            adjustment = spec.get("adjustment")
+            valid = True
+            if terrain_type not in self.terrain:
+                errors.append(
+                    f"Class '{class_key}': terrain_affinities[{idx}] names "
+                    f"unknown terrain_type {terrain_type!r}."
+                )
+                valid = False
+            if kind not in _AFFINITY_KINDS:
+                errors.append(
+                    f"Class '{class_key}': terrain_affinities[{idx}] has invalid "
+                    f"kind {kind!r} (expected one of vision, movement, defense)."
+                )
+                valid = False
+            if not isinstance(adjustment, (int, float)) or isinstance(adjustment, bool):
+                errors.append(
+                    f"Class '{class_key}': terrain_affinities[{idx}] has "
+                    f"non-numeric adjustment {adjustment!r}."
+                )
+                valid = False
+            if valid:
+                affinities.append(TerrainAffinity(
+                    terrain_type=terrain_type,
+                    kind=kind,
+                    adjustment=float(adjustment),
+                ))
+        return affinities
+
+    @staticmethod
+    def _check_affinity_sidegrade(
+        class_key: str, entry: dict, affinities: list[TerrainAffinity],
+        description: str, errors: list[str],
+    ) -> None:
+        """Enforce the sidegrade rule (Req 6.5) for one class.
+
+        A class with any positive-adjustment affinity must carry an offsetting
+        weakness — at least one negative-adjustment affinity or one negative
+        ``stat_modifiers`` value — and a non-empty description naming it.
+        Violations append to *errors*, naming the class.
+        """
+        if not any(aff.adjustment > 0 for aff in affinities):
+            return
+        has_negative_affinity = any(aff.adjustment < 0 for aff in affinities)
+        stat_mods = entry.get("stat_modifiers")
+        stat_values = stat_mods.values() if isinstance(stat_mods, dict) else ()
+        has_negative_stat = any(
+            isinstance(val, (int, float)) and not isinstance(val, bool) and val < 0
+            for val in stat_values
+        )
+        if not (has_negative_affinity or has_negative_stat):
+            errors.append(
+                f"Class '{class_key}': has a positive terrain affinity but no "
+                "offsetting negative affinity or negative stat_modifiers value."
+            )
+        if not description:
+            errors.append(
+                f"Class '{class_key}': has a positive terrain affinity but an "
+                "empty description (the description must name the weakness)."
+            )
 
     def _load_alliance_perks(self, base_path: str) -> None:
         """Load the optional alliance perk catalog from alliance_perks.yaml.

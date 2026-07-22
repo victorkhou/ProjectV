@@ -244,6 +244,31 @@ def compute_effective_delay(base_delay: int, speed_modifier: int) -> int:
     return max(1, base_delay - speed_modifier)
 
 
+def compute_combat_move_lag(base: int, move_speed: int, terrain_mod: float) -> int:
+    """Player in-combat movement lag: ``max(0, int(base - move_speed - terrain_mod))``.
+
+    Zero-floored (Req 4.2): unlike :func:`compute_effective_delay` (which floors
+    at 1 for agents), a fast, favorably-positioned player may move again on the
+    same tick. ``int()`` truncates toward zero, so a fractional terrain modifier
+    never grants more relief than a full tick.
+
+    Args:
+        base: Base combat movement lag in ticks (``COMBAT_MOVE_LAG_TICKS``).
+        move_speed: Sum of ``move_speed`` stat modifiers from equipped items.
+        terrain_mod: Destination tile's resolved terrain Movement_Modifier
+            (positive reduces lag, negative increases it).
+
+    Returns:
+        Effective lag in whole ticks, floored at zero.
+
+    Notes:
+        Used by the player movement gate (``CmdMove``) only. Agents keep
+        :func:`compute_effective_delay` and its minimum-1 floor — do not merge
+        the two helpers.
+    """
+    return max(0, int(base - move_speed - terrain_mod))
+
+
 # ------------------------------------------------------------------ #
 #  Agent state enums / status strings
 # ------------------------------------------------------------------ #

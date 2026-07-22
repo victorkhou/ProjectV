@@ -3296,5 +3296,123 @@ class TestPermanentBonusCap(unittest.TestCase):
         self.assertEqual(bonus, 15.0)
 
 
+# -------------------------------------------------------------- #
+#  Terrain defense in the physical damage branch (terrain-strategy Req 5)
+# -------------------------------------------------------------- #
+
+class _FakeTerrainModifiers:
+    """Minimal stand-in for TerrainModifiers (only .defense is read here)."""
+    def __init__(self, defense):
+        self.defense = defense
+
+
+class _FakeTerrainResolver:
+    """Records resolve calls and returns a fixed defense modifier."""
+    def __init__(self, defense=0.0):
+        self._defense = defense
+        self.player_calls = []
+        self.base_calls = []
+
+    def resolve_for_player(self, player, planet, x, y):
+        self.player_calls.append((player, planet, x, y))
+        return _FakeTerrainModifiers(self._defense)
+
+    def resolve_base(self, planet, x, y):
+        self.base_calls.append((planet, x, y))
+        return _FakeTerrainModifiers(self._defense)
+
+
+class _RaisingTerrainResolver:
+    """Terrain resolver whose lookups always raise."""
+    def resolve_for_player(self, player, planet, x, y):
+        raise RuntimeError("resolver blew up")
+
+    def resolve_base(self, planet, x, y):
+        raise RuntimeError("resolver blew up")
+
+
+class TestTerrainDefense(unittest.TestCase):
+    """_calculate_damage applies the terrain Defense_Modifier (Req 5.1-5.5, 2.7)."""
+
+    def _damage(self, resolver, weapon, target, attacker=None):
+        from world import services
+        engine, _ = _make_engine()
+        with services.override({"terrain_modifier_system": resolver}):
+            return engine._calculate_damage(
+                attacker=attacker or FakePlayer(name="A"),
+                target=target,
+                weapon_item=weapon,
+            )
+
+    def test_player_target_adds_player_resolved_defense(self):
+        """Player-resolved terrain DR stacks onto armor DR (Req 5.1, 2.7)."""
+        resolver = _FakeTerrainResolver(defense=10.0)
+        target = FakePlayer(name="T", armor=FakeArmor(damage_reduction=5),
+                            location=FakeTile(xyz=(3, 4, "earth")))
+        # 40 raw - (5 armor + 10 terrain) = 25; chip floor ceil(40*0.5)=20.
+        dmg = self._damage(resolver, FakeWeapon(damage=40), target)
+        self.assertEqual(dmg, 25)
+        # Resolved at the target's occupied tile, player-resolved (Req 5.1).
+        self.assertEqual(resolver.player_calls, [(target, "earth", 3, 4)])
+        self.assertEqual(resolver.base_calls, [])
+
+    def test_chip_floor_applies_after_terrain_adjusted_dr(self):
+        """The chip floor caps terrain-boosted DR absorption (Req 5.2)."""
+        resolver = _FakeTerrainResolver(defense=10.0)
+        target = FakePlayer(name="T", armor=FakeArmor(damage_reduction=20))
+        # 30 raw - 30 total DR = 0, but chip floor ceil(30*0.5) = 15.
+        dmg = self._damage(resolver, FakeWeapon(damage=30), target)
+        self.assertEqual(dmg, 15)
+
+    def test_negative_terrain_never_pushes_damage_above_raw(self):
+        """DR total is floored at zero before subtraction (Req 5.4)."""
+        resolver = _FakeTerrainResolver(defense=-5.0)
+        target = FakePlayer(name="T")  # unarmored: DR total = max(0, -5) = 0
+        dmg = self._damage(resolver, FakeWeapon(damage=20), target)
+        self.assertEqual(dmg, 20)
+
+    def test_building_target_uses_base_resolution(self):
+        """Buildings get the base terrain defense only (Req 5.3, 2.6)."""
+        resolver = _FakeTerrainResolver(defense=10.0)
+        building = FakeBuilding(location=FakeTile(xyz=(7, 8, "earth")))
+        building.db = type("_D", (), {"coord_x": 7, "coord_y": 8})()
+        # 40 raw - 10 terrain = 30 (buildings have no armor DR otherwise).
+        dmg = self._damage(resolver, FakeWeapon(damage=40), building)
+        self.assertEqual(dmg, 30)
+        self.assertEqual(resolver.base_calls, [("earth", 7, 8)])
+        self.assertEqual(resolver.player_calls, [])
+
+    def test_resolver_failure_degrades_to_zero(self):
+        """A raising resolver contributes 0 terrain DR, never raises (Req 5.4)."""
+        target = FakePlayer(name="T", armor=FakeArmor(damage_reduction=5))
+        dmg = self._damage(_RaisingTerrainResolver(), FakeWeapon(damage=20), target)
+        self.assertEqual(dmg, 15)  # 20 - 5 armor, terrain 0
+
+    def test_no_resolver_installed_leaves_damage_unchanged(self):
+        """Without a terrain_modifier_system service, terrain DR is 0."""
+        from world import services
+        engine, _ = _make_engine()
+        target = FakePlayer(name="T", armor=FakeArmor(damage_reduction=5))
+        with services.override({}):
+            dmg = engine._calculate_damage(
+                attacker=FakePlayer(name="A"), target=target,
+                weapon_item=FakeWeapon(damage=20),
+            )
+        self.assertEqual(dmg, 15)
+
+    def test_non_physical_damage_ignores_terrain(self):
+        """Non-physical attacks never consult the terrain resolver (Req 5.5)."""
+        resolver = _FakeTerrainResolver(defense=10.0)
+        weapon = FakeWeapon(damage=20)
+        weapon.damage_type = "fire"
+        target = FakePlayer(name="T")
+        dmg_with_terrain = self._damage(resolver, weapon, target)
+        dmg_without = self._damage(_FakeTerrainResolver(defense=0.0), weapon, target)
+        self.assertEqual(dmg_with_terrain, dmg_without)
+        # The typed-resist branch never consults the terrain resolver at all.
+        self.assertEqual(resolver.player_calls, [])
+        self.assertEqual(resolver.base_calls, [])
+
+
 if __name__ == "__main__":
     unittest.main()

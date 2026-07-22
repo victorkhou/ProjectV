@@ -57,3 +57,50 @@
   effect_type: production_bonus
   effect_value:
     production_multiplier: 1.5
+# ── Terrain technologies (terrain-strategy, Req 7.1) ─────────────────
+# effect_value keys follow terrain_affinity:{terrain_type}:{kind};
+# terrain types must exist in terrain.yaml (cross-validated at load).
+
+- name: Forest Warfare
+  key: forest_warfare
+  required_rank: Sergeant
+  resource_cost:
+    Wood: 200
+  research_ticks: 20
+  effect_type: terrain_affinity
+  effect_value:
+    "terrain_affinity:Forest:movement": 1
+
+- name: Mountain Surveying
+  key: mountain_surveying
+  required_rank: Staff_Sergeant
+  resource_cost:
+    Stone: 120
+    Iron: 80
+  research_ticks: 45
+  effect_type: terrain_affinity
+  effect_value:
+    "terrain_affinity:Mountain:vision": 2
+
+- name: Ruin Fortification
+  key: ruin_fortification
+  required_rank: Lieutenant
+  resource_cost:
+    Iron: 150
+    Circuits: 40
+  research_ticks: 60
+  effect_type: terrain_affinity
+  effect_value:
+    "terrain_affinity:Ruins:defense": 2
+
+- name: Glacier Traversal
+  key: glacier_traversal
+  required_rank: Captain
+  resource_cost:
+    Iron: 180
+    Energy: 90
+  research_ticks: 70
+  effect_type: terrain_affinity
+  effect_value:
+    "terrain_affinity:Glacier:movement": 1
+    "terrain_affinity:Frozen_Lake:movement": 1

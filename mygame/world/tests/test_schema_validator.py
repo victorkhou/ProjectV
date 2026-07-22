@@ -410,6 +410,71 @@ class TestValidateTechnologies:
         errs = self.v.validate_technologies([make_valid_tech(research_ticks="slow")])
         assert any("research_ticks must be an integer" in e for e in errs)
 
+    # --- terrain_affinity effect validation (terrain-strategy 7.1/7.5) --- #
+
+    def _terrain_tech(self, effect_value):
+        return make_valid_tech(
+            key="forest_warfare", name="Forest Warfare",
+            effect_type="terrain_affinity", effect_value=effect_value,
+        )
+
+    def test_terrain_affinity_valid(self):
+        tech = self._terrain_tech({
+            "terrain_affinity:Forest:movement": 1,
+            "terrain_affinity:Mountain:vision": 2.5,
+            "terrain_affinity:Swamp:defense": -1,
+        })
+        assert self.v.validate_technologies([tech]) == []
+
+    def test_terrain_affinity_effect_value_not_a_dict(self):
+        for bad in (None, 1.5, "Forest", ["terrain_affinity:Forest:vision"]):
+            errs = self.v.validate_technologies([self._terrain_tech(bad)])
+            assert any("effect_value must be a dict" in e for e in errs), bad
+
+    def test_terrain_affinity_malformed_key(self):
+        for bad_key in (
+            "Forest:movement",                        # missing prefix
+            "terrain_affinity:Forest",                # missing kind segment
+            "terrain_affinity:Forest:movement:extra",  # too many segments
+            "terrain_affinity::movement",             # empty terrain type
+            "bonus:Forest:movement",                  # wrong prefix
+        ):
+            errs = self.v.validate_technologies([self._terrain_tech({bad_key: 1})])
+            assert any("must match" in e for e in errs), bad_key
+
+    def test_terrain_affinity_invalid_kind(self):
+        errs = self.v.validate_technologies(
+            [self._terrain_tech({"terrain_affinity:Forest:stealth": 1})]
+        )
+        assert any("invalid kind 'stealth'" in e for e in errs)
+
+    def test_terrain_affinity_non_numeric_value(self):
+        for bad_val in (True, "fast", [1], None):
+            errs = self.v.validate_technologies(
+                [self._terrain_tech({"terrain_affinity:Forest:movement": bad_val})]
+            )
+            assert any("must be numeric" in e for e in errs), bad_val
+
+    def test_terrain_affinity_errors_collected_across_technologies(self):
+        techs = [
+            make_valid_tech(
+                key="t1", name="T1", effect_type="terrain_affinity",
+                effect_value={"badkey": 1},
+            ),
+            make_valid_tech(
+                key="t2", name="T2", effect_type="terrain_affinity",
+                effect_value={"terrain_affinity:Forest:movement": "slow"},
+            ),
+        ]
+        errs = self.v.validate_technologies(techs)
+        assert any("technologies[0]" in e and "must match" in e for e in errs)
+        assert any("technologies[1]" in e and "must be numeric" in e for e in errs)
+
+    def test_non_terrain_effect_type_not_checked(self):
+        # Other effect types keep their existing free-form effect_value.
+        tech = make_valid_tech(effect_type="damage_bonus", effect_value=1.5)
+        assert self.v.validate_technologies([tech]) == []
+
 
 class TestValidatePowerups:
     def setup_method(self):
@@ -542,6 +607,81 @@ class TestValidateTerrain:
         }
         errs = self.v.validate_terrain(data)
         assert any("'Void' not found" in e for e in errs)
+
+    def test_numeric_modifiers_valid(self):
+        data = {
+            "terrain": [
+                {
+                    "terrain_type": "Forest",
+                    "map_symbol": "FF",
+                    "vision_modifier": -2,
+                    "movement_modifier": -1.5,
+                    "defense_modifier": 3,
+                },
+            ],
+        }
+        assert self.v.validate_terrain(data) == []
+
+    def test_missing_or_null_modifiers_valid(self):
+        data = {
+            "terrain": [
+                {
+                    "terrain_type": "Plains",
+                    "map_symbol": "PP",
+                    "vision_modifier": None,
+                    "defense_modifier": 1,
+                },
+            ],
+        }
+        assert self.v.validate_terrain(data) == []
+
+    def test_non_numeric_modifier_rejected(self):
+        data = {
+            "terrain": [
+                {
+                    "terrain_type": "Swamp",
+                    "map_symbol": "SS",
+                    "movement_modifier": "slow",
+                },
+            ],
+        }
+        errs = self.v.validate_terrain(data)
+        assert any("movement_modifier must be a number" in e and "Swamp" in e for e in errs)
+
+    def test_bool_modifier_rejected(self):
+        data = {
+            "terrain": [
+                {
+                    "terrain_type": "Hills",
+                    "map_symbol": "HH",
+                    "vision_modifier": True,
+                },
+            ],
+        }
+        errs = self.v.validate_terrain(data)
+        assert any("vision_modifier must be a number" in e and "Hills" in e for e in errs)
+
+    def test_multiple_bad_modifiers_all_reported(self):
+        data = {
+            "terrain": [
+                {
+                    "terrain_type": "Swamp",
+                    "map_symbol": "SS",
+                    "vision_modifier": "foo",
+                    "defense_modifier": False,
+                },
+                {
+                    "terrain_type": "Hills",
+                    "map_symbol": "HH",
+                    "movement_modifier": [1],
+                },
+            ],
+        }
+        errs = self.v.validate_terrain(data)
+        assert any("vision_modifier" in e and "Swamp" in e for e in errs)
+        assert any("defense_modifier" in e and "Swamp" in e for e in errs)
+        assert any("movement_modifier" in e and "Hills" in e for e in errs)
+        assert len(errs) == 3
 
 
 class TestValidateBalance:
@@ -819,6 +959,48 @@ class TestCrossValidate:
         })
         errs = self.v.cross_validate(reg)
         assert any("required_rank 'Marshal'" in e for e in errs)
+
+    # --- terrain-technology terrain references (terrain-strategy 7.5) --- #
+
+    def _terrain_tech_registry(self, effect_value):
+        from mygame.world.definitions import TechnologyDef
+        return self._make_registry(technologies={
+            "forest_warfare": TechnologyDef(
+                name="Forest Warfare", key="forest_warfare",
+                required_rank="Sergeant", effect_type="terrain_affinity",
+                effect_value=effect_value,
+            ),
+        })
+
+    def test_terrain_tech_known_terrain_passes(self):
+        reg = self._terrain_tech_registry({"terrain_affinity:Forest:movement": 1})
+        assert self.v.cross_validate(reg) == []
+
+    def test_terrain_tech_unknown_terrain(self):
+        reg = self._terrain_tech_registry({"terrain_affinity:Lava:defense": 2})
+        errs = self.v.cross_validate(reg)
+        assert any(
+            "technology 'forest_warfare'" in e
+            and "unknown terrain type 'Lava'" in e
+            for e in errs
+        )
+
+    def test_terrain_tech_errors_collected_across_keys(self):
+        reg = self._terrain_tech_registry({
+            "terrain_affinity:Lava:defense": 2,
+            "terrain_affinity:Void:vision": 1,
+            "terrain_affinity:Forest:movement": 1,
+        })
+        errs = self.v.cross_validate(reg)
+        assert any("unknown terrain type 'Lava'" in e for e in errs)
+        assert any("unknown terrain type 'Void'" in e for e in errs)
+        assert not any("'Forest'" in e for e in errs)
+
+    def test_terrain_tech_malformed_key_skipped_here(self):
+        # Malformed keys are validate_technologies' concern; cross_validate
+        # only checks the terrain reference of well-formed keys.
+        reg = self._terrain_tech_registry({"not_a_structured_key": 1})
+        assert self.v.cross_validate(reg) == []
 
     def test_production_map_invalid_building(self):
         reg = self._make_registry(item_production_map={"ZZ": ["rifle"]})

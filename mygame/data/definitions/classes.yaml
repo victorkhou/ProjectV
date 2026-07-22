@@ -13,32 +13,52 @@
 # be filled in as each axis gets a consumer. See steering doc §2d / Phase 5.
 #
 # key: persists on db.player_class; name/description drive the selection menu.
+#
+# terrain_affinities (terrain-strategy feature) ARE wired: the
+# TerrainModifierSystem folds them into vision, in-combat movement lag, and
+# damage reduction for the matching terrain. Each entry is
+# {terrain_type, kind: vision|movement|defense, adjustment}; terrain types are
+# cross-validated against terrain.yaml at load, and any class with a positive
+# affinity must carry an offsetting negative affinity or negative stat_modifier
+# named in its description (sidegrade rule, fail-fast at load).
 
 classes:
   - key: vanguard
     name: Vanguard
     description: >-
       Front-line assault specialist. Leads the breach and holds the line.
-      Intended sidegrade: +HP, faster move; -accuracy, -range. Currently a
-      neutral damage profile (bruiser bonuses pending max_hp/accuracy wiring).
+      Charges hard across open Plains (faster in-combat movement) but heavy
+      kit snags under the Forest canopy, slowing movement there. Intended
+      sidegrade: +HP, faster move; -accuracy, -range (pending wiring).
     stat_modifiers: {}
+    terrain_affinities:
+      - {terrain_type: Plains, kind: movement, adjustment: 1}
+      - {terrain_type: Forest, kind: movement, adjustment: -1}
 
   - key: engineer
     name: Engineer
     description: >-
       Builder and fortifier. Keeps the base running and the walls standing.
-      Weaker in direct combat (-5 damage) — the paired sight/build strengths
-      are pending their consumer wiring.
+      Digs in well on Rock and among Ruins (+1 defense each) but is weaker in
+      direct combat (-5 damage) — the paired sight/build strengths are pending
+      their consumer wiring.
     stat_modifiers:
       damage_bonus: -5
+    terrain_affinities:
+      - {terrain_type: Rock, kind: defense, adjustment: 1}
+      - {terrain_type: Ruins, kind: defense, adjustment: 1}
 
   - key: ranger
     name: Ranger
     description: >-
-      Scout and marksman. Ranges ahead, spots targets, strikes from distance.
-      Intended sidegrade: +range, +accuracy; -HP. Currently neutral (bonuses
-      pending range/accuracy/max_hp wiring).
+      Scout and marksman. At home under the canopy — sees farther and moves
+      faster through Forest — but thin-skinned in the open: reduced defense
+      on Plains. Intended sidegrade: +range, +accuracy; -HP (pending wiring).
     stat_modifiers: {}
+    terrain_affinities:
+      - {terrain_type: Forest, kind: movement, adjustment: 1}
+      - {terrain_type: Forest, kind: vision, adjustment: 2}
+      - {terrain_type: Plains, kind: defense, adjustment: -1}
 
   - key: commander
     name: Commander

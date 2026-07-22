@@ -95,6 +95,21 @@ class RankDef:
     planet_access: list[str] = field(default_factory=list)
 
 
+@dataclass(frozen=True)
+class TerrainAffinity:
+    """One class terrain affinity (terrain-strategy feature).
+
+    Adjusts how strongly one terrain modifier kind applies to a player of the
+    owning class on tiles of ``terrain_type``. ``kind`` is one of ``"vision"``,
+    ``"movement"``, or ``"defense"``. A positive ``adjustment`` strengthens the
+    player on that terrain; a negative one weakens them.
+    """
+
+    terrain_type: str
+    kind: str
+    adjustment: float
+
+
 @dataclass
 class ClassDef:
     """Definition for a selectable player class (state 3.2 + Phase 5 substrate).
@@ -104,6 +119,10 @@ class ClassDef:
     penalties to the player's combat stats (read in CombatEngine via a class-
     modifier accessor). A class with +damage always pays with -HP/-accuracy/etc.
 
+    ``terrain_affinities`` (terrain-strategy feature) lists optional per-terrain
+    modifier adjustments; a class with any positive affinity must carry an
+    offsetting weakness (validated fail-fast at load).
+
     ``key`` persists on ``db.player_class``; ``name`` + ``description`` drive
     the selection menu and score display.
     """
@@ -112,6 +131,7 @@ class ClassDef:
     name: str
     description: str = ""
     stat_modifiers: dict[str, float] = field(default_factory=dict)
+    terrain_affinities: list[TerrainAffinity] = field(default_factory=list)
 
 
 @dataclass
@@ -148,6 +168,12 @@ class TerrainDef:
     map_symbol: str
     resource_type: str | None = None
     passable: bool = True
+    #: Vision-radius adjustment in tiles: + widens fog-of-war reveal, - narrows it.
+    vision_modifier: int = 0
+    #: In-combat movement-lag adjustment in ticks: + reduces lag, - increases it.
+    movement_modifier: float = 0.0
+    #: Damage-reduction adjustment: + adds DR, - subtracts it.
+    defense_modifier: float = 0.0
 
 
 @dataclass
@@ -610,3 +636,15 @@ class BalanceConfig:
     travel_fuel_per_agent: int = 1
     #: Base fuel cells consumed per single-rung hop (Basic Fuel).
     travel_fuel_per_hop: int = 1
+
+    # --- Terrain strategy (terrain-strategy feature) ------------------- #
+    #: Clamp bound for resolved terrain VISION modifiers (tiles). Every
+    #: resolved value satisfies |value| <= bound (sign-preserving clamp).
+    terrain_vision_bound: int = 5
+    #: Clamp bound for resolved terrain MOVEMENT modifiers (ticks).
+    terrain_movement_bound: float = 3.0
+    #: Clamp bound for resolved terrain DEFENSE modifiers (DR points).
+    terrain_defense_bound: float = 6.0
+    #: Minimum fog-of-war vision radius after terrain adjustment: a circle
+    #: never shrinks below this many tiles regardless of penalties.
+    min_vision_radius: int = 1

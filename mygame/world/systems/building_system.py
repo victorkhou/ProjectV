@@ -89,6 +89,10 @@ class BuildingSystem(BaseSystem):
         self._factory: "BuildingFactory" = building_factory or EvenniaBuildingFactory()
         self._create_building_func = create_building_func or self._factory.create_building
         self._terrain_provider = terrain_provider
+        # TerrainModifierSystem for placement feedback (terrain-strategy
+        # Req 8.3); injected at the composition root like terrain_provider,
+        # with a services-lookup fallback when unset.
+        self._terrain_modifier_resolver: Any | None = None
         self.build_range = build_range
         self._current_tick_func = current_tick_func or (lambda: 0)
 
@@ -101,6 +105,45 @@ class BuildingSystem(BaseSystem):
         ``_legacy_terrain_provider`` fallback.
         """
         self._terrain_provider = terrain_provider
+
+    def set_terrain_modifier_resolver(self, resolver: Any) -> None:
+        """Inject the TerrainModifierSystem after construction (Req 8.3).
+
+        Wired at the composition root once the per-planet terrain generators
+        exist, mirroring :meth:`set_terrain_provider`. When unset, placement
+        feedback falls back to ``get_service("terrain_modifier_system")``.
+        """
+        self._terrain_modifier_resolver = resolver
+
+    def _terrain_defense_note(
+        self, tile: Any, x: int | None = None, y: int | None = None
+    ) -> str:
+        """' [terrain defense +3]' for the target tile, or '' (Req 8.3).
+
+        The value shown is the tile's BASE Defense_Modifier via
+        ``resolve_base`` — buildings never receive class or technology
+        affinity adjustments (Req 2.6, 5.3). Fail-soft: an unwired or failing
+        resolver, unresolvable coordinates, or an unresolvable terrain type
+        (no generator / no TerrainDef) omit the note rather than raising.
+        """
+        resolver = self._terrain_modifier_resolver
+        if resolver is None:
+            resolver = get_service("terrain_modifier_system")
+        if resolver is None:
+            return ""
+        if x is None or y is None:
+            coords = self._get_coords(tile)
+            if coords is None:
+                return ""
+            x, y = coords
+        planet = self._tile_planet(tile, x=x, y=y)
+        try:
+            mods = resolver.resolve_base(planet, int(x), int(y))
+        except Exception:  # noqa: BLE001 — run time fails soft
+            return ""
+        if getattr(mods, "terrain_type", None) is None:
+            return ""
+        return f" [terrain defense {mods.defense:+g}]"
 
     # ------------------------------------------------------------------ #
     #  Construction
@@ -190,11 +233,14 @@ class BuildingSystem(BaseSystem):
         """Construct a building on the given tile (instant, for testing/admin).
 
         Returns:
-            (success, message) tuple.
+            (success, message) tuple. Both the acceptance message and every
+            rejection message carry the target tile's base terrain defense
+            modifier when resolvable (Req 8.3).
         """
+        terrain_note = self._terrain_defense_note(tile, x=x, y=y)
         building_def, err = self._validate_construction(player, tile, building_abbr, x=x, y=y)
         if err:
-            return False, err
+            return False, err + terrain_note
 
         player.deduct_resources(building_def.cost)
         building = self._call_create_building(building_def, tile, player, x=x, y=y)
@@ -206,7 +252,7 @@ class BuildingSystem(BaseSystem):
             tile=tile,
         )
 
-        return True, f"Constructed {building_def.name} on tile."
+        return True, f"Constructed {building_def.name} on tile.{terrain_note}"
 
     # ------------------------------------------------------------------ #
     #  Upgrade
@@ -502,11 +548,14 @@ class BuildingSystem(BaseSystem):
         """Begin a timed construction requiring player active-presence.
 
         Returns:
-            (success, message) tuple.
+            (success, message) tuple. Both the acceptance message and every
+            rejection message carry the target tile's base terrain defense
+            modifier when resolvable (Req 8.3).
         """
+        terrain_note = self._terrain_defense_note(tile, x=x, y=y)
         building_def, err = self._validate_construction(player, tile, building_abbr, x=x, y=y)
         if err:
-            return False, err
+            return False, err + terrain_note
 
         player.deduct_resources(building_def.cost)
         building = self._call_create_building(building_def, tile, player, x=x, y=y)
@@ -532,7 +581,7 @@ class BuildingSystem(BaseSystem):
 
         return True, (
             f"Construction of {building_def.name} started "
-            f"(0/{build_time}s). Stay on the tile to continue."
+            f"(0/{build_time}s). Stay on the tile to continue.{terrain_note}"
         )
 
     # Progress interval imported from world.constants

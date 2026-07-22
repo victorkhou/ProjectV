@@ -255,7 +255,9 @@ class TestDataclassContracts:
         assert len(fields(PowerupDef)) == 7
 
     def test_terrain_def_field_count(self):
-        assert len(fields(TerrainDef)) == 4
+        # 4 original + 3 terrain-strategy modifiers
+        # (vision_modifier, movement_modifier, defense_modifier).
+        assert len(fields(TerrainDef)) == 7
 
     def test_planet_def_field_count(self):
         assert len(fields(PlanetDef)) == 3
@@ -299,8 +301,10 @@ class TestDataclassContracts:
         #  + 2 fire burn DoT (fire_burn_fraction, fire_burn_ticks).
         #  + 2 blast armor-shred (blast_shred_per_hit, blast_shred_decay_per_tick).
         #  + 2 graduation throttle (outgrown_grace_levels, outgrown_min_factor).
+        #  + 4 terrain strategy (terrain_vision_bound, terrain_movement_bound,
+        #    terrain_defense_bound, min_vision_radius).
         # Bump this when adding a balance tunable.
-        assert len(fields(BalanceConfig)) == 127
+        assert len(fields(BalanceConfig)) == 131
 
     def test_coordinate_space_def_field_count(self):
         # 14 core + 2 graduation-economy scales (yield_scale, npc_scale).

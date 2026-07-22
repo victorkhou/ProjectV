@@ -1658,5 +1658,122 @@ class TestInsufficientResourceDisplay(unittest.TestCase):
         )
 
 
+# -------------------------------------------------------------- #
+#  Placement terrain-defense feedback (terrain-strategy Req 8.3)
+# -------------------------------------------------------------- #
+
+class _FakeDefenseResolver:
+    """Minimal TerrainModifierSystem stand-in for placement feedback tests."""
+
+    def __init__(self, defense=3.0, terrain_type="Forest"):
+        self.defense = defense
+        self.terrain_type = terrain_type
+        self.calls = []
+
+    def resolve_base(self, planet, x, y):
+        self.calls.append((planet, x, y))
+        return types.SimpleNamespace(
+            terrain_type=self.terrain_type, vision=0, movement=0.0,
+            defense=self.defense,
+        )
+
+
+class _RaisingResolver:
+    """Resolver whose resolve_base always raises (fail-soft path)."""
+
+    def resolve_base(self, planet, x, y):
+        raise RuntimeError("boom")
+
+
+class TestPlacementTerrainDefenseFeedback(unittest.TestCase):
+    """Accept/reject placement messages carry the tile's base terrain defense
+    (Req 8.3), resolved via resolve_base — base only, no player affinities
+    (Req 2.6, 5.3). Unwired or failing resolver omits the note (fail-soft)."""
+
+    def _tile(self):
+        tile = FakeTile(terrain_type="Plains", xyz=(3, 4, "earth"))
+        tile.db.planet = "earth"
+        return tile
+
+    def test_construct_acceptance_includes_defense(self):
+        player = FakePlayer(resources={"Straw": 100, "Wood": 100, "Stone": 100})
+        system, _, _ = _make_building_system()
+        system.set_terrain_modifier_resolver(_FakeDefenseResolver(defense=3.0))
+        ok, msg = system.construct(player, self._tile(), "HQ")
+        self.assertTrue(ok, msg)
+        self.assertIn("[terrain defense +3]", msg)
+
+    def test_construct_rejection_includes_defense(self):
+        player = FakePlayer(resources={"Straw": 1, "Wood": 1, "Stone": 1})
+        system, _, _ = _make_building_system()
+        system.set_terrain_modifier_resolver(_FakeDefenseResolver(defense=-2.5))
+        ok, msg = system.construct(player, self._tile(), "HQ")
+        self.assertFalse(ok)
+        self.assertIn("Insufficient Resources", msg)
+        self.assertIn("[terrain defense -2.5]", msg)
+
+    def test_start_construction_acceptance_includes_defense(self):
+        player = FakePlayer(resources={"Straw": 100, "Wood": 100, "Stone": 100})
+        system, _, _ = _make_building_system()
+        system.set_terrain_modifier_resolver(_FakeDefenseResolver(defense=3.0))
+        ok, msg = system.start_construction(player, self._tile(), "HQ")
+        self.assertTrue(ok, msg)
+        self.assertIn("[terrain defense +3]", msg)
+
+    def test_start_construction_rejection_includes_defense(self):
+        player = FakePlayer(resources={"Straw": 100, "Wood": 100, "Stone": 100})
+        system, _, _ = _make_building_system()
+        system.set_terrain_modifier_resolver(_FakeDefenseResolver(defense=0.0))
+        ok, msg = system.start_construction(player, self._tile(), "teleporter")
+        self.assertFalse(ok)
+        self.assertIn("Unknown building type", msg)
+        self.assertIn("[terrain defense +0]", msg)
+
+    def test_resolver_receives_target_tile_coordinates(self):
+        player = FakePlayer(resources={"Straw": 100, "Wood": 100, "Stone": 100})
+        system, _, _ = _make_building_system()
+        resolver = _FakeDefenseResolver()
+        system.set_terrain_modifier_resolver(resolver)
+        system.construct(player, self._tile(), "HQ")
+        self.assertEqual(resolver.calls, [("earth", 3, 4)])
+
+    def test_unwired_resolver_omits_note(self):
+        player = FakePlayer(resources={"Straw": 100, "Wood": 100, "Stone": 100})
+        system, _, _ = _make_building_system()
+        ok, msg = system.construct(player, self._tile(), "HQ")
+        self.assertTrue(ok, msg)
+        self.assertNotIn("terrain defense", msg)
+
+    def test_raising_resolver_omits_note_and_never_raises(self):
+        player = FakePlayer(resources={"Straw": 100, "Wood": 100, "Stone": 100})
+        system, _, _ = _make_building_system()
+        system.set_terrain_modifier_resolver(_RaisingResolver())
+        ok, msg = system.construct(player, self._tile(), "HQ")
+        self.assertTrue(ok, msg)
+        self.assertNotIn("terrain defense", msg)
+
+    def test_unresolved_terrain_type_omits_note(self):
+        # resolve_base returning terrain_type=None (no generator / no
+        # TerrainDef, Req 2.3/2.5) omits the note rather than showing zeros.
+        player = FakePlayer(resources={"Straw": 100, "Wood": 100, "Stone": 100})
+        system, _, _ = _make_building_system()
+        system.set_terrain_modifier_resolver(
+            _FakeDefenseResolver(defense=0.0, terrain_type=None)
+        )
+        ok, msg = system.construct(player, self._tile(), "HQ")
+        self.assertTrue(ok, msg)
+        self.assertNotIn("terrain defense", msg)
+
+    def test_services_fallback_used_when_unset(self):
+        from world import services  # same module building_system reads
+        player = FakePlayer(resources={"Straw": 100, "Wood": 100, "Stone": 100})
+        system, _, _ = _make_building_system()
+        resolver = _FakeDefenseResolver(defense=1.0)
+        with services.override({"terrain_modifier_system": resolver}):
+            ok, msg = system.construct(player, self._tile(), "HQ")
+        self.assertTrue(ok, msg)
+        self.assertIn("[terrain defense +1]", msg)
+
+
 if __name__ == "__main__":
     unittest.main()

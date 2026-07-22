@@ -29,6 +29,76 @@ from world.utils import (
 )
 
 
+def _tile_visibility_state(caller, x, y):
+    """Return 'visible', 'fog', or 'unexplored' for the tile at (x, y), or None.
+
+    ``None`` means the discovery state cannot be determined (no fog system
+    wired, or the lookup failed) — callers treat that as "no gate" and keep
+    their legacy display, so unwired systems degrade gracefully.
+    """
+    fog_system = _get_system(caller, "fog_system")
+    if fog_system is None:
+        return None
+    try:
+        from world.utils import shared_visible_tiles
+        buildings = caller.get_buildings() if hasattr(caller, "get_buildings") else []
+        visible = shared_visible_tiles(caller, buildings, fog_system)
+        return fog_system.get_tile_visibility(caller, int(x), int(y), visible)
+    except Exception:
+        return None
+
+
+def _resolved_modifier_suffix(caller, planet, x, y):
+    """' [vision -2, movement -1, defense +3]' for the tile at (x, y), or ''.
+
+    Values come from ``resolve_for_player`` — the clamped, affinity-adjusted
+    modifiers, never raw TerrainDef fields (Req 8.1). An unwired or failing
+    resolver yields '' (terrain type still shows, just without values).
+    """
+    system = _get_system(caller, "terrain_modifier_system")
+    if system is None:
+        return ""
+    try:
+        mods = system.resolve_for_player(caller, str(planet), int(x), int(y))
+    except Exception:
+        return ""
+    if getattr(mods, "terrain_type", None) is None:
+        return ""
+    return (
+        f" [vision {mods.vision:+d}, movement {mods.movement:+g}, "
+        f"defense {mods.defense:+g}]"
+    )
+
+
+def _terrain_header_info(caller, planet, x, y):
+    """Map-header fragment describing the tile at (x, y), discovery-gated.
+
+    Coordinate-inspection surface (Req 8.1, 8.4): a tile the caller has never
+    discovered reveals nothing — ' | unexplored', with no terrain type and no
+    modifier values. A discovered (visible or fog) tile shows the terrain
+    type, its resource, and the three caller-resolved modifier values.
+    Returns '' when tile info is unavailable (unwired generators/fog degrade
+    to the legacy no-extra-info display). Never raises.
+    """
+    if x == "?" or y == "?" or not planet:
+        return ""
+    try:
+        if _tile_visibility_state(caller, x, y) == "unexplored":
+            return " | unexplored"
+        terrain_generators = get_game_systems().get("_terrain_generators", {})
+        gen = terrain_generators.get(str(planet))
+        if not gen:
+            return ""
+        terrain_type = gen.get_terrain(int(x), int(y))
+        info = f" | {terrain_type}"
+        _, resource = gen.get_terrain_and_resource(int(x), int(y))
+        if resource:
+            info += f" ({resource})"
+        return info + _resolved_modifier_suffix(caller, planet, x, y)
+    except Exception:
+        return ""
+
+
 def _send_map_update(caller):
     """Send structured map data to the webclient via OOB.
 
@@ -46,18 +116,32 @@ def _send_map_update(caller):
         fog = _get_system(caller, "fog_system")
         if fog:
             data["discovered_count"] = len(fog.get_discovered_tile_set(caller))
-        # Add current terrain info for the webclient header
+        # Add current terrain info for the webclient header — discovery-gated
+        # like every coordinate-inspection surface (Req 8.4): an unexplored
+        # tile reveals neither its terrain type nor any modifier values.
         try:
             coords = coords_of(caller)
             if coords is not None and coords[2]:
                 x, y, planet = coords
-                terrain_generators = get_game_systems().get("_terrain_generators", {})
-                gen = terrain_generators.get(planet)
-                if gen:
-                    tt, res = gen.get_terrain_and_resource(int(x), int(y))
-                    data["player"]["terrain"] = tt
-                    if res:
-                        data["player"]["resource"] = res
+                if _tile_visibility_state(caller, x, y) != "unexplored":
+                    terrain_generators = get_game_systems().get("_terrain_generators", {})
+                    gen = terrain_generators.get(planet)
+                    if gen:
+                        tt, res = gen.get_terrain_and_resource(int(x), int(y))
+                        data["player"]["terrain"] = tt
+                        if res:
+                            data["player"]["resource"] = res
+                    system = _get_system(caller, "terrain_modifier_system")
+                    if system is not None:
+                        mods = system.resolve_for_player(
+                            caller, planet, int(x), int(y)
+                        )
+                        if mods.terrain_type is not None:
+                            data["player"]["terrain_modifiers"] = {
+                                "vision": mods.vision,
+                                "movement": mods.movement,
+                                "defense": mods.defense,
+                            }
         except Exception:
             pass
         caller.msg(map_update=data)
@@ -105,19 +189,9 @@ def _render_and_send_map(caller):
         x = getattr(caller.db, "coord_x", "?")
         y = getattr(caller.db, "coord_y", "?")
 
-        terrain_info = ""
-        try:
-            if x != "?" and y != "?":
-                terrain_generators = get_game_systems().get("_terrain_generators", {})
-                gen = terrain_generators.get(planet)
-                if gen:
-                    terrain_type = gen.get_terrain(int(x), int(y))
-                    terrain_info = f" | {terrain_type}"
-                    _, resource = gen.get_terrain_and_resource(int(x), int(y))
-                    if resource:
-                        terrain_info += f" ({resource})"
-        except Exception:
-            pass
+        # Discovery-gated tile inspection (Req 8.1, 8.4): terrain type plus
+        # the caller-resolved modifier values, or only 'unexplored'.
+        terrain_info = _terrain_header_info(caller, planet, x, y)
 
         fog_system = _get_system(caller, "fog_system")
         disc_count = 0
@@ -442,9 +516,10 @@ class CmdMove(GameCommand):
                     )
                     return
 
-        # In-combat movement lag — equipment move_speed alleviates it.
+        # In-combat movement lag — equipment move_speed and the DESTINATION
+        # tile's terrain Movement_Modifier alleviate (or worsen) it.
         # Out of combat this is a no-op (instant movement).
-        if not self._check_combat_move_lag(caller):
+        if not self._check_combat_move_lag(caller, tx, ty):
             return
 
         # Reset active-presence state on movement
@@ -545,21 +620,27 @@ class CmdMove(GameCommand):
         """Resolve caller's current coordinates, syncing from room if needed."""
         return ensure_coords(caller)
 
-    def _check_combat_move_lag(self, caller) -> bool:
+    def _check_combat_move_lag(self, caller, dest_x, dest_y) -> bool:
         """Gate a player's move while they are in the combat state.
 
         Out of combat, movement is always instant (returns ``True`` and
-        clears any stale pending lag). While in combat (``combat_timer_expires``
-        is in the future), a base movement lag of ``COMBAT_MOVE_LAG_TICKS``
-        applies between steps, reduced by the player's equipment ``move_speed``
-        via ``compute_effective_delay`` — the same equipment-derived mechanism
-        agents use for their per-tick movement delay. Returns ``False`` (and
-        messages the caller) when the player must still wait before moving.
+        clears any stale pending lag — Req 4.3). While in combat
+        (``combat_timer_expires`` is in the future), a base movement lag of
+        ``COMBAT_MOVE_LAG_TICKS`` applies between steps, reduced by the
+        player's equipment ``move_speed`` and the DESTINATION tile's resolved
+        terrain Movement_Modifier (Req 4.1; Req 2.7 tile asymmetry — movement
+        resolves against the tile being entered, not the tile occupied) via
+        ``compute_combat_move_lag`` (zero-floored, Req 4.2). Returns ``False``
+        (and messages the caller with the remaining wait in ticks, Req 4.6)
+        when the player must still wait before moving; a blocked move leaves
+        position and pending lag untouched (Req 4.4).
 
         Defensive: an entity with no equipment handler yields a ``move_speed``
-        modifier of 0 (``_get_move_speed_modifier``), so the base lag applies.
+        modifier of 0 (``_get_move_speed_modifier``); an unwired or failing
+        terrain resolver yields a terrain modifier of 0 (Req 4.7); a failed
+        wait-message delivery still blocks the move (Req 4.5).
         """
-        from world.constants import COMBAT_MOVE_LAG_TICKS, compute_effective_delay
+        from world.constants import COMBAT_MOVE_LAG_TICKS, compute_combat_move_lag
         from world.combat_timer import _get_current_tick, player_in_combat
 
         # Admins move freely — no combat move-lag (parity with Wall passage and
@@ -577,10 +658,22 @@ class CmdMove(GameCommand):
                 caller.db.next_move_tick = 0
             return True
 
-        # In combat: enforce the (move_speed-reduced) movement lag.
+        # In combat: enforce the (move_speed/terrain-adjusted) movement lag.
         next_move_tick = getattr(caller.db, "next_move_tick", 0) or 0
         if current_tick < next_move_tick:
-            caller.msg("You are still repositioning — combat slows your movement.")
+            # Blocked: return before any state change so position and pending
+            # lag stay exactly as they were (Req 4.4). The remaining wait is
+            # always > 0 on this path — zero remaining means the move proceeds
+            # — so the no-message-at-zero rule (Req 4.6) holds structurally.
+            remaining = next_move_tick - current_tick
+            try:
+                caller.msg(
+                    "You are still repositioning — combat slows your movement. "
+                    f"Wait {remaining} more tick(s)."
+                )
+            except Exception:
+                # Message delivery failure must not unblock the move (Req 4.5).
+                pass
             return False
 
         modifier = (
@@ -588,7 +681,22 @@ class CmdMove(GameCommand):
             if hasattr(caller, "_get_move_speed_modifier")
             else 0
         )
-        delay = compute_effective_delay(COMBAT_MOVE_LAG_TICKS, modifier)
+
+        # Destination tile's Movement_Modifier (Req 4.1; Req 2.7 asymmetry).
+        # Unresolvable or unwired resolver → 0 (Req 4.7).
+        terrain_mod = 0.0
+        try:
+            resolver = _get_system(caller, "terrain_modifier_system")
+            if resolver is not None:
+                coords = coords_of(caller)
+                planet = coords[2] if coords else None
+                if planet:
+                    resolved = resolver.resolve_for_player(caller, planet, dest_x, dest_y)
+                    terrain_mod = resolved.movement
+        except Exception:
+            terrain_mod = 0.0
+
+        delay = compute_combat_move_lag(COMBAT_MOVE_LAG_TICKS, modifier, terrain_mod)
         caller.db.next_move_tick = current_tick + delay
         return True
 
@@ -2722,6 +2830,25 @@ class CmdScore(GameCommand):
             f"  Position: ({x}, {y}) on {planet}",
         ]
 
+        # Terrain — the three resolved modifiers at the current tile (Req 8.2).
+        # Values come from resolve_for_player: clamped, affinity-adjusted, never
+        # raw TerrainDef fields. All three always print, zeros included. An
+        # unwired or failing resolver omits the section (fail-soft, matching the
+        # other optional sections).
+        terrain_system = _get_system(caller, "terrain_modifier_system")
+        if terrain_system is not None and "?" not in (str(x), str(y), str(planet)):
+            try:
+                mods = terrain_system.resolve_for_player(
+                    caller, str(planet), int(x), int(y)
+                )
+                lines.extend(format_section("Terrain", [
+                    ("Vision", f"{mods.vision:+d}"),
+                    ("Movement", f"{mods.movement:+g}"),
+                    ("Defense", f"{mods.defense:+g}"),
+                ]))
+            except Exception:
+                pass
+
         # Agent count
         agent_system = _get_system(caller, "agent_system")
         if agent_system:
@@ -3826,19 +3953,8 @@ class CmdLeave(GameCommand):
                     x = getattr(caller.db, "coord_x", "?")
                     y = getattr(caller.db, "coord_y", "?")
                     planet = getattr(caller.db, "coord_planet", "?")
-                    terrain_info = ""
-                    try:
-                        if x != "?" and y != "?":
-                            terrain_generators = get_game_systems().get("_terrain_generators", {})
-                            gen = terrain_generators.get(str(planet))
-                            if gen:
-                                tt = gen.get_terrain(int(x), int(y))
-                                terrain_info = f" | {tt}"
-                                _, res = gen.get_terrain_and_resource(int(x), int(y))
-                                if res:
-                                    terrain_info += f" ({res})"
-                    except Exception:
-                        pass
+                    # Discovery-gated tile inspection (Req 8.1, 8.4).
+                    terrain_info = _terrain_header_info(caller, planet, x, y)
                     _send_ascii_map(caller, f"|wMap — ({x}, {y}) on {planet}{terrain_info}|n\n{map_str}")
             except Exception:
                 pass

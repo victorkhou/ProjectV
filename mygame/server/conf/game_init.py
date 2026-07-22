@@ -452,6 +452,7 @@ def initialize_game() -> dict:
     fog_system = None
     procedural_map_renderer = None
     terrain_generators = None
+    terrain_modifier_system = None
     map_data_provider = None
     planet_rooms: dict[str, Any] = {}
 
@@ -501,6 +502,21 @@ def initialize_game() -> dict:
             GameSystemsTerrainProvider(terrain_generators)
         )
 
+        # 2b. TerrainModifierSystem — the single resolution point for terrain
+        # vision/movement/defense modifiers (terrain-strategy feature). Built
+        # here because it needs both the registry and the per-planet terrain
+        # generators; consumers reach it via
+        # services.get_service("terrain_modifier_system").
+        from world.systems.terrain_modifiers import TerrainModifierSystem
+
+        terrain_modifier_system = TerrainModifierSystem(registry, terrain_generators)
+        logger.info("TerrainModifierSystem initialized.")
+
+        # Placement feedback (terrain-strategy Req 8.3): BuildingSystem shows
+        # the target tile's base defense modifier in accept/reject messages —
+        # injected like the terrain provider above.
+        building_system.set_terrain_modifier_resolver(terrain_modifier_system)
+
         # 3. Balance config for fog system
         balance = getattr(registry, "balance", None)
 
@@ -513,6 +529,9 @@ def initialize_game() -> dict:
         # Out-of-bounds tiles (beyond a planet's 0,0..max coords) render as fog
         # of war — inject the same bounds authority movement/bombs use.
         fog_system.set_in_bounds_func(planet_registry.is_valid_coordinate)
+        # Terrain vision modifiers (terrain-strategy Req 3.1/3.3): late-bound
+        # like set_in_bounds_func, since the resolver is built above in 2b.
+        fog_system.set_terrain_modifier_resolver(terrain_modifier_system)
         logger.info("FogOfWarSystem initialized.")
 
         # 5. ProceduralMapRenderer
@@ -705,6 +724,7 @@ def initialize_game() -> dict:
         "fog_system": fog_system,
         "procedural_map_renderer": procedural_map_renderer,
         "map_data_provider": map_data_provider,
+        "terrain_modifier_system": terrain_modifier_system,
         "_terrain_generators": terrain_generators,
         "planet_rooms": planet_rooms,
     })

@@ -114,22 +114,20 @@ planets:
     height: 400
     terrain_seed: 117
     terrain_noise_cell_size: 8
-    # Elysium is an earth-like paradise: an Earth-terrain base (~60%) with the
-    # arcane paradise tiles scattered as accents (~40%). The Terra types are
-    # shared terrain defs, so they reuse Terra's sprites/colors/resources.
+    # Elysium is an earth-like paradise: an Earth-terrain base (~75%) with the
+    # arcane paradise tiles (Aether_Spring, Ley_Nexus, Arcane_Relay, and the
+    # cosmetic Cloud_Meadow/Shimmer_Lake) scattered as accents (~25%). The Terra
+    # types are shared terrain defs, so they reuse Terra's sprites/colors/yields.
     terrain_weights:
       Plains: 0.16
-      Forest: 0.12
+      Forest: 0.19
       Dirt: 0.08
-      Rock: 0.08
-      Mountain: 0.06
+      Rock: 0.14
+      Mountain: 0.11
       River: 0.05
       Sand: 0.03
       Snow: 0.02
       Aether_Spring: 0.06
-      Crystal_Grove: 0.07
-      Marble_Terrace: 0.06
-      Starfall_Crater: 0.05
       Ley_Nexus: 0.06
       Arcane_Relay: 0.04
       Cloud_Meadow: 0.04

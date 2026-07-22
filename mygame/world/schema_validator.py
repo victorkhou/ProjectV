@@ -53,6 +53,11 @@ def _balance_fields_by_type():
 
 _BALANCE_INT_FIELDS, _BALANCE_FLOAT_FIELDS, _BALANCE_BOOL_FIELDS = _balance_fields_by_type()
 
+#: Valid modifier kinds for terrain affinities (terrain-strategy). Single
+#: source of truth — the DataRegistry imports this for class-affinity parsing
+#: so the validator and loader can never drift.
+_AFFINITY_KINDS = frozenset({"vision", "movement", "defense"})
+
 
 class SchemaValidator:
     """Validates definition file contents against expected schemas."""
@@ -415,7 +420,68 @@ class SchemaValidator:
                     f"{prefix}: research_ticks must be an integer, got {type(rt).__name__}"
                 )
 
+            # Terrain technologies (terrain-strategy, Req 7.1/7.5): the
+            # effect_value payload carries structured bonus keys.
+            if entry.get("effect_type") == "terrain_affinity":
+                errors.extend(
+                    self._validate_terrain_affinity_effect(
+                        prefix, entry.get("effect_value")
+                    )
+                )
+
         return errors
+
+    @staticmethod
+    def _parse_affinity_key(key) -> "tuple[str, str] | None":
+        """Split a structured terrain-affinity bonus key into (terrain, kind).
+
+        Returns ``None`` unless *key* is a string of the exact form
+        ``terrain_affinity:{terrain_type}:{kind}`` with a non-empty terrain
+        type segment. The kind segment is NOT checked here — callers decide
+        whether an unknown kind is an error (``validate_technologies``) or a
+        skip (``cross_validate``, which only checks terrain existence).
+        """
+        if not isinstance(key, str):
+            return None
+        parts = key.split(":")
+        if len(parts) != 3 or parts[0] != "terrain_affinity" or not parts[1]:
+            return None
+        return parts[1], parts[2]
+
+    def _validate_terrain_affinity_effect(self, prefix: str, effect_value) -> list[str]:
+        """Validate one technology's ``terrain_affinity`` effect_value payload.
+
+        Every key must match ``terrain_affinity:{terrain_type}:{kind}`` with a
+        kind of vision/movement/defense, and every value must be numeric
+        (bool rejected explicitly — it is an int subclass). Terrain-type
+        existence is a cross-file concern checked in :meth:`cross_validate`,
+        which runs after the terrain definitions have populated (Req 7.5).
+        """
+        out: list[str] = []
+        if not isinstance(effect_value, dict):
+            out.append(
+                f"{prefix}: terrain_affinity effect_value must be a dict of "
+                f"'terrain_affinity:{{terrain_type}}:{{kind}}' keys, "
+                f"got {effect_value!r}"
+            )
+            return out
+        for key, val in effect_value.items():
+            parsed = self._parse_affinity_key(key)
+            if parsed is None:
+                out.append(
+                    f"{prefix}: effect_value key {key!r} must match "
+                    f"'terrain_affinity:{{terrain_type}}:{{kind}}'"
+                )
+            elif parsed[1] not in _AFFINITY_KINDS:
+                out.append(
+                    f"{prefix}: effect_value key {key!r} has invalid kind "
+                    f"{parsed[1]!r} (expected one of vision, movement, defense)"
+                )
+            if not isinstance(val, (int, float)) or isinstance(val, bool):
+                out.append(
+                    f"{prefix}: effect_value[{key!r}] must be numeric, got {val!r}"
+                )
+        return out
 
     # ------------------------------------------------------------------ #
     #  Powerups
@@ -496,6 +562,8 @@ class SchemaValidator:
         required = {"terrain_type", "map_symbol"}
         terrain_types: set[str] = set()
 
+        modifier_fields = ("vision_modifier", "movement_modifier", "defense_modifier")
+
         for prefix, entry in self._iter_dict_entries(terrain_list, "terrain", required, errors):
             ms = entry.get("map_symbol")
             if isinstance(ms, str) and len(ms) != 2:
@@ -504,6 +572,17 @@ class SchemaValidator:
             tt = entry.get("terrain_type")
             if isinstance(tt, str):
                 terrain_types.add(tt)
+
+            # Modifier fields, when present and non-null, must be numeric.
+            # (bool is a subclass of int, so reject it explicitly.)
+            for field in modifier_fields:
+                val = entry.get(field)
+                if val is not None and (
+                    not isinstance(val, (int, float)) or isinstance(val, bool)
+                ):
+                    errors.append(
+                        f"{prefix} ('{tt}'): {field} must be a number, got {val!r}"
+                    )
 
         # Validate planet references to terrain types
         planets_list = data.get("planets", [])
@@ -582,6 +661,8 @@ class SchemaValidator:
             "blast_shred_per_hit", "blast_shred_decay_per_tick",
             "perm_bonus_cap_damage", "perm_bonus_cap_dr",
             "outgrown_grace_levels", "outgrown_min_factor",
+            "terrain_vision_bound", "terrain_movement_bound",
+            "terrain_defense_bound", "min_vision_radius",
         ]
         for field in non_negative_fields:
             val = data.get(field)
@@ -847,6 +928,23 @@ class SchemaValidator:
 
         # Powerup required_rank → valid rank names
         self._check_required_rank(errors, "powerup", registry.powerups, rank_names)
+
+        # Terrain-technology effect keys → terrain types must exist in the
+        # terrain definitions (terrain-strategy, Req 7.5). Key format and
+        # value types are checked in validate_technologies; here only the
+        # cross-file terrain reference is validated (terrain populates before
+        # this step runs), so malformed keys are skipped rather than re-flagged.
+        for key, tdef in registry.technologies.items():
+            if tdef.effect_type != "terrain_affinity":
+                continue
+            effect_value = tdef.effect_value if isinstance(tdef.effect_value, dict) else {}
+            for bonus_key in effect_value:
+                parsed = self._parse_affinity_key(bonus_key)
+                if parsed is not None and parsed[0] not in terrain_types:
+                    errors.append(
+                        f"technology '{key}': effect_value key {bonus_key!r} "
+                        f"names unknown terrain type '{parsed[0]}'"
+                    )
 
         # production_map building abbreviations → valid buildings
         # production_map item keys → valid items

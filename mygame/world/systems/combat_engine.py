@@ -1140,7 +1140,14 @@ class CombatEngine(BaseSystem):
         damage_type = self._get_damage_type(weapon_item)
         if damage_type == "physical":
             armor_reduction = self._get_target_armor_reduction(target)
+            # Terrain Defense_Modifier of the tile the target OCCUPIES
+            # (terrain-strategy Req 5.1/5.3, occupied-tile side of Req 2.7),
+            # then floor the DR total at zero so a negative terrain modifier
+            # never pushes damage above the attack's raw output (Req 5.4).
+            armor_reduction += self._terrain_defense(target)
+            armor_reduction = max(0.0, armor_reduction)
         else:
+            # Non-physical damage never sees terrain (Req 5.5).
             armor_reduction = self._get_target_typed_resist(target, damage_type)
 
         raw = base_damage + bonus
@@ -1179,6 +1186,45 @@ class CombatEngine(BaseSystem):
         if frac > 1.0:
             return 1.0
         return frac
+
+    def _terrain_defense(self, target: Any) -> float:
+        """Terrain Defense_Modifier for the tile *target* occupies.
+
+        Resolved through the TerrainModifierSystem at the moment the attack
+        resolves (terrain-strategy Req 5.1): a player target gets the
+        player-resolved value (class and completed-tech adjustments included);
+        a building target gets the base terrain value only (Req 5.3, Req 2.6).
+        The hook lives here in the damage calculation because
+        ``_get_target_armor_reduction`` is player-only (buildings early-return
+        0 there) — the terrain term is the first DR buildings receive.
+
+        Fail-soft (run time never raises): no resolver installed, missing
+        coordinates/planet, or a resolution error all degrade to 0.0 (Req 5.4
+        guard path), so terrain can never break damage resolution.
+        """
+        try:
+            resolver = get_service("terrain_modifier_system")
+            if resolver is None:
+                return 0.0
+            from world.utils import coords_of
+            coords = coords_of(target)
+            if coords is None:
+                return 0.0
+            x, y, planet = coords
+            if planet is None:
+                # Buildings store coord_x/coord_y but sit in a (coordless)
+                # PlanetRoom — read the planet off the location instead.
+                loc = self._get_target_location(target)
+                planet = getattr(loc, "planet_name", None)
+            if planet is None:
+                return 0.0
+            if self._is_building(target):
+                return float(resolver.resolve_base(planet, int(x), int(y)).defense)
+            return float(
+                resolver.resolve_for_player(target, planet, int(x), int(y)).defense
+            )
+        except Exception:  # noqa: BLE001 - terrain must never break combat
+            return 0.0
 
     # ------------------------------------------------------------------ #
     #  Rank-gap PvP protection (anti-ganking)

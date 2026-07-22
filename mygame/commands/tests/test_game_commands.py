@@ -718,8 +718,8 @@ class TestCmdMoveCombatMoveSpeed(unittest.TestCase):
     Out of combat, player movement is always instant. In the combat state
     (``combat_timer_expires`` in the future) a base lag of
     ``COMBAT_MOVE_LAG_TICKS`` applies between steps, reduced by the player's
-    equipment ``move_speed`` via ``compute_effective_delay`` — the same
-    equipment-derived mechanism agents use.
+    equipment ``move_speed`` (and the destination terrain's Movement_Modifier)
+    via the zero-floored ``compute_combat_move_lag`` helper.
     """
 
     class _FakePlanetRegistry:
@@ -836,8 +836,13 @@ class TestCmdMoveCombatMoveSpeed(unittest.TestCase):
         self.assertEqual(caller.db.coord_y, 6)
         self.assertFalse(caller.db.inside_building)
 
-    def test_large_move_speed_never_drops_lag_below_one(self):
-        """A huge move_speed clamps the lag to a minimum of 1 tick."""
+    def test_large_move_speed_floors_lag_at_zero(self):
+        """A huge move_speed floors the lag at 0 ticks (zero floor, Req 4.2).
+
+        Unlike agents (``compute_effective_delay``, min 1), the player combat
+        gate uses ``compute_combat_move_lag`` which floors at zero — a fast
+        player may move again on the same tick.
+        """
         caller = self._make_caller(move_speed_modifier=99)
         caller.db.combat_timer_expires = 999
 
@@ -845,7 +850,7 @@ class TestCmdMoveCombatMoveSpeed(unittest.TestCase):
             _make_cmd(CmdMove, caller, " north").func()
 
         self.assertEqual(caller.db.coord_y, 6)
-        self.assertEqual(caller.db.next_move_tick, 100 + 1)
+        self.assertEqual(caller.db.next_move_tick, 100 + 0)
 
     def test_admin_has_no_combat_move_lag(self):
         """Admins move freely in combat — no lag scheduled, moves not blocked."""
@@ -864,6 +869,103 @@ class TestCmdMoveCombatMoveSpeed(unittest.TestCase):
         self.assertFalse(
             any("repositioning" in m.lower() for m in caller._messages)
         )
+
+
+class TestCmdMoveCombatLagEdgeCases(unittest.TestCase):
+    """Movement gate edge cases for the terrain-strategy consumer (Req 4.5–4.7).
+
+    Covers the blocked-move wait message contents (remaining ticks, Req 4.6),
+    the structural no-message-at-zero-remaining rule (a move at exactly
+    ``next_move_tick`` proceeds, Req 4.6), message-delivery failure still
+    blocking the move (Req 4.5), and an unresolvable destination terrain
+    Movement_Modifier falling back to zero (Req 4.7).
+    """
+
+    class _FakePlanetRegistry:
+        def is_valid_coordinate(self, x, y, planet):
+            return 0 <= x < 100 and 0 <= y < 100
+
+    def _make_caller(self, move_speed_modifier=0, extra_systems=None):
+        systems = {"planet_registry": self._FakePlanetRegistry()}
+        if extra_systems:
+            systems.update(extra_systems)
+        caller = FakeCaller(systems=systems)
+        caller._get_move_speed_modifier = lambda: move_speed_modifier
+        caller.db.combat_timer_expires = 999  # in combat
+        return caller
+
+    def test_blocked_move_message_contains_remaining_ticks(self):
+        """Req 4.6: the wait message states the remaining wait in ticks."""
+        caller = self._make_caller()
+        caller.db.next_move_tick = 107  # 7 ticks of pending lag
+
+        with patch("world.combat_timer._get_current_tick", return_value=100):
+            _make_cmd(CmdMove, caller, " north").func()
+
+        # Blocked: coords unchanged, and the message names the 7-tick wait.
+        self.assertEqual(caller.db.coord_y, 5)
+        waits = [m for m in caller._messages if "repositioning" in m.lower()]
+        self.assertEqual(len(waits), 1)
+        self.assertIn("7", waits[0])
+        self.assertIn("tick", waits[0].lower())
+
+    def test_move_at_exact_next_move_tick_proceeds_without_wait_message(self):
+        """Req 4.6: zero remaining wait → the move proceeds, no wait message.
+
+        The no-message-at-zero rule is structural: the blocked path only
+        triggers while ``current_tick < next_move_tick``, so at exactly
+        ``next_move_tick`` (remaining == 0) the move goes through and no
+        repositioning message is ever sent.
+        """
+        from world.constants import COMBAT_MOVE_LAG_TICKS
+        caller = self._make_caller()
+        caller.db.next_move_tick = 100  # lag expires exactly now
+
+        with patch("world.combat_timer._get_current_tick", return_value=100):
+            _make_cmd(CmdMove, caller, " north").func()
+
+        self.assertEqual(caller.db.coord_y, 6)  # move happened
+        self.assertFalse(
+            any("repositioning" in m.lower() for m in caller._messages)
+        )
+        # A fresh lag is scheduled for the move that just occurred.
+        self.assertEqual(caller.db.next_move_tick, 100 + COMBAT_MOVE_LAG_TICKS)
+
+    def test_msg_failure_still_blocks_move(self):
+        """Req 4.5: a wait-message delivery failure must not unblock the move."""
+        caller = self._make_caller()
+        caller.db.next_move_tick = 200  # far-future pending lag
+
+        def _raising_msg(text=None, **kwargs):
+            raise RuntimeError("session gone")
+
+        caller.msg = _raising_msg
+
+        with patch("world.combat_timer._get_current_tick", return_value=100):
+            # Must not raise, and must still block the move.
+            _make_cmd(CmdMove, caller, " north").func()
+
+        self.assertEqual((caller.db.coord_x, caller.db.coord_y), (5, 5))
+        self.assertEqual(caller.db.next_move_tick, 200)  # pending lag untouched
+
+    def test_unresolvable_terrain_modifier_computes_lag_with_zero(self):
+        """Req 4.7: a raising resolver degrades to a terrain modifier of 0."""
+        from world.constants import COMBAT_MOVE_LAG_TICKS
+
+        class _RaisingResolver:
+            def resolve_for_player(self, player, planet, x, y):
+                raise RuntimeError("resolution failed")
+
+        caller = self._make_caller(
+            extra_systems={"terrain_modifier_system": _RaisingResolver()}
+        )
+
+        with patch("world.combat_timer._get_current_tick", return_value=100):
+            _make_cmd(CmdMove, caller, " north").func()
+
+        # Move succeeds; lag computed as if the terrain modifier were zero.
+        self.assertEqual(caller.db.coord_y, 6)
+        self.assertEqual(caller.db.next_move_tick, 100 + COMBAT_MOVE_LAG_TICKS)
 
 
 class TestCmdHarvest(unittest.TestCase):
@@ -2552,6 +2654,60 @@ class TestCmdScore(unittest.TestCase):
         output = "\n".join(caller._messages)
         self.assertNotIn("Equipment totals:", output)
 
+    class _FakeResolver:
+        """Terrain modifier resolver returning a fixed resolved triple."""
+        def __init__(self, vision=0, movement=0.0, defense=0.0):
+            self._mods = types.SimpleNamespace(
+                terrain_type="Forest", vision=vision,
+                movement=movement, defense=defense,
+            )
+
+        def resolve_for_player(self, player, planet, x, y):
+            return self._mods
+
+    def test_terrain_section_shows_resolved_values(self):
+        """The Terrain section shows the three resolver-produced values."""
+        caller = FakeCaller(systems={
+            "terrain_modifier_system":
+                self._FakeResolver(vision=-2, movement=-1.0, defense=3.0),
+        })
+        _make_cmd(CmdScore, caller).func()
+        output = "\n".join(caller._messages)
+        self.assertIn("Terrain:", output)
+        self.assertIn("Vision - -2", output)
+        self.assertIn("Movement - -1", output)
+        self.assertIn("Defense - +3", output)
+
+    def test_terrain_section_prints_zeros(self):
+        """All three values print even when every resolved value is zero."""
+        caller = FakeCaller(systems={
+            "terrain_modifier_system": self._FakeResolver(),
+        })
+        _make_cmd(CmdScore, caller).func()
+        output = "\n".join(caller._messages)
+        self.assertIn("Terrain:", output)
+        self.assertIn("Vision - +0", output)
+        self.assertIn("Movement - +0", output)
+        self.assertIn("Defense - +0", output)
+
+    def test_terrain_section_omitted_when_resolver_unwired(self):
+        """No terrain_modifier_system → the section is omitted (fail-soft)."""
+        caller = FakeCaller()
+        _make_cmd(CmdScore, caller).func()
+        output = "\n".join(caller._messages)
+        self.assertNotIn("Terrain:", output)
+
+    def test_terrain_section_omitted_when_resolver_raises(self):
+        """A raising resolver omits the section without breaking the sheet."""
+        class _Raising:
+            def resolve_for_player(self, player, planet, x, y):
+                raise RuntimeError("resolution failed")
+        caller = FakeCaller(systems={"terrain_modifier_system": _Raising()})
+        _make_cmd(CmdScore, caller).func()
+        output = "\n".join(caller._messages)
+        self.assertNotIn("Terrain:", output)
+        self.assertIn("Position:", output)  # rest of the sheet still renders
+
 class TestCmdBuildings(unittest.TestCase):
     def test_no_buildings(self):
         caller = FakeCaller()
@@ -2940,6 +3096,127 @@ class TestCmdMap(unittest.TestCase):
         cmd = _make_cmd(CmdMap, caller, "")
         cmd.func()
         # No error — just no map output
+
+
+class TestTileInspectionDiscoveryGate(unittest.TestCase):
+    """Tile inspection is gated by discovery (terrain-strategy Req 8.1, 8.4).
+
+    The map-header inspection surface (``_terrain_header_info``) must show
+    only 'unexplored' for a tile the caller has never discovered — no terrain
+    type, no modifier values — and for a discovered tile it must show the
+    terrain type plus the three caller-resolved (clamped, affinity-adjusted)
+    modifier values from ``resolve_for_player``, never raw TerrainDef fields.
+    Unwired systems degrade gracefully (fail-soft).
+    """
+
+    class _FakeGen:
+        def get_terrain(self, x, y):
+            return "Forest"
+
+        def get_terrain_and_resource(self, x, y):
+            return "Forest", "Wood"
+
+    class _FakeFog:
+        def __init__(self, state):
+            self._state = state
+
+        def get_visible_tiles(self, player, buildings, **kwargs):
+            return set()
+
+        def get_tile_visibility(self, player, x, y, visible_tiles):
+            return self._state
+
+        def get_discovered_tile_set(self, player):
+            return set()
+
+    class _FakeResolver:
+        def resolve_for_player(self, player, planet, x, y):
+            return types.SimpleNamespace(
+                terrain_type="Forest", vision=-2, movement=-1.0, defense=3.0
+            )
+
+    def _header(self, fog_state=None, fog=True, resolver=True):
+        systems = {"_terrain_generators": {"earth_planet": self._FakeGen()}}
+        if fog:
+            systems["fog_system"] = self._FakeFog(fog_state)
+        if resolver:
+            systems["terrain_modifier_system"] = self._FakeResolver()
+        caller = FakeCaller(systems=systems)
+        from mygame.commands.game_commands import _terrain_header_info
+        return _terrain_header_info(caller, "earth_planet", 5, 5)
+
+    def test_unexplored_tile_reveals_nothing(self):
+        """Req 8.4: unexplored → only the unexplored indication leaks."""
+        info = self._header(fog_state="unexplored")
+        self.assertIn("unexplored", info)
+        self.assertNotIn("Forest", info)
+        self.assertNotIn("Wood", info)
+        self.assertNotIn("vision", info)
+        self.assertNotIn("movement", info)
+        self.assertNotIn("defense", info)
+
+    def test_visible_tile_shows_resolved_modifiers(self):
+        """Req 8.1: visible tile → terrain type + resolver values."""
+        info = self._header(fog_state="visible")
+        self.assertIn("Forest", info)
+        self.assertIn("(Wood)", info)
+        self.assertIn("vision -2", info)
+        self.assertIn("movement -1", info)
+        self.assertIn("defense +3", info)
+
+    def test_fog_tile_shows_resolved_modifiers(self):
+        """Req 8.1: a discovered (fog) tile is inspectable like a visible one."""
+        info = self._header(fog_state="fog")
+        self.assertIn("Forest", info)
+        self.assertIn("vision -2", info)
+
+    def test_no_fog_system_degrades_to_showing_terrain(self):
+        """Fail-soft: no fog system wired → no gate, terrain still shows."""
+        info = self._header(fog=False)
+        self.assertIn("Forest", info)
+        self.assertNotIn("unexplored", info)
+
+    def test_no_resolver_shows_terrain_without_modifier_values(self):
+        """Fail-soft: unwired resolver → terrain type only, no values."""
+        info = self._header(fog_state="visible", resolver=False)
+        self.assertIn("Forest", info)
+        self.assertNotIn("vision", info)
+
+    def test_raising_resolver_shows_terrain_without_modifier_values(self):
+        """Fail-soft: a raising resolver never breaks inspection."""
+        class _Raising:
+            def resolve_for_player(self, player, planet, x, y):
+                raise RuntimeError("resolution failed")
+
+        systems = {
+            "_terrain_generators": {"earth_planet": self._FakeGen()},
+            "fog_system": self._FakeFog("visible"),
+            "terrain_modifier_system": _Raising(),
+        }
+        caller = FakeCaller(systems=systems)
+        from mygame.commands.game_commands import _terrain_header_info
+        info = _terrain_header_info(caller, "earth_planet", 5, 5)
+        self.assertIn("Forest", info)
+        self.assertNotIn("vision", info)
+
+    def test_map_header_gates_unexplored_through_cmdmap(self):
+        """End-to-end: 'map' header shows only 'unexplored' when undiscovered."""
+        class FakeRenderer:
+            def render(self, player, buildings):
+                return "?? ??"
+
+        systems = {
+            "procedural_map_renderer": FakeRenderer(),
+            "_terrain_generators": {"earth_planet": self._FakeGen()},
+            "fog_system": self._FakeFog("unexplored"),
+            "terrain_modifier_system": self._FakeResolver(),
+        }
+        caller = FakeCaller(systems=systems)
+        _make_cmd(CmdMap, caller, "").func()
+        headers = [m for m in caller._messages if "Map —" in m]
+        self.assertTrue(headers)
+        self.assertIn("unexplored", headers[0])
+        self.assertNotIn("Forest", headers[0])
 
 
 class TestExitCommands(unittest.TestCase):

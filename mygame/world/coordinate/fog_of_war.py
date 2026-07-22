@@ -46,6 +46,9 @@ class FogOfWarSystem:
         self.player_vision_radius: int = balance.player_vision_radius
         self.building_vision_radius: int = balance.building_vision_radius
         self.scout_vision_radius: int = getattr(balance, "scout_vision_radius", 0)
+        #: Floor for player and building vision circles (terrain-strategy Req
+        #: 3.2). A balance config omitting the field defaults to 1 (Req 3.6).
+        self.min_vision_radius: int = int(getattr(balance, "min_vision_radius", 1))
         self._map_border: int = getattr(balance, "map_border_tiles", 5)
         #: Injected ``(x, y, planet_key) -> bool`` map-bounds check (the
         #: PlanetRegistry's ``is_valid_coordinate``), wired at the composition
@@ -53,10 +56,22 @@ class FogOfWarSystem:
         #: unwired), so the bounds overlay only ever ADDS edge fog, never hides
         #: a real tile.
         self._in_bounds_func = None
+        #: Injected TerrainModifierSystem (terrain-strategy feature), wired at
+        #: the composition root via ``set_terrain_modifier_resolver``. When
+        #: unset (tests / unwired), terrain vision is 0 (Req 3.5).
+        self._terrain_modifier_resolver = None
 
     # ------------------------------------------------------------------ #
     #  Public API
     # ------------------------------------------------------------------ #
+
+    def set_terrain_modifier_resolver(self, resolver) -> None:
+        """Inject the TerrainModifierSystem (late-bound at the composition root).
+
+        Late-bound like ``set_in_bounds_func`` because the resolver is built
+        after the FogOfWarSystem's collaborators become available.
+        """
+        self._terrain_modifier_resolver = resolver
 
     def set_in_bounds_func(self, fn) -> None:
         """Inject the map-bounds check (``planet_registry.is_valid_coordinate``).
@@ -81,6 +96,25 @@ class FogOfWarSystem:
         except Exception:  # noqa: BLE001 - unknown planet / bad coords: fall open
             return True
 
+    def _terrain_vision(self, planet: str, x: int, y: int, player: Any = None):
+        """Resolved terrain Vision_Modifier at ``(x, y)`` on *planet*.
+
+        With *player*, resolves the player's affinity-adjusted modifier at the
+        occupied tile (Req 3.1); without, the terrain's base modifier — used
+        for building circles (Req 3.3). Fail-soft (Req 3.5): an unset resolver
+        or any raise yields 0, so the vision circle is computed from the
+        remaining adjustments. Never raises.
+        """
+        resolver = self._terrain_modifier_resolver
+        if resolver is None:
+            return 0
+        try:
+            if player is not None:
+                return resolver.resolve_for_player(player, planet, x, y).vision
+            return resolver.resolve_base(planet, x, y).vision
+        except Exception:  # noqa: BLE001 - terrain resolution must not break vision
+            return 0
+
     def get_visible_tiles(
         self, player: Any, player_buildings: list[Any],
         player_scouts: list[Any] | None = None,
@@ -95,16 +129,30 @@ class FogOfWarSystem:
         """
         visible: set[tuple[int, int]] = set()
 
-        # Player vision circle (base radius + equipped sight_range bonus)
+        # Player vision circle: base radius + equipped sight_range bonus +
+        # resolved terrain Vision_Modifier at the OCCUPIED tile (Req 3.1),
+        # truncated toward zero (Req 3.7) then floored at the configured
+        # minimum (Req 3.2).
         px = _get_coord(player, "coord_x")
         py = _get_coord(player, "coord_y")
-        vision_radius = self.player_vision_radius + _get_sight_bonus(player)
+        planet = _get_planet(player)
+        raw_radius = (
+            self.player_vision_radius
+            + _get_sight_bonus(player)
+            + self._terrain_vision(planet, px, py, player=player)
+        )
+        vision_radius = max(self.min_vision_radius, int(raw_radius))
         _add_chebyshev_circle(visible, px, py, vision_radius)
 
-        # Building vision circles
+        # Building vision circles: base modifiers only — never any player's
+        # class/tech affinities (Req 3.3) — same truncate-then-minimum
+        # treatment (Req 3.2, 3.7).
         for building in player_buildings:
             bx, by = _get_building_coords(building)
-            _add_chebyshev_circle(visible, bx, by, self.building_vision_radius)
+            b_planet = _building_planet_key(building) or planet
+            b_raw = self.building_vision_radius + self._terrain_vision(b_planet, bx, by)
+            b_radius = max(self.min_vision_radius, int(b_raw))
+            _add_chebyshev_circle(visible, bx, by, b_radius)
 
         # Scout-agent vision circles (R5) — only active scouts project vision.
         if player_scouts and self.scout_vision_radius > 0:
@@ -349,6 +397,15 @@ def _is_scout_active(agent: Any) -> bool:
     if getattr(db, "reserve", False):
         return False
     return True
+
+
+def _building_planet_key(building: Any) -> str | None:
+    """Best-effort planet key for a building's vision circle. Never raises."""
+    try:
+        from world.utils import _building_planet
+        return _building_planet(building)
+    except Exception:  # noqa: BLE001 - fall back to the player's planet
+        return None
 
 
 def _get_building_coords(building: Any) -> tuple[int, int]:

@@ -92,11 +92,9 @@ _TERRAIN_COLORS: dict[str, str] = {
     "Wormhole":      "|m",   # magenta
     "Radiation_Zone":"|R",   # dark red
     "Derelict_Ship": "|x",   # dark grey
-    # Elysium (paradise)
+    # Elysium (paradise) — earth-like tiles (Forest/Rock/Mountain/…) reuse the
+    # Terra entries above; only the arcane-exclusive tiles are listed here.
     "Aether_Spring": "|C",   # bright cyan
-    "Crystal_Grove": "|M",   # bright magenta
-    "Marble_Terrace":"|W",   # bright white
-    "Starfall_Crater":"|Y",  # bright yellow
     "Ley_Nexus":     "|c",   # cyan
     "Arcane_Relay":  "|m",   # magenta
     "Cloud_Meadow":  "|w",   # white

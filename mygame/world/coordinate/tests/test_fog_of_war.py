@@ -67,10 +67,16 @@ class _FakeDB:
 
 
 class _FakeBalance:
-    """Minimal stand-in for BalanceConfig."""
-    def __init__(self, pvr=10, bvr=7):
+    """Minimal stand-in for BalanceConfig.
+
+    ``min_vision_radius`` defaults to 0 here (unlike the real BalanceConfig's
+    1) so the radius-0 geometry tests below stay exact; the terrain-strategy
+    minimum-radius behavior is covered by its own tests.
+    """
+    def __init__(self, pvr=10, bvr=7, min_vision_radius=0):
         self.player_vision_radius = pvr
         self.building_vision_radius = bvr
+        self.min_vision_radius = min_vision_radius
 
 
 class _FakeEquipment:
@@ -576,3 +582,133 @@ class TestIsInBounds:
         fow = FogOfWarSystem(_FakeBalance())
         fow.set_in_bounds_func(self._bounds_10x8)
         assert fow.is_in_bounds("nonexistent", 3, 3) is True
+
+
+# -------------------------------------------------------------- #
+#  Tests: terrain vision fallback and minimum radius
+#  (terrain-strategy Req 3.5, 3.6, 3.2)
+# -------------------------------------------------------------- #
+
+class _FakeBalanceNoMin:
+    """Balance stand-in WITHOUT a ``min_vision_radius`` attribute.
+
+    Used to verify the FogOfWarSystem defaults the minimum vision radius to 1
+    when the balance configuration omits the field (Req 3.6).
+    """
+    def __init__(self, pvr=10, bvr=7):
+        self.player_vision_radius = pvr
+        self.building_vision_radius = bvr
+
+
+class _FakeModifiers:
+    """Minimal TerrainModifiers stand-in exposing only ``vision``."""
+    def __init__(self, vision=0):
+        self.vision = vision
+
+
+class _FakeResolver:
+    """Terrain modifier resolver returning fixed vision modifiers."""
+    def __init__(self, player_vision=0, base_vision=0):
+        self._player_vision = player_vision
+        self._base_vision = base_vision
+
+    def resolve_for_player(self, player, planet, x, y):
+        return _FakeModifiers(self._player_vision)
+
+    def resolve_base(self, planet, x, y):
+        return _FakeModifiers(self._base_vision)
+
+
+class _RaisingResolver:
+    """Terrain modifier resolver whose lookups always raise."""
+    def resolve_for_player(self, player, planet, x, y):
+        raise RuntimeError("resolver blew up")
+
+    def resolve_base(self, planet, x, y):
+        raise RuntimeError("resolver blew up")
+
+
+class TestTerrainVisionFallback:
+    """Fail-soft terrain vision: unset or raising resolver yields modifier 0
+    (Req 3.5)."""
+
+    def test_unset_resolver_yields_zero_player_modifier(self):
+        fow = FogOfWarSystem(_FakeBalance(pvr=2, bvr=1))
+        player = _FakePlayer(x=5, y=5)
+        tiles = fow.get_visible_tiles(player, [])
+        # No resolver injected -> terrain vision 0 -> base radius 2 -> 25 tiles
+        assert len(tiles) == 25
+
+    def test_unset_resolver_yields_zero_building_modifier(self):
+        fow = FogOfWarSystem(_FakeBalance(pvr=1, bvr=2))
+        player = _FakePlayer(x=0, y=0)
+        building = _FakeBuilding(location=_FakeRoom(x=20, y=20))
+        tiles = fow.get_visible_tiles(player, [building])
+        # Building circle keeps its base radius 2 -> 25 tiles around (20,20)
+        assert (22, 22) in tiles
+        assert (23, 20) not in tiles
+
+    def test_wired_resolver_adjusts_player_radius(self):
+        """Sanity check: a wired resolver actually changes the circle, so the
+        fallback tests above are meaningful."""
+        fow = FogOfWarSystem(_FakeBalance(pvr=2, bvr=1))
+        fow.set_terrain_modifier_resolver(_FakeResolver(player_vision=1))
+        player = _FakePlayer(x=5, y=5)
+        tiles = fow.get_visible_tiles(player, [])
+        # Radius 2 + 1 => 3 -> 7x7 = 49 tiles
+        assert len(tiles) == 49
+
+    def test_raising_resolver_yields_zero_and_no_exception(self):
+        fow = FogOfWarSystem(_FakeBalance(pvr=2, bvr=1))
+        fow.set_terrain_modifier_resolver(_RaisingResolver())
+        player = _FakePlayer(x=5, y=5)
+        tiles = fow.get_visible_tiles(player, [])  # must not raise
+        # Terrain vision degraded to 0 -> base radius 2 -> 25 tiles
+        assert len(tiles) == 25
+
+    def test_raising_resolver_building_circle_unaffected(self):
+        fow = FogOfWarSystem(_FakeBalance(pvr=1, bvr=2))
+        fow.set_terrain_modifier_resolver(_RaisingResolver())
+        player = _FakePlayer(x=0, y=0)
+        building = _FakeBuilding(location=_FakeRoom(x=20, y=20))
+        tiles = fow.get_visible_tiles(player, [building])  # must not raise
+        # Building circle keeps its base radius 2 around (20,20)
+        assert (22, 22) in tiles
+        assert (23, 20) not in tiles
+
+
+class TestMinVisionRadiusDefault:
+    """A balance config omitting ``min_vision_radius`` defaults the minimum to
+    1 for both player and building circles (Req 3.6, 3.2)."""
+
+    def test_default_min_applied_to_player_circle(self):
+        fow = FogOfWarSystem(_FakeBalanceNoMin(pvr=2, bvr=1))
+        assert fow.min_vision_radius == 1
+        # Large negative terrain modifier drives the raw radius below 1.
+        fow.set_terrain_modifier_resolver(_FakeResolver(player_vision=-10))
+        player = _FakePlayer(x=5, y=5)
+        tiles = fow.get_visible_tiles(player, [])
+        # max(1, int(2 - 10)) == 1 -> 3x3 = 9 tiles
+        assert len(tiles) == 9
+        assert (5, 5) in tiles
+        assert (6, 6) in tiles
+        assert (7, 5) not in tiles
+
+    def test_default_min_applied_to_building_circle(self):
+        fow = FogOfWarSystem(_FakeBalanceNoMin(pvr=1, bvr=2))
+        fow.set_terrain_modifier_resolver(_FakeResolver(base_vision=-10))
+        player = _FakePlayer(x=0, y=0)
+        building = _FakeBuilding(location=_FakeRoom(x=20, y=20))
+        tiles = fow.get_visible_tiles(player, [building])
+        # Building circle: max(1, int(2 - 10)) == 1 -> radius 1 around (20,20)
+        assert (20, 20) in tiles
+        assert (21, 21) in tiles
+        assert (22, 20) not in tiles
+
+    def test_default_min_does_not_inflate_normal_radius(self):
+        """The default minimum of 1 never shrinks or grows a radius already
+        above it."""
+        fow = FogOfWarSystem(_FakeBalanceNoMin(pvr=2, bvr=1))
+        player = _FakePlayer(x=5, y=5)
+        tiles = fow.get_visible_tiles(player, [])
+        assert len(tiles) == 25
