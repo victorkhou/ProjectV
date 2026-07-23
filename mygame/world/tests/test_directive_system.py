@@ -68,8 +68,12 @@ class _RankSystem:
 
 
 class _Registry:
-    def __init__(self, directives):
+    def __init__(self, directives, base_templates=None):
         self.directives = directives
+        self._base_templates = base_templates or {}
+
+    def get_base_template(self, tier):
+        return self._base_templates.get(tier)
 
 
 _CHAIN = [
@@ -236,6 +240,24 @@ class TestDeedAwards(DirectiveTestBase):
         self.bus.publish(BASE_ELIMINATED, attacker=npc, tier="outpost",
                          sentinel=None, planet="terra", x=0, y=0)
         self.assertEqual(p.db.deeds.get("outpost_cleared"), 1)
+
+    def test_new_tier_deed_maps_by_difficulty_class(self):
+        """A difficulty tier awards the deed for its CLASS, not its tier key: a
+        'stronghold' (outpost-class) → outpost_cleared, a 'citadel'
+        (fortress-class) → fortress_cleared. Resolved via the template's
+        difficulty_class in the registry."""
+        import types as _t
+        self.registry._base_templates = {
+            "stronghold": _t.SimpleNamespace(difficulty_class="outpost"),
+            "citadel": _t.SimpleNamespace(difficulty_class="fortress"),
+        }
+        p = _Player()
+        self.bus.publish(BASE_ELIMINATED, attacker=p, tier="stronghold",
+                         sentinel=None, planet="terra", x=0, y=0)
+        self.bus.publish(BASE_ELIMINATED, attacker=p, tier="citadel",
+                         sentinel=None, planet="terra", x=0, y=0)
+        self.assertEqual(p.db.deeds.get("outpost_cleared"), 1)
+        self.assertEqual(p.db.deeds.get("fortress_cleared"), 1)
 
 
 # -------------------------------------------------------------- #

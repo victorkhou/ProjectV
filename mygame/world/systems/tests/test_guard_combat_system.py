@@ -242,19 +242,19 @@ class TestGuardTargetAcquisition(unittest.TestCase):
         p.db.inside_building = True
         return p
 
-    def test_ranged_guard_does_not_acquire_sheltered_player(self):
-        """A ranged guard (soldier) skips a player sheltered in a closed
-        building — its shot can't reach an occupant under cover, so it falls
-        through to the next-nearest real target (here: none)."""
-        system, engine = _make_system(guard_aggro_radius=5)
+    def test_guard_does_not_shoot_sheltered_player(self):
+        """A guard does not SHOOT a raider sheltered in a closed building — a
+        bullet can't reach an occupant under cover. With no reachable target it
+        closes in to melee instead, so no ranged attack is queued from range."""
+        system, engine = _make_system(guard_aggro_radius=5, guard_ranged_range=4)
         owner = _hq_owner()
         sheltered = self._sheltered_player("Hider", x=1, y=0, oid=2)
         tile = FakeTile(nearby_players=[sheltered])
-        soldier = FakeGuard(role="soldier", owner=owner, x=0, y=0, location=tile)
+        guard = FakeGuard(role="soldier", owner=owner, x=0, y=0, location=tile)
 
-        system.process_tick(1, [soldier])
+        system.process_tick(1, [guard])
         self.assertEqual(len(engine.pending_actions), 0,
-                         "a ranged guard must not lock onto a sheltered player")
+                         "a guard must not shoot a sheltered player")
 
     def test_melee_guard_does_not_hit_inside_player_from_adjacent_tile(self):
         """Buildings are rooms for melee: a melee guard adjacent to a player who
@@ -291,21 +291,22 @@ class TestGuardChebyshevDistance(unittest.TestCase):
     Chebyshev and Manhattan agree — these diagonal cases are the ones that catch
     a silent revert to Manhattan (which would read a diagonal as distance 2)."""
 
-    def test_melee_guard_chases_diagonal_adjacent_target(self):
-        """A melee guard does NOT hit a diagonal-adjacent target — melee is
-        same-tile only, so it chases onto the target's tile instead. (Aggro
-        acquisition still uses Chebyshev; the diagonal foe IS acquired.)"""
-        system, engine = _make_system(guard_aggro_radius=5)
+    def test_guard_shoots_diagonal_adjacent_target(self):
+        """A diagonal-adjacent raider (Chebyshev 1) is outside melee reach
+        (melee is same-tile only) but within gun range, so the hybrid guard
+        SHOOTS it rather than chasing onto its tile."""
+        system, engine = _make_system(guard_aggro_radius=5, guard_ranged_range=4)
         owner = _hq_owner()
         diag = FakePlayer(name="Diag", x=1, y=1, oid=2)  # Chebyshev 1 (adjacent)
         tile = FakeTile(nearby_players=[diag])
         guard = _ChaseGuard(role="guard", owner=owner, x=0, y=0, location=tile)
 
         system.process_tick(1, [guard])
-        # No attack (not same tile) — the guard queues a one-axis step toward the
-        # target (greedy step moves the larger axis first; ties pick x).
-        self.assertEqual(len(engine.pending_actions), 0)
-        self.assertEqual(guard.queued_path, [(1, 0)])
+        # Shot fired (in gun range), so no chase step is queued.
+        self.assertEqual(len(engine.pending_actions), 1)
+        self.assertEqual(engine.pending_actions[0]["weapon_item"].weapon_type,
+                         "ranged")
+        self.assertIsNone(guard.queued_path)
 
     def test_ranged_soldier_reaches_diagonal_within_chebyshev_range(self):
         """A soldier with range 4 hits a target at (3,3): Chebyshev 3 (in range).
@@ -352,12 +353,27 @@ class TestGuardChebyshevDistance(unittest.TestCase):
 
 class TestGuardWeaponSelection(unittest.TestCase):
 
-    def test_melee_guard_range_one_blocks_distant_target(self):
-        """A melee guard's effective range is 1: a target 3 tiles away is inside
-        aggro but out of weapon range, so queue_attack rejects it."""
-        system, engine = _make_system(guard_aggro_radius=5)
+    def test_guard_shoots_distant_target_within_gun_range(self):
+        """Hybrid rule: an outpost 'guard' now SHOOTS a raider that is outside
+        melee reach but within guard_ranged_range (it "also has a gun"), instead
+        of only chasing. The queued attack uses the ranged weapon."""
+        system, engine = _make_system(guard_aggro_radius=5, guard_ranged_range=4)
         owner = _hq_owner()
-        target = FakePlayer(name="T", x=3, y=0, oid=2)
+        target = FakePlayer(name="T", x=3, y=0, oid=2)  # out of melee, in gun range
+        tile = FakeTile(nearby_players=[target])
+        guard = FakeGuard(role="guard", owner=owner, x=0, y=0, location=tile)
+
+        system.process_tick(1, [guard])
+        self.assertEqual(len(engine.pending_actions), 1)
+        self.assertEqual(engine.pending_actions[0]["weapon_item"].weapon_type,
+                         "ranged")
+
+    def test_guard_out_of_gun_range_does_not_fire(self):
+        """A raider inside aggro but beyond guard_ranged_range is not shot — the
+        guard chases instead (no attack queued)."""
+        system, engine = _make_system(guard_aggro_radius=8, guard_ranged_range=4)
+        owner = _hq_owner()
+        target = FakePlayer(name="T", x=6, y=0, oid=2)  # aggro yes, past gun range
         tile = FakeTile(nearby_players=[target])
         guard = FakeGuard(role="guard", owner=owner, x=0, y=0, location=tile)
 
@@ -367,7 +383,7 @@ class TestGuardWeaponSelection(unittest.TestCase):
     def test_melee_guard_fires_at_same_tile(self):
         system, engine = _make_system()
         owner = _hq_owner()
-        # Melee guard fires only at a same-tile foe.
+        # A guard on the raider's own tile strikes in melee (not with the gun).
         target = FakePlayer(name="T", x=0, y=0, oid=2)
         tile = FakeTile(nearby_players=[target])
         guard = FakeGuard(role="guard", owner=owner, x=0, y=0, location=tile)
@@ -561,9 +577,11 @@ class TestGuardChase(unittest.TestCase):
     """A melee guard steps toward an out-of-weapon-range raider (bounded)."""
 
     def test_melee_guard_chases_out_of_range_target(self):
-        system, engine = _make_system(guard_aggro_radius=5)
+        # Target inside aggro but beyond BOTH melee and gun range, so the guard
+        # can neither strike nor shoot — it chases to close the gap.
+        system, engine = _make_system(guard_aggro_radius=8, guard_ranged_range=4)
         owner = _hq_owner()
-        target = FakePlayer(name="T", x=3, y=0, oid=2)  # aggro yes, melee no
+        target = FakePlayer(name="T", x=6, y=0, oid=2)  # aggro yes, past gun range
         tile = FakeTile(nearby_players=[target])
         guard = _ChaseGuard(role="guard", owner=owner, x=0, y=0, location=tile)
 
@@ -574,8 +592,9 @@ class TestGuardChase(unittest.TestCase):
 
     def test_chase_is_leashed_to_home(self):
         # aggro_radius 5, but the guard is already 5 tiles from home, so a step
-        # to 6 would exceed the leash — no chase.
-        system, engine = _make_system(guard_aggro_radius=5)
+        # to 6 would exceed the leash — no chase. gun range 1 so the dist-4
+        # target is past gun range and the guard would otherwise chase.
+        system, engine = _make_system(guard_aggro_radius=5, guard_ranged_range=1)
         owner = _hq_owner()
         target = FakePlayer(name="T", x=9, y=0, oid=2)
         tile = FakeTile(nearby_players=[target])
@@ -587,7 +606,9 @@ class TestGuardChase(unittest.TestCase):
         self.assertIsNone(guard.queued_path)
 
     def test_no_chase_when_already_moving(self):
-        system, engine = _make_system(guard_aggro_radius=5)
+        # gun range 1 so the dist-3 target is past gun range (chase territory),
+        # but the guard is already en route, so no new step is queued.
+        system, engine = _make_system(guard_aggro_radius=5, guard_ranged_range=1)
         owner = _hq_owner()
         target = FakePlayer(name="T", x=3, y=0, oid=2)
         tile = FakeTile(nearby_players=[target])
@@ -600,8 +621,9 @@ class TestGuardChase(unittest.TestCase):
     def test_homeless_agent_does_not_chase(self):
         """A guard/soldier with no home anchor (e.g. a player-assigned agent)
         must NOT chase — otherwise the leash resets every tick and it follows a
-        raider across the map."""
-        system, engine = _make_system(guard_aggro_radius=5)
+        raider across the map. gun range 1 puts the dist-3 target in chase
+        territory (past gun range)."""
+        system, engine = _make_system(guard_aggro_radius=5, guard_ranged_range=1)
         owner = _hq_owner()
         target = FakePlayer(name="T", x=3, y=0, oid=2)
         tile = FakeTile(nearby_players=[target])

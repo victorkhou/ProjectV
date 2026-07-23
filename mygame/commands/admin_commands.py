@@ -1989,6 +1989,232 @@ def _resolve_combat_unit(caller, name):
     return None
 
 
+#: Import-once cache of Evennia's DefaultCharacter (populated by
+#: _is_protected_player on first use — the class import is deferred so this
+#: module stays importable without a full Evennia env, e.g. in unit tests).
+_DefaultCharacter = None
+
+
+def _is_protected_player(obj) -> bool:
+    """True if *obj* is a real player character that obliterate must NOT delete.
+
+    A player is a ``DefaultCharacter`` (even while disconnected — a linkdead or
+    stowed character still owns its account and world state). A Sentinel is ALSO
+    a DefaultCharacter subclass, so we explicitly exclude it (``is_sentinel``):
+    the NPC-base HQ IS a valid obliterate target. Fails safe — anything we can't
+    classify as a non-sentinel character is treated as NOT protected (obliterate
+    is an explicit destructive admin action; the one thing it guards is real
+    players).
+    """
+    global _DefaultCharacter
+    if _DefaultCharacter is None:
+        from evennia.objects.objects import DefaultCharacter
+        _DefaultCharacter = DefaultCharacter
+    if not isinstance(obj, _DefaultCharacter):
+        return False
+    # A sentinel is a character but represents an NPC base HQ — destroyable.
+    return not bool(getattr(getattr(obj, "db", None), "is_sentinel", False))
+
+
+class CmdObliterate(BaseCommand):
+    """Destroy every building/entity within a radius — a blunt cleanup tool.
+
+    Usage:
+        obliterate <radius>
+        obliterate <radius> <x> <y> [z]
+
+    Options:
+        <radius>   Chebyshev radius in tiles (0 = just the center tile).
+        <x> <y>    center coordinates; defaults to your current tile.
+        [z]        planet by z-level (0/1/2) — or name/prefix; defaults to the
+                   center's planet (your planet when no coords are given).
+
+    Destroys, within range: buildings (incl. NPC-base HQs/turrets/walls/shield
+    generators), NPCs (agents, enemy guards, sentinels), dropped items, resource
+    drops, and armed bombs. Real player characters are ALWAYS spared — including
+    disconnected/linkdead ones.
+
+    Examples:
+        obliterate 5                — everything within 5 tiles of you
+        obliterate 5 250 250 3      — within 5 tiles of (250,250) on z-level 3
+        obliterate 0                — just your own tile
+
+    This is a hard delete: no XP, no loot, no BASE_ELIMINATED event (so wiping a
+    Sentinel HQ won't trigger the base-elimination reward path). Any NPC base
+    whose HQ is in range is cleared as a UNIT (owning Sentinel + all buildings +
+    guards) and dropped from the '@outpost list' — the base owner is an off-map
+    ownership anchor, so a plain tile sweep would otherwise leave a phantom base.
+    Restricted to Builder+.
+    """
+
+    key = "obliterate"
+    locks = "cmd:perm(Builder);view:perm(Builder)"
+    help_category = "Admin"
+
+    _USAGE = "Usage: obliterate <radius> [<x> <y> [z]]  (commas optional)"
+
+    def func(self):
+        caller = self.caller
+        args = self.args.strip()
+        if not args:
+            caller.msg(self._USAGE)
+            return
+
+        # Accept commas or spaces interchangeably, matching goto/throw.
+        parts = args.replace(",", " ").split()
+
+        try:
+            radius = int(parts[0])
+        except ValueError:
+            caller.msg("Radius must be an integer.")
+            return
+        if radius < 0:
+            caller.msg("Radius must be zero or positive.")
+            return
+
+        registry = _get_system(caller, "planet_registry")
+
+        # Resolve center + planet. Either just <radius> (use caller's position)
+        # or <radius> <x> <y> [z].
+        if len(parts) == 1:
+            coords = coords_of(caller)
+            if coords is None or not coords[2]:
+                caller.msg("You have no coordinates set. Specify: obliterate <radius> <x> <y> [z].")
+                return
+            cx, cy, planet = int(coords[0]), int(coords[1]), coords[2]
+        elif len(parts) >= 3:
+            try:
+                cx = int(parts[1])
+                cy = int(parts[2])
+            except ValueError:
+                caller.msg("Coordinates must be integers.")
+                return
+            if len(parts) >= 4:
+                if registry is None:
+                    caller.msg("Planet registry not available.")
+                    return
+                planet = registry.resolve_planet(parts[3])
+                if planet is None:
+                    caller.msg(f"Unknown planet '{parts[3]}'. Use a name, prefix, or z-level (0/1/2).")
+                    return
+            else:
+                planet = getattr(caller.db, "coord_planet", None)
+                if not planet:
+                    caller.msg("No planet specified and no current planet set.")
+                    return
+        else:
+            caller.msg(self._USAGE)
+            return
+
+        # Find the target planet's room (may be a different planet than caller's).
+        room = self._room_for_planet(caller, planet)
+        if room is None:
+            caller.msg(f"No PlanetRoom found for {planet}.")
+            return
+        if not hasattr(room, "get_objects_in_area"):
+            caller.msg("Target location does not support coordinate queries.")
+            return
+
+        x1, y1 = cx - radius, cy - radius
+        x2, y2 = cx + radius, cy + radius
+
+        spawner = _get_system(caller, "outpost_spawner")
+
+        # NPC bases FIRST, as whole units. A base's owning Sentinel holds its
+        # tracking record but is NOT a map actor (no coords / not in the tile
+        # index), so the tile sweep below would delete a base's buildings+guards
+        # yet never the Sentinel — leaving a phantom base in '@outpost list'.
+        # wipe_bases_in_area removes each base whose HQ is in range as a unit
+        # (Sentinel + buildings + guards) and untracks it, so the list updates.
+        bases_wiped = 0
+        try:
+            if spawner is not None and hasattr(spawner, "wipe_bases_in_area"):
+                bases_wiped = spawner.wipe_bases_in_area(planet, x1, y1, x2, y2)
+        except Exception:  # noqa: BLE001 - base wipe is best-effort
+            logger.exception("obliterate: base wipe failed")
+
+        # Then sweep any remaining loose entities on the tiles (buildings/guards
+        # of a partially-overlapping base already gone above are skipped as stale
+        # refs; player structures, dropped items, resource nodes, bombs remain).
+        try:
+            candidates = room.get_objects_in_area(x1, y1, x2, y2)
+        except Exception:  # noqa: BLE001
+            logger.exception("obliterate: area query failed")
+            caller.msg("Failed to query the target area.")
+            return
+
+        destroyed, spared_players = self._destroy_all(candidates)
+
+        # Reconcile any base whose Sentinel was somehow removed by the tile sweep
+        # (defense-in-depth — wipe_bases_in_area already handled in-range bases).
+        try:
+            if spawner is not None and hasattr(spawner, "forget_dead_bases"):
+                spawner.forget_dead_bases()
+        except Exception:  # noqa: BLE001 - reconcile is best-effort
+            logger.exception("obliterate: base reconcile failed")
+
+        where = f"({cx}, {cy}) on {planet}"
+        self._log_obliterate(caller, radius, where, destroyed, bases_wiped)
+        spared = (
+            f" Spared {spared_players} player(s)." if spared_players else ""
+        )
+        bases_note = f" Cleared {bases_wiped} NPC base(s)." if bases_wiped else ""
+        caller.msg(
+            f"|rObliterated {destroyed} entit"
+            f"{'y' if destroyed == 1 else 'ies'}|n within {radius} tile(s) of "
+            f"{where}.{bases_note}{spared}"
+        )
+
+    def _destroy_all(self, candidates):
+        """Delete every non-protected entity in *candidates*.
+
+        Returns ``(destroyed_count, spared_player_count)``. Best-effort per
+        entity: one failed delete never aborts the sweep. Skips objects whose DB
+        row is already gone (a stale index ref).
+        """
+        destroyed = 0
+        spared = 0
+        for obj in candidates:
+            if getattr(obj, "pk", True) is None:
+                continue  # already-deleted stale index entry
+            if _is_protected_player(obj):
+                spared += 1
+                continue
+            if not hasattr(obj, "delete"):
+                continue
+            try:
+                obj.delete()
+                destroyed += 1
+            except Exception:  # noqa: BLE001 - keep sweeping past a bad delete
+                logger.exception(
+                    "obliterate: delete failed for %s",
+                    getattr(obj, "key", "?"),
+                )
+        return destroyed, spared
+
+    @staticmethod
+    def _room_for_planet(caller, planet):
+        """Return the PlanetRoom for *planet* — the caller's location if it
+        matches, else the shared room from the ``planet_rooms`` service."""
+        loc = getattr(caller, "location", None)
+        if loc is not None and getattr(getattr(caller, "db", None), "coord_planet", None) == planet:
+            return loc
+        try:
+            from world.services import get_service
+            rooms = get_service("planet_rooms") or {}
+            return rooms.get(planet)
+        except Exception:  # noqa: BLE001
+            return loc
+
+    @staticmethod
+    def _log_obliterate(caller, radius, where, destroyed, bases_wiped=0):
+        logger.info(
+            "Admin %s: obliterate r=%d at %s — destroyed %d entities, "
+            "cleared %d NPC bases",
+            getattr(caller, "key", "?"), radius, where, destroyed, bases_wiped,
+        )
+
+
 class CmdAdminStat(AdminSubcommandRouter):
     """Set health, XP, and other combat stats on a player or NPC.
 
@@ -2215,8 +2441,9 @@ class CmdAdminOutpost(AdminSubcommandRouter):
         @outpost tiers
 
     Options:
-        <tier>   template tier ("outpost" or "fortress"), an unambiguous prefix
-                 ("fort"), or an index (#2) from '@outpost tiers'
+        <tier>   template tier (outpost / stronghold / fortress / citadel, in
+                 ascending difficulty), an unambiguous prefix ("fort"), or an
+                 index (#2) from '@outpost tiers'
         [x y]    HQ tile coordinates; defaults to your current tile
 
     Subcommands:

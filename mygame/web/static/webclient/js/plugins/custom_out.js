@@ -12,6 +12,14 @@ let custom_out_plugin = (function () {
         var cls = (kwargs && kwargs.cls) ? kwargs.cls : "out";
         var html = args[0] || "";
 
+        if (cls === "prompt-line") {
+            // The status line (HP/level/position/terrain) is printed as normal
+            // text so raw telnet clients always see it. The webclient already
+            // shows the same fields in the map footer (via prompt_status), so
+            // drop it here to avoid duplicating it in the output panel.
+            return true;
+        }
+
         if (cls === "game-chat") {
             // Route to chat panel with timestamp
             var cw = document.getElementById("chatwindow");

@@ -82,6 +82,15 @@ html, body { height: 100%; width: 100%; margin: 0; padding: 0; overflow: hidden;
     white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
 #map-info .mi-hp { font-weight: bold; }
+/* Nearby NPC-base event banner (above the footer): the "you're engaging an
+   event" cue — base type + refresh countdown. */
+#map-base-banner {
+    color: #ddd; font-family: 'DejaVu Sans Mono', Consolas, monospace;
+    font-size: 11px; padding: 3px 8px; text-align: center;
+    background: #1a1206; border-top: 1px solid #3a2a10; flex-shrink: 0;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+#map-base-banner .mb-name { color: #ffd24a; font-weight: bold; }
 
 /* -- Right panel: vertical split (chat top, output bottom) -- */
 #right-panel {

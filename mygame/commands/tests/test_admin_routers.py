@@ -114,6 +114,7 @@ from mygame.commands.admin_commands import (  # noqa: E402
     CmdAdminStat,
     CmdPeace,
     CmdRestore,
+    CmdObliterate,
     CmdTeleport,
     CmdTransfer,
 )
@@ -1823,6 +1824,244 @@ class TestAdminStat(unittest.TestCase):
         caller = FakeCaller(perm_level="Admin")
         _make_cmd(CmdAdminStat, caller, " hp").func()
         self.assertTrue(any("Usage" in m for m in caller._messages))
+
+
+# -------------------------------------------------------------- #
+#  CmdObliterate tests — radius mass-delete
+# -------------------------------------------------------------- #
+
+from evennia.objects.objects import DefaultCharacter as _StubDefaultCharacter  # noqa: E402
+
+
+class _Deletable:
+    """A destroyable entity (building/NPC/item) at a tile."""
+
+    _next_pk = 1
+
+    def __init__(self, key="thing", x=0, y=0):
+        self.key = key
+        self.pk = _Deletable._next_pk
+        _Deletable._next_pk += 1
+        self.db = FakeDB(coord_x=x, coord_y=y)
+        self.deleted = False
+
+    def delete(self):
+        self.deleted = True
+        self.pk = None
+
+
+class _ObliteratePlayer(_StubDefaultCharacter):
+    """A real (stub) player character — must be spared by obliterate."""
+
+    def __init__(self, key="Hero"):
+        super().__init__(key=key)
+        self.pk = 999
+        self.deleted = False
+
+    def delete(self):
+        self.deleted = True
+
+
+class _ObliterateSentinel(_StubDefaultCharacter):
+    """A Sentinel HQ — a DefaultCharacter, but is_sentinel → destroyable."""
+
+    def __init__(self, key="Sentinel"):
+        super().__init__(key=key)
+        self.pk = 500
+        self.db.is_sentinel = True
+        self.deleted = False
+
+    def delete(self):
+        self.deleted = True
+        self.pk = None
+
+
+class _AreaRoom:
+    """PlanetRoom stand-in exposing get_objects_in_area over a fixed list."""
+
+    def __init__(self, objects):
+        self._objects = list(objects)
+        self.key = "TestPlanet"
+
+    def get_objects_in_area(self, x1, y1, x2, y2):
+        out = []
+        for o in self._objects:
+            ox = getattr(o.db, "coord_x", None)
+            oy = getattr(o.db, "coord_y", None)
+            if ox is None or oy is None:
+                continue
+            if x1 <= ox <= x2 and y1 <= oy <= y2:
+                out.append(o)
+        return out
+
+
+class _FakeSpawner:
+    """Spawner stand-in tracking bases by HQ coords (like the real one keys them
+    off a Sentinel that is NOT on the tile map). ``bases`` is a list of dicts
+    ``{tier, planet, x, y}``; wipe_bases_in_area removes those whose HQ is in the
+    box, mirroring the real wipe-as-a-unit behavior."""
+
+    def __init__(self, bases=None):
+        self.bases = list(bases or [])
+        self.reconciled = 0
+
+    def wipe_bases_in_area(self, planet, x1, y1, x2, y2):
+        victims = [
+            b for b in self.bases
+            if b["planet"] == planet and x1 <= b["x"] <= x2 and y1 <= b["y"] <= y2
+        ]
+        for b in victims:
+            self.bases.remove(b)
+        return len(victims)
+
+    def forget_dead_bases(self):
+        self.reconciled += 1
+        return 0
+
+
+class _ObliteratePlanetRegistry:
+    def resolve_planet(self, ident):
+        # Accept a z-level number or the literal name "earth".
+        if ident in ("0", "earth"):
+            return "earth"
+        if ident == "3":
+            return "mars"
+        return None
+
+    def is_valid_coordinate(self, x, y, planet):
+        return True
+
+
+class TestObliterate(unittest.TestCase):
+    """obliterate <radius> [<x> <y> [z]] mass-deletes entities, sparing players."""
+
+    def _caller(self, x=10, y=10, planet="earth"):
+        caller = FakeCaller(perm_level="Builder")
+        caller.db.coord_x = x
+        caller.db.coord_y = y
+        caller.db.coord_planet = planet
+        return caller
+
+    def test_destroys_entities_in_radius_around_self(self):
+        near = _Deletable("HQ", x=11, y=11)      # within 5 of (10,10)
+        far = _Deletable("FarHQ", x=99, y=99)    # out of range
+        room = _AreaRoom([near, far])
+        caller = self._caller()
+        caller.location = room
+        _install_systems({"planet_rooms": {"earth": room}})
+        _make_cmd(CmdObliterate, caller, "5").func()
+        self.assertTrue(near.deleted)
+        self.assertFalse(far.deleted)
+        self.assertTrue(any("Obliterated 1" in m for m in caller._messages))
+
+    def test_spares_player_characters(self):
+        player = _ObliteratePlayer("Hero")
+        player.db.coord_x, player.db.coord_y = 10, 10
+        building = _Deletable("HQ", x=10, y=10)
+        room = _AreaRoom([player, building])
+        caller = self._caller()
+        caller.location = room
+        _install_systems({"planet_rooms": {"earth": room}})
+        _make_cmd(CmdObliterate, caller, "3").func()
+        self.assertFalse(player.deleted)          # player spared
+        self.assertTrue(building.deleted)         # building destroyed
+        self.assertTrue(any("Spared 1 player" in m for m in caller._messages))
+
+    def test_destroys_sentinel_hq(self):
+        sentinel = _ObliterateSentinel("Sentinel")
+        sentinel.db.coord_x, sentinel.db.coord_y = 10, 10
+        room = _AreaRoom([sentinel])
+        caller = self._caller()
+        caller.location = room
+        _install_systems({"planet_rooms": {"earth": room}})
+        _make_cmd(CmdObliterate, caller, "2").func()
+        self.assertTrue(sentinel.deleted)         # sentinel HQ is destroyable
+
+    def test_explicit_coords_and_zlevel(self):
+        # obliterate 5 250 250 3 → around (250,250) on z-level 3 ("mars").
+        target = _Deletable("MarsHQ", x=250, y=250)
+        mars_room = _AreaRoom([target])
+        caller = self._caller(planet="earth")
+        caller.location = _AreaRoom([])  # caller is on earth; target on mars
+        _install_systems({
+            "planet_registry": _ObliteratePlanetRegistry(),
+            "planet_rooms": {"earth": caller.location, "mars": mars_room},
+        })
+        _make_cmd(CmdObliterate, caller, "5 250 250 3").func()
+        self.assertTrue(target.deleted)
+        self.assertTrue(any("on mars" in m for m in caller._messages))
+
+    def test_reconciles_dead_bases(self):
+        sentinel = _ObliterateSentinel("Sentinel")
+        sentinel.db.coord_x, sentinel.db.coord_y = 10, 10
+        room = _AreaRoom([sentinel])
+        spawner = _FakeSpawner()
+        caller = self._caller()
+        caller.location = room
+        _install_systems({"planet_rooms": {"earth": room}, "outpost_spawner": spawner})
+        _make_cmd(CmdObliterate, caller, "2").func()
+        self.assertEqual(spawner.reconciled, 1)   # base bookkeeping reconciled
+
+    def test_clears_npc_base_from_tracking(self):
+        # Regression: obliterating an outpost must remove it from '@outpost list'.
+        # The base's owning Sentinel is NOT on the tile map (no coords), so the
+        # tile sweep alone would leave a phantom base — wipe_bases_in_area (called
+        # by obliterate, keyed off the HQ coords) must clear it as a unit.
+        room = _AreaRoom([_Deletable("HQ building", x=25, y=25)])
+        spawner = _FakeSpawner(bases=[
+            {"tier": "outpost", "planet": "earth", "x": 25, "y": 25},
+            {"tier": "fortress", "planet": "earth", "x": 200, "y": 200},  # far away
+        ])
+        caller = self._caller(x=25, y=25)
+        caller.location = room
+        _install_systems({"planet_rooms": {"earth": room}, "outpost_spawner": spawner})
+        _make_cmd(CmdObliterate, caller, "5").func()
+        # The in-range outpost is gone from tracking; the distant fortress stays.
+        remaining = [(b["tier"], b["x"], b["y"]) for b in spawner.bases]
+        self.assertEqual(remaining, [("fortress", 200, 200)])
+        self.assertTrue(any("Cleared 1 NPC base" in m for m in caller._messages))
+
+    def test_radius_zero_hits_only_center_tile(self):
+        center = _Deletable("Center", x=10, y=10)
+        adjacent = _Deletable("Adj", x=11, y=10)
+        room = _AreaRoom([center, adjacent])
+        caller = self._caller()
+        caller.location = room
+        _install_systems({"planet_rooms": {"earth": room}})
+        _make_cmd(CmdObliterate, caller, "0").func()
+        self.assertTrue(center.deleted)
+        self.assertFalse(adjacent.deleted)
+
+    def test_no_args_shows_usage(self):
+        caller = self._caller()
+        _make_cmd(CmdObliterate, caller, "").func()
+        self.assertTrue(any("Usage" in m for m in caller._messages))
+
+    def test_negative_radius_rejected(self):
+        caller = self._caller()
+        _make_cmd(CmdObliterate, caller, "-3").func()
+        self.assertTrue(any("zero or positive" in m for m in caller._messages))
+
+    def test_non_integer_radius_rejected(self):
+        caller = self._caller()
+        _make_cmd(CmdObliterate, caller, "big").func()
+        self.assertTrue(any("integer" in m for m in caller._messages))
+
+    def test_requires_builder(self):
+        self.assertIn("Builder", CmdObliterate.locks)
+
+    def test_skips_already_deleted_stale_refs(self):
+        stale = _Deletable("Ghost", x=10, y=10)
+        stale.pk = None  # already-deleted stale index entry
+        live = _Deletable("HQ", x=10, y=10)
+        room = _AreaRoom([stale, live])
+        caller = self._caller()
+        caller.location = room
+        _install_systems({"planet_rooms": {"earth": room}})
+        _make_cmd(CmdObliterate, caller, "1").func()
+        self.assertFalse(stale.deleted)   # never touched
+        self.assertTrue(live.deleted)
+        self.assertTrue(any("Obliterated 1" in m for m in caller._messages))
 
 
 if __name__ == "__main__":

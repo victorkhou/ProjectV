@@ -791,6 +791,14 @@ class NotificationPresenter:
         "base_reactivated": _fmt_base_reactivated,
     }
 
+    #: Notification kinds that change the RECIPIENT's own HP or level. After
+    #: delivering one, we push a fresh status prompt so the player's webclient
+    #: footer (and prompt-aware telnet clients) reflect the new HP/level live —
+    #: without the player having to type a command. "attacked" = took a hit,
+    #: "healed" = restored, "rank_level_up" = levelled. (Kinds about a player's
+    #: BUILDINGS/UNITS being hit are excluded: the player's own HP is unchanged.)
+    _STATUS_AFFECTING_KINDS = frozenset({"attacked", "healed", "rank_level_up"})
+
     def __init__(self, event_bus: EventBus, player_notifier: Any = None) -> None:
         self.event_bus = event_bus
         from world.adapters.evennia_player_notifier import EvenniaPlayerNotifier
@@ -817,3 +825,19 @@ class NotificationPresenter:
             logger.exception("Failed to format notification kind %r: %r", kind, data)
             return
         self._notifier.notify(player, message)
+        if kind in self._STATUS_AFFECTING_KINDS:
+            self._push_status(player)
+
+    @staticmethod
+    def _push_status(player: Any) -> None:
+        """Push a live status prompt (HP/level/position) to *player*.
+
+        Best-effort and import-local to avoid a load-time cycle
+        (status_prompt → world.utils). A failure here must never disrupt the
+        notification it follows.
+        """
+        try:
+            from world.status_prompt import push_status
+            push_status(player)
+        except Exception:  # noqa: BLE001 - live status is best-effort
+            logger.debug("live status push failed", exc_info=True)

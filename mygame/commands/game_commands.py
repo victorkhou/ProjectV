@@ -99,79 +99,15 @@ def _terrain_header_info(caller, planet, x, y):
         return ""
 
 
-def _prompt_fields(caller):
-    """Return the status fields for the prompt as a dict, or ``None``.
-
-    The single source of truth for the prompt's contents: current/max health,
-    level, coordinates + planet, and the terrain under the player's feet (the
-    player's own tile is always known, so terrain needs no discovery gate). Both
-    the telnet text prompt (:func:`_player_prompt`) and the webclient footer
-    payload (:func:`send_prompt`) are built from this, so they never drift.
-
-    Returns ``None`` when there is nothing meaningful to show — the caller isn't
-    a positioned player, or is still OOC in the spawning/lobby flow — so callers
-    skip the prompt in those states (a prompt during the spawn wizard is noise).
-    """
-    db = getattr(caller, "db", None)
-    if db is None:
-        return None
-
-    # Suppress while the player is staging (SPAWNING/LOBBY) — a prompt only makes
-    # sense once they're deployed. A no-op when the lobby flow is off or the
-    # character is legacy (state None), matching player_is_present's gate.
-    try:
-        from world.lobby_flow import lobby_flow_enabled
-        if lobby_flow_enabled():
-            from world import player_lifecycle as pl
-            from world.constants import PLAYER_STATE_PLAYING
-            if pl.get_state(caller) not in (PLAYER_STATE_PLAYING, None):
-                return None
-    except Exception:  # noqa: BLE001 - gate never blocks the prompt
-        pass
-
-    coords = coords_of(caller)
-    if coords is None or not coords[2]:
-        return None
-    x, y, planet = coords
-
-    terrain = ""
-    try:
-        gens = get_game_systems().get("_terrain_generators", {})
-        gen = gens.get(planet)
-        if gen:
-            terrain = gen.get_terrain(int(x), int(y)) or ""
-    except Exception:  # noqa: BLE001 - terrain is optional in the prompt
-        terrain = ""
-
-    return {
-        "hp": int(getattr(db, "hp", 0) or 0),
-        "hp_max": int(getattr(db, "hp_max", 0) or 0),
-        "level": int(getattr(db, "level", None) or 1),
-        "x": x,
-        "y": y,
-        "planet": planet,
-        "terrain": terrain,
-    }
-
-
-def _format_prompt(fields):
-    """Format the telnet status prompt text from :func:`_prompt_fields` output.
-
-    e.g. ``[HP 100/500] [Lv 5] [(25,25) terra] [Plains]`` — each field in white
-    brackets, HP colored by fraction (green >=60%, yellow >=30%, red below).
-    """
-    hp, hp_max = fields["hp"], fields["hp_max"]
-    frac = (hp / hp_max) if hp_max > 0 else 0.0
-    hp_col = "|g" if frac >= 0.6 else ("|y" if frac >= 0.3 else "|r")
-    segs = [
-        f"HP {hp_col}{hp}/{hp_max}|n",
-        f"Lv {fields['level']}",
-        f"({fields['x']},{fields['y']}) {fields['planet']}",
-    ]
-    terrain = fields.get("terrain")
-    if terrain:
-        segs.append(terrain.replace("_", " "))
-    return " ".join(f"|w[|n{s}|w]|n" for s in segs)
+# The status prompt (HP/level/position/terrain) now lives in world.status_prompt
+# so both the command post-hook AND the notification presenter (server-driven HP
+# changes) share one source of truth. These names are kept as thin re-exports so
+# existing callers/tests keep working.
+from world.status_prompt import (  # noqa: E402
+    status_fields as _prompt_fields,
+    format_status_line as _format_prompt,
+    send_status as send_prompt,
+)
 
 
 def _player_prompt(caller):
@@ -184,32 +120,6 @@ def _player_prompt(caller):
     if fields is None:
         return None
     return _format_prompt(fields)
-
-
-def send_prompt(caller):
-    """Refresh *caller*'s status prompt after a command (telnet + webclient).
-
-    Sends two things, both best-effort, from one field snapshot so they agree:
-
-    * ``prompt=`` — the ANSI text prompt. Telnet renders it as the input-line
-      prompt (the classic MUD prompt). The webclient receives it too, but hides
-      the duplicate ``.prompt`` bar via CSS (the info lives in the map footer).
-    * ``prompt_status=`` — a structured OOB payload the webclient's map_renderer
-      folds into the map footer, so HP/level/position refresh on EVERY command
-      (a ``map_update`` is only sent on moves/builds). Telnet ignores it.
-
-    A no-op when there's no prompt to show (see :func:`_prompt_fields`) or the
-    caller can't be messaged. Never raises — a prompt hiccup must not surface as
-    a command error.
-    """
-    try:
-        fields = _prompt_fields(caller)
-        if fields is None or not hasattr(caller, "msg"):
-            return
-        caller.msg(prompt=_format_prompt(fields))
-        caller.msg(prompt_status=fields)
-    except Exception:  # noqa: BLE001 - prompt must never break a command
-        pass
 
 
 def _send_map_update(caller):
@@ -257,6 +167,27 @@ def _send_map_update(caller):
                             }
         except Exception:
             pass
+        # Nearby NPC-base event readout (type + refresh countdown). Runs on every
+        # map refresh (move/look/map), so it drives both the webclient footer
+        # payload AND — when near a base — a telnet line + any disappearance
+        # announcements. Sent as its own ascii-map line so the webclient (which
+        # hides ascii-map) shows it via the payload instead of duplicating.
+        try:
+            pc = coords_of(caller)
+            if pc is not None and pc[2]:
+                bx, by, bplanet = pc
+                lines, payload = _base_proximity_status(caller, bplanet, bx, by)
+                # Always set the key (even to []) so the webclient CLEARS its
+                # banner when the player walks out of range — an absent key means
+                # "don't touch", which would leave a stale banner on screen.
+                data["nearby_bases"] = payload
+                if lines:
+                    _send_ascii_map(
+                        caller,
+                        "|w=== Nearby NPC bases ===|n\n" + "\n".join(lines),
+                    )
+        except Exception:
+            pass
         caller.msg(map_update=data)
     except Exception:
         import logging
@@ -271,6 +202,100 @@ def _send_ascii_map(caller, map_text):
     clients see it normally.
     """
     caller.msg(text=(map_text, {"cls": "ascii-map"}))
+
+
+def _fmt_duration(ticks):
+    """Human-readable countdown from a tick count (tick ≈ 1 s).
+
+    e.g. 90000 → "25h 0m", 3660 → "1h 1m", 90 → "1m 30s", 5 → "5s". Clamped at 0.
+    """
+    secs = max(0, int(ticks))
+    h, rem = divmod(secs, 3600)
+    m, s = divmod(rem, 60)
+    if h:
+        return f"{h}h {m}m"
+    if m:
+        return f"{m}m {s}s"
+    return f"{s}s"
+
+
+def _base_proximity_status(caller, planet, x, y):
+    """Return ``(lines, payload)`` describing NPC bases near the player.
+
+    When the player is within ``BASE_PROXIMITY_RADIUS`` of an NPC base HQ they
+    are told the base TYPE and, once it's been disturbed, the TIME REMAINING
+    before it refreshes — so they know they're engaging a timed event. Two
+    disappearance cases both announce "it vanished" (to the player) and drop the
+    base from the readout:
+      * the base's timer has expired while the player is here → wipe it now
+        (proximity-triggered refresh); or
+      * a base the player was watching last render is no longer active (the
+        background staleness sweep, or another raider, wiped it).
+
+    ``lines`` are ANSI strings for the telnet map; ``payload`` is a
+    JSON-serializable list for the webclient footer. Both empty when nothing is
+    near. Never raises — returns ``([], [])`` on any failure.
+    """
+    spawner = _get_system(caller, "outpost_spawner")
+    if spawner is None or x == "?" or y == "?" or not planet:
+        return [], []
+    try:
+        from world.combat_timer import _get_current_tick
+        from world.systems.outpost_spawner import BASE_PROXIMITY_RADIUS
+
+        tick = _get_current_tick()
+        nearby = spawner.bases_near(
+            planet, int(x), int(y), BASE_PROXIMITY_RADIUS, tick
+        )
+        current_keys = {b["key"] for b in nearby}
+
+        # Announce any base we were watching that is now gone (wiped by the
+        # background sweep or another raider while we stood near it).
+        watched = getattr(caller.ndb, "_watched_bases", None) or {}
+        for key, name in list(watched.items()):
+            if key not in current_keys and not spawner.is_active(key):
+                caller.msg(
+                    f"|yThe {name} has crumbled and vanished from the map.|n"
+                )
+                watched.pop(key, None)
+
+        lines, payload = [], []
+        new_watched = {}
+        for base in nearby:
+            remaining = base["ticks_remaining"]
+            at = f"({base['x']}, {base['y']})"
+            # Expired timer + player present → wipe now and announce it vanished.
+            if remaining is not None and remaining <= 0:
+                if spawner.refresh_base_by_key(base["key"]):
+                    caller.msg(
+                        f"|yThe {base['name']} at {at} has crumbled and "
+                        f"vanished from the map.|n"
+                    )
+                continue
+            new_watched[base["key"]] = base["name"]
+            if remaining is None:
+                lines.append(f"|c{base['name']}|n {at} — |wintact|n")
+                payload.append({"name": base["name"], "x": base["x"],
+                                "y": base["y"], "state": "intact"})
+            else:
+                human = _fmt_duration(remaining)
+                lines.append(
+                    f"|c{base['name']}|n {at} — |yrefreshes in {human}|n"
+                )
+                payload.append({"name": base["name"], "x": base["x"],
+                                "y": base["y"], "state": "disturbed",
+                                "remaining": human})
+        try:
+            caller.ndb._watched_bases = new_watched
+        except Exception:  # noqa: BLE001 - ndb unavailable on a test double
+            pass
+        return lines, payload
+    except Exception:
+        import logging
+        logging.getLogger("evennia.commands").debug(
+            "Base proximity status failed", exc_info=True
+        )
+        return [], []
 
 
 def _render_and_send_map(caller):
@@ -316,6 +341,8 @@ def _render_and_send_map(caller):
             f"{disc_count} discovered|n\n{map_str}",
         )
 
+    # _send_map_update appends the "Nearby NPC bases" readout (telnet line +
+    # webclient payload) so it isn't duplicated here.
     _send_map_update(caller)
 
 

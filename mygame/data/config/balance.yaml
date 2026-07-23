@@ -225,6 +225,8 @@ outpost_count: 5                 # outposts per planet at init
 fortress_count: 2                # fortresses per planet at init
 outpost_guard_hp: 80             # HP per outpost guard
 fortress_guard_hp: 150           # HP per fortress guard
+outpost_stale_ticks: 86400       # ~24h: a DISTURBED base not cleared in time is
+                                 # wiped + regenerated (0=never; keeps bases fresh)
 
 # --- Tile (room) item-capacity caps ---
 # Max loose ground items (dropped Game_Items + Resource_Drops) a single tile

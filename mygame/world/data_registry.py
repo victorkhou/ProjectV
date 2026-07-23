@@ -607,11 +607,15 @@ class DataRegistry:
             rare_pool = self._validate_gear_pool(
                 tier, "rare_pool", spec.get("rare_pool") or []
             )
+            spawn_count = spec.get("spawn_count")
+            xp_reward = spec.get("xp_reward")
             self.base_templates[tier] = BaseTemplateDef(
                 tier=tier,
                 display_name=spec.get("display_name", tier.title()),
                 buildings=buildings,
                 guards=guards,
+                spawn_count=(int(spawn_count) if spawn_count is not None else None),
+                difficulty_class=str(spec.get("difficulty_class", "outpost")),
                 loot=loot,
                 guard_loot_chance=spec.get("guard_loot_chance"),
                 guard_loot_amount=spec.get("guard_loot_amount"),
@@ -619,6 +623,8 @@ class DataRegistry:
                 rare_gear_chance=spec.get("rare_gear_chance"),
                 gear_pool=gear_pool,
                 rare_pool=rare_pool,
+                xp_reward=(int(xp_reward) if xp_reward is not None else None),
+                gear_rolls=int(spec.get("gear_rolls", 1) or 1),
             )
         logger.info("Loaded %d NPC-base template(s).", len(self.base_templates))
 

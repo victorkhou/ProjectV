@@ -105,18 +105,42 @@ class DirectiveSystem(BaseSystem):
     # ------------------------------------------------------------------ #
 
     def _award_base_deed(self, payload: dict) -> None:
-        """Increment the tier deed for the player credited with the wipe."""
+        """Increment the tier deed for the player credited with the wipe.
+
+        The deed is keyed by the base's DIFFICULTY CLASS, not its specific tier,
+        so every outpost-class tier (easy/hard outpost) awards
+        ``outpost_cleared`` and every fortress-class tier awards
+        ``fortress_cleared``. The class is read from the template; it falls back
+        to the tier key so the two legacy tiers ("outpost"/"fortress") still map
+        correctly even without a template lookup.
+        """
         player = self._resolve_player({"player_key": "attacker"}, payload)
         if player is None:
             return
         tier = (payload.get("tier") or "").lower()
+        cls = self._difficulty_class(tier)
         deed = {
             "outpost": DEED_OUTPOST_CLEARED,
             "fortress": DEED_FORTRESS_CLEARED,
-        }.get(tier)
+        }.get(cls)
         if deed is None:
             return
         self.award_deed(player, deed)
+
+    def _difficulty_class(self, tier: str) -> str:
+        """Resolve a base *tier* to its difficulty class ("outpost"/"fortress").
+
+        Reads the template's ``difficulty_class`` when the registry has the tier;
+        otherwise returns the tier key itself (so the legacy "outpost"/"fortress"
+        tiers still resolve without a template). Never raises.
+        """
+        try:
+            template = self.registry.get_base_template(tier)
+            if template is not None:
+                return getattr(template, "difficulty_class", tier) or tier
+        except Exception:  # noqa: BLE001 - deed award never breaks on a lookup
+            pass
+        return tier
 
     @staticmethod
     def award_deed(player: Any, deed_id: str, count: int = 1) -> None:

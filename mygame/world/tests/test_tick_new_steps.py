@@ -548,6 +548,57 @@ class TestOutpostRespawnStep(unittest.TestCase):
         self.assertNotIn("outpost_respawn", [n for n, _ in steps])
 
 
+class TestOutpostStaleStep(unittest.TestCase):
+    """The outpost_stale step drives the spawner's process_stale.
+
+    Regression guard: a step registered in ``_build_tick_steps`` but MISSING from
+    ``TICK_STEP_ORDER`` is silently dropped (emit only includes declared steps),
+    so process_stale would never run and the 24h staleness decay would be dead
+    despite passing unit tests that call process_stale directly.
+    """
+
+    class _FakeSpawner:
+        def __init__(self):
+            self.stale_calls = []
+            self.respawn_calls = []
+
+        def process_respawns(self, tick_number):
+            self.respawn_calls.append(tick_number)
+            return 0
+
+        def process_stale(self, tick_number):
+            self.stale_calls.append(tick_number)
+            return 0
+
+    def test_step_registered_and_calls_process_stale(self):
+        script = GameTickScript()
+        script._get_online_players = lambda: []
+        spawner = self._FakeSpawner()
+        systems = {"outpost_spawner": spawner, "event_bus": FakeEventBus()}
+        steps = dict(script._build_tick_steps(systems, tick_number=99))
+        # Must actually be EMITTED (i.e. present in TICK_STEP_ORDER), not just
+        # in the `registered` dict — this is the exact wiring gap being guarded.
+        self.assertIn("outpost_stale", steps)
+        steps["outpost_stale"]()
+        self.assertEqual(spawner.stale_calls, [99])
+
+    def test_stale_runs_after_respawn(self):
+        script = GameTickScript()
+        script._get_online_players = lambda: []
+        spawner = self._FakeSpawner()
+        systems = {"outpost_spawner": spawner, "event_bus": FakeEventBus()}
+        names = [n for n, _ in script._build_tick_steps(systems, tick_number=1)]
+        self.assertLess(
+            names.index("outpost_respawn"), names.index("outpost_stale")
+        )
+
+    def test_step_absent_without_spawner(self):
+        script = GameTickScript()
+        script._get_online_players = lambda: []
+        steps = script._build_tick_steps({"event_bus": FakeEventBus()}, tick_number=1)
+        self.assertNotIn("outpost_stale", [n for n, _ in steps])
+
+
 class TestBuildingCacheInvalidation(unittest.TestCase):
     """_get_all_buildings caches the tag search and re-runs it only when a
     building is created/destroyed (the building-index generation advances)."""

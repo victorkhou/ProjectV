@@ -9,6 +9,12 @@ base against raiders and an NPC outpost against players with the same code path
 non-owner player within ``guard_aggro_radius`` and queues an attack through the
 standard combat engine using a synthetic guard weapon.
 
+Every guard is a **hybrid**: it strikes in melee when it shares the raider's
+tile and fires a gun (``guard_ranged_range`` / ``guard_ranged_damage``) at a
+raider outside melee reach — so a raider who stands off or kites is shot rather
+than merely chased. Weapon choice is by distance, not role; a raider sheltered
+in a closed building can't be shot, so the guard closes in to melee instead.
+
 Placed as the ``"guard_combat"`` tick step BEFORE ``combat_resolution`` so a
 guard's queued attack resolves in the SAME tick (an intentional asymmetry with
 turrets, which fire AFTER resolution and land the next tick — see the tick
@@ -139,14 +145,12 @@ class GuardCombatSystem(BaseSystem):
             return
         gx, gy = coords
 
-        # Ranged guards (soldiers) cannot hit a player sheltered inside a closed
-        # building, so they don't acquire one; a melee guard still may (the
-        # melee-bypass mirrors the closed-building rule, with queue_attack the
-        # final gate).
-        is_ranged = role.lower() == "soldier"
-        target = self._acquire_target(
-            npc, owner, location, gx, gy, aggro_radius, skip_sheltered=is_ranged
-        )
+        # Every guard is a HYBRID: it strikes in melee on its own tile and fires
+        # a gun at a raider outside melee range (up to guard_ranged_range). So
+        # acquire the nearest hostile without a shelter skip — a raider sheltered
+        # in a closed building can't be shot, but can still be chased down and
+        # meleed, so it's a valid target either way.
+        target = self._acquire_target(npc, owner, location, gx, gy, aggro_radius)
         if target is None:
             # No hostile in range — a base guard that chased a now-departed
             # raider walks back to its post so the garrison doesn't drift off
@@ -154,35 +158,39 @@ class GuardCombatSystem(BaseSystem):
             self._return_home(npc, gx, gy)
             return
 
-        weapon = self._guard_weapon(role)
-        is_melee = role.lower() != "soldier"
-        weapon_range = 1 if is_melee else \
-            self.registry.balance.guard_ranged_range
-
         tcoords = self._get_coords(target)
         if tcoords is None:
             t_loc = getattr(target, "location", target)
             tcoords = self._get_coords(t_loc)
-        from world.utils import chebyshev_distance
+        from world.utils import chebyshev_distance, player_is_sheltered
         dist = (chebyshev_distance(gx, gy, tcoords[0], tcoords[1])
                 if tcoords else None)
 
-        # A melee guard must be on the SAME tile as its target to strike it —
-        # melee is grappling range, not a reach into the neighbouring tile (see
-        # CombatEngine._melee_blocked). So a melee guard's effective range is 0:
-        # it chases onto the target's tile before it can attack, rather than
-        # hitting a raider who merely stands adjacent.
-        effective_range = 0 if is_melee else weapon_range
+        ranged_range = self.registry.balance.guard_ranged_range
 
-        if dist is not None and dist <= effective_range:
-            # In weapon range — attack. queue_attack still runs the full
-            # validation pipeline (range/self/ammo/room) as a backstop.
-            self._combat_engine.queue_attack(npc, target, weapon=weapon)
+        # Weapon choice by distance (the hybrid rule):
+        #   * SAME tile (dist 0) — melee strike. Melee is grappling range, not a
+        #     reach into the neighbouring tile (see CombatEngine._melee_blocked),
+        #     so a guard's melee only lands on its own tile.
+        #   * OUTSIDE melee, within gun range, target in the open — shoot. This
+        #     is the "also have guns" behaviour: a raider a tile or more away
+        #     (who a melee-only guard could never touch without chasing) is now
+        #     shot on sight.
+        #   * otherwise — beyond gun range, or the target is sheltered from fire
+        #     (a bullet can't reach an occupant under cover) — close in so the
+        #     guard can melee. Bounded to the base (see _chase).
+        # queue_attack still runs the full validation pipeline (range/self/ammo/
+        # room/shelter) as a backstop on whichever weapon is chosen.
+        if dist == 0:
+            self._combat_engine.queue_attack(
+                npc, target, weapon=self._guard_weapon(ranged=False)
+            )
+        elif (dist is not None and dist <= ranged_range
+                and not player_is_sheltered(target)):
+            self._combat_engine.queue_attack(
+                npc, target, weapon=self._guard_weapon(ranged=True)
+            )
         else:
-            # In aggro range but out of weapon range: close the distance so a
-            # melee garrison isn't inert against a raider who kites the walls
-            # (or ducks into a building). Bounded to the base so guards stay
-            # defensive (see _chase).
             self._chase(npc, gx, gy, tcoords, aggro_radius)
 
     # ------------------------------------------------------------------ #
@@ -197,17 +205,14 @@ class GuardCombatSystem(BaseSystem):
         gx: int,
         gy: int,
         aggro_radius: int,
-        skip_sheltered: bool = False,
     ) -> Any | None:
         """Return the nearest non-owner player within *aggro_radius*, or None.
 
-        When *skip_sheltered* is True (ranged guards), a player sheltered inside
-        a closed building is not acquired — ranged fire can't reach an occupant
-        under cover.
+        Acquires regardless of shelter: a hybrid guard that can't SHOOT a
+        sheltered raider can still chase it down to melee, so shelter is checked
+        at the shoot decision (see :meth:`_process_guard`), not here.
         """
-        from world.utils import (
-            chebyshev_distance, is_friendly, player_is_sheltered,
-        )
+        from world.utils import chebyshev_distance, is_friendly
 
         players = self._nearby_players(location, gx, gy, aggro_radius)
         nearest = None
@@ -218,9 +223,6 @@ class GuardCombatSystem(BaseSystem):
             # an ally (the hybrid friendly-fire rule; only direct player fire can
             # hit an ally).
             if is_friendly(player, owner):
-                continue
-            # A ranged guard can't hit a player sheltered in a closed building.
-            if skip_sheltered and player_is_sheltered(player):
                 continue
             p_coords = self._get_coords(player)
             if p_coords is None:
@@ -335,17 +337,19 @@ class GuardCombatSystem(BaseSystem):
         except Exception:  # noqa: BLE001 - a move step must never break the tick
             pass
 
-    def _guard_weapon(self, role: str) -> Any:
-        """Build the synthetic weapon for a guard of *role*.
+    def _guard_weapon(self, ranged: bool) -> Any:
+        """Build the synthetic weapon a guard uses at the current distance.
 
-        Guards (outpost) are melee (range 1); soldiers (fortress) are ranged
-        with a configurable range. Damage/range come from BalanceConfig so both
-        are hot-tunable.
+        Every guard is a hybrid, so weapon choice is by DISTANCE, not role: a
+        ``ranged`` gun (``guard_ranged_damage`` / ``guard_ranged_range``) for a
+        raider outside melee reach, or a melee strike (``guard_melee_damage``,
+        range 1) on the guard's own tile. Damage/range come from BalanceConfig so
+        both are hot-tunable.
         """
         from world.systems.combat_engine import _GuardWeapon
 
         bal = self.registry.balance
-        if role.lower() == "soldier":
+        if ranged:
             return _GuardWeapon(
                 bal.guard_ranged_damage, bal.guard_ranged_range,
                 weapon_type="ranged",

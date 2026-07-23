@@ -67,6 +67,7 @@ TICK_STEP_ORDER = (
     ("tech_research", "Decrement research timers."),
     ("resource_respawns", "Decrement depleted-node respawn counters."),
     ("outpost_respawn", "Respawn cleared NPC bases whose cooldown elapsed."),
+    ("outpost_stale", "Wipe + regenerate disturbed NPC bases past their staleness deadline."),
     ("linkdead_expiry", "Remove linkdead characters whose disconnect grace elapsed."),
     ("tick_completed", "Last: announce the tick is fully processed."),
 )
@@ -628,6 +629,11 @@ class GameTickScript(DefaultScript):
         if outpost_spawner:
             registered["outpost_respawn"] = (
                 lambda: outpost_spawner.process_respawns(tick_number)
+            )
+            # Staleness refresh: wipe + regenerate any base that was disturbed
+            # (damaged / lost a guard) but not cleared within outpost_stale_ticks.
+            registered["outpost_stale"] = (
+                lambda: outpost_spawner.process_stale(tick_number)
             )
 
         # Linkdead grace expiry: remove characters whose disconnect grace window

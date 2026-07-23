@@ -192,7 +192,10 @@ class BaseEliminationHandler(BaseSystem):
         # 4. Reward the destroyer: XP + loot. Only a non-owner player earns it
         #    (mirrors the combat-engine anti-farm guard; a sentinel can't own
         #    itself, but keep the guard for symmetry / admin edge cases).
-        xp = self.registry.balance.xp_hq_destroy
+        #    XP is difficulty-scaled: the template's ``xp_reward`` overrides the
+        #    balance ``xp_hq_destroy`` default, so a fortress pays out far more
+        #    than an easy outpost.
+        xp = self._tunable_xp(template)
         awarded_xp = 0
         # A real player only earns the base-destroy reward. NPCs (agents/enemy
         # guards) also satisfy is_player — they carry combat_xp — so exclude any
@@ -249,20 +252,39 @@ class BaseEliminationHandler(BaseSystem):
     def _try_gear_drops(self, room: Any, template: Any, x: Any, y: Any) -> None:
         """Roll gear and rare gear drops on HQ destruction (R8.3, R8.4).
 
-        Two independent rolls (normal + rare), each: pool non-empty AND
-        ``random() < chance`` → spawn one random item from the pool.
+        Each ROUND makes two independent rolls (normal + rare), each: pool
+        non-empty AND ``random() < chance`` → spawn one random item from the
+        pool. The template's ``gear_rolls`` (default 1) sets how many rounds to
+        run, so a difficult base can rain several upgrades from one wipe
+        (difficulty-scaled loot).
         """
         import random as _rng
         if self._loot_drop_func is None or room is None:
             return
-        for chance_key, pool_key in (
-            ("gear_drop_chance", "gear_pool"),
-            ("rare_gear_chance", "rare_pool"),
-        ):
-            chance = self._tunable(template, chance_key, 0)
-            pool = getattr(template, pool_key, None) or []
-            if pool and _rng.random() < chance:
-                self._spawn_gear_item(room, _rng.choice(pool), x, y)
+        rounds = max(1, int(getattr(template, "gear_rolls", 1) or 1))
+        for _ in range(rounds):
+            for chance_key, pool_key in (
+                ("gear_drop_chance", "gear_pool"),
+                ("rare_gear_chance", "rare_pool"),
+            ):
+                chance = self._tunable(template, chance_key, 0)
+                pool = getattr(template, pool_key, None) or []
+                if pool and _rng.random() < chance:
+                    self._spawn_gear_item(room, _rng.choice(pool), x, y)
+
+    def _tunable_xp(self, template: Any) -> int:
+        """HQ-destroy XP for *template*: its ``xp_reward``, else ``xp_hq_destroy``.
+
+        Difficulty-scaled: a tier that declares ``xp_reward`` pays that out; one
+        that doesn't falls back to the global balance default. Never negative.
+        """
+        value = getattr(template, "xp_reward", None) if template is not None else None
+        if value is None:
+            value = getattr(self.registry.balance, "xp_hq_destroy", 0)
+        try:
+            return max(0, int(value))
+        except (TypeError, ValueError):
+            return 0
 
     def _tunable(self, template: Any, key: str, default: Any = 0) -> Any:
         """Read *key* from the base template, falling back to balance.

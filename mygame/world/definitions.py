@@ -261,6 +261,14 @@ class BaseTemplateDef:
     display_name: str
     buildings: list[TemplateBuildingDef] = field(default_factory=list)
     guards: list[TemplateGuardDef] = field(default_factory=list)
+    #: How many of this tier to place per planet at server start. None = fall
+    #: back to the balance count for the tier's class (outpost- vs fortress-class
+    #: via ``difficulty_class``), so old templates without the field still work.
+    spawn_count: int | None = None
+    #: "outpost" or "fortress" — groups a tier for the deed award (which base
+    #: type was cleared) and the fallback spawn/guard-HP balance defaults. Lets
+    #: several difficulty tiers share one base class. Defaults to the tier key.
+    difficulty_class: str = "outpost"
     #: Loot per resource: fixed int or [min, max] range drawn uniformly (R8.1).
     loot: dict = field(default_factory=dict)
     #: Per-guard-kill mini-drop chance (R8.2); overrides balance default.
@@ -275,6 +283,14 @@ class BaseTemplateDef:
     gear_pool: list[str] = field(default_factory=list)
     #: Item keys eligible for the rare roll.
     rare_pool: list[str] = field(default_factory=list)
+    #: XP awarded for destroying this base's HQ. None = the balance default
+    #: (``xp_hq_destroy``). Lets a tougher tier pay out more (difficulty-scaled
+    #: reward — a fortress is worth far more than an easy outpost).
+    xp_reward: int | None = None
+    #: How many INDEPENDENT gear + rare rolls to make on HQ destruction. Each
+    #: round rolls the normal pool AND the rare pool once. >1 lets a fortress
+    #: rain several upgrades from one wipe. Defaults to 1 (single roll each).
+    gear_rolls: int = 1
 
 
 @dataclass
@@ -497,6 +513,12 @@ class BalanceConfig:
     outpost_guard_hp: int = 80
     #: HP for each fortress guard NPC (overridden per template if specified).
     fortress_guard_hp: int = 150
+    #: Staleness decay: once an NPC base is DISTURBED (a building damaged or a
+    #: guard killed) it must be fully cleared within this many ticks, else it is
+    #: wiped and freshly regenerated so partially-raided bases don't sit stale.
+    #: ~24h at 1 tick/s (86400). 0 disables the decay (bases persist until
+    #: cleared). An untouched base never starts the timer.
+    outpost_stale_ticks: int = 86400
 
     # --- Tile (room) item-capacity caps --------------------------------- #
     #: Max loose ground items (Game_Item + Resource_Drop objects) a tile can

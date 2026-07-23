@@ -304,8 +304,10 @@ class TestDataclassContracts:
         #  + 2 graduation throttle (outgrown_grace_levels, outgrown_min_factor).
         #  + 4 terrain strategy (terrain_vision_bound, terrain_movement_bound,
         #    terrain_defense_bound, min_vision_radius).
+        #  + 1 NPC-base staleness decay (outpost_stale_ticks) — a disturbed base
+        #    not cleared in time is wiped + regenerated.
         # Bump this when adding a balance tunable.
-        assert len(fields(BalanceConfig)) == 131
+        assert len(fields(BalanceConfig)) == 132
 
     def test_coordinate_space_def_field_count(self):
         # 14 core + 2 graduation-economy scales (yield_scale, npc_scale).

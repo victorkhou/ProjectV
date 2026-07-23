@@ -44,7 +44,7 @@ from commands.lifecycle_commands import (
 from commands.alliance_commands import CmdAlliance
 from commands.admin_commands import (
     CmdReboot, CmdPurgeRooms, CmdTeleport, CmdTransfer, CmdClearFog, CmdMigrate,
-    CmdPeace, CmdRestore, CmdAdminStat,
+    CmdPeace, CmdRestore, CmdAdminStat, CmdObliterate,
     CmdAdminBuilding, CmdAdminAgent, CmdAdminResource, CmdAdminItem,
     CmdAdminPlayer, CmdAdminOutpost, CmdAdminAlliance,
 )
@@ -193,6 +193,7 @@ class CharacterCmdSet(default_cmds.CharacterCmdSet):
         self.add(CmdMigrate())
         self.add(CmdPeace())
         self.add(CmdRestore())
+        self.add(CmdObliterate())
         # Admin routers (replace old standalone admin commands)
         self.add(CmdAdminBuilding())
         self.add(CmdAdminAgent())

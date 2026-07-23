@@ -669,6 +669,9 @@ def initialize_game() -> dict:
         planet_rooms_provider=lambda: game_systems.get("planet_rooms", {}),
         planet_registry=planet_registry,
         current_tick_func=_get_current_tick,
+        # Shared with BaseEliminationHandler — used by the staleness sweep to
+        # enumerate a base's buildings + guards when wiping a stale base.
+        owned_entities_provider=_owned_entities_for,
     )
 
     # ---------------------------------------------------------- #
@@ -743,6 +746,13 @@ def initialize_game() -> dict:
         from world.utils import get_obj_attr
 
         existing = list(search_object_by_tag("sentinel", category="npc_role") or [])
+        # Purge bases spawned under an older spec version (template overhaul) so
+        # they regenerate under the current spec. Runs before rebuild so purged
+        # sentinels aren't re-tracked and their planets re-seed below.
+        if outpost_spawner.purge_outdated_bases(existing):
+            existing = list(
+                search_object_by_tag("sentinel", category="npc_role") or []
+            )
         # Restore active-base separation state + reload persisted respawns.
         outpost_spawner.rebuild_from_world(existing)
 

@@ -133,12 +133,15 @@ class FakeSentinel:
         self.deleted = False
         FakeSentinel._next += 1
         self.id = FakeSentinel._next
+        # Mirror Evennia: a live object has a pk; delete() clears it to None.
+        self.pk = self.id
 
     def get_buildings(self):
         return list(self._buildings)
 
     def delete(self):
         self.deleted = True
+        self.pk = None
 
 
 class FakeGuard:
@@ -189,12 +192,19 @@ class FakeBuildingFactory:
 
 
 class FakeTerrain:
-    """Terrain provider: everything passable unless a tile is blocked."""
-    def __init__(self, blocked=None):
+    """Terrain provider: 'grass' everywhere, except ``blocked`` tiles report
+    'blocked' (impassable) and ``river`` tiles report 'river' (passable but not
+    buildable — a treacherous tile a base must avoid)."""
+    def __init__(self, blocked=None, river=None):
         self._blocked = set(blocked or [])
+        self._river = set(river or [])
 
     def get_terrain_and_resource(self, planet, x, y):
-        return ("blocked" if (x, y) in self._blocked else "grass"), None
+        if (x, y) in self._blocked:
+            return "blocked", None
+        if (x, y) in self._river:
+            return "river", None
+        return "grass", None
 
 
 class FakeSpace:
@@ -233,15 +243,19 @@ def _make_registry():
                           required_terrain=None, category="defense", produces=None,
                           capabilities=frozenset({"turret"})),
     }
-    # Terrain defs for passability lookups.
+    # Terrain defs for passability + buildability lookups. 'river' mirrors the
+    # real treacherous tile: passable (you can walk it) but NOT buildable, so a
+    # base must never spawn on it.
     r.terrain = {
-        "grass": types.SimpleNamespace(passable=True),
-        "blocked": types.SimpleNamespace(passable=False),
+        "grass": types.SimpleNamespace(passable=True, buildable=True),
+        "blocked": types.SimpleNamespace(passable=False, buildable=False),
+        "river": types.SimpleNamespace(passable=True, buildable=False),
     }
     r.get_terrain = lambda t: r.terrain[t]
     r.base_templates = {
         "outpost": BaseTemplateDef(
             tier="outpost", display_name="Outpost",
+            difficulty_class="outpost",
             buildings=[
                 TemplateBuildingDef("HQ", (0, 0), hp=200),
                 TemplateBuildingDef("WL", (0, 1), hp=300),
@@ -251,9 +265,14 @@ def _make_registry():
         ),
         "fortress": BaseTemplateDef(
             tier="fortress", display_name="Fortress",
+            difficulty_class="fortress",
             buildings=[TemplateBuildingDef("HQ", (0, 0), hp=600)],
             guards=[TemplateGuardDef("soldier", "ranged", 3)],
             loot={"Iron": 100},
+            xp_reward=800,     # difficulty-scaled XP override
+            gear_rolls=3,      # three roll rounds
+            gear_drop_chance=1.0,
+            gear_pool=["assault_rifle"],
         ),
     }
     return r
@@ -354,6 +373,31 @@ class TestPlacement(unittest.TestCase):
         spawner, npc, bf, room, _ = _make_spawner(terrain=terrain)
         base = spawner.spawn_base("earth", "outpost")  # auto placement
         self.assertIsNone(base)
+
+    def test_placement_rejects_non_buildable_terrain(self):
+        # Flood the whole map with river tiles (passable but NOT buildable).
+        # A base must never spawn on treacherous terrain the way a player could
+        # never build there — so auto-placement finds nowhere and returns None.
+        river = {(x, y) for x in range(50) for y in range(50)}
+        terrain = FakeTerrain(river=river)
+        spawner, npc, bf, room, _ = _make_spawner(terrain=terrain)
+        self.assertIsNone(spawner.spawn_base("earth", "outpost"))
+        self.assertEqual(len(npc.sentinels), 0)
+
+    def test_placement_avoids_river_tile_for_offsets(self):
+        # A single river tile at (0,1) must block a base whose HQ is at (0,0)
+        # with a WL offset onto (0,1): _placement_valid rejects the footprint
+        # because one occupied tile is non-buildable.
+        terrain = FakeTerrain(river={(0, 1)})
+        spawner, npc, bf, room, _ = _make_spawner(terrain=terrain)
+        offsets = [(0, 0), (0, 1)]  # matches the outpost template footprint
+        self.assertFalse(
+            spawner._placement_valid("earth", room, 0, 0, offsets)
+        )
+        # A footprint clear of the river tile is fine.
+        self.assertTrue(
+            spawner._placement_valid("earth", room, 10, 10, offsets)
+        )
 
     def test_placement_rejects_occupied_tile(self):
         spawner, npc, bf, room, _ = _make_spawner()
@@ -753,3 +797,272 @@ class TestGearDropResolution(unittest.TestCase):
                 del objects_mod.spawn_gear_drop
         self.assertEqual(len(calls), 1)
         self.assertIs(calls[0], registry.items["combat_knife"])
+
+    def test_gear_rolls_multiplies_drops(self):
+        """gear_rolls=N runs N independent (gear+rare) rounds — a difficult base
+        rains several upgrades. With chance 1.0 and gear_rolls=3, three drops."""
+        import typeclasses.objects as objects_mod
+        handler, registry = self._handler_with_items()
+        room = FakeRoom()
+        template = types.SimpleNamespace(
+            gear_drop_chance=1.0, gear_pool=["combat_knife"],
+            rare_gear_chance=0.0, rare_pool=[], gear_rolls=3,
+        )
+        calls = []
+        original = getattr(objects_mod, "spawn_gear_drop", None)
+        objects_mod.spawn_gear_drop = (
+            lambda location, item_def, x=None, y=None:
+            calls.append(item_def) or object()
+        )
+        try:
+            handler._try_gear_drops(room, template, 3, 4)
+        finally:
+            if original is not None:
+                objects_mod.spawn_gear_drop = original
+            else:
+                del objects_mod.spawn_gear_drop
+        self.assertEqual(len(calls), 3, "gear_rolls=3 → three gear drops")
+
+
+# -------------------------------------------------------------- #
+#  Difficulty-scaled rewards (XP + spawn count by tier)
+# -------------------------------------------------------------- #
+
+class TestDifficultyScaledRewards(unittest.TestCase):
+
+    def _sentinel_hq(self, room, tier):
+        sentinel = FakeSentinel(f"{tier} #1", room, "earth")
+        sentinel.db.base_tier = tier
+        sentinel.db.base_planet = "earth"
+        sentinel.attributes.add("base_tier", tier)
+        sentinel.attributes.add("base_planet", "earth")
+        hqdef = BuildingDef(name="HQ", abbreviation="HQ", cost={}, max_health=200,
+                            requires_hq=False, required_terrain=None, category="hq",
+                            produces=None, capabilities=frozenset({"headquarters"}))
+        hq = FakeBuilding(hqdef, sentinel, 5, 5, room)
+        return sentinel, hq
+
+    def test_template_xp_reward_overrides_balance_default(self):
+        """A tier's xp_reward is paid instead of the balance xp_hq_destroy — a
+        fortress (xp_reward=800) pays far more than the 300 default."""
+        room = FakeRoom()
+        sentinel, hq = self._sentinel_hq(room, "fortress")
+        handler, bus, drops = _make_handler(owned={sentinel: [hq]})
+        raider = FakePlayer(oid=2, combat_xp=0)
+        bus.publish(BUILDING_DESTROYED, building=hq, attacker=raider, tile=room)
+        self.assertEqual(raider.db.combat_xp, 800)  # template override, not 300
+
+    def test_outpost_uses_balance_xp_default(self):
+        """A tier WITHOUT xp_reward falls back to balance xp_hq_destroy (300)."""
+        room = FakeRoom()
+        sentinel, hq = self._sentinel_hq(room, "outpost")  # no xp_reward
+        handler, bus, drops = _make_handler(owned={sentinel: [hq]})
+        raider = FakePlayer(oid=2, combat_xp=0)
+        bus.publish(BUILDING_DESTROYED, building=hq, attacker=raider, tile=room)
+        self.assertEqual(raider.db.combat_xp, 300)
+
+    def test_spawn_count_from_template_and_class_fallback(self):
+        """spawn_initial places each tier's spawn_count; a template without one
+        falls back to the balance count for its difficulty_class."""
+        spawner, npc, bf, room, _ = _make_spawner()
+        # Give the outpost an explicit spawn_count; leave fortress to fall back
+        # to fortress_count (=2, the balance default).
+        spawner.registry.base_templates["outpost"].spawn_count = 3
+        spawner.registry.base_templates["fortress"].spawn_count = None
+        spawned = spawner.spawn_initial("earth")
+        tiers = [s["tier"] for s in spawned]
+        self.assertEqual(tiers.count("outpost"), 3)   # explicit spawn_count
+        self.assertEqual(tiers.count("fortress"), 2)  # fortress_count fallback
+
+
+# -------------------------------------------------------------- #
+#  Staleness decay — disturbed bases refresh after outpost_stale_ticks
+# -------------------------------------------------------------- #
+
+def _make_stale_spawner(stale_ticks=100):
+    """Spawner with a mutable tick + an owned-entities provider for wipe tests."""
+    from world.event_bus import COMBAT_ACTION
+    registry = _make_registry()
+    registry.balance.outpost_stale_ticks = stale_ticks
+    event_bus = EventBus()
+    room = FakeRoom("earth")
+    npc_factory = FakeNpcFactory()
+    building_factory = FakeBuildingFactory()
+    clock = {"t": 0}
+    spawner = OutpostSpawnerSystem(
+        registry, event_bus,
+        npc_base_factory=npc_factory,
+        building_factory=building_factory,
+        terrain_provider=FakeTerrain(),
+        planet_rooms_provider=lambda: {"earth": room},
+        planet_registry=FakePlanetRegistry(),
+        rng=random.Random(1),
+        current_tick_func=lambda: clock["t"],
+        owned_entities_provider=lambda s: list(s.get_buildings()),
+    )
+    return spawner, npc_factory, room, event_bus, clock, COMBAT_ACTION
+
+
+class TestStalenessDecay(unittest.TestCase):
+
+    def test_pristine_base_has_no_timer(self):
+        spawner, npc, room, bus, clock, _ = _make_stale_spawner()
+        rec = spawner.spawn_base("earth", "outpost", coords=(10, 10))
+        self.assertEqual(rec["disturbed_at"], 0)
+        self.assertIsNone(spawner.ticks_remaining(rec, clock["t"]))
+
+    def test_combat_action_starts_timer_once(self):
+        spawner, npc, room, bus, clock, COMBAT_ACTION = _make_stale_spawner()
+        rec = spawner.spawn_base("earth", "outpost", coords=(10, 10))
+        guard = npc.guards[0]  # a base guard, owned by the sentinel
+        clock["t"] = 50
+        bus.publish(COMBAT_ACTION, target=guard, damage=5)
+        self.assertEqual(rec["disturbed_at"], 50)
+        # A later hit does NOT reset the clock — it runs from first disturbance.
+        clock["t"] = 90
+        bus.publish(COMBAT_ACTION, target=guard, damage=5)
+        self.assertEqual(rec["disturbed_at"], 50)
+
+    def test_zero_damage_does_not_start_timer(self):
+        spawner, npc, room, bus, clock, COMBAT_ACTION = _make_stale_spawner()
+        rec = spawner.spawn_base("earth", "outpost", coords=(10, 10))
+        bus.publish(COMBAT_ACTION, target=npc.guards[0], damage=0)
+        self.assertEqual(rec["disturbed_at"], 0)
+
+    def test_stale_base_wiped_and_regenerated(self):
+        spawner, npc, room, bus, clock, COMBAT_ACTION = _make_stale_spawner(
+            stale_ticks=100)
+        rec = spawner.spawn_base("earth", "outpost", coords=(10, 10))
+        old_sentinel = rec["sentinel"]
+        clock["t"] = 10
+        bus.publish(COMBAT_ACTION, target=npc.guards[0], damage=5)
+        # Before the deadline: nothing happens.
+        clock["t"] = 100
+        self.assertEqual(spawner.process_stale(clock["t"]), 0)
+        self.assertFalse(old_sentinel.deleted)
+        # After the deadline (10 + 100): wiped + a fresh base spawned.
+        clock["t"] = 111
+        self.assertEqual(spawner.process_stale(clock["t"]), 1)
+        self.assertTrue(old_sentinel.deleted)
+        self.assertEqual(len(spawner._active_bases), 1)  # the regenerated one
+        new_rec = next(iter(spawner._active_bases.values()))
+        self.assertEqual(new_rec["disturbed_at"], 0)  # fresh base is pristine
+
+    def test_undisturbed_base_never_wiped(self):
+        spawner, npc, room, bus, clock, _ = _make_stale_spawner(stale_ticks=100)
+        rec = spawner.spawn_base("earth", "outpost", coords=(10, 10))
+        clock["t"] = 100000  # far past any deadline
+        self.assertEqual(spawner.process_stale(clock["t"]), 0)
+        self.assertFalse(rec["sentinel"].deleted)
+
+    def test_stale_disabled_when_ticks_zero(self):
+        spawner, npc, room, bus, clock, COMBAT_ACTION = _make_stale_spawner(
+            stale_ticks=0)
+        rec = spawner.spawn_base("earth", "outpost", coords=(10, 10))
+        bus.publish(COMBAT_ACTION, target=npc.guards[0], damage=5)
+        clock["t"] = 999999
+        self.assertEqual(spawner.process_stale(clock["t"]), 0)
+
+    def test_bases_near_reports_type_and_countdown(self):
+        spawner, npc, room, bus, clock, COMBAT_ACTION = _make_stale_spawner(
+            stale_ticks=100)
+        spawner.spawn_base("earth", "outpost", coords=(10, 10))
+        # Pristine → within range, no countdown.
+        near = spawner.bases_near("earth", 12, 12, 20, clock["t"])
+        self.assertEqual(len(near), 1)
+        self.assertEqual(near[0]["name"], "Outpost")
+        self.assertIsNone(near[0]["ticks_remaining"])
+        # Out of range → not reported.
+        self.assertEqual(spawner.bases_near("earth", 40, 40, 20, clock["t"]), [])
+        # Disturbed → countdown surfaces.
+        clock["t"] = 10
+        bus.publish(COMBAT_ACTION, target=npc.guards[0], damage=5)
+        near = spawner.bases_near("earth", 12, 12, 20, clock["t"])
+        self.assertEqual(near[0]["ticks_remaining"], 100)  # 10 + 100 - 10
+
+    def test_proximity_refresh_wipes_expired(self):
+        spawner, npc, room, bus, clock, COMBAT_ACTION = _make_stale_spawner(
+            stale_ticks=100)
+        rec = spawner.spawn_base("earth", "outpost", coords=(10, 10))
+        key = rec["sentinel"].id
+        clock["t"] = 10
+        bus.publish(COMBAT_ACTION, target=npc.guards[0], damage=5)
+        self.assertTrue(spawner.is_active(key))
+        self.assertTrue(spawner.refresh_base_by_key(key))
+        self.assertTrue(rec["sentinel"].deleted)
+        self.assertFalse(spawner.is_active(key))  # old key gone
+
+
+class TestSpecVersionPurge(unittest.TestCase):
+
+    def test_purge_wipes_only_outdated(self):
+        spawner, npc, room, bus, clock, _ = _make_stale_spawner()
+        cur = spawner.spawn_base("earth", "outpost", coords=(10, 10))
+        # An old-spec sentinel (version 1) not tracked in _active_bases.
+        from world.utils import set_obj_attr
+        old = FakeSentinel("Old #1", room, "earth")
+        set_obj_attr(old, "base_spec_version", 1)
+        purged = spawner.purge_outdated_bases([cur["sentinel"], old])
+        self.assertEqual(purged, 1)
+        self.assertTrue(old.deleted)
+        self.assertFalse(cur["sentinel"].deleted)  # current-spec base survives
+
+
+class TestForgetDeadBases(unittest.TestCase):
+    """forget_dead_bases drops records whose sentinel was deleted externally
+    (e.g. by an admin obliterate) so no phantom base lingers in tracking."""
+
+    def test_forgets_base_whose_sentinel_was_deleted(self):
+        spawner, npc, room, bus, clock, _ = _make_stale_spawner()
+        base = spawner.spawn_base("earth", "outpost", coords=(10, 10))
+        self.assertEqual(len(spawner._active_bases), 1)
+        # Simulate an external delete of the HQ (obliterate): pk → None.
+        base["sentinel"].delete()
+        forgotten = spawner.forget_dead_bases()
+        self.assertEqual(forgotten, 1)
+        self.assertEqual(len(spawner._active_bases), 0)
+
+    def test_keeps_live_bases(self):
+        spawner, npc, room, bus, clock, _ = _make_stale_spawner()
+        spawner.spawn_base("earth", "outpost", coords=(10, 10))
+        forgotten = spawner.forget_dead_bases()
+        self.assertEqual(forgotten, 0)
+        self.assertEqual(len(spawner._active_bases), 1)
+
+
+class TestWipeBasesInArea(unittest.TestCase):
+    """wipe_bases_in_area removes bases whose HQ is in a box, as whole units —
+    the fix for 'obliterate left the base in @outpost list' (the Sentinel owner
+    isn't a tile actor, so a tile-only sweep never deleted it)."""
+
+    def test_wipes_base_in_box_and_deletes_sentinel(self):
+        spawner, npc, room, bus, clock, _ = _make_stale_spawner()
+        base = spawner.spawn_base("earth", "outpost", coords=(10, 10))
+        sentinel = base["sentinel"]
+        wiped = spawner.wipe_bases_in_area("earth", 8, 8, 12, 12)
+        self.assertEqual(wiped, 1)
+        self.assertEqual(len(spawner._active_bases), 0)  # untracked
+        self.assertTrue(sentinel.deleted)                # sentinel gone as a unit
+
+    def test_leaves_bases_outside_box(self):
+        spawner, npc, room, bus, clock, _ = _make_stale_spawner()
+        spawner.spawn_base("earth", "outpost", coords=(10, 10))
+        wiped = spawner.wipe_bases_in_area("earth", 100, 100, 110, 110)
+        self.assertEqual(wiped, 0)
+        self.assertEqual(len(spawner._active_bases), 1)
+
+    def test_does_not_respawn(self):
+        # Unlike the staleness refresh, an area clear must NOT re-seed.
+        spawner, npc, room, bus, clock, _ = _make_stale_spawner()
+        spawner.spawn_base("earth", "outpost", coords=(10, 10))
+        spawner.wipe_bases_in_area("earth", 8, 8, 12, 12)
+        self.assertEqual(len(spawner._active_bases), 0)
+        self.assertEqual(len(spawner._pending_respawns), 0)
+
+    def test_scoped_to_planet(self):
+        spawner, npc, room, bus, clock, _ = _make_stale_spawner()
+        spawner.spawn_base("earth", "outpost", coords=(10, 10))
+        # Same box, different planet → no match.
+        wiped = spawner.wipe_bases_in_area("mars", 8, 8, 12, 12)
+        self.assertEqual(wiped, 0)
+        self.assertEqual(len(spawner._active_bases), 1)

@@ -3892,6 +3892,17 @@ class TestPlayerPrompt(unittest.TestCase):
         self.assertEqual(len(caller._prompts), 1)
         self.assertIn("HP", caller._prompts[0])
 
+    def test_send_prompt_prints_visible_status_line(self):
+        # Raw telnet clients don't reliably render a bare prompt= OOB (no GA is
+        # sent under Evennia's default NOGOAHEAD), so the status is ALSO printed
+        # as a normal text line — that's what shows in the raw MUD output.
+        from mygame.commands.game_commands import send_prompt
+        caller = FakeCaller()
+        caller.db.hp = 40
+        caller.db.hp_max = 100
+        send_prompt(caller)
+        self.assertTrue(any("HP" in m and "40/100" in m for m in caller._messages))
+
     def test_send_prompt_also_emits_structured_status(self):
         # The webclient footer is refreshed from a structured prompt_status OOB
         # sent alongside the telnet text prompt, so it updates every command.
@@ -3931,6 +3942,88 @@ class TestPlayerPrompt(unittest.TestCase):
         cmd.at_post_cmd()
         self.assertEqual(len(caller._prompts), 1)
         self.assertEqual(len(caller._prompt_status), 1)
+
+
+# -------------------------------------------------------------- #
+#  NPC-base proximity readout on the map
+# -------------------------------------------------------------- #
+
+class _FakeSpawner:
+    """Minimal outpost_spawner stand-in for the proximity map notice."""
+    def __init__(self, bases):
+        self._bases = bases          # list of dicts from bases_near()
+        self._active = {b["key"] for b in bases}
+        self.refreshed = []
+
+    def bases_near(self, planet, x, y, radius, tick):
+        return list(self._bases)
+
+    def is_active(self, key):
+        return key in self._active
+
+    def refresh_base_by_key(self, key):
+        self.refreshed.append(key)
+        self._active.discard(key)
+        return True
+
+
+class TestBaseProximityNotice(unittest.TestCase):
+    def test_fmt_duration(self):
+        from mygame.commands.game_commands import _fmt_duration
+        self.assertEqual(_fmt_duration(90000), "25h 0m")
+        self.assertEqual(_fmt_duration(3660), "1h 1m")
+        self.assertEqual(_fmt_duration(90), "1m 30s")
+        self.assertEqual(_fmt_duration(5), "5s")
+        self.assertEqual(_fmt_duration(-10), "0s")
+
+    def _status(self, caller):
+        from mygame.commands.game_commands import _base_proximity_status
+        caller.db.coord_x = 10
+        caller.db.coord_y = 10
+        caller.db.coord_planet = "earth"
+        return _base_proximity_status(caller, "earth", 10, 10)
+
+    def test_intact_base_listed_no_countdown(self):
+        caller = FakeCaller(systems={"outpost_spawner": _FakeSpawner([
+            {"key": 1, "name": "Outpost", "x": 12, "y": 12, "dist": 2,
+             "disturbed": False, "ticks_remaining": None},
+        ])})
+        lines, payload = self._status(caller)
+        self.assertEqual(len(payload), 1)
+        self.assertEqual(payload[0]["state"], "intact")
+        self.assertTrue(any("Outpost" in ln and "intact" in ln for ln in lines))
+
+    def test_disturbed_base_shows_countdown(self):
+        caller = FakeCaller(systems={"outpost_spawner": _FakeSpawner([
+            {"key": 1, "name": "Fortress", "x": 12, "y": 12, "dist": 2,
+             "disturbed": True, "ticks_remaining": 3660},
+        ])})
+        lines, payload = self._status(caller)
+        self.assertEqual(payload[0]["state"], "disturbed")
+        self.assertEqual(payload[0]["remaining"], "1h 1m")
+        self.assertTrue(any("refreshes in 1h 1m" in ln for ln in lines))
+
+    def test_expired_base_wiped_and_announced(self):
+        spawner = _FakeSpawner([
+            {"key": 7, "name": "Citadel", "x": 11, "y": 11, "dist": 1,
+             "disturbed": True, "ticks_remaining": 0},
+        ])
+        caller = FakeCaller(systems={"outpost_spawner": spawner})
+        lines, payload = self._status(caller)
+        # Wiped on the spot, announced, and dropped from the readout.
+        self.assertEqual(spawner.refreshed, [7])
+        self.assertEqual(payload, [])
+        self.assertTrue(any("vanished" in m for m in caller._messages))
+
+    def test_watched_base_gone_is_announced(self):
+        # Player watched base #5 last render; it's now gone (background wipe).
+        spawner = _FakeSpawner([])  # nothing nearby now
+        spawner._active = set()     # #5 is no longer active
+        caller = FakeCaller(systems={"outpost_spawner": spawner})
+        caller.ndb._watched_bases = {5: "Stronghold"}
+        lines, payload = self._status(caller)
+        self.assertTrue(any("Stronghold" in m and "vanished" in m
+                            for m in caller._messages))
 
 
 if __name__ == "__main__":

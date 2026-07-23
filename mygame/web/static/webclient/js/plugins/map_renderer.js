@@ -510,6 +510,34 @@ let map_renderer_plugin = (function () {
             terrain: data.player.terrain, resource: data.player.resource,
             discovered_count: data.discovered_count,
         });
+        // Nearby NPC-base event banner (type + refresh countdown). Absent key =
+        // don't touch it (a non-map command); empty array = clear it.
+        if ("nearby_bases" in data) updateBaseBanner(data.nearby_bases);
+    }
+
+    // Banner above the map footer listing NPC bases within range: type + either
+    // "intact" or a refresh countdown, so a raider sees the timed event.
+    function updateBaseBanner(bases) {
+        var info = document.getElementById("map-info");
+        if (!info) return;
+        var banner = document.getElementById("map-base-banner");
+        if (!bases || !bases.length) {
+            if (banner) banner.remove();
+            return;
+        }
+        if (!banner) {
+            banner = document.createElement("div");
+            banner.id = "map-base-banner";
+            info.parentNode.insertBefore(banner, info);
+        }
+        var rows = bases.map(function (b) {
+            var right = (b.state === "disturbed")
+                ? "<span style='color:#ffb020'>refreshes in " + b.remaining + "</span>"
+                : "<span style='color:#7fd8a0'>intact</span>";
+            return "<span class='mb-name'>" + b.name + "</span> ("
+                + b.x + ", " + b.y + ") — " + right;
+        });
+        banner.innerHTML = "⚠ Nearby: " + rows.join(" &nbsp;|&nbsp; ");
     }
 
     // The last status shown in the footer, merged across map_update payloads and

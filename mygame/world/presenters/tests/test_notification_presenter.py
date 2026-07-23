@@ -606,3 +606,72 @@ class TestPresenterOwnershipBehavioral:
         msg = player.messages[0]
         assert "eliminated" in msg.lower()
         assert "Loot" not in msg
+
+
+class _StatusPlayer:
+    """Player double with a db/coords so status_prompt.push_status fires.
+
+    Records prompt_status= kwargs so we can assert a LIVE status push happened
+    (the webclient footer refresh) when a server-driven event changed HP.
+    """
+
+    def __init__(self):
+        self.db = type("DB", (), {
+            "hp": 55, "hp_max": 100, "level": 2,
+            "coord_x": 3, "coord_y": 4, "coord_planet": "terra",
+            "inside_building": False,
+        })()
+        self.ndb = type("NDB", (), {})()
+        self.messages = []
+        self.prompt_status = []
+
+    def msg(self, text=None, session=None, **kwargs):
+        if text is not None:
+            self.messages.append(text)
+        if "prompt_status" in kwargs:
+            self.prompt_status.append(kwargs["prompt_status"])
+
+
+class TestLiveStatusPush:
+    """Server-driven HP/level changes push a fresh status prompt so the
+    webclient footer (and prompt-aware telnet clients) update WITHOUT the player
+    typing anything — the "I'm being attacked but my HP doesn't move" fix."""
+
+    def test_attacked_pushes_live_status(self):
+        bus = EventBus()
+        player = _StatusPlayer()
+        NotificationPresenter(bus, player_notifier=EvenniaPlayerNotifier())
+        bus.publish(PLAYER_NOTIFICATION, player=player, kind="attacked",
+                    data={"attacker_name": "Guard", "weapon_name": "rifle",
+                          "damage": 12})
+        # The combat line AND a live status push (prompt_status OOB) both fire.
+        assert any("Combat" in m for m in player.messages)
+        assert len(player.prompt_status) == 1
+        assert player.prompt_status[0]["hp"] == 55
+
+    def test_healed_pushes_live_status(self):
+        bus = EventBus()
+        player = _StatusPlayer()
+        NotificationPresenter(bus, player_notifier=EvenniaPlayerNotifier())
+        bus.publish(PLAYER_NOTIFICATION, player=player, kind="healed",
+                    data={"amount": 20, "hp": 75, "hp_max": 100})
+        assert len(player.prompt_status) == 1
+
+    def test_rank_level_up_pushes_live_status(self):
+        bus = EventBus()
+        player = _StatusPlayer()
+        NotificationPresenter(bus, player_notifier=EvenniaPlayerNotifier())
+        bus.publish(PLAYER_NOTIFICATION, player=player, kind="rank_level_up",
+                    data={"level": 3, "rank_name": "Private", "sub": 1})
+        assert len(player.prompt_status) == 1
+
+    def test_non_status_kind_does_not_push(self):
+        # A notification that doesn't change the recipient's own HP (e.g. their
+        # BUILDING was hit) must NOT trigger a personal status push.
+        bus = EventBus()
+        player = _StatusPlayer()
+        NotificationPresenter(bus, player_notifier=EvenniaPlayerNotifier())
+        bus.publish(PLAYER_NOTIFICATION, player=player, kind="building_attacked",
+                    data={"building_name": "HQ", "attacker_name": "Guard",
+                          "weapon_name": "rifle", "damage": 8})
+        assert player.prompt_status == []

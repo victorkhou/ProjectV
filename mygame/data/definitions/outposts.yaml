@@ -3,35 +3,65 @@
 # Data-driven layouts for the Outpost_Spawner. Each template names a tier and
 # describes the buildings (type + tile offset from the HQ + optional HP/level),
 # the guards (role + weapon_type + count), and the loot dropped when the base's
-# HQ is destroyed. Adding a new tier (e.g. "citadel") is a YAML edit — no code
-# change (Requirement 8.5).
+# HQ is destroyed. Adding a new tier is a YAML edit — no code change (Req 8.5).
 #
-# building.type is a BuildingDef abbreviation (HQ, WL, TU, AR, BK, ...).
+# Four difficulty tiers, escalating threat (each may exist on every planet):
+#   outpost   — Easy outpost:      HQ + 1 turret,           1 guard
+#   stronghold— Difficult outpost: HQ + 1-2 turrets, walls, 1 guard
+#   fortress  — Easy fortress:     HQ + turrets,     walls, 2 guards
+#   citadel   — Difficult fortress:HQ + turrets + shield,  walls, 2-4 guards
+#
+# building.type is a BuildingDef abbreviation (HQ, WL, TU, SG, ...).
 # offset is [dx, dy] relative to the HQ tile (which is always [0, 0]).
-# guard.role is "guard" (melee) or "soldier" (ranged) — GuardCombatSystem reads
-# the role; damage/range come from BalanceConfig (guard_* fields).
+# guard.role is "guard" or "soldier" — cosmetic/loot-naming only. Every guard is
+# a HYBRID: GuardCombatSystem picks the weapon by DISTANCE, not role — a melee
+# strike on the raider's own tile, a gun (guard_ranged_range/guard_ranged_damage)
+# at a raider standing off. weapon_type is retained for display but no longer
+# gates whether a guard can shoot.
 #
-# Loot supports both fixed amounts (N) and ranges ([min, max]) drawn uniformly.
-# gear_pool / rare_pool are item keys from items.yaml; gear_drop_chance and
-# rare_gear_chance override the balance.yaml defaults per template.
-# guard_loot_chance / guard_loot_amount control per-guard-kill mini-drops.
+# spawn_count sets how many of this tier spawn per planet (omit → the balance
+# default for the difficulty_class). difficulty_class ("outpost"/"fortress")
+# groups a tier for the deed award + guard-HP/spawn-count fallbacks, so several
+# difficulty tiers share one base class.
+#
+# Turrets/Walls/Shield Generators on an NPC base are ownership-generic: turrets
+# auto-fire on raiders, walls block movement + ranged LOS, and a Shield Generator
+# projects a regenerating shield over the covered buildings — all via the same
+# systems a player base uses (the Sentinel owner has an active HQ).
+#
+# Rewards scale with difficulty. Knobs (all optional; sensible balance defaults):
+#   xp_reward         — XP for the HQ kill (overrides balance xp_hq_destroy).
+#   loot              — resources dropped: fixed N or [min, max] uniform range.
+#   gear_rolls        — how many independent (gear + rare) roll ROUNDS to make;
+#                       >1 lets a fortress rain several upgrades from one wipe.
+#   gear_drop_chance / rare_gear_chance — per-round drop odds (override balance).
+#   gear_pool / rare_pool — item keys from items.yaml eligible for each roll.
+#   guard_loot_chance / guard_loot_amount — per-guard-kill mini-drops.
+# The easy outpost is a modest payout; the citadel is a jackpot — tremendous
+# resources plus several rolls at futuristic-tier gear (plasma_rifle, power_armor,
+# psi_blade, blast_launcher, jetpack).
 
+# ── Easy outpost — a light picket: one guard, one turret, no walls. ──
 outpost:
   display_name: Outpost
+  difficulty_class: outpost
+  spawn_count: 4
   buildings:
     - type: HQ
       offset: [0, 0]
       hp: 200
-    - type: WL
+    - type: TU
       offset: [0, 1]
-      hp: 300
+      hp: 250
   guards:
     - role: guard
       weapon_type: melee
-      count: 2
+      count: 1
+  xp_reward: 150            # modest — an easy picket
   loot:
     Iron: [20, 40]
     Stone: [10, 25]
+  gear_rolls: 1
   guard_loot_chance: 0.4
   guard_loot_amount: [5, 15]
   gear_drop_chance: 0.15
@@ -43,11 +73,93 @@ outpost:
   rare_pool:
     - sniper_rifle
 
-fortress:
-  display_name: Fortress
+# ── Difficult outpost — walled, twin turrets covering the approach. ──
+stronghold:
+  display_name: Stronghold
+  difficulty_class: outpost
+  spawn_count: 3
   buildings:
     - type: HQ
       offset: [0, 0]
+      hp: 300
+    - type: TU
+      offset: [0, 1]
+      hp: 300
+    - type: TU
+      offset: [0, -1]
+      hp: 300
+    # A wall ring around the HQ+turret core (the 8 tiles around the HQ that the
+    # turrets don't occupy), forcing raiders to breach before reaching the HQ.
+    - type: WL
+      offset: [-1, 0]
+      hp: 400
+    - type: WL
+      offset: [1, 0]
+      hp: 400
+    - type: WL
+      offset: [-1, 1]
+      hp: 400
+    - type: WL
+      offset: [1, 1]
+      hp: 400
+    - type: WL
+      offset: [-1, -1]
+      hp: 400
+    - type: WL
+      offset: [1, -1]
+      hp: 400
+  guards:
+    - role: guard
+      weapon_type: melee
+      count: 1
+  xp_reward: 350            # walled + twin turrets — a real fight
+  loot:
+    Iron: [50, 90]
+    Stone: [35, 65]
+    Energy: [15, 35]
+  gear_rolls: 2             # two roll rounds — better odds of an upgrade
+  guard_loot_chance: 0.45
+  guard_loot_amount: [8, 18]
+  gear_drop_chance: 0.25
+  rare_gear_chance: 0.07
+  gear_pool:
+    - combat_knife
+    - combat_helmet
+    - kevlar_vest
+    - combat_gloves
+    - combat_greaves
+    - scope
+  rare_pool:
+    - sniper_rifle
+    - assault_rifle
+
+# ── Easy fortress — a walled compound with a turret line and two guards. ──
+fortress:
+  display_name: Fortress
+  difficulty_class: fortress
+  spawn_count: 2
+  buildings:
+    - type: HQ
+      offset: [0, 0]
+      hp: 600
+    - type: TU
+      offset: [0, 2]
+      hp: 400
+    - type: TU
+      offset: [-2, 0]
+      hp: 400
+    - type: TU
+      offset: [2, 0]
+      hp: 400
+    # Wall ring one tile out from the HQ (the inner 3x3 perimeter).
+    - type: WL
+      offset: [-1, -1]
+      hp: 600
+    - type: WL
+      offset: [0, -1]
+      hp: 600
+    - type: WL
+      offset: [1, -1]
       hp: 600
     - type: WL
       offset: [-1, 0]
@@ -55,32 +167,128 @@ fortress:
     - type: WL
       offset: [1, 0]
       hp: 600
-    - type: TU
+    - type: WL
+      offset: [-1, 1]
+      hp: 600
+    - type: WL
       offset: [0, 1]
-      hp: 400
-    - type: TU
-      offset: [0, -1]
-      hp: 400
+      hp: 600
+    - type: WL
+      offset: [1, 1]
+      hp: 600
   guards:
     - role: guard
       weapon_type: melee
       count: 2
-    - role: soldier
-      weapon_type: ranged
-      count: 3
+  xp_reward: 800            # a walled compound — a major objective
   loot:
-    Iron: [60, 120]
-    Stone: [50, 100]
-    Energy: [30, 60]
+    Iron: [120, 200]
+    Stone: [100, 170]
+    Energy: [60, 110]
+    Circuits: [15, 40]
+  gear_rolls: 3             # three rounds — expect multiple upgrades
   guard_loot_chance: 0.5
-  guard_loot_amount: [8, 20]
-  gear_drop_chance: 0.30
-  rare_gear_chance: 0.08
+  guard_loot_amount: [10, 24]
+  gear_drop_chance: 0.40
+  rare_gear_chance: 0.15
   gear_pool:
     - assault_rifle
+    - sniper_rifle
     - combat_helmet
     - kevlar_vest
     - combat_gloves
+    - combat_greaves
+    - scope
   rare_pool:
     - plasma_rifle
+    - power_armor
+    - jetpack
+
+# ── Difficult fortress — shielded, heavily walled, a full garrison. ──
+citadel:
+  display_name: Citadel
+  difficulty_class: fortress
+  spawn_count: 1
+  buildings:
+    - type: HQ
+      offset: [0, 0]
+      hp: 900
+    # Shield Generator adjacent to the HQ so its coverage blankets the core;
+    # the shield must be burned down before the buildings under it take damage.
+    - type: SG
+      offset: [0, 1]
+      hp: 400
+      level: 2
+    - type: TU
+      offset: [0, -2]
+      hp: 500
+    - type: TU
+      offset: [-2, 0]
+      hp: 500
+    - type: TU
+      offset: [2, 0]
+      hp: 500
+    - type: TU
+      offset: [2, 2]
+      hp: 500
+    - type: TU
+      offset: [-2, 2]
+      hp: 500
+    # Double-layer wall perimeter around the inner 3x3 core.
+    - type: WL
+      offset: [-1, -1]
+      hp: 800
+    - type: WL
+      offset: [0, -1]
+      hp: 800
+    - type: WL
+      offset: [1, -1]
+      hp: 800
+    - type: WL
+      offset: [-1, 0]
+      hp: 800
+    - type: WL
+      offset: [1, 0]
+      hp: 800
+    - type: WL
+      offset: [-1, 1]
+      hp: 800
+    - type: WL
+      offset: [1, 1]
+      hp: 800
+  guards:
+    - role: soldier
+      weapon_type: ranged
+      count: 2
+    - role: guard
+      weapon_type: melee
+      count: 2
+  xp_reward: 2000           # the apex PvE objective — a huge XP payout
+  loot:
+    Iron: [300, 500]
+    Stone: [250, 420]
+    Energy: [150, 280]
+    Circuits: [80, 160]
+    Nexium: [10, 30]
+  gear_rolls: 5             # five rounds — a raid nets a pile of upgrades
+  guard_loot_chance: 0.6
+  guard_loot_amount: [15, 35]
+  gear_drop_chance: 0.55
+  rare_gear_chance: 0.30    # each round is a strong shot at futuristic gear
+  gear_pool:
+    - assault_rifle
+    - sniper_rifle
+    - plasma_rifle
+    - power_armor
+    - combat_helmet
+    - kevlar_vest
+    - combat_gloves
+    - combat_greaves
+    - scope
+  rare_pool:
+    - plasma_rifle
+    - power_armor
+    - psi_blade
+    - blast_launcher
+    - incendiary_rifle
     - jetpack

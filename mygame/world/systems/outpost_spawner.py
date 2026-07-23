@@ -41,6 +41,17 @@ _RESPAWN_BACKOFF_DIVISOR = 4
 #: PlanetRoom attribute key under which pending respawns for that planet are
 #: persisted, so a cleared base still respawns after a server restart (Req 7.6).
 _PENDING_ATTR = "npc_base_pending_respawns"
+#: Current NPC-base spec version. Stamped on every spawned sentinel; a startup
+#: sweep wipes + re-seeds any base stamped with an OLDER version, so a template
+#: overhaul (new tiers/layouts/rewards) — OR a new placement rule — automatically
+#: clears stale-spec bases from live worlds. BUMP THIS whenever outposts.yaml
+#: changes materially or placement constraints change.
+#: v3: bases must sit on buildable terrain (no rivers/hazards); re-seed to
+#: relocate any base placed on treacherous terrain under the old rule.
+_BASE_SPEC_VERSION = 3
+#: Chebyshev range (tiles) at which a player is shown a nearby base's status on
+#: their map (type + staleness countdown) — the "you're engaging an event" cue.
+BASE_PROXIMITY_RADIUS = 15
 
 
 class OutpostSpawnerSystem(BaseSystem):
@@ -73,6 +84,7 @@ class OutpostSpawnerSystem(BaseSystem):
         planet_registry: Any = None,
         rng: "random.Random | None" = None,
         current_tick_func: Callable[[], int] | None = None,
+        owned_entities_provider: Callable[[Any], list] | None = None,
     ) -> None:
         super().__init__(registry, event_bus)
         self._npc_factory = npc_base_factory
@@ -82,42 +94,62 @@ class OutpostSpawnerSystem(BaseSystem):
         self._planet_registry = planet_registry
         self._rng = rng or random.Random()
         self._current_tick_func = current_tick_func or (lambda: 0)
+        #: Enumerate every building + guard a sentinel owns (for the stale wipe).
+        #: Shared with BaseEliminationHandler at the composition root; None in
+        #: isolated tests that don't exercise the wipe.
+        self._owned_entities_provider = owned_entities_provider
         #: Active bases: sentinel-id -> {"sentinel", "tier", "planet", "x", "y"}.
         self._active_bases: dict[Any, dict] = {}
         #: Pending respawns: list of {"tier", "planet", "respawn_at"} (tick).
         self._pending_respawns: list[dict] = []
         # Schedule a respawn whenever a base is eliminated (decoupled from the
-        # elimination handler — it publishes, we react).
+        # elimination handler — it publishes, we react). Also watch COMBAT_ACTION
+        # to start a base's staleness timer the moment it's first disturbed.
         if event_bus is not None:
-            from world.event_bus import BASE_ELIMINATED
+            from world.event_bus import BASE_ELIMINATED, COMBAT_ACTION
             event_bus.subscribe(BASE_ELIMINATED, self.on_base_eliminated)
+            event_bus.subscribe(COMBAT_ACTION, self.on_combat_action)
 
     # ------------------------------------------------------------------ #
     #  Initial placement
     # ------------------------------------------------------------------ #
 
     def spawn_initial(self, planet: str) -> list:
-        """Place ``outpost_count`` outposts + ``fortress_count`` fortresses.
+        """Place every configured NPC-base tier per planet at server start.
 
-        Called once per planet at server start. Silently places as many as fit;
-        a base that can't find a valid spot after the attempt cap is skipped
-        (logged), so a crowded planet never blocks startup.
+        Iterates ALL loaded templates (not just the two legacy tiers), so adding
+        a difficulty tier is a pure outposts.yaml edit. Each tier's count comes
+        from its ``spawn_count``; a template that omits it falls back to the
+        balance count for its ``difficulty_class`` (``outpost_count`` /
+        ``fortress_count``). Silently places as many as fit; a base that can't
+        find a valid spot after the attempt cap is skipped (logged), so a crowded
+        planet never blocks startup.
 
         Returns the list of spawned base records.
         """
-        bal = self.registry.balance
         spawned = []
-        plan = (
-            [("outpost", bal.outpost_count)]
-            + [("fortress", bal.fortress_count)]
-        )
-        for tier, count in plan:
+        # Deterministic order (sorted by tier key) so placement is reproducible
+        # under a seeded RNG in tests, regardless of dict insertion order.
+        for tier in sorted(self.registry.base_templates.keys()):
+            template = self.registry.base_templates[tier]
+            count = self._spawn_count(template)
             for _ in range(max(0, count)):
                 base = self.spawn_base(planet, tier)
                 if base is not None:
                     spawned.append(base)
         logger.info("Spawned %d NPC base(s) on planet %s.", len(spawned), planet)
         return spawned
+
+    def _spawn_count(self, template: Any) -> int:
+        """How many of *template* to place: its ``spawn_count``, else the class
+        balance default (fortress-class → ``fortress_count``, else
+        ``outpost_count``)."""
+        if getattr(template, "spawn_count", None) is not None:
+            return int(template.spawn_count)
+        bal = self.registry.balance
+        if getattr(template, "difficulty_class", "outpost") == "fortress":
+            return bal.fortress_count
+        return bal.outpost_count
 
     # ------------------------------------------------------------------ #
     #  Spawn one base
@@ -190,7 +222,7 @@ class OutpostSpawnerSystem(BaseSystem):
 
         # 3. Guards at the HQ tile. A running 1-based index across all guard
         # groups makes each guard uniquely named (Guard-1, Guard-2, Soldier-3…).
-        guard_hp = self._guard_hp(tier, planet)
+        guard_hp = self._guard_hp(template, planet)
         guard_index = 0
         for g in template.guards:
             hp = g.hp if g.hp is not None else guard_hp
@@ -200,9 +232,17 @@ class OutpostSpawnerSystem(BaseSystem):
                     sentinel, room, hx, hy, g.role, hp, index=guard_index
                 )
 
+        # A fresh base is undisturbed: no staleness timer runs until it's first
+        # damaged/loses a guard (see on_combat_action). disturbed_at == 0 means
+        # "pristine". Persisted on the sentinel so the timer survives a restart.
+        set_obj_attr(sentinel, "base_disturbed_at", 0)
+        # Stamp the spec version so a later template overhaul can identify and
+        # purge stale-spec bases (see purge_outdated_bases).
+        set_obj_attr(sentinel, "base_spec_version", _BASE_SPEC_VERSION)
+
         record = {
             "sentinel": sentinel, "tier": tier, "planet": planet,
-            "x": hx, "y": hy,
+            "x": hx, "y": hy, "disturbed_at": 0,
         }
         self._active_bases[self._base_key(sentinel)] = record
         logger.info("Spawned %s base at (%d, %d) on %s.", tier, hx, hy, planet)
@@ -236,6 +276,249 @@ class OutpostSpawnerSystem(BaseSystem):
         # Persist so the pending respawn survives a server restart (Req 7.6) —
         # without this a base cleared before its cooldown would never come back.
         self._save_state()
+
+    # ------------------------------------------------------------------ #
+    #  Staleness decay — refresh partially-raided bases
+    # ------------------------------------------------------------------ #
+
+    def on_combat_action(
+        self, event_name: str = "", target: Any = None, damage: Any = 0, **kwargs
+    ) -> None:
+        """Start a base's staleness timer the first time it is disturbed.
+
+        A base is "disturbed" when one of its buildings takes damage or one of
+        its guards is attacked — both surface here as a ``COMBAT_ACTION`` whose
+        ``target`` is owned by the base's Sentinel. On the FIRST such hit we
+        stamp ``disturbed_at`` (the current tick) on the base record and the
+        sentinel; subsequent hits don't reset it, so the 24h clock runs from the
+        first disturbance. A pristine, untouched base never starts the timer.
+
+        Best-effort and cheap: a hit on anything not owned by a tracked,
+        still-pristine sentinel is ignored. Never raises into the combat path.
+        """
+        try:
+            if target is None or not damage or int(damage) <= 0:
+                return
+            sentinel = get_obj_attr(target, "owner")
+            if sentinel is None or not get_obj_attr(sentinel, "is_sentinel", False):
+                return
+            record = self._active_bases.get(self._base_key(sentinel))
+            if record is None or record.get("disturbed_at"):
+                return  # untracked, or already ticking — don't reset the clock
+            now = self._current_tick_func()
+            record["disturbed_at"] = now
+            set_obj_attr(sentinel, "base_disturbed_at", now)
+            logger.info(
+                "NPC base %s disturbed at tick %d — staleness timer started.",
+                getattr(sentinel, "key", "?"), now,
+            )
+        except Exception:  # noqa: BLE001 - staleness tracking never breaks combat
+            logger.debug("on_combat_action staleness stamp failed", exc_info=True)
+
+    def process_stale(self, tick_number: int) -> int:
+        """Wipe + regenerate any DISTURBED base past its staleness deadline.
+
+        Wired as the ``"outpost_stale"`` tick step. A base whose ``disturbed_at``
+        is more than ``outpost_stale_ticks`` old — i.e. it was damaged but not
+        fully cleared within ~24h — is deleted and a fresh base of the same tier
+        is spawned (at a new valid location), keeping partially-raided bases from
+        sitting stale. Pristine bases (``disturbed_at == 0``) are never touched.
+        Returns the number of bases refreshed this tick.
+        """
+        stale_ticks = self.registry.balance.outpost_stale_ticks
+        if stale_ticks <= 0 or not self._active_bases:
+            return 0
+        # Snapshot: the wipe mutates _active_bases (pops the sentinel key).
+        due = [
+            rec for rec in list(self._active_bases.values())
+            if rec.get("disturbed_at")
+            and tick_number - rec["disturbed_at"] >= stale_ticks
+        ]
+        refreshed = 0
+        for rec in due:
+            tier, planet = rec["tier"], rec["planet"]
+            self._wipe_base(rec["sentinel"])
+            logger.info(
+                "NPC base (%s on %s) went stale — wiped and regenerating.",
+                tier, planet,
+            )
+            if self.spawn_base(planet, tier) is not None:
+                refreshed += 1
+        if refreshed:
+            self._save_state()
+        return refreshed
+
+    def ticks_remaining(self, record: dict, tick_number: int) -> int | None:
+        """Ticks until *record*'s base goes stale, or None if not yet disturbed.
+
+        ``None`` = pristine (no timer running). A value <= 0 means the deadline
+        has passed (it will be wiped by the next ``process_stale``). Returns None
+        when the staleness decay is disabled (``outpost_stale_ticks`` <= 0).
+        """
+        stale_ticks = self.registry.balance.outpost_stale_ticks
+        if stale_ticks <= 0:
+            return None
+        disturbed_at = record.get("disturbed_at") or 0
+        if disturbed_at <= 0:
+            return None
+        return disturbed_at + stale_ticks - tick_number
+
+    def bases_near(
+        self, planet: Any, x: int, y: int, radius: int, tick_number: int
+    ) -> list[dict]:
+        """Return status for each active base HQ within *radius* of (x, y).
+
+        Chebyshev distance on the same planet. Each entry:
+        ``{key, tier, name, x, y, dist, disturbed, ticks_remaining}`` — where
+        ``name`` is the tier's display name and ``ticks_remaining`` is None for a
+        pristine (undisturbed) base. Sorted nearest-first. Powers the player's
+        map proximity readout (see the map command). Pure read — never mutates.
+        """
+        from world.utils import chebyshev_distance
+        out = []
+        for key, rec in self._active_bases.items():
+            if rec.get("planet") != planet:
+                continue
+            bx, by = rec.get("x"), rec.get("y")
+            if bx is None or by is None:
+                continue
+            dist = chebyshev_distance(int(x), int(y), int(bx), int(by))
+            if dist > radius:
+                continue
+            template = self.registry.get_base_template(rec.get("tier"))
+            name = getattr(template, "display_name", None) or str(
+                rec.get("tier", "Base")
+            ).title()
+            out.append({
+                "key": key, "tier": rec.get("tier"), "name": name,
+                "x": int(bx), "y": int(by), "dist": dist,
+                "disturbed": bool(rec.get("disturbed_at")),
+                "ticks_remaining": self.ticks_remaining(rec, tick_number),
+            })
+        out.sort(key=lambda b: b["dist"])
+        return out
+
+    def is_active(self, key: Any) -> bool:
+        """Return True if *key* still identifies a tracked, live base.
+
+        Lets the map proximity readout tell "the player walked away" (base still
+        active, just out of range) from "the base was wiped" (key gone) so it
+        only announces a disappearance for the latter.
+        """
+        return key in self._active_bases
+
+    def forget_dead_bases(self) -> int:
+        """Drop tracked bases whose sentinel HQ was deleted out from under us.
+
+        A base is normally removed via ``_wipe_base`` / the elimination path,
+        which pops ``_active_bases`` as it deletes. But an EXTERNAL delete — an
+        admin ``obliterate`` sweeping an HQ, say — removes the sentinel without
+        telling this system, leaving a stale record that would (a) block
+        placement near the now-empty tile via the separation check and (b) drive
+        a phantom proximity readout. This reconciles: any record whose sentinel
+        is gone (``pk`` is None, or it no longer reports as a sentinel) is
+        dropped. Returns the number forgotten. Safe to call anytime; never
+        raises. Persists state if anything changed.
+        """
+        dead = []
+        for key, rec in list(self._active_bases.items()):
+            sentinel = rec.get("sentinel")
+            alive = (
+                sentinel is not None
+                and getattr(sentinel, "pk", None) is not None
+                and bool(get_obj_attr(sentinel, "is_sentinel", False))
+            )
+            if not alive:
+                dead.append(key)
+        for key in dead:
+            self._active_bases.pop(key, None)
+        if dead:
+            try:
+                self._save_state()
+            except Exception:  # noqa: BLE001 - reconcile must not raise
+                logger.exception("forget_dead_bases: state save failed")
+        return len(dead)
+
+    def wipe_bases_in_area(
+        self, planet: Any, x1: int, y1: int, x2: int, y2: int
+    ) -> int:
+        """Wipe (no respawn) every tracked base whose HQ tile lies in the box.
+
+        The base owner — the Sentinel — carries the base record but is NOT a map
+        actor (no coord_x/coord_y, not in the coordinate index), so an area sweep
+        that only walks tiles (e.g. admin ``obliterate``) deletes a base's
+        buildings/guards yet never the Sentinel — leaving a phantom base in
+        tracking + the ``@outpost list``. Callers that clear a region invoke this
+        FIRST so each affected base is removed as a UNIT (Sentinel + all owned
+        entities via ``_wipe_base``) and untracked. Range is the base's stored HQ
+        tile (``rec['x']``/``rec['y']``) against the inclusive box. Returns the
+        number of bases wiped. Unlike the staleness/proximity refresh this does
+        NOT respawn — an admin clearing a region wants it emptied, not re-seeded.
+        """
+        victims = [
+            rec for rec in self._active_bases.values()
+            if rec.get("planet") == planet
+            and rec.get("x") is not None and rec.get("y") is not None
+            and x1 <= int(rec["x"]) <= x2 and y1 <= int(rec["y"]) <= y2
+        ]
+        for rec in victims:
+            self._wipe_base(rec["sentinel"])  # deletes sentinel + owned, untracks
+            logger.info(
+                "NPC base (%s on %s at %s,%s) wiped by area clear.",
+                rec.get("tier"), planet, rec.get("x"), rec.get("y"),
+            )
+        if victims:
+            self._save_state()
+        return len(victims)
+
+    def refresh_base_by_key(self, key: Any) -> bool:
+        """Wipe + regenerate the tracked base identified by *key* (its sentinel
+        id). Used by the proximity path so a base whose timer expired while a
+        player watched is refreshed on the spot. Returns True if a base was
+        wiped. No-op (False) for an unknown key.
+        """
+        rec = self._active_bases.get(key)
+        if rec is None:
+            return False
+        tier, planet = rec["tier"], rec["planet"]
+        self._wipe_base(rec["sentinel"])
+        logger.info(
+            "NPC base (%s on %s) refreshed on proximity (timer expired).",
+            tier, planet,
+        )
+        self.spawn_base(planet, tier)
+        self._save_state()
+        return True
+
+    def _wipe_base(self, sentinel: Any) -> None:
+        """Delete a base's sentinel + all its buildings/guards, and untrack it.
+
+        Reuses the shared owned-entities enumeration (buildings via
+        ``get_buildings`` + guards via the owner tag). Unlike the elimination
+        path this awards no XP/loot and publishes no BASE_ELIMINATED — it's a
+        silent housekeeping refresh, not a player kill. Best-effort per entity so
+        one bad delete never aborts the sweep.
+        """
+        self._active_bases.pop(self._base_key(sentinel), None)
+        entities = []
+        if self._owned_entities_provider is not None:
+            try:
+                entities = list(self._owned_entities_provider(sentinel) or [])
+            except Exception:  # noqa: BLE001
+                logger.exception("Stale wipe: owned-entity enumeration failed")
+        for ent in entities:
+            self._safe_delete(ent)
+        self._safe_delete(sentinel)
+
+    @staticmethod
+    def _safe_delete(entity: Any) -> None:
+        """Delete *entity* if it supports it; never raise into the sweep."""
+        if entity is not None and hasattr(entity, "delete"):
+            try:
+                entity.delete()
+            except Exception:  # noqa: BLE001
+                logger.exception("Stale wipe: delete failed for %s",
+                                 getattr(entity, "key", "?"))
 
     def process_respawns(self, tick_number: int) -> int:
         """Spawn any pending respawns whose cooldown has elapsed.
@@ -294,6 +577,10 @@ class OutpostSpawnerSystem(BaseSystem):
                     "planet": planet,
                     "x": get_obj_attr(s, "base_x"),
                     "y": get_obj_attr(s, "base_y"),
+                    # Restore the staleness clock — it persists on the sentinel,
+                    # so a base disturbed before the reboot keeps ticking (a
+                    # crash can't reset the 24h refresh timer).
+                    "disturbed_at": get_obj_attr(s, "base_disturbed_at", 0) or 0,
                 }
         except Exception:  # noqa: BLE001 - a bad sentinel must not abort startup
             logger.exception("rebuild_from_world: active-base rebuild failed")
@@ -313,6 +600,37 @@ class OutpostSpawnerSystem(BaseSystem):
                         })
         except Exception:  # noqa: BLE001
             logger.exception("rebuild_from_world: pending-respawn reload failed")
+
+    def purge_outdated_bases(self, sentinels: list | None = None) -> int:
+        """Wipe every base whose stamped spec version is older than the current.
+
+        A one-shot startup migration: when ``_BASE_SPEC_VERSION`` is bumped (a
+        template overhaul — new tiers, layouts, or rewards), bases spawned under
+        the old spec are deleted here so the next re-seed replaces them with
+        current-spec bases. A base already at the current version is left alone,
+        so this is idempotent across restarts (it only acts the first boot after
+        a bump). Returns the number of bases purged. Never raises.
+
+        Call BEFORE ``rebuild_from_world`` at startup so purged sentinels aren't
+        re-tracked, and so their planets read as un-seeded and get re-seeded.
+        """
+        purged = 0
+        for s in list(sentinels or ()):
+            try:
+                version = get_obj_attr(s, "base_spec_version", 0) or 0
+                if version >= _BASE_SPEC_VERSION:
+                    continue
+                self._wipe_base(s)
+                purged += 1
+            except Exception:  # noqa: BLE001 - one bad sentinel never aborts startup
+                logger.exception("purge_outdated_bases: wipe failed for %s",
+                                 getattr(s, "key", "?"))
+        if purged:
+            logger.info(
+                "Purged %d outdated NPC base(s) (spec < v%d) for regeneration.",
+                purged, _BASE_SPEC_VERSION,
+            )
+        return purged
 
     def _save_state(self) -> None:
         """Persist pending respawns onto their PlanetRoom (Req 7.6).
@@ -396,7 +714,7 @@ class OutpostSpawnerSystem(BaseSystem):
             x, y = hx + dx, hy + dy
             if not self._coord_valid(planet, x, y):
                 return False
-            if not self._terrain_passable(planet, x, y):
+            if not self._terrain_buildable(planet, x, y):
                 return False
             if self._tile_occupied(room, x, y):
                 return False
@@ -410,8 +728,17 @@ class OutpostSpawnerSystem(BaseSystem):
         except Exception:  # noqa: BLE001 - unknown planet → invalid
             return False
 
-    def _terrain_passable(self, planet: str, x: int, y: int) -> bool:
-        """True if the tile's terrain is passable (buildable)."""
+    def _terrain_buildable(self, planet: str, x: int, y: int) -> bool:
+        """True if a base may occupy the tile — passable AND buildable terrain.
+
+        Mirrors the player build rule (BuildingSystem._validate_buildable): a
+        tile whose TerrainDef sets ``buildable: false`` (River, Toxic_Waste,
+        Lava_Flow, …) is treacherous and hosts no buildings, and an impassable
+        tile (Void) can't hold one either. So NPC bases never spawn on a river
+        or other hazard the way a player could never build there. Unresolvable
+        terrain or a missing provider fails open (don't block placement) so
+        legacy rooms/test fakes are unaffected.
+        """
         if self._terrain is None:
             return True
         try:
@@ -424,7 +751,9 @@ class OutpostSpawnerSystem(BaseSystem):
             tdef = self.registry.get_terrain(terrain_type)
         except (KeyError, AttributeError):
             return False
-        return bool(getattr(tdef, "passable", True))
+        return bool(getattr(tdef, "passable", True)) and bool(
+            getattr(tdef, "buildable", True)
+        )
 
     @staticmethod
     def _tile_occupied(room: Any, x: int, y: int) -> bool:
@@ -454,16 +783,21 @@ class OutpostSpawnerSystem(BaseSystem):
         except Exception:  # noqa: BLE001
             return None
 
-    def _guard_hp(self, tier: str, planet: str | None = None) -> int:
-        """Guard HP for *tier*, scaled by the planet's ``npc_scale`` (Phase 4).
+    def _guard_hp(self, template: Any, planet: str | None = None) -> int:
+        """Default guard HP for *template*, scaled by the planet's ``npc_scale``.
 
-        The scale is data-driven from planets.yaml via the injected
-        PlanetRegistry (shared ``world.utils.planet_scale`` lookup) — adding a
-        planet needs no code change. Unknown planets scale 1.0.
+        The base HP is chosen by the template's ``difficulty_class``
+        (fortress-class → ``fortress_guard_hp``, else ``outpost_guard_hp``), so a
+        new difficulty tier inherits sensible guard HP just by declaring its
+        class. A per-guard ``hp`` in the template still overrides this. The scale
+        is data-driven from planets.yaml via the injected PlanetRegistry (shared
+        ``world.utils.planet_scale`` lookup) — adding a planet needs no code
+        change. Unknown planets scale 1.0.
         """
         from world.utils import planet_scale
         bal = self.registry.balance
-        base = bal.fortress_guard_hp if tier == "fortress" else bal.outpost_guard_hp
+        cls = getattr(template, "difficulty_class", "outpost")
+        base = bal.fortress_guard_hp if cls == "fortress" else bal.outpost_guard_hp
         scale = planet_scale(planet, "npc_scale",
                              planet_registry=self._planet_registry)
         return int(round(base * scale))
