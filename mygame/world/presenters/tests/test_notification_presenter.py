@@ -607,6 +607,34 @@ class TestPresenterOwnershipBehavioral:
         assert "eliminated" in msg.lower()
         assert "Loot" not in msg
 
+    def test_pvp_gear_dropped_renders_victim_items_coords_planet(self):
+        """The killer's PvP loot notice names the victim, gear, coords + planet."""
+        bus = EventBus()
+        player = _MsgPlayer()
+        NotificationPresenter(bus, player_notifier=EvenniaPlayerNotifier())
+        bus.publish(PLAYER_NOTIFICATION, player=player, kind="pvp_gear_dropped",
+                    data={"victim_name": "Raider", "items": "Assault Rifle, Kevlar Vest",
+                          "x": 12, "y": 34, "planet": "elysium"})
+        msg = player.messages[0]
+        assert "Raider" in msg
+        assert "Assault Rifle" in msg and "Kevlar Vest" in msg
+        assert "12" in msg and "34" in msg
+        # Planet named so a cross-planet turret/agent kill isn't ambiguous.
+        assert "elysium" in msg
+
+    def test_pvp_gear_dropped_without_planet_omits_it(self):
+        # No planet (coords_of returned None) → the notice still renders, just
+        # without a planet suffix (no "on None").
+        bus = EventBus()
+        player = _MsgPlayer()
+        NotificationPresenter(bus, player_notifier=EvenniaPlayerNotifier())
+        bus.publish(PLAYER_NOTIFICATION, player=player, kind="pvp_gear_dropped",
+                    data={"victim_name": "Raider", "items": "Assault Rifle",
+                          "x": 12, "y": 34, "planet": None})
+        msg = player.messages[0]
+        assert "Raider" in msg and "(12,34)" in msg
+        assert "None" not in msg  # no "on None" leak
+
 
 class _StatusPlayer:
     """Player double with a db/coords so status_prompt.push_status fires.

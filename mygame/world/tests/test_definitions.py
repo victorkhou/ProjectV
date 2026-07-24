@@ -306,8 +306,12 @@ class TestDataclassContracts:
         #    terrain_defense_bound, min_vision_radius).
         #  + 1 NPC-base staleness decay (outpost_stale_ticks) — a disturbed base
         #    not cleared in time is wiped + regenerated.
+        #  + 3 PvP gear drop-on-death (pvp_gear_drop_base_chance,
+        #    pvp_gear_drop_underdog_bonus_per_level, pvp_gear_drop_max_chance) —
+        #    a slain player's destroyed gear can drop for the killer, scaled by
+        #    the underdog gap.
         # Bump this when adding a balance tunable.
-        assert len(fields(BalanceConfig)) == 132
+        assert len(fields(BalanceConfig)) == 135
 
     def test_coordinate_space_def_field_count(self):
         # 14 core + 2 graduation-economy scales (yield_scale, npc_scale).

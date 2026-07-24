@@ -350,6 +350,20 @@ class BalanceConfig:
     rank_gap_full_penalty_span: int = 30   # extra gap over threshold → min mult
     rank_gap_min_damage_mult: float = 0.25  # damage floor multiplier at max gap
     rank_gap_xp_loot_mult: float = 0.25    # kill XP/loot kept on a lopsided kill
+    # --- PvP gear drop-on-death (underdog bounty) --------------------- #
+    #: When a real player kills another real player, each of the victim's
+    #: equipped gear items that would OTHERWISE be destroyed (i.e. NOT recovered
+    #: into the victim's own Respawn stash) gets a second roll to drop as a
+    #: ground pickup on the death tile instead — attainable-and-losable power.
+    #: The chance is ``base + per_level * max(0, victim_level - killer_level)``
+    #: (an UNDERDOG who beats a higher-ranked player drops MORE — catch-up),
+    #: clamped to ``max_chance``. Only equipped GEAR drops; supplies/resources
+    #: stay destroyed. Never fires for PvE/agent/self/ally deaths. Set
+    #: ``pvp_gear_drop_base_chance`` to 0 to disable. See
+    #: EquipmentSystem.apply_death_loss.
+    pvp_gear_drop_base_chance: float = 0.15
+    pvp_gear_drop_underdog_bonus_per_level: float = 0.02
+    pvp_gear_drop_max_chance: float = 0.50
     tick_interval: float = 1.0
     # --- Passive HP regeneration (players and agents only) ------------ #
     #: HP regenerated per interval, as a PERCENT of the entity's hp_max.

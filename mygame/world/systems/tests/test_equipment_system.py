@@ -240,6 +240,17 @@ ITEMS = {
         key="featherlite", name="Featherlite Rounds", slot="", category="ammo",
         weight=0.0, max_stack=200,  # zero weight — exercises the /0 guard
     ),
+    # Equippable gear (slot set) — resolvable ItemDefs so the PvP gear
+    # drop-on-death path (which looks item_key up in the registry) can spawn a
+    # drop. TestDeathLoss equips these by key and only checked the stash before.
+    "assault_rifle": ItemDef(
+        key="assault_rifle", name="Assault Rifle", slot="weapon",
+        category="weapon", stat_modifiers={"damage": 25}, weight=8.0,
+    ),
+    "kevlar_vest": ItemDef(
+        key="kevlar_vest", name="Kevlar Vest", slot="torso", category="armor",
+        stat_modifiers={"damage_reduction": 5}, weight=6.0,
+    ),
 }
 
 
@@ -978,6 +989,213 @@ class TestDeathLoss(unittest.TestCase):
         summary = system.collect_recovery(p, b)
         self.assertEqual(summary["items"], {})
         self.assertEqual(summary["resources"], {})
+
+
+class TestPvPGearDropOnDeath(unittest.TestCase):
+    """apply_death_loss(player, killer): a slain player's DESTROYED gear can
+    drop on their tile for the killer (PvP underdog bounty). Only equipped gear
+    drops; supplies/resources never do; PvE/self deaths never drop."""
+
+    def _victim(self, level=10, planet="earth"):
+        p = FakePlayer(level=level, resources={"Iron": 100})
+        p.db.coord_planet = planet
+        p.equipment.equip(FakeItem("assault_rifle", "weapon", {"damage": 25}))
+        p.equipment.equip(FakeItem("kevlar_vest", "torso", {"damage_reduction": 5}))
+        p.equipment.add_supply("medkit", 4)
+        p._buildings = []
+        p.get_buildings = lambda: list(p._buildings)
+        return p
+
+    def _system_with_drop_recorder(self):
+        system, event_bus, _ = _make_system(_death_registry())
+        drops = []  # (victim, item_def)
+
+        def _spawner(victim, item_def):
+            drops.append((victim, item_def))
+            return object()  # non-None → drop "spawned"
+
+        system.set_pvp_gear_drop_spawner(_spawner)
+        # Capture notifications WITH their target player (the shared
+        # NotificationSink drops the player arg, but we need it to prove the
+        # KILLER is the one told about the loot).
+        notes = []  # (player, kind, data)
+
+        def _sink(event_name=None, player=None, kind=None, data=None, **_x):
+            notes.append((player, kind, data or {}))
+
+        event_bus.subscribe(PLAYER_NOTIFICATION, _sink)
+        return system, drops, notes
+
+    def test_pvp_kill_drops_destroyed_gear(self):
+        system, drops, notes = self._system_with_drop_recorder()
+        victim = self._victim(level=10)
+        killer = FakePlayer(level=10)
+        # No respawn building → all gear is "destroyed"; base chance 0.15, roll
+        # 0.0 always succeeds → both equipped items drop (supplies never do).
+        system._rng = _DeterministicRNG(0.0)
+        summary = system.apply_death_loss(victim, killer)
+        dropped_keys = {d[1].key for d in drops}
+        self.assertEqual(dropped_keys, {"assault_rifle", "kevlar_vest"})
+        self.assertEqual(summary["dropped"].get("assault_rifle"), 1)
+        self.assertEqual(summary["dropped"].get("kevlar_vest"), 1)
+        # Supplies are NOT dropped (only equipped gear).
+        self.assertNotIn("medkit", summary["dropped"])
+
+    def test_killer_notified_of_drop_with_items_and_coords(self):
+        system, _drops, notes = self._system_with_drop_recorder()
+        victim = self._victim(level=10)
+        victim.key = "Victim"          # distinct keys so the victim_name
+        victim.db.coord_x, victim.db.coord_y = 42, 7
+        killer = FakePlayer(level=10)
+        killer.key = "Killer"          # assertion can't pass on a swap
+        system._rng = _DeterministicRNG(0.0)
+        system.apply_death_loss(victim, killer)
+        # Exactly one pvp_gear_dropped notice, addressed to the KILLER (not the
+        # victim), naming the gear (display names) and the pickup coords.
+        drop_notes = [n for n in notes if n[1] == "pvp_gear_dropped"]
+        self.assertEqual(len(drop_notes), 1)
+        player, _kind, data = drop_notes[0]
+        self.assertIs(player, killer)
+        self.assertEqual((data["x"], data["y"]), (42, 7))
+        # Planet is included so a cross-planet turret/agent kill isn't ambiguous.
+        self.assertEqual(data["planet"], "earth")
+        self.assertIn("Assault Rifle", data["items"])
+        self.assertIn("Kevlar Vest", data["items"])
+        # The victim is named (NOT the killer) — distinct keys prove no swap.
+        self.assertEqual(data["victim_name"], "Victim")
+
+    def test_no_drop_no_notification(self):
+        # Gear all recovered (respawn building, low roll) → nothing dropped → the
+        # killer gets no loot notice.
+        system, _drops, notes = self._system_with_drop_recorder()
+        victim = self._victim()
+        victim._buildings = [_FakeRespawnBuilding(level=5, planet="earth")]
+        killer = FakePlayer(level=10)
+        system._rng = _DeterministicRNG(0.0)  # everything recovers, nothing drops
+        system.apply_death_loss(victim, killer)
+        self.assertNotIn("pvp_gear_dropped", [n[1] for n in notes])
+
+    def test_no_killer_no_drop(self):
+        # PvE / self / ally death → killer is None → nothing drops.
+        system, drops, _ = self._system_with_drop_recorder()
+        victim = self._victim()
+        system._rng = _DeterministicRNG(0.0)
+        summary = system.apply_death_loss(victim, None)
+        self.assertEqual(drops, [])
+        self.assertEqual(summary["dropped"], {})
+        # Gear was still stripped/destroyed as before.
+        self.assertEqual(victim.equipment.get_all_equipped(), {})
+
+    def test_self_kill_no_drop(self):
+        system, drops, _ = self._system_with_drop_recorder()
+        victim = self._victim()
+        system._rng = _DeterministicRNG(0.0)
+        system.apply_death_loss(victim, victim)  # killer is victim
+        self.assertEqual(drops, [])
+        # Positive signal that the strip actually ran (so drops==[] isn't
+        # vacuously true from a short-circuit): gear was still stripped.
+        self.assertEqual(victim.equipment.get_all_equipped(), {})
+
+    def test_disabled_at_zero_base_chance(self):
+        system, drops, _ = self._system_with_drop_recorder()
+        system.registry.balance.pvp_gear_drop_base_chance = 0.0
+        victim = self._victim()
+        killer = FakePlayer(level=10)
+        system._rng = _DeterministicRNG(0.0)
+        system.apply_death_loss(victim, killer)
+        self.assertEqual(drops, [])
+        # Positive signal: the strip ran (drops==[] is the disable, not a no-op).
+        self.assertEqual(victim.equipment.get_all_equipped(), {})
+
+    def test_recovered_gear_is_not_dropped(self):
+        # With a respawn building and a low roll, gear is RECOVERED into the
+        # stash — recovered items must never also drop for the killer.
+        system, drops, _ = self._system_with_drop_recorder()
+        victim = self._victim()
+        b = _FakeRespawnBuilding(level=5, planet="earth")  # 95% recovery
+        victim._buildings = [b]
+        killer = FakePlayer(level=10)
+        system._rng = _DeterministicRNG(0.0)  # 0.0 < 0.95 → everything recovers
+        summary = system.apply_death_loss(victim, killer)
+        self.assertEqual(drops, [])  # nothing destroyed → nothing to drop
+        self.assertEqual(summary["dropped"], {})
+        self.assertEqual(b.db.recovery_stash["items"].get("assault_rifle"), 1)
+
+    def test_underdog_scaling_increases_chance(self):
+        # base 0.15 + 0.02/level over. Victim L30 vs killer L10 → gap 20 →
+        # 0.15 + 0.40 = 0.55, clamped to max 0.50.
+        system, _drops, _ = self._system_with_drop_recorder()
+        victim = self._victim(level=30)
+        killer = FakePlayer(level=10)
+        chance = system._pvp_gear_drop_chance(victim, killer)
+        self.assertAlmostEqual(chance, 0.50)  # clamped to pvp_gear_drop_max_chance
+        # Ganking DOWN (victim below killer) → only the base chance.
+        low_victim = self._victim(level=5)
+        self.assertAlmostEqual(
+            system._pvp_gear_drop_chance(low_victim, killer), 0.15
+        )
+
+    def test_drop_falls_back_to_destroy_when_spawner_unwired(self):
+        # No spawner injected → _drop_gear_on_death returns False → gear is
+        # destroyed and counted as lost, not dropped (no crash).
+        system, _, _ = _make_system(_death_registry())
+        victim = self._victim()
+        killer = FakePlayer(level=10)
+        system._rng = _DeterministicRNG(0.0)
+        summary = system.apply_death_loss(victim, killer)
+        self.assertEqual(summary["dropped"], {})
+        self.assertIn("assault_rifle", summary["lost"])
+
+    def test_spawner_refusal_counts_as_lost_and_no_notification(self):
+        # Spawner WIRED but REFUSES (returns None — e.g. tile full): the item
+        # must be counted as LOST, not dropped, and NO killer loot notice fires
+        # (guards against telling the killer to grab loot that never spawned).
+        system, event_bus, _ = _make_system(_death_registry())
+        system.set_pvp_gear_drop_spawner(lambda victim, item_def: None)
+        notes = []
+        event_bus.subscribe(
+            PLAYER_NOTIFICATION,
+            lambda event_name=None, player=None, kind=None, data=None, **_x:
+            notes.append(kind),
+        )
+        victim = self._victim()
+        killer = FakePlayer(level=10)
+        system._rng = _DeterministicRNG(0.0)  # would drop IF the spawner accepted
+        summary = system.apply_death_loss(victim, killer)
+        self.assertEqual(summary["dropped"], {})
+        self.assertIn("assault_rifle", summary["lost"])
+        self.assertIn("kevlar_vest", summary["lost"])
+        self.assertNotIn("pvp_gear_dropped", notes)
+
+    def test_notify_pvp_drop_aggregates_counts_and_resolves_names(self):
+        # Directly exercise _notify_pvp_drop: count>1 renders "Name xN"; a
+        # registry-resolved key uses its display name; an unknown key falls back
+        # to the raw key (the defensive `or key` branch).
+        system, event_bus, _ = _make_system(_death_registry())
+        notes = []
+        event_bus.subscribe(
+            PLAYER_NOTIFICATION,
+            lambda event_name=None, player=None, kind=None, data=None, **_x:
+            notes.append((player, kind, data or {})),
+        )
+        killer = FakePlayer(level=10)
+        killer.key = "Killer"
+        victim = self._victim()
+        victim.key = "Victim"
+        victim.db.coord_x, victim.db.coord_y = 3, 9
+        system._notify_pvp_drop(
+            killer, victim,
+            {"assault_rifle": 2, "mystery_key": 1},  # known (x2) + unknown key
+        )
+        self.assertEqual(len(notes), 1)
+        player, kind, data = notes[0]
+        self.assertIs(player, killer)
+        self.assertEqual(kind, "pvp_gear_dropped")
+        self.assertEqual(data["victim_name"], "Victim")
+        self.assertEqual((data["x"], data["y"]), (3, 9))
+        self.assertEqual(data["planet"], "earth")  # via sanctioned coords_of
+        self.assertIn("Assault Rifle x2", data["items"])  # count>1 aggregation
+        self.assertIn("mystery_key", data["items"])        # unknown key fallback
 
 
 # -------------------------------------------------------------- #

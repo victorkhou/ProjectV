@@ -90,15 +90,18 @@ class CombatEngine(BaseSystem):
         # fraction into their Respawn building (EquipmentSystem.apply_death_loss).
         # Only invoked for real PLAYER victims (agents keep their loadout). None →
         # no loss (tests / flow disabled).
-        self._death_loss_func: Callable[[Any], Any] | None = None
+        self._death_loss_func: Callable[..., Any] | None = None
 
-    def set_death_loss_func(self, func: Callable[[Any], Any] | None) -> None:
+    def set_death_loss_func(self, func: Callable[..., Any] | None) -> None:
         """Inject the on-death equipment/resource-loss handler.
 
-        *func* is ``(victim) -> summary``: it strips the player's carried gear,
-        Supply_Bag, and resources, depositing a building-level-scaled fraction
-        into their Respawn building. Wired at the composition root to
-        ``EquipmentSystem.apply_death_loss``. Only called for player victims.
+        *func* is ``(victim, killer=None) -> summary``: it strips the player's
+        carried gear, Supply_Bag, and resources, depositing a building-level-
+        scaled fraction into their Respawn building. When *killer* is the real
+        player who defeated them (PvP), a slain player's destroyed gear may drop
+        as a ground pickup for the killer (underdog bounty). Wired at the
+        composition root to ``EquipmentSystem.apply_death_loss``. Only called for
+        player victims.
         """
         self._death_loss_func = func
 
@@ -1458,9 +1461,17 @@ class CombatEngine(BaseSystem):
         # routing so the strip happens at the moment of death. Agents keep their
         # loadout (never stripped). Best-effort — a loss failure never breaks the
         # kill resolution.
+        #
+        # PvP gear drop: pass the KILLER (the attacker's owning player) only for a
+        # genuine, non-friendly player-vs-player kill — so a slain player's
+        # destroyed gear can drop for the killer (underdog bounty). ``own_victim``
+        # covers self/ally/own-unit; ``attacker_owner`` is None for a PvE enemy
+        # NPC. None killer → the normal PvE strip (no drop). The victim being a
+        # real player is already guaranteed by the ``not _is_agent`` gate.
         if not self._is_agent(victim) and self._death_loss_func is not None:
+            killer = None if own_victim else attacker_owner
             try:
-                self._death_loss_func(victim)
+                self._death_loss_func(victim, killer)
             except Exception:  # noqa: BLE001 - death loss must not break combat
                 from world.systems.agent_constants import logger as _log
                 _log.exception("Death-loss handling failed")

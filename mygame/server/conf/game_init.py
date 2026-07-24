@@ -425,6 +425,22 @@ def initialize_game() -> dict:
 
     equipment_system.set_gear_drop_spawner(_spawn_gear_drop_for)
 
+    # Inject the PvP gear drop-on-death spawner: when a real player kills another
+    # player, a slain player's destroyed gear can drop on the VICTIM's tile for
+    # the killer (underdog bounty — EquipmentSystem.apply_death_loss). Same
+    # ``_holder_room_and_coords`` + ``spawn_gear_drop`` path as passive drops (a
+    # player is a valid holder). Returns None on a missing tile / full tile so
+    # the gear is destroyed as before.
+    def _spawn_pvp_gear_drop_for(victim: Any, item_def: Any) -> Any:
+        room, cx, cy = _holder_room_and_coords(victim)
+        if room is None:
+            return None
+        from typeclasses.objects import spawn_gear_drop
+
+        return spawn_gear_drop(room, item_def, x=cx, y=cy)
+
+    equipment_system.set_pvp_gear_drop_spawner(_spawn_pvp_gear_drop_for)
+
     movement_system = MovementSystem(
         max_paths_per_tick=MAX_PATHS_PER_TICK,
         moving_entity_repository=EvenniaMovingEntityRepository(),

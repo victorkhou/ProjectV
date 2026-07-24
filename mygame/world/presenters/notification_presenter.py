@@ -658,6 +658,21 @@ def _fmt_base_eliminated(d: dict) -> str:
     )
 
 
+def _fmt_pvp_gear_dropped(d: dict) -> str:
+    # Fired to the KILLER when a slain player's gear drops on the tile (the PvP
+    # underdog bounty). Names the victim, the gear, and where to grab it — the
+    # planet is included (unlike guard_loot/base_eliminated) so a cross-planet
+    # turret/agent kill isn't ambiguous.
+    planet = d.get("planet")
+    where = f"({d.get('x', '?')},{d.get('y', '?')})"
+    if planet:
+        where += f" on {planet}"
+    return (
+        f"|g[Loot] {d.get('victim_name', 'Your foe')} dropped "
+        f"{d.get('items', 'gear')} at {where}.|n"
+    )
+
+
 def _fmt_base_deactivated(d: dict) -> str:
     # Fired when a player's HQ is destroyed — the base goes inert until rebuilt.
     return (
@@ -787,6 +802,7 @@ class NotificationPresenter:
         "npc_killed": _fmt_npc_killed,
         "guard_loot": _fmt_guard_loot,
         "base_eliminated": _fmt_base_eliminated,
+        "pvp_gear_dropped": _fmt_pvp_gear_dropped,
         "base_deactivated": _fmt_base_deactivated,
         "base_reactivated": _fmt_base_reactivated,
     }

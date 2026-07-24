@@ -115,6 +115,14 @@ class EquipmentSystem(CarryWeightMixin, StorageMixin, BaseSystem):
         # into their inventory. When unwired (isolated tests), the gear branch
         # falls back to the ``_create_item_func`` inventory factory.
         self._gear_drop_spawner: Callable[[Any, Any], Any] | None = None
+        # Injected PvP gear drop-on-death spawner (composition root wires this
+        # via ``set_pvp_gear_drop_spawner``). A callable ``(victim, item_def) ->
+        # obj`` that spawns a ground-pickup Gear ``GameItem`` on the VICTIM's
+        # death tile (indexed) so a killer can collect it. Used by
+        # ``apply_death_loss`` for the underdog-bounty drop; when unwired (PvE or
+        # isolated tests) no drop happens and the gear is simply destroyed as
+        # before.
+        self._pvp_gear_drop_spawner: Callable[[Any, Any], Any] | None = None
 
     # ------------------------------------------------------------------ #
     #  Collaborator injection (composition root)
@@ -179,6 +187,22 @@ class EquipmentSystem(CarryWeightMixin, StorageMixin, BaseSystem):
         falls back to the inventory ``_create_item_func`` factory.
         """
         self._gear_drop_spawner = func
+
+    def set_pvp_gear_drop_spawner(
+        self, func: Callable[[Any, Any], Any]
+    ) -> None:
+        """Inject the PvP gear drop-on-death spawner used by death loss.
+
+        *func* is a callable ``(victim, item_def) -> obj`` that spawns a
+        pickup-able Gear ``GameItem`` on the *victim*'s death tile (coordinate-
+        indexed). Wired once at the composition root
+        (``server/conf/game_init.py``) over ``typeclasses.objects.spawn_gear_drop``
+        so a slain player's destroyed gear can drop for the killer without
+        ``world/systems`` importing ``typeclasses`` at module scope. When unwired
+        (PvE deaths, isolated tests) no drop occurs and the gear is destroyed as
+        before.
+        """
+        self._pvp_gear_drop_spawner = func
 
     # ------------------------------------------------------------------ #
     #  Production
@@ -1282,7 +1306,7 @@ class EquipmentSystem(CarryWeightMixin, StorageMixin, BaseSystem):
     #  Death loss + respawn-building recovery
     # ------------------------------------------------------------------ #
 
-    def apply_death_loss(self, player: Any) -> dict:
+    def apply_death_loss(self, player: Any, killer: Any = None) -> dict:
         """Strip everything the *player* was carrying on death, recovering a
         building-level-scaled fraction into their Respawn building's stash.
 
@@ -1300,15 +1324,25 @@ class EquipmentSystem(CarryWeightMixin, StorageMixin, BaseSystem):
         and each supply unit is recovered with that chance) and as
         ``floor(pct × amount)`` of each carried resource stack.
 
-        Returns a summary dict ``{recovered, lost, building}`` for notification;
-        never raises (a recovery failure must not break combat).
+        PvP gear drop (underdog bounty): when *killer* is the real player who
+        defeated this player, each equipped gear item that is NOT recovered into
+        the victim's stash (i.e. would be destroyed) rolls to DROP as a ground
+        pickup on the victim's tile instead — with probability
+        ``pvp_gear_drop_base_chance`` plus a per-level underdog bonus when the
+        victim outranks the killer, clamped to ``pvp_gear_drop_max_chance``. Only
+        equipped gear drops; supplies and resources are never dropped. *killer*
+        is None for PvE/agent/self/ally deaths → no drop (unchanged behavior).
+
+        Returns a summary dict ``{recovered, lost, dropped, building}`` for
+        notification; never raises (a recovery failure must not break combat).
         """
         from world.constants import RESPAWN_POINT, RESPAWN_RECOVERY_BY_LEVEL
         from world.utils import (
             building_has_capability, get_building_level, get_obj_attr,
         )
 
-        summary = {"recovered": {}, "lost": {}, "building": None, "pct": 0.0}
+        summary = {"recovered": {}, "lost": {}, "dropped": {},
+                   "building": None, "pct": 0.0}
         equipment = getattr(player, "equipment", None)
 
         # Resolve the recovery building: an owned RESPAWN_POINT building on the
@@ -1324,6 +1358,8 @@ class EquipmentSystem(CarryWeightMixin, StorageMixin, BaseSystem):
 
         stash = self._get_recovery_stash(building) if building is not None else None
         rng = getattr(self, "_rng", random)
+        # PvP drop chance for a NOT-recovered gear item (0.0 = no drop / PvE).
+        drop_chance = self._pvp_gear_drop_chance(player, killer)
 
         # --- Equipped gear + Supply_Bag: per-item probabilistic recovery ---
         if equipment is not None:
@@ -1338,6 +1374,15 @@ class EquipmentSystem(CarryWeightMixin, StorageMixin, BaseSystem):
                     self._stash_add(stash, "items", key, 1)
                     summary["recovered"][key] = summary["recovered"].get(key, 0) + 1
                     self._destroy_item(item)  # object destroyed; stash holds the key
+                    continue
+                # Not recovered → normally destroyed. In PvP, give it a second
+                # roll to DROP as a ground pickup on the victim's tile (for the
+                # killer) instead of being destroyed — the underdog bounty.
+                if (drop_chance > 0 and key
+                        and rng.random() < drop_chance
+                        and self._drop_gear_on_death(player, key)):
+                    summary["dropped"][key] = summary["dropped"].get(key, 0) + 1
+                    self._destroy_item(item)  # original stripped; a fresh drop spawned
                 else:
                     summary["lost"][key or "?"] = summary["lost"].get(key or "?", 0) + 1
                     self._destroy_item(item)
@@ -1369,7 +1414,94 @@ class EquipmentSystem(CarryWeightMixin, StorageMixin, BaseSystem):
 
         if stash is not None:
             self._set_recovery_stash(building, stash)
+
+        # PvP loot notice: tell the KILLER what the victim dropped and WHERE
+        # (tile + planet), so the bounty is discoverable. The drop is a normal
+        # ground pickup on the victim's tile with no owner lock — for a melee
+        # kill the killer is standing on it, but for a turret/agent/ranged kill
+        # the killer may be elsewhere (even on another planet), so the notice
+        # names the planet and is purely informational: it does NOT imply the
+        # killer is the only one who can grab it. No-op unless a genuine PvP kill
+        # actually dropped something.
+        if killer is not None and summary["dropped"]:
+            self._notify_pvp_drop(killer, player, summary["dropped"])
+
         return summary
+
+    def _notify_pvp_drop(self, killer: Any, victim: Any, dropped: dict) -> None:
+        """Notify *killer* of the gear *victim* dropped on death (tile + planet).
+
+        ``dropped`` is ``{item_key: count}``. Item keys are resolved to display
+        names via the registry (falling back to the key). Location is read via
+        the sanctioned :func:`world.utils.coords_of` (``(x, y, planet)``) so the
+        drop is unambiguous even for a cross-planet turret/agent kill. Best-effort
+        — a notification hiccup must never break death resolution.
+        """
+        try:
+            from world.utils import coords_of
+
+            items = getattr(self.registry, "items", None) or {}
+            names = []
+            for key, count in dropped.items():
+                name = getattr(items.get(key), "name", None) or key
+                names.append(f"{name} x{count}" if count > 1 else name)
+            coords = coords_of(victim)
+            x, y, planet = coords if coords is not None else ("?", "?", None)
+            self.notify(
+                killer, "pvp_gear_dropped",
+                victim_name=getattr(victim, "key", "your foe"),
+                items=", ".join(names),
+                x=x, y=y, planet=planet,
+            )
+        except Exception:  # noqa: BLE001 - a loot notice must not break combat
+            logger.exception("PvP drop notification failed")
+
+    def _pvp_gear_drop_chance(self, victim: Any, killer: Any) -> float:
+        """Per-item chance a NOT-recovered gear item drops for the killer.
+
+        ``0.0`` (no drop) unless *killer* is a real player distinct from the
+        victim and the feature is enabled. Otherwise
+        ``base + per_level * max(0, victim_level - killer_level)`` clamped to
+        ``max_chance`` — an UNDERDOG (victim outranks killer) drops MORE gear as
+        a catch-up bounty; ganking down grants only the base. Never raises.
+        """
+        if killer is None or killer is victim:
+            return 0.0
+        bal = getattr(self.registry, "balance", None)
+        base = float(getattr(bal, "pvp_gear_drop_base_chance", 0.0) or 0.0)
+        if base <= 0:
+            return 0.0  # feature disabled
+        per_level = float(
+            getattr(bal, "pvp_gear_drop_underdog_bonus_per_level", 0.0) or 0.0)
+        max_chance = float(getattr(bal, "pvp_gear_drop_max_chance", base) or base)
+        try:
+            from world.utils import get_player_level
+            gap = get_player_level(victim) - get_player_level(killer)
+        except Exception:  # noqa: BLE001 - level read must not break death loss
+            gap = 0
+        chance = base + per_level * max(0, gap)
+        return max(0.0, min(chance, max_chance))
+
+    def _drop_gear_on_death(self, victim: Any, item_key: str) -> bool:
+        """Spawn *item_key* as a ground-pickup Gear drop on *victim*'s tile.
+
+        Delegates to the injected PvP gear-drop spawner (composition root; over
+        ``spawn_gear_drop``). Returns True if a drop was spawned, False if the
+        spawner is unwired, the key has no ItemDef, or the spawn was refused
+        (e.g. tile full) — in which case the caller destroys the item as normal.
+        Never raises.
+        """
+        spawner = self._pvp_gear_drop_spawner
+        if spawner is None:
+            return False
+        item_def = (getattr(self.registry, "items", None) or {}).get(item_key)
+        if item_def is None:
+            return False
+        try:
+            return spawner(victim, item_def) is not None
+        except Exception:  # noqa: BLE001 - a drop must not break death loss
+            logger.exception("PvP gear drop failed for %s", item_key)
+            return False
 
     def _find_respawn_building(self, player: Any):
         """Return the player's owned RESPAWN_POINT building on their death planet.

@@ -56,6 +56,18 @@ rank_gap_full_penalty_span: 30
 rank_gap_min_damage_mult: 0.25
 rank_gap_xp_loot_mult: 0.25
 
+# PvP gear drop-on-death (underdog bounty). When a real player kills another real
+# player, each equipped gear item that would OTHERWISE be destroyed (i.e. not
+# recovered into the victim's own Respawn stash) rolls to drop as a ground pickup
+# on the death tile instead. Chance = base + per_level * max(0, victim_level -
+# killer_level), clamped to max — so an underdog who beats a higher-ranked player
+# drops MORE (catch-up), while ganking down grants only the base. Only equipped
+# GEAR drops (supplies/resources stay destroyed); never fires for PvE/agent/self/
+# ally deaths. Set pvp_gear_drop_base_chance to 0 to disable.
+pvp_gear_drop_base_chance: 0.15
+pvp_gear_drop_underdog_bonus_per_level: 0.02
+pvp_gear_drop_max_chance: 0.50
+
 # Passive HP regeneration for players and agents (NOT buildings — buildings
 # must be repaired). hp_regen_percent% of max HP is restored every
 # hp_regen_interval_ticks ticks (default: 1% per 2 ticks). Set hp_regen_percent
