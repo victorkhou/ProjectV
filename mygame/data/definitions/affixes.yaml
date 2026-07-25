@@ -1,0 +1,39 @@
+# ---------------------------------------------------------------------------
+# Affix pools — item-loot-economy R3 (design §3.3).
+#
+# Category-keyed pools (weapon / armor / accessory). Each entry:
+#   key:    unique id within its pool (drawn without replacement, no dups)
+#   name:   display suffix ("Assault Rifle of Power")
+#   stat:   the stat axis the affix adds to (must be a known axis —
+#           schema_validator.AFFIX_STAT_AXES; validated at LOAD time)
+#   min/max: magnitude band the affix rolls in (design §9: 2–6 for the
+#           aggregating axes; 1–3 for range and procs — the spicy stats
+#           stay low and weighted rare)
+#   weight: draw weight within the pool (relative; > 0)
+#   proc:   instead of `stat` — an on-hit rider (must be a known proc key,
+#           schema_validator.AFFIX_PROC_KEYS). `proc: poison` makes every
+#           landed hit apply a poison DoT whose per-tick damage is the
+#           affix's rolled magnitude (combat_engine._apply_weapon_procs).
+#
+# Aggregating-axis affixes (Phase 2, task 2.1) work through get_stat_total
+# with no combat change. `range` and `proc` affixes (Phase 3, task 3.4) work
+# through the R8 range-resolution hook (_resolve_weapon_range reads the
+# weapon instance's get_stat, which adds affix magnitudes) and the R9 poison
+# DoT respectively — weapon-pool only, since range never aggregates across
+# equipped items (R8.1) and procs ride weapon hits.
+# ---------------------------------------------------------------------------
+
+weapon:
+  - {key: keen,       stat: damage_bonus,   min: 2, max: 6, weight: 1.0, name: "of Power"}
+  - {key: long,       stat: range,          min: 1, max: 3, weight: 1.4, name: "of Reach"}
+  - {key: venomous,   proc: poison,         min: 1, max: 3, weight: 1.6, name: "of the Viper"}
+  - {key: warding_f,  stat: fire_resist,    min: 2, max: 6, weight: 0.8, name: "of Embers"}
+  - {key: warding_ps, stat: psychic_resist, min: 2, max: 6, weight: 0.8, name: "of Focus"}
+  - {key: warding_b,  stat: blast_resist,   min: 2, max: 6, weight: 0.8, name: "of Deflection"}
+
+armor:
+  - {key: sturdy,     stat: damage_reduction, min: 2, max: 6, weight: 1.0, name: "of the Bulwark"}
+  - {key: warded,     stat: psychic_resist,   min: 2, max: 6, weight: 0.8, name: "of Clarity"}
+  - {key: flameproof, stat: fire_resist,      min: 2, max: 6, weight: 0.8, name: "of Ashes"}
+  - {key: blastproof, stat: blast_resist,     min: 2, max: 6, weight: 0.8, name: "of Iron Will"}
+  - {key: venomguard, stat: poison_resist,    min: 2, max: 6, weight: 0.8, name: "of Antitoxin"}

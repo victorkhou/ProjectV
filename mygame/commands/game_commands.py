@@ -1119,8 +1119,11 @@ class CmdDemolish(GameCommand):
     Destroys the building and refunds resources based on level.
     Refund scales from 40% at level 1 to 80% at level 5.
 
-    The total invested cost accounts for the base build plus all
-    upgrade costs (base × 2 for level 2, base × 3 for level 3, etc).
+    The refund basis is the building's cumulative investment (base build
+    cost plus every upgrade cost up to its level), priced with your
+    build-cost tech discount — the same basis you actually paid and that
+    repair bills against. Because every refund rate is below 100%, a
+    demolish always returns less than was invested.
     """
 
     key = "demolish"
@@ -1162,19 +1165,36 @@ class CmdDemolish(GameCommand):
         level = info["level"]
         name = info["name"]
 
-        # Calculate refund
+        # Calculate refund: refund_rate × the CUMULATIVE investment, priced
+        # via BuildingSystem.get_building_investment with the OWNER's
+        # build_cost_mult discount — the same discounted basis build/upgrade
+        # charged and repair bills against (F5 review fix: refund and
+        # investment must be CONSISTENT, and since every refund rate is < 1.0
+        # a refund on the discounted basis can never exceed what the player
+        # actually paid — no build-then-demolish arbitrage). Falls back to
+        # the legacy list-price × level-sum formula when the building system
+        # is unwired (minimal setups).
         refund = {}
         registry = _get_system(caller, "registry")
+        building_system = _get_system(caller, "building_system")
         if registry:
             try:
                 bdef = registry.get_building(btype)
-                # Total invested = base cost × (1 + 2 + ... + level)
-                level_sum = level * (level + 1) // 2
                 bal = registry.balance
                 rate = bal.demolish_refund_rates.get(level, bal.demolish_refund_default)
+                if building_system is not None and hasattr(
+                    building_system, "get_building_investment"
+                ):
+                    investment = building_system.get_building_investment(
+                        bdef, level, owner=owner
+                    )
+                else:  # legacy fallback: undiscounted linear level-sum
+                    level_sum = level * (level + 1) // 2
+                    investment = {
+                        res: amt * level_sum for res, amt in bdef.cost.items()
+                    }
                 refund = {
-                    res: int(amt * level_sum * rate)
-                    for res, amt in bdef.cost.items()
+                    res: int(amt * rate) for res, amt in investment.items()
                 }
             except (KeyError, AttributeError):
                 pass
@@ -1251,20 +1271,33 @@ class CmdRepair(GameCommand):
 def _attack_reach(caller):
     """The radius (Chebyshev) within which 'attack' may resolve a target.
 
-    The larger of the caller's vision radius (what 'scan' shows) and their
-    equipped weapon's range — so a long-range weapon (e.g. a sniper rifle whose
-    range exceeds base vision) can still target a foe it can legitimately hit,
-    while a short-ranged loadout is still capped to what the player can see
-    rather than the whole planet. queue_attack remains the authority on whether
-    the shot is actually in weapon range; this only bounds the target search.
+    The larger of the caller's vision radius (what 'scan' shows — including
+    the Watchtower vision aura, see :meth:`CmdScan._vision_radius`) and their
+    equipped weapon's EFFECTIVE range — so a long-range weapon (e.g. a sniper
+    rifle whose range exceeds base vision) can still target a foe it can
+    legitimately hit, while a short-ranged loadout is still capped to what the
+    player can see rather than the whole planet. The weapon term resolves
+    through the combat engine's public R8 resolver (``resolve_weapon_range``:
+    weapon instance + owner tech + tile bonus, clamped to
+    ``max_weapon_range`` — M2 review fix: the raw stat read here previously
+    dropped tech/nest bonuses AND ignored the cap), falling back to the raw
+    weapon stat when the engine is unwired (minimal/test setups — the same
+    fallback shape as ``TargetingSystem.effective_range``). queue_attack /
+    resolve_now remain the authority on whether the shot is actually in
+    weapon range; this only bounds the target search.
     """
     radius = CmdScan._vision_radius(caller)
     equipment = getattr(caller, "equipment", None)
     if equipment is not None and hasattr(equipment, "get_equipped"):
         try:
             weapon = equipment.get_equipped("weapon")
-            if weapon is not None and hasattr(weapon, "get_stat"):
-                radius = max(radius, int(weapon.get_stat("range", 0)))
+            if weapon is not None:
+                engine = _get_system(caller, "combat_engine")
+                resolver = getattr(engine, "resolve_weapon_range", None)
+                if callable(resolver):
+                    radius = max(radius, int(resolver(caller, weapon)))
+                elif hasattr(weapon, "get_stat"):
+                    radius = max(radius, int(weapon.get_stat("range", 0)))
         except Exception:  # pragma: no cover - defensive
             pass
     return max(1, radius)
@@ -1691,7 +1724,20 @@ class CmdShoot(GameCommand):
                 caller.msg("Nothing in the line of fire.")
                 return
         else:
-            weapon_range = targeting.weapon_range(weapon)
+            # Walk the ray out to the EFFECTIVE range (M2 review fix):
+            # ``effective_range`` routes through the combat engine's injected
+            # R8 resolver (weapon instance + owner tech + tile bonus, clamped
+            # to max_weapon_range), so a directional shot reaches exactly as
+            # far as the engine will actually allow — the raw ``weapon_range``
+            # stat read here previously dropped the tech/Sniper Nest bonuses
+            # AND walked an UNCAPPED ray past the cap, only for the engine to
+            # reject the resolved target. Falls back to the raw stat when the
+            # targeting fake/minimal setup lacks the resolver method.
+            range_fn = getattr(targeting, "effective_range", None)
+            if callable(range_fn):
+                weapon_range = int(range_fn(caller, weapon))
+            else:
+                weapon_range = int(targeting.weapon_range(weapon))
             target = _first_target_along_ray(caller, step[0], step[1], weapon_range)
             if target is None:
                 caller.msg("Nothing in the line of fire.")
@@ -2517,6 +2563,257 @@ class CmdCraft(GameCommand):
         caller.msg("\n".join(lines))
 
 
+class CmdInsert(GameCommand):
+    """Permanently modify your equipped weapon at your Blacksmith.
+
+    Usage:
+      insert <insert item> [weapon]
+
+    Options:
+      <insert item>  which insert to apply, by key or name (venom_coating |
+                     "venom coating"). Consumes one from your supply bag.
+      [weapon]       optional: name your equipped weapon as a safety check.
+
+    Examples:
+      insert venom_coating
+      insert extended barrel
+      insert hollowpoint assault_rifle
+
+    Notes:
+      Stand in your own |cBlacksmith|n (it must be online and not
+      mid-upgrade). Inserts permanently mutate the weapon you have
+      equipped — a damage-type coating (fire/poison/...), +range, or a
+      stat kit with a tradeoff — and |rcannot be removed|n. A weapon has
+      limited insert slots (more at higher Blacksmith levels). Craft
+      inserts at the Armory/Lab first. See 'help craft' and 'help
+      equipment'.
+    """
+
+    key = "insert"
+    help_category = "Game"
+
+    def func(self):
+        equipment_system = self.require_system("equipment_system")
+        if equipment_system is None:
+            return
+
+        args = self.args.strip()
+        if not args:
+            self.caller.msg(
+                "Usage: |winsert <insert item>|n — apply a weapon insert at "
+                "your Blacksmith. See 'help insert'."
+            )
+            return
+
+        token, weapon_token = self._split_tokens(equipment_system, args)
+        building = self._building_at_caller(self.caller)
+
+        # NOTE: deliberately NO base-active (HQ) gate here, unlike craft —
+        # the Blacksmith bench gates only on ownership + operational status
+        # (item-loot-economy design §4.1). The system validates the gates and
+        # emits the player-facing notification (insert_applied /
+        # insert_failed) via the presenter.
+        equipment_system.apply_insert(
+            self.caller, token, building, weapon_token
+        )
+
+    @staticmethod
+    def _split_tokens(equipment_system, args):
+        """Split ``<insert item> [weapon]`` tolerating multi-word item names.
+
+        Greedy LONGEST item-name prefix match (F9 review fix): try the
+        whole argument string as the item token first, then progressively
+        shorter word-boundary prefixes, taking the longest one the
+        registry resolves — the remainder becomes the optional weapon
+        check token. So ``insert venom coating`` resolves the two-word
+        name whole, and ``insert extended barrel assault_rifle`` resolves
+        "extended barrel" + weapon "assault_rifle" (previously mis-split
+        as item "extended" + weapon "barrel assault_rifle" → a confusing
+        weapon_not_equipped failure).
+
+        When NO prefix resolves, the FULL input is returned as the item
+        token so the system's unknown_item failure names exactly what the
+        player typed (not a misleading first-word fragment). Without a
+        resolving registry (minimal/test fakes) the legacy first-word
+        split applies.
+        """
+        registry = getattr(equipment_system, "registry", None)
+        resolver = getattr(registry, "resolve_item", None) \
+            if registry is not None else None
+        if callable(resolver):
+            words = args.split()
+            for cut in range(len(words), 0, -1):
+                candidate = " ".join(words[:cut])
+                try:
+                    resolved = resolver(candidate) is not None
+                except Exception:
+                    resolved = False
+                if resolved:
+                    weapon_token = " ".join(words[cut:]).strip()
+                    return candidate, (weapon_token or None)
+            # Nothing resolves — the system will fail unknown_item whatever
+            # the split; hand it the full input so the failure names it.
+            return args, None
+        parts = args.split(None, 1)
+        weapon_token = parts[1].strip() if len(parts) > 1 else None
+        return parts[0], (weapon_token or None)
+
+
+class CmdReroll(GameCommand):
+    """Re-roll an item's base stats at your Blacksmith.
+
+    Usage:
+      reroll <item>
+
+    Options:
+      <item>  a rolled item you carry or have equipped, by name or key
+              (assault_rifle | "assault rifle" | assault).
+
+    Examples:
+      reroll assault_rifle
+      reroll kevlar vest
+
+    Notes:
+      Stand in your own |cBlacksmith|n (it must be online and not
+      mid-upgrade). Rerolling draws fresh base stats within the item's
+      roll bands and re-stamps its quality score — costs |ySalvage|n plus
+      some resources. A higher-level Blacksmith raises the floor of the
+      new rolls; an item's rarity floor always still applies. Affixes,
+      rarity, and applied inserts are |wnot|n changed. Fixed items (ammo,
+      consumables) can't be rerolled. See 'help insert' and 'help
+      equipment'.
+    """
+
+    key = "reroll"
+    help_category = "Game"
+
+    def func(self):
+        equipment_system = self.require_system("equipment_system")
+        if equipment_system is None:
+            return
+
+        token = self.args.strip()
+        if not token:
+            self.caller.msg(
+                "Usage: |wreroll <item>|n — re-roll a rolled item's base "
+                "stats at your Blacksmith. See 'help reroll'."
+            )
+            return
+
+        building = self._building_at_caller(self.caller)
+
+        # NOTE: deliberately NO base-active (HQ) gate here, unlike craft —
+        # the Blacksmith bench gates only on ownership + operational status
+        # (item-loot-economy design §4.1). The system validates the gates and
+        # emits the player-facing notification (rerolled / reroll_failed)
+        # via the presenter.
+        equipment_system.reroll(self.caller, token, building)
+
+
+class CmdSalvage(GameCommand):
+    """Break a carried item down into Salvage at your Blacksmith.
+
+    Usage:
+      salvage <item>
+
+    Options:
+      <item>  an item you carry (not equipped), by name or key
+              (assault_rifle | "assault rifle" | assault).
+
+    Examples:
+      salvage assault_rifle
+      salvage kevlar vest
+
+    Notes:
+      Stand in your own |cBlacksmith|n (it must be online and not
+      mid-upgrade). Salvaging |rdestroys|n the item and credits you
+      |ySalvage|n — the currency that pays for rerolls. Higher-quality
+      items are worth more, and a higher-level Blacksmith yields more from
+      the same item. Equipped gear must be unequipped first. See 'help
+      reroll' and 'help equipment'.
+    """
+
+    key = "salvage"
+    help_category = "Game"
+
+    def func(self):
+        equipment_system = self.require_system("equipment_system")
+        if equipment_system is None:
+            return
+
+        token = self.args.strip()
+        if not token:
+            self.caller.msg(
+                "Usage: |wsalvage <item>|n — break a carried item down "
+                "into Salvage at your Blacksmith. See 'help salvage'."
+            )
+            return
+
+        building = self._building_at_caller(self.caller)
+
+        # NOTE: deliberately NO base-active (HQ) gate here, unlike craft —
+        # the Blacksmith bench gates only on ownership + operational status
+        # (item-loot-economy design §4.1). The system validates the gates and
+        # emits the player-facing notification (salvaged / salvage_failed)
+        # via the presenter.
+        equipment_system.salvage(self.caller, token, building)
+
+
+class CmdRefine(GameCommand):
+    """Convert surplus resources into Salvage at your Refinery.
+
+    Usage:
+      refine <resource> <amount>
+      refine <resource> all
+      refine <resource>
+
+    Options:
+      <resource>  which resource to convert (nexium, iron, wood, …)
+      <amount>    how many units; a positive number
+      all         convert everything you hold of that resource
+      (no amount) same as 'all'
+
+    Examples:
+      refine nexium 50
+      refine nexium all
+      refine iron
+
+    Notes:
+      Stand in your own |cRefinery|n (it must be online and not
+      mid-upgrade). Refining |rburns|n the resource and credits you
+      |ySalvage|n — the currency that pays for rerolls and inserts. A
+      higher-level Refinery converts at a better rate. The Refinery
+      outputs Salvage only — it never produces resources. See 'help
+      salvage' and 'help equipment'.
+    """
+
+    key = "refine"
+    help_category = "Game"
+
+    _USAGE = ("Usage: |wrefine <resource> [<amount>|all]|n — convert a "
+              "resource into Salvage at your Refinery. See 'help refine'.")
+
+    def func(self):
+        equipment_system = self.require_system("equipment_system")
+        if equipment_system is None:
+            return
+
+        parsed = _parse_resource_amount(self.args)
+        if parsed is None:
+            self.caller.msg(self._USAGE)
+            return
+        resource, amount = parsed
+
+        building = self._building_at_caller(self.caller)
+
+        # NOTE: deliberately NO base-active (HQ) gate here, unlike craft —
+        # the Refinery gates only on ownership + operational status
+        # (mirroring the Blacksmith bench, item-loot-economy design §4.1).
+        # The system validates the gates and emits the player-facing
+        # notification (refined / refine_failed) via the presenter.
+        equipment_system.refine(self.caller, resource, amount, building)
+
+
 def _parse_resource_amount(args):
     """Parse ``<resource> [<amount>|all]`` into ``(Title_Case_resource, amount)``.
 
@@ -2859,6 +3156,22 @@ def _carried_gear_items(caller):
     return loose
 
 
+def _gear_display_name(item, looker=None):
+    """Return a gear item's display name, quality-tag decorated when rolled.
+
+    Rolled GameItems decorate their name as ``Name [Rarity · IQS%]``
+    (item-loot-economy R2.3) via ``get_display_name``; anything without
+    that hook falls back to its key so mock/legacy objects render as before.
+    """
+    getter = getattr(item, "get_display_name", None)
+    if callable(getter):
+        try:
+            return getter(looker)
+        except Exception:
+            pass
+    return getattr(item, "key", str(item))
+
+
 def _append_carried_gear_section(caller, lines):
     """Append a ``Carried gear:`` section (loose, unequipped Gear) to *lines*.
 
@@ -2875,10 +3188,15 @@ def _append_carried_gear_section(caller, lines):
 
     registry = _get_system(caller, "registry")
     lines.append("  Carried gear:")
-    names = [
-        _item_display_name(registry, getattr(obj.db, "item_key", None))
-        for obj in loose
-    ]
+    names = []
+    for obj in loose:
+        getter = getattr(obj, "get_display_name", None)
+        if callable(getter):
+            names.append(_gear_display_name(obj, caller))
+        else:
+            names.append(
+                _item_display_name(registry, getattr(obj.db, "item_key", None))
+            )
     for name in sorted(names):
         lines.append(f"    {name}")
     return True
@@ -3027,8 +3345,13 @@ class CmdScore(GameCommand):
                 lines.append(f"  |rCombat: {remaining}s|n")
 
         # Resources — one "Name - amount" row per non-zero resource.
+        # Salvage (the weightless Blacksmith currency, db.salvage) shows here
+        # alongside the resources so all currencies read in one place.
         resources = status.get("resources", {})
         res_rows = {k: v for k, v in resources.items() if v}
+        salvage = status.get("salvage", 0)
+        if salvage:
+            res_rows["Salvage"] = salvage
         if res_rows:
             lines.extend(format_section("Resources", res_rows))
 
@@ -3161,7 +3484,7 @@ class CmdEquipment(GameCommand):
                 lines.append(f"  [{slot}] (empty)")
                 continue
 
-            item_name = getattr(item, "key", str(item))
+            item_name = _gear_display_name(item, caller)
             mods = getattr(item, "stat_modifiers", None)
             if isinstance(mods, dict) and any(mods.values()):
                 mod_str = ", ".join(
@@ -3381,18 +3704,31 @@ class CmdScan(GameCommand):
 
     @staticmethod
     def _vision_radius(caller):
-        """The caller's scan radius: base player vision + equipped sight bonus."""
-        radius = 10
-        registry = _get_system(caller, "registry")
-        balance = getattr(registry, "balance", None) if registry else None
-        if balance is not None:
-            radius = int(getattr(balance, "player_vision_radius", radius))
+        """The caller's scan radius: base vision + sight gear + Watchtower aura.
+
+        Mirrors the FogOfWarSystem player-circle read (L2 review fix): the
+        base ``balance.player_vision_radius`` (via the installed balance —
+        the literal 7 below is only the FINAL default when no balance is
+        wired, matching BalanceConfig's own default) + the equipped
+        ``sight_range`` total + the Watchtower ``VISION_AURA`` tile bonus
+        (:func:`world.utils.tile_aura_level`) — previously the aura extended
+        the fog map but 'scan' and the attack-reach bound stayed unboosted,
+        so a tower owner could SEE farther than they could scan/target.
+        """
+        balance = get_balance()
+        radius = int(getattr(balance, "player_vision_radius", 7) or 7) \
+            if balance is not None else 7
         equipment = getattr(caller, "equipment", None)
         if equipment is not None:
             try:
                 radius += int(equipment.get_stat_total("sight_range"))
             except (TypeError, ValueError):
                 pass
+        from world.constants import VISION_AURA
+        from world.utils import tile_aura_level
+        radius += tile_aura_level(
+            caller, VISION_AURA, provider=_get_system(caller, "registry")
+        )
         return max(1, radius)
 
 
@@ -3571,7 +3907,7 @@ class CmdInventory(GameCommand):
             if equipped:
                 lines.append("  Equipped:")
                 for slot, item in equipped.items():
-                    item_name = getattr(item, "key", str(item))
+                    item_name = _gear_display_name(item, caller)
                     lines.append(f"    [{slot}] {item_name}")
 
         # Loose (carried-but-unequipped) Gear, then Supply_Bag counts, then

@@ -137,6 +137,29 @@ class GameEntity(DefaultObject):
         return results
 
 
+# Rarity display colors (item-loot-economy design §3.1). Rarity itself is
+# assigned in Phase 2; the display layer already knows the palette so rolled
+# items color in as soon as an instance carries a rarity.
+RARITY_COLORS = {
+    "common": "|w",
+    "uncommon": "|g",
+    "rare": "|c",
+    "epic": "|m",
+    "legendary": "|y",
+}
+
+
+def _format_stat_value(value) -> str:
+    """Format a stat number for display: whole floats render as ints."""
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return str(value)
+    if number == int(number):
+        return str(int(number))
+    return f"{number:g}"
+
+
 class GameItem(GameEntity):
     """A unified item object. Slot type and stats come from the item definition.
 
@@ -159,6 +182,16 @@ class GameItem(GameEntity):
         weight (float) — per-unit carried weight
         classification (str) — "modern" or "futuristic"
         required_rank (str | None) — rank name or None
+
+    Optional per-instance roll state (item-loot-economy, all unset unless
+    written by the loot roller / Blacksmith — R12):
+        rolled_stats (dict) — per-instance rolled stat values; preferred by
+            ``get_stat`` over the def base in stat_modifiers
+        affixes (list) — drawn affixes
+        rarity (str) — rarity tier name
+        iqs (float) — displayed item score: base IQS (0–100) + affix
+            values, so it can exceed 100 (design §2.2)
+        inserts (list) — applied Blacksmith inserts
 
     """
 
@@ -265,6 +298,23 @@ class GameItem(GameEntity):
         return self.attributes.get("weapon_type", default=None)
 
     @property
+    def damage_type(self) -> str | None:
+        """Return the weapon's typed damage, or None (→ physical default).
+
+        A per-instance value (``db.damage_type``, written by a Blacksmith
+        damage-type insert — item-loot-economy §4.3) overrides the
+        definition's ``damage_type``. Combat's ``_get_damage_type`` reads
+        this property, so both the shipped typed weapons (fire/psychic/
+        blast from the def) and an insert conversion on THIS instance
+        dispatch typed damage.
+        """
+        dt = self.attributes.get("damage_type", default=None)
+        if dt:
+            return dt
+        item_def = self.item_def
+        return getattr(item_def, "damage_type", None) if item_def else None
+
+    @property
     def ammo_type(self) -> str | None:
         """Return the ammo item key the magazine holds (ranged), or None."""
         return self.attributes.get("ammo_type", default=None)
@@ -294,8 +344,54 @@ class GameItem(GameEntity):
         """Return the per-unit carried weight (>= 0)."""
         return self.attributes.get("weight", default=1.0)
 
+    # ------------------------------------------------------------------ #
+    #  Per-instance roll state (item-loot-economy §10) — all optional.
+    #  Items spawned before the loot roller (or from defs without a
+    #  roll_spec) simply never have these attributes set (R12.1).
+    # ------------------------------------------------------------------ #
+
+    @property
+    def rolled_stats(self) -> dict:
+        """Return the per-instance rolled stat values, or {} if unrolled."""
+        return self.attributes.get("rolled_stats", default=None) or {}
+
+    @property
+    def affixes(self) -> list:
+        """Return the per-instance affix list, or [] if none."""
+        return self.attributes.get("affixes", default=None) or []
+
+    @property
+    def rarity(self) -> str | None:
+        """Return the per-instance rarity name, or None if unrolled."""
+        return self.attributes.get("rarity", default=None)
+
+    @property
+    def iqs(self) -> float | None:
+        """Return the per-instance Item Quality Score, or None if unrolled."""
+        return self.attributes.get("iqs", default=None)
+
+    @property
+    def inserts(self) -> list:
+        """Return the list of applied Blacksmith inserts, or [] if none."""
+        return self.attributes.get("inserts", default=None) or []
+
     def get_stat(self, stat_name: str, default: float = 0) -> float:
         """Return the value of a stat modifier, or the default.
+
+        A per-instance rolled value (``db.rolled_stats``, written by the
+        loot roller) takes precedence over the definition base carried in
+        ``stat_modifiers``. Items without roll data behave exactly as
+        before (R12.1): the def base is returned unchanged. This is the
+        single read path combat's ``_get_stat`` / equipment's
+        ``get_stat_total`` go through, so rolled values flow into combat
+        with no engine change.
+
+        Drawn affixes (``db.affixes``, task 2.3 — R3.5) targeting this
+        stat axis ADD their rolled magnitude on top of the base value, so
+        an affix on an aggregating axis (``damage_bonus``,
+        ``damage_reduction``, ``<type>_resist``) flows into combat through
+        ``get_stat_total`` with no combat-engine change, while staying
+        stored separately for display/reroll semantics.
 
         Args:
             stat_name: The stat key to look up (e.g. "damage", "range").
@@ -304,8 +400,146 @@ class GameItem(GameEntity):
         Returns:
             The stat value as a float.
         """
-        mods = self.stat_modifiers
-        return float(mods.get(stat_name, default))
+        base = None
+        rolled = self.attributes.get("rolled_stats", default=None)
+        if rolled is not None and hasattr(rolled, "get"):
+            value = rolled.get(stat_name)
+            if value is not None:
+                base = float(value)
+        if base is None:
+            mods = self.stat_modifiers
+            value = mods.get(stat_name) if hasattr(mods, "get") else None
+            if value is not None:
+                base = float(value)
+
+        affix_total = 0.0
+        affixes = self.attributes.get("affixes", default=None)
+        if affixes:
+            for affix in affixes:
+                if not hasattr(affix, "get"):
+                    continue
+                if affix.get("stat") != stat_name:
+                    continue
+                magnitude = affix.get("magnitude")
+                if isinstance(magnitude, (int, float)) and not isinstance(
+                    magnitude, bool
+                ):
+                    affix_total += float(magnitude)
+
+        if base is None:
+            base = float(default)
+        return base + affix_total
+
+    # ------------------------------------------------------------------ #
+    #  Display (item-loot-economy §2.3 — R2.3, R2.5)
+    # ------------------------------------------------------------------ #
+
+    def get_quality_tag(self) -> str:
+        """Return the ``[Rarity · IQS%]`` name tag, or "" when neutral.
+
+        A fixed (unrolled) item carries neither ``iqs`` nor ``rarity`` and
+        gets an empty tag — the readout only appears where it is meaningful
+        (R2.5). In Phase 1 rarity is not yet assigned, so the tag shows
+        just ``[73%]``; once rarity lands (Phase 2) it reads
+        ``[Rare · 73%]``. The score is the DISPLAYED item score (design
+        §2.2): base IQS + affix values, so it can exceed 100 — a
+        "Legendary 112" reads as top-tier. The display renders at most
+        ``min(score, 999)``; the stored math is never clamped.
+        """
+        parts = []
+        rarity = self.rarity
+        if rarity:
+            parts.append(str(rarity).capitalize())
+        iqs = self.iqs
+        if iqs is not None:
+            parts.append(f"{min(int(round(float(iqs))), 999)}%")
+        if not parts:
+            return ""
+        return "[" + " · ".join(parts) + "]"
+
+    def get_display_name(self, looker=None, **kwargs):
+        """Return the item name decorated with its quality tag.
+
+        Rolled items show ``Name [Rarity · IQS%]`` colored by rarity
+        (design §3.1 palette); unrolled items show the plain name — a
+        neutral readout (R2.5).
+        """
+        parent = getattr(super(), "get_display_name", None)
+        name = parent(looker, **kwargs) if callable(parent) else self.key
+        tag = self.get_quality_tag()
+        if not tag:
+            return name
+        color = RARITY_COLORS.get(str(self.rarity or "").lower(), "")
+        if color:
+            return f"{color}{name} {tag}|n"
+        return f"{name} {tag}"
+
+    def get_roll_details(self) -> list[str]:
+        """Return inspect lines: per-stat ``rolled (min–max)`` + affixes.
+
+        Bands come from the def's ``roll_spec.stats``; a rolled stat with
+        no band (e.g. added by an insert) shows its value alone. Unrolled
+        items return no lines (neutral — R2.5).
+        """
+        rolled = self.rolled_stats
+        affixes = self.affixes
+        if not rolled and not affixes:
+            return []
+
+        bands = {}
+        item_def = self.item_def
+        spec = getattr(item_def, "roll_spec", None) if item_def else None
+        if isinstance(spec, dict):
+            stats = spec.get("stats")
+            if isinstance(stats, dict):
+                bands = stats
+
+        lines = []
+        # Spec-ordered stats first (matches the def's authoring order),
+        # then any rolled extras without a band.
+        ordered = [s for s in bands if s in rolled]
+        ordered += [s for s in rolled if s not in bands]
+        for stat in ordered:
+            label = str(stat).replace("_", " ").capitalize()
+            value = _format_stat_value(rolled[stat])
+            band = bands.get(stat)
+            if isinstance(band, dict) and "min" in band and "max" in band:
+                lo = _format_stat_value(band["min"])
+                hi = _format_stat_value(band["max"])
+                lines.append(f"{label} {value} ({lo}–{hi})")
+            else:
+                lines.append(f"{label} {value}")
+
+        for affix in affixes:
+            if not isinstance(affix, dict):
+                lines.append(str(affix))
+                continue
+            magnitude = affix.get("magnitude", affix.get("value"))
+            axis = affix.get("stat") or affix.get("proc") or affix.get("key", "affix")
+            if magnitude is not None:
+                lines.append(f"+{_format_stat_value(magnitude)} {axis}")
+            else:
+                lines.append(str(axis))
+        return lines
+
+    def return_appearance(self, looker, **kwargs):
+        """Append the roll-detail block to the item's appearance.
+
+        ``look <item>`` routes here (Evennia's ``at_look`` →
+        ``return_appearance``). Rolled items get a per-stat
+        ``rolled (min–max)`` block plus affixes (R2.3); unrolled items
+        render exactly as before (R2.5).
+        """
+        parent = getattr(super(), "return_appearance", None)
+        if callable(parent):
+            text = parent(looker, **kwargs)
+        else:
+            text = self.get_display_name(looker)
+        details = self.get_roll_details()
+        if not details:
+            return text
+        block = "\n".join(f"  {line}" for line in details)
+        return f"{text}\n{block}" if text else block
 
     def get_structured_state(self) -> dict:
         """Return a presentation-agnostic dict of this item's state."""
@@ -325,6 +559,13 @@ class GameItem(GameEntity):
             "weight": self.weight,
             "classification": self.classification,
             "required_rank": self.required_rank,
+            # Per-instance roll state (item-loot-economy §10) — neutral
+            # values ({} / [] / None) for unrolled items (R12.1).
+            "rolled_stats": dict(self.rolled_stats),
+            "affixes": list(self.affixes),
+            "rarity": self.rarity,
+            "iqs": self.iqs,
+            "inserts": list(self.inserts),
         }
 
 

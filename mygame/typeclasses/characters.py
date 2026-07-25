@@ -478,6 +478,39 @@ class CombatCharacter(CombatEntity, DefaultCharacter):
         return True
 
     # ------------------------------------------------------------------ #
+    #  Salvage currency helpers (item-loot-economy R7)
+    # ------------------------------------------------------------------ #
+    # Salvage is a per-player counted currency stored as a dedicated
+    # ``db.salvage`` int — weightless and currency-like, deliberately NOT in
+    # the validator-enforced RESOURCE_TYPES tuple (precedent: the Supply_Bag's
+    # ``db.supplies`` counted store). A character without the attribute reads
+    # 0, so legacy characters keep working unchanged (R12.1).
+
+    def get_salvage(self) -> int:
+        """Return the current Salvage balance (0 when never credited)."""
+        return int(self.db.salvage or 0)
+
+    def add_salvage(self, amount: int) -> None:
+        """Credit *amount* Salvage. The balance is clamped to never go
+        negative (a negative credit can drain to 0 but not below)."""
+        self.db.salvage = max(0, self.get_salvage() + int(amount))
+
+    def spend_salvage(self, amount: int) -> bool:
+        """Spend *amount* Salvage if the balance covers it. Return success.
+
+        Refuses (returns False, balance unchanged) on overdraft or a
+        negative amount — the balance can never go negative.
+        """
+        amount = int(amount)
+        if amount < 0:
+            return False
+        balance = self.get_salvage()
+        if balance < amount:
+            return False
+        self.db.salvage = balance - amount
+        return True
+
+    # ------------------------------------------------------------------ #
     #  Building helpers
     # ------------------------------------------------------------------ #
 
@@ -517,6 +550,7 @@ class CombatCharacter(CombatEntity, DefaultCharacter):
             "combat_xp": self.db.combat_xp,
             "rank_level": self.db.rank_level,
             "resources": dict(res),
+            "salvage": self.get_salvage(),
             "active_powerups": dict(self.db.active_powerups or {}),
             "researched_techs": list(self.db.researched_techs or set()),
             "combat_lockout_tick": self.db.combat_lockout_tick or 0,

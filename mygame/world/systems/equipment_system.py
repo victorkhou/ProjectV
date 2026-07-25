@@ -46,6 +46,44 @@ logger = logging.getLogger("mygame.equipment_system")
 # intentionally excluded (task 8.4 / 8.3).
 EQUIPMENT_BUILDING_TYPES = ("AR", "MB", "LB")
 
+# Blacksmith reroll floor per level (item-loot-economy task 4.4, design §4.4
+# "reroll floor (U clamp rises with level)"). The DECIDED formula:
+#
+#     level_floor = REROLL_FLOOR_PER_LEVEL * (blacksmith_level - 1)
+#
+# i.e. L1 0.0 (no floor) → L2 0.1 → ... → L5 0.4 — a modest curve that makes
+# a maxed bench meaningfully kinder without guaranteeing god-rolls (a 0.4 U
+# clamp at skew 2 puts the worst possible roll at 16% of the band). The
+# EFFECTIVE floor is ``max(level_floor, rarity_floor)``: the bench floor is
+# the lever, the item's rarity floor stays the guarantee — an Epic (0.50)
+# or Legendary (0.75) item never rerolls below its rarity-guaranteed band
+# fraction, at any bench level.
+REROLL_FLOOR_PER_LEVEL = 0.1
+
+# Salvage Protocols cost-multiplier floor (item-loot-economy task 5.4,
+# R11.2): the reroll-charge consumer clamps the researched
+# ``salvage_cost_mult`` tech value to ``[floor, 1.0]`` — mirroring
+# ``building_system._build_cost_multiplier`` — so stacked cost-reduction
+# research can never trivialize the reroll Salvage sink (the economy's
+# anti-inflation valve, design §5) nor raise costs. A module constant
+# rather than a balance field (deliberate, task 5.4): the shipped tech is
+# 0.75, well above the floor, so this is a stacking guard, not a tuning
+# lever — promote to balance.yaml if a second economy-cost tech ships.
+SALVAGE_COST_MULT_FLOOR = 0.5
+
+# Master Gunsmithing craft-floor cap (item-loot-economy task 6.4, R11.6):
+# the craft-path consumer clamps the researched ``craft_iqs_floor`` tech
+# value to ``[0.0, cap]`` before handing it to the loot roller as the
+# crafted-roll U-clamp. The tech accumulator ADDS effect values, so a
+# second floor tech would SUM floors (0.25 + 0.25 = 0.5) — the cap absorbs
+# additive stacking and keeps crafted gear "reliable, never god-roll"
+# (design §9: the craft band's top is already only a good loot roll; a 0.5
+# U-clamp at skew 2 puts the worst crafted roll at 25% of that band). A
+# module constant, not a balance field — the shipped tech is 0.25, well
+# under the cap, so this is a stacking guard, not a tuning lever
+# (mirroring SALVAGE_COST_MULT_FLOOR above).
+CRAFT_IQS_FLOOR_CAP = 0.5
+
 
 class EquipmentSystem(CarryWeightMixin, StorageMixin, BaseSystem):
     """Mediates equipment production, item actions, carry weight, and storage.
@@ -395,7 +433,8 @@ class EquipmentSystem(CarryWeightMixin, StorageMixin, BaseSystem):
         return total
 
     def _route_produced_item(
-        self, item_def: ItemDef, owner: Any, building: Any = None
+        self, item_def: ItemDef, owner: Any, building: Any = None,
+        craft_building: Any = None,
     ) -> bool:
         """Route a produced *item_def* into storage by category.
 
@@ -419,6 +458,13 @@ class EquipmentSystem(CarryWeightMixin, StorageMixin, BaseSystem):
             owner: The building owner receiving supply produce / crafted gear.
             building: The producing building (passive path) → gear drops on its
                 tile; ``None`` (craft path) → gear goes to *owner*'s inventory.
+            craft_building: The building a MANUAL craft happens at (the craft
+                path passes it alongside ``building=None`` — ``building``
+                keeps its "passive production drop target" meaning). Its
+                level drives the crafted-rarity draw (≤ Rare, capped 5% at
+                L5 — the deviation-from-R6.1 decision documented on
+                :meth:`_roll_spawned_gear`), whichever equipment building
+                it is (Armory/Lab/Medbay — the mechanism is generic).
 
         Returns:
             ``True`` if the item was routed, ``False`` otherwise (e.g. a Supply
@@ -470,15 +516,48 @@ class EquipmentSystem(CarryWeightMixin, StorageMixin, BaseSystem):
                     return False
                 # None => no resolvable tile (building off-map): a real failure,
                 # so the caller refunds rather than minting a lost item.
-                return drop is not None
+                if drop is None:
+                    return False
+                # Passive/agent production drop: roll the spawned instance in
+                # the LOWEST rarity bucket (source weight 0) with no affixes —
+                # passive income gets the safe-floor treatment (item-loot-
+                # economy task 1.5, design §3.2). Defs without a roll_spec
+                # stay fixed (R1.3); a roll failure degrades to a fixed item,
+                # never a lost drop (R1.5).
+                self._roll_spawned_gear(drop, item_def, crafted=False)
+                return True
             try:
-                self._create_item_func(item_def, owner)
+                item = self._create_item_func(item_def, owner)
             except Exception:
                 logger.exception(
                     "Failed to create gear %s for %s",
                     item_def.key, getattr(owner, "key", "?"),
                 )
                 return False
+            # Manual craft (building=None) rolls in the tighter per-stat
+            # craft band (crafted=True — R1.4/R6.1, task 1.5) and applies
+            # the crafter's Master Gunsmithing floor (task 6.4, R11.6) plus
+            # the crafting building's level-scaled rarity draw (via
+            # craft_building — see _roll_spawned_gear). The unwired-spawner
+            # fallback (building given, isolated tests) is still passive
+            # production, so it keeps the production-drop treatment.
+            crafted = building is None
+            craft_level = 0
+            if crafted and craft_building is not None:
+                from world.utils import get_building_level
+                try:
+                    craft_level = int(get_building_level(craft_building))
+                except (TypeError, ValueError):
+                    craft_level = 0
+            roll = self._roll_spawned_gear(item, item_def,
+                                           crafted=crafted,
+                                           owner=owner,
+                                           craft_level=craft_level)
+            if crafted:
+                # Stash the craft roll so `craft` can surface the stamped
+                # IQS/rarity in its success notification (unrolled defs
+                # leave this None → no value readout, R2.5).
+                self._last_craft_roll = roll
             return True
 
         # Unrecognized category — content is load-validated to one of the six,
@@ -488,6 +567,76 @@ class EquipmentSystem(CarryWeightMixin, StorageMixin, BaseSystem):
             item_def.key, category,
         )
         return False
+
+    def _craft_iqs_floor(self, player: Any) -> float:
+        """Resolve *player*'s crafted-roll floor tech (R11.6, task 6.4).
+
+        Reads the ``craft_iqs_floor`` tech key via ``get_tech_bonus`` with
+        ``default=0.0`` (no research → no floor, exactly today's crafted
+        roll). The Master Gunsmithing tech ships ``effect_value:
+        {craft_iqs_floor: 0.25}`` — a U-clamp fraction the loot roller
+        applies INSIDE the craft band (the same mechanism as the rarity
+        roll floors), so the researched floor raises the low end of a
+        crafted roll but can never push it past the band (R6.1: crafted
+        stays craft-band-bounded).
+
+        Clamped to ``[0.0, CRAFT_IQS_FLOOR_CAP]``: the tech accumulator
+        ADDS values, so stacked floor techs would sum — the cap absorbs
+        that, and negative/garbage values degrade to 0 (never a *worse*
+        roll than unresearched).
+        """
+        from world.utils import get_tech_bonus
+
+        try:
+            floor = float(get_tech_bonus(player, "craft_iqs_floor",
+                                         default=0.0))
+        except (TypeError, ValueError):
+            return 0.0
+        return min(max(floor, 0.0), CRAFT_IQS_FLOOR_CAP)
+
+    def _roll_spawned_gear(self, item: Any, item_def: ItemDef,
+                           *, crafted: bool, owner: Any = None,
+                           craft_level: int = 0) -> Any:
+        """Roll a freshly spawned gear *item* (item-loot-economy task 1.5).
+
+        Delegates to :func:`world.systems.loot_roller.roll_and_stamp`, which
+        writes per-instance ``rolled_stats`` + ``iqs`` onto the item (design
+        §1.2). Both production paths pass rarity weight 0 — production drops
+        roll in the lowest rarity bucket (design §3.2) and crafted items never
+        get affixes (R6.1); base-elimination drops carry their own weight in
+        ``base_elimination``. Crafted rolls additionally apply the *owner*'s
+        Master Gunsmithing ``craft_iqs_floor`` tech (task 6.4, R11.6) as the
+        in-band roll floor — see :meth:`_craft_iqs_floor` — and, when a
+        *craft_level* (the crafting building's level) is supplied, draw a
+        crafted rarity (≤ Rare) from the balance ``craft_rarity_table``
+        (deliberate deviation from R6.1's "no crafted rarity" — per user
+        request, a higher-level building crafts better gear, capping at
+        Rare 5% at L5; see the loot_roller module docstring for the full
+        decision record). When both floors apply (a Rare craft under Master
+        Gunsmithing) the roller takes ``max`` of the two, like the reroll
+        path. Uses the injected ``self._rng`` when a test set one (mirroring
+        ``apply_death_loss``), else the module :mod:`random`. Never raises;
+        a def without a ``roll_spec`` no-ops (R1.3/R1.5).
+        """
+        from world.systems.loot_roller import (
+            DEFAULT_LOOT_ROLL_SKEW, roll_and_stamp,
+        )
+        balance = getattr(self.registry, "balance", None)
+        craft_floor = 0.0
+        if crafted and owner is not None:
+            craft_floor = self._craft_iqs_floor(owner)
+        return roll_and_stamp(
+            item, item_def,
+            source_rarity_weight=0.0,
+            crafted=crafted,
+            rng=getattr(self, "_rng", random),
+            default_skew=getattr(
+                balance, "loot_roll_skew", DEFAULT_LOOT_ROLL_SKEW),
+            rarity_table=getattr(balance, "rarity_table", None),
+            craft_floor=craft_floor,
+            craft_level=craft_level,
+            craft_rarity_table=getattr(balance, "craft_rarity_table", None),
+        )
 
     # ------------------------------------------------------------------ #
     #  Mediated actions (use-case)
@@ -949,26 +1098,10 @@ class EquipmentSystem(CarryWeightMixin, StorageMixin, BaseSystem):
                         item_name=item_name)
             return False
 
-        # 4. Ownership gate. Read the ``owner`` property (Building exposes one),
-        #    falling back to the raw Attribute/db for objects that don't.
-        from world.utils import is_owner, get_building_attr
-        owner = getattr(building, "owner", None)
-        if owner is None:
-            owner = get_building_attr(building, "owner")
-        if not is_owner(player, owner):
-            self.notify(player, "craft_failed", reason="not_owner",
-                        item_name=item_name)
-            return False
-
-        # 5. Operational gate — offline OR mid-upgrade can't craft.
-        if getattr(building, "is_offline", False):
-            self.notify(player, "craft_failed", reason="building_offline",
-                        item_name=item_name)
-            return False
-        from world.utils import get_obj_attr as _get_obj_attr
-        if _get_obj_attr(building, "under_construction", False):
-            self.notify(player, "craft_failed", reason="building_upgrading",
-                        item_name=item_name)
+        # 4-5. Ownership + operational gate (shared bench tail).
+        if not self._check_owner_operational(
+            player, building, "craft_failed", item_name=item_name
+        ):
             return False
 
         # 6. Rank gate (shared with equip/use; emits its own equip_denied).
@@ -992,7 +1125,11 @@ class EquipmentSystem(CarryWeightMixin, StorageMixin, BaseSystem):
                         breakdown=format_insufficient_resources(player, craft_cost))
             return False
 
-        if not self._route_produced_item(item_def, player):
+        # Clear the stashed craft roll before routing so a supply craft (or
+        # an unrolled def) can never inherit a previous craft's IQS readout.
+        self._last_craft_roll = None
+        if not self._route_produced_item(item_def, player,
+                                         craft_building=building):
             # Routing failed — refund so the spend isn't lost. The reachable
             # cause depends on category: a full Supply_Bag (max_stack) for
             # supplies, or a gear-factory error for gear. Report each accurately
@@ -1010,9 +1147,790 @@ class EquipmentSystem(CarryWeightMixin, StorageMixin, BaseSystem):
             "%s crafted %s at %s",
             getattr(player, "key", "?"), item_def.key, btype,
         )
+        # Surface the crafted item's value in the success line: the stamped
+        # IQS (the `[73%]` quality tag) and — when the building-level rarity
+        # draw assigned one — its rarity (`[Rare · 73%]`). Unrolled items
+        # (no roll_spec) carry no roll and show no value, matching the
+        # neutral display treatment elsewhere (R2.5).
+        extra: dict[str, Any] = {}
+        roll = getattr(self, "_last_craft_roll", None)
+        if roll is not None and getattr(roll, "iqs", None) is not None:
+            extra["iqs"] = roll.iqs
+            if getattr(roll, "rarity", None):
+                extra["rarity"] = roll.rarity
         self.notify(player, "crafted", item_name=item_name,
-                    category=item_def.category)
+                    category=item_def.category, **extra)
         return True
+
+    def apply_insert(self, player: Any, insert_token: str, building: Any,
+                     weapon_token: str | None = None) -> bool:
+        """Apply a Blacksmith insert to the player's equipped weapon (R5).
+
+        The `insert` command backend (item-loot-economy §4.3): standing in
+        their own operational Blacksmith, a player consumes one insert item
+        from their Supply_Bag to permanently mutate the equipped weapon
+        ``GameItem`` — irreversible by design (decided §12).
+
+        Gate order mirrors :meth:`craft` (each failure emits an
+        ``insert_failed`` notification with a reason; no active-HQ gate —
+        design §4.1):
+
+        1. ``unknown_item`` — the token resolves to no Item_Def.
+        2. ``not_an_insert`` — the item is not a ``category: insert``
+           consumable carrying a well-formed ``insert_effect``.
+        3. ``wrong_building`` — the player is not standing in a building
+           with the ``blacksmith`` capability (also covers "nothing here").
+        4. ``not_owner`` — the Blacksmith is not the player's.
+        5. ``building_offline`` / ``building_upgrading`` — operational gate.
+        6. rank gate — reuses :meth:`_rank_allows` (emits ``equip_denied``).
+        7. ``no_weapon`` / ``weapon_not_equipped`` — an equipped weapon is
+           required (and must match the optional *weapon_token*).
+        8. ``no_slots`` — slot limit ``1 + blacksmith_level // 3`` (L1–2 →
+           1 slot, L3+ → 2); over-limit is REFUSED with the weapon
+           unchanged and the insert NOT consumed (design §4.3, R5.3).
+        9. ``insufficient_supply`` — the player doesn't carry the insert
+           item (the "cost": one unit is consumed from the Supply_Bag).
+
+        On success the weapon instance is mutated per the effect type
+        (``damage_type`` → ``db.damage_type``; ``range``/``stat`` →
+        ``db.rolled_stats`` so combat's ``get_stat`` read path picks it
+        up), the applied insert is recorded in ``db.inserts`` (display +
+        slot-limit enforcement, and the PvP death drop carries it — R5.4),
+        and the IQS is re-stamped through the single writer
+        ``recompute_iqs`` (R2.4). Never raises into the command layer.
+
+        Args:
+            player: The player applying the insert.
+            insert_token: Insert item key or display name (typo-tolerant).
+            building: The building the player is standing in (or ``None``).
+            weapon_token: Optional weapon name to sanity-check against the
+                equipped weapon.
+
+        Returns:
+            ``True`` if the insert was applied, ``False`` otherwise.
+        """
+        from world.constants import BLACKSMITH
+        from world.utils import building_has_capability, get_building_level
+        from world.systems.loot_roller import (recompute_iqs,
+                                               write_instance_field)
+
+        # 1. Resolve the insert item.
+        item_def = self.registry.resolve_item(insert_token)
+        if item_def is None:
+            self.notify(player, "insert_failed", reason="unknown_item",
+                        item_name=insert_token)
+            return False
+
+        item_name = item_def.name
+
+        # 2. Insert gate — must be a category:"insert" consumable with a
+        #    well-formed payload (shape is load-validated; the type check
+        #    here keeps the consume-then-mutate step below unreachable for
+        #    anything the mutation switch doesn't handle).
+        effect = getattr(item_def, "insert_effect", None)
+        if (
+            getattr(item_def, "category", None) != "insert"
+            or not isinstance(effect, dict)
+            or effect.get("type") not in ("damage_type", "range", "stat")
+        ):
+            self.notify(player, "insert_failed", reason="not_an_insert",
+                        item_name=item_name)
+            return False
+
+        # 3. Right-building gate — the bench is any building whose def
+        #    declares the `blacksmith` capability (design §4.1: the
+        #    Blacksmith is a pure bench, not a production building, so this
+        #    is a capability check rather than a production-catalog check).
+        if building is None or not building_has_capability(
+            building, BLACKSMITH, provider=self.registry
+        ):
+            self.notify(player, "insert_failed", reason="wrong_building",
+                        item_name=item_name)
+            return False
+
+        # 4-5. Ownership + operational gate (shared bench tail).
+        if not self._check_owner_operational(
+            player, building, "insert_failed", item_name=item_name
+        ):
+            return False
+
+        # 6. Rank gate (shared with equip/use/craft; emits equip_denied).
+        if not self._rank_allows(player, item_def.required_rank, item_name):
+            return False
+
+        # 7. Weapon gate — inserts mutate the EQUIPPED weapon only (R5.1).
+        handler = getattr(player, "equipment", None)
+        weapon = (
+            handler.get_equipped("weapon")
+            if handler is not None and hasattr(handler, "get_equipped")
+            else None
+        )
+        if weapon is None:
+            self.notify(player, "insert_failed", reason="no_weapon",
+                        item_name=item_name)
+            return False
+        weapon_name = self._item_name(weapon)
+        if weapon_token and not self._weapon_matches(weapon, weapon_token):
+            self.notify(player, "insert_failed", reason="weapon_not_equipped",
+                        item_name=item_name, weapon_name=weapon_token)
+            return False
+
+        # 8. Slot-limit gate — refuse BEFORE consuming, weapon unchanged
+        #    (R5.3). Limit = 1 + level//3: L1–2 → 1 slot, L3+ → 2.
+        applied = list(self._read_instance_field(weapon, "inserts") or [])
+        slot_limit = 1 + (int(get_building_level(building)) // 3)
+        if len(applied) >= slot_limit:
+            self.notify(player, "insert_failed", reason="no_slots",
+                        item_name=item_name, weapon_name=weapon_name,
+                        slot_limit=slot_limit)
+            return False
+
+        # 9. Cost gate — consuming the insert item from the Supply_Bag IS
+        #    the cost. Deduct-first (mirrors craft); the mutation below is
+        #    plain attribute writes and cannot fail after this point.
+        if (
+            not hasattr(handler, "remove_supply")
+            or not handler.remove_supply(item_def.key, 1)
+        ):
+            self.notify(player, "insert_failed",
+                        reason="insufficient_supply", item_name=item_name)
+            return False
+
+        # Apply — mutate the equipped weapon instance (design §4.3).
+        effect = dict(effect)
+        etype = effect.get("type")
+        if etype == "damage_type":
+            # Combat's _get_damage_type reads the instance: fire/psychic/
+            # blast dispatch today, poison via the task-3.2 DoT branch.
+            write_instance_field(weapon, "damage_type",
+                                 str(effect.get("value")).lower())
+        elif etype == "range":
+            # Lands in rolled_stats["range"], read by the task-3.1
+            # _resolve_weapon_range hook via get_stat.
+            self._bump_rolled_stat(weapon, "range", effect.get("value"))
+        elif etype == "stat":
+            self._bump_rolled_stat(weapon, effect.get("stat"),
+                                   effect.get("value"))
+            for trade_stat, trade_val in (effect.get("tradeoff") or {}).items():
+                self._bump_rolled_stat(weapon, trade_stat, trade_val)
+
+        # Record the applied insert (display + slot-limit enforcement + the
+        # PvP death-drop carry, R5.4) and re-stamp IQS through the single
+        # writer (R2.4).
+        applied.append({"key": item_def.key, "name": item_name,
+                        "effect": effect})
+        write_instance_field(weapon, "inserts", applied)
+        recompute_iqs(weapon)
+
+        logger.info("%s applied insert %s to %s",
+                    getattr(player, "key", "?"), item_def.key, weapon_name)
+        self.notify(player, "insert_applied", item_name=item_name,
+                    weapon_name=weapon_name, slots_used=len(applied),
+                    slot_limit=slot_limit)
+        return True
+
+    @classmethod
+    def _bump_rolled_stat(cls, weapon: Any, stat: Any, delta: Any) -> None:
+        """Add *delta* to *stat* in the weapon's ``rolled_stats`` (§4.3).
+
+        ``get_stat`` prefers ``rolled_stats`` over the def base, so an
+        unrolled weapon is seeded from its ``stat_modifiers`` base first —
+        a +2 range insert on a base-5 weapon reads 7 afterwards, never 2.
+        Results floor at 0 (a tradeoff can't push a stat negative).
+        Integral values are stored as ints to match the loot roller.
+        """
+        from world.systems.loot_roller import write_instance_field
+
+        if not stat:
+            return
+        try:
+            delta = float(delta)
+        except (TypeError, ValueError):
+            return
+        rolled = dict(cls._read_instance_field(weapon, "rolled_stats") or {})
+        if stat in rolled:
+            try:
+                base = float(rolled[stat] or 0)
+            except (TypeError, ValueError):
+                base = 0.0
+        else:
+            mods = cls._item_attr(weapon, "stat_modifiers", None) or {}
+            try:
+                base = float(mods.get(stat, 0) or 0) if hasattr(mods, "get") \
+                    else 0.0
+            except (TypeError, ValueError):
+                base = 0.0
+        new = max(base + delta, 0.0)
+        rolled[stat] = int(new) if new.is_integer() else new
+        write_instance_field(weapon, "rolled_stats", rolled)
+
+    @classmethod
+    def _weapon_matches(cls, weapon: Any, token: str) -> bool:
+        """Return True if *token* names the equipped *weapon* (lenient).
+
+        Case-, space- and underscore-insensitive against the weapon's
+        item_key, object key, and display name; a token that is a prefix
+        of the name also matches (``insert hollowpoint assault`` works).
+        """
+        token_norm = " ".join(str(token).lower().replace("_", " ").split())
+        if not token_norm:
+            return False
+        candidates = (
+            cls._item_attr(weapon, "item_key", None),
+            getattr(weapon, "key", None),
+            cls._item_name(weapon),
+        )
+        for cand in candidates:
+            if not cand:
+                continue
+            cand_norm = " ".join(str(cand).lower().replace("_", " ").split())
+            if cand_norm == token_norm or cand_norm.startswith(token_norm):
+                return True
+        return False
+
+    def _salvage_cost_multiplier(self, player: Any) -> float:
+        """Resolve *player*'s economy cost-mult tech (R11.2, task 5.4).
+
+        Reads the NEW ``salvage_cost_mult`` tech key via ``get_tech_bonus``
+        with ``default=1.0`` (no research → costs unchanged — a copied
+        ``default=0.0`` would make every reroll free, the wiring landmine
+        flagged in the combat-rebalance review). The Salvage Protocols tech
+        ships ``effect_value: {salvage_cost_mult: 0.75}`` meaning "reroll
+        charge ×0.75" (−25%).
+
+        Applies to the Blacksmith **reroll** charge (Salvage + resources)
+        only — an insert's "cost" is the consumed insert item itself, which
+        a multiplier cannot meaningfully discount (documented decision,
+        task 5.4).
+
+        Accumulator semantics (mirrors ``building_system.
+        _build_cost_multiplier``): ``TechSystem._apply_tech_effect`` ADDS
+        effect values for every key except ``production_multiplier``, so a
+        single ``salvage_cost_mult`` tech stores its multiplier verbatim
+        (0 + 0.75) and this consumer reads it directly. Two such techs
+        would SUM (nonsense as a multiplier), so the value is clamped to
+        ``[SALVAGE_COST_MULT_FLOOR, 1.0]``: research can never RAISE the
+        charge (upper clamp absorbs additive stacking) and stacking can
+        never trivialize the Salvage sink (the floor, 0.5). Only one
+        salvage_cost_mult tech is the supported data shape.
+        """
+        from world.utils import get_tech_bonus
+
+        mult = get_tech_bonus(player, "salvage_cost_mult", default=1.0)
+        return min(1.0, max(SALVAGE_COST_MULT_FLOOR, float(mult)))
+
+    def reroll(self, player: Any, item_token: str, building: Any) -> bool:
+        """Re-roll a held/equipped item's BASE stats at the Blacksmith (R4.5).
+
+        The `reroll` command backend (item-loot-economy §4.2/§4.4, task
+        4.4): standing in their own operational Blacksmith, a player pays
+        Salvage + resources to draw fresh base rolls for a rolled item they
+        carry or have equipped. Base stats ONLY — rarity, affixes, and
+        applied inserts are untouched (R4.5 default; reforge is deferred),
+        and insert stat deltas are re-applied on top of the fresh base so
+        an irreversible insert's value is never erased by a reroll.
+
+        The reroll floor (design §4.4): fresh rolls use the loot band with
+        a U-clamp floor of ``max(level_floor, rarity_floor)`` where
+        ``level_floor = REROLL_FLOOR_PER_LEVEL * (blacksmith_level - 1)``
+        (L1 0.0 → L5 0.4) — a higher bench raises the worst case, while an
+        Epic/Legendary item keeps its rarity-guaranteed floor if higher.
+
+        Gate order mirrors :meth:`apply_insert` (each failure emits a
+        ``reroll_failed`` notification with a reason; no active-HQ gate —
+        design §4.1):
+
+        1. ``unknown_item`` — no carried or equipped item matches the token.
+        2. ``not_rerollable`` — the item's def declares no ``roll_spec``
+           (fixed items — ammo, consumables, legacy gear — never roll).
+        3. ``wrong_building`` — not standing in a ``blacksmith``-capability
+           building (also covers "nothing here").
+        4. ``not_owner`` — the Blacksmith is not the player's.
+        5. ``building_offline`` / ``building_upgrading`` — operational gate.
+        6. rank gate — reuses :meth:`_rank_allows` (emits ``equip_denied``).
+        7. ``insufficient_salvage`` / ``insufficient_resources`` — the cost
+           (``balance.reroll_salvage_cost`` + ``balance.reroll_resource_cost``,
+           both × the clamped ``salvage_cost_mult`` tech multiplier — see
+           :meth:`_salvage_cost_multiplier`, R11.2 Salvage Protocols),
+           checked then deducted FIRST (Salvage refunded if the resource
+           spend fails mid-way), mirroring craft's deduct-first discipline.
+
+        On success the fresh rolls land in ``db.rolled_stats`` (combat's
+        ``get_stat`` read path), insert deltas are re-applied, and the IQS
+        is re-stamped through the single writer ``recompute_iqs`` (R2.4).
+        Never raises into the command layer.
+
+        Args:
+            player: The player rerolling.
+            item_token: Name/key of a carried or equipped item (lenient
+                matching, same as the insert weapon check).
+            building: The building the player is standing in (or ``None``).
+
+        Returns:
+            ``True`` if the item was rerolled, ``False`` otherwise.
+        """
+        from world.constants import BLACKSMITH
+        from world.utils import building_has_capability, get_building_level
+        from world.systems.loot_roller import (rarity_roll_floor,
+                                               recompute_iqs,
+                                               reroll_base_stats,
+                                               write_instance_field,
+                                               DEFAULT_LOOT_ROLL_SKEW)
+
+        # 1. Resolve the target — an item the player carries or wears
+        #    (R4.2: "a held/equipped rolled item").
+        item = self._find_carried_or_equipped(player, item_token)
+        if item is None:
+            self.notify(player, "reroll_failed", reason="unknown_item",
+                        item_name=item_token)
+            return False
+        item_name = self._item_name(item)
+
+        # 2. Rerollable gate — only items whose def declares a roll_spec
+        #    roll at all (R1.3); everything else is fixed, permanently.
+        #    ``item_key`` names the def on a live GameItem; the object key
+        #    is the fallback for stubs/legacy objects without one.
+        item_key = (self._item_attr(item, "item_key", None)
+                    or getattr(item, "key", None) or "")
+        item_def = self.registry.resolve_item(str(item_key))
+        roll_spec = getattr(item_def, "roll_spec", None) if item_def else None
+        if not isinstance(roll_spec, dict) or not roll_spec.get("stats"):
+            self.notify(player, "reroll_failed", reason="not_rerollable",
+                        item_name=item_name)
+            return False
+
+        # 3. Right-building gate — the bench is any building with the
+        #    `blacksmith` capability (mirrors apply_insert).
+        if building is None or not building_has_capability(
+            building, BLACKSMITH, provider=self.registry
+        ):
+            self.notify(player, "reroll_failed", reason="wrong_building",
+                        item_name=item_name)
+            return False
+
+        # 4-5. Ownership + operational gate (shared bench tail).
+        if not self._check_owner_operational(
+            player, building, "reroll_failed", item_name=item_name
+        ):
+            return False
+
+        # 6. Rank gate (shared with equip/use/craft; emits equip_denied).
+        if not self._rank_allows(player, item_def.required_rank, item_name):
+            return False
+
+        # 7. Cost gate — Salvage + resources (design §9), both checked
+        #    before either is deducted, then deducted Salvage-first with a
+        #    refund if the resource spend fails (craft's deduct-first
+        #    discipline; the mutation below is plain writes and cannot
+        #    fail after this point). Salvage Protocols research (R11.2,
+        #    task 5.4) discounts BOTH components via the clamped
+        #    ``salvage_cost_mult`` tech multiplier — no research reads 1.0
+        #    and leaves the charge exactly at the balance numbers.
+        balance = getattr(self.registry, "balance", None)
+        cost_mult = self._salvage_cost_multiplier(player)
+        salvage_cost = max(0, int(round(
+            (int(getattr(balance, "reroll_salvage_cost", 40) or 0))
+            * cost_mult)))
+        resource_cost = {
+            res: int(round(amt * cost_mult))
+            for res, amt in dict(getattr(balance, "reroll_resource_cost",
+                                         None) or {}).items()
+        }
+        resource_cost = {res: amt for res, amt in resource_cost.items()
+                         if amt > 0}
+
+        get_salvage = getattr(player, "get_salvage", None)
+        have_salvage = int(get_salvage()) if callable(get_salvage) else 0
+        if salvage_cost and have_salvage < salvage_cost:
+            self.notify(player, "reroll_failed",
+                        reason="insufficient_salvage", item_name=item_name,
+                        salvage_cost=salvage_cost, salvage_have=have_salvage)
+            return False
+        if resource_cost and not player.has_resources(resource_cost):
+            from world.utils import format_insufficient_resources
+            self.notify(player, "reroll_failed",
+                        reason="insufficient_resources", item_name=item_name,
+                        breakdown=format_insufficient_resources(
+                            player, resource_cost))
+            return False
+
+        if salvage_cost:
+            spend_salvage = getattr(player, "spend_salvage", None)
+            if not callable(spend_salvage) or not spend_salvage(salvage_cost):
+                self.notify(player, "reroll_failed",
+                            reason="insufficient_salvage",
+                            item_name=item_name, salvage_cost=salvage_cost,
+                            salvage_have=have_salvage)
+                return False
+        if resource_cost and not player.deduct_resources(resource_cost):
+            # Refund the Salvage already spent — the charge is atomic.
+            if salvage_cost and callable(getattr(player, "add_salvage", None)):
+                player.add_salvage(salvage_cost)
+            from world.utils import format_insufficient_resources
+            self.notify(player, "reroll_failed",
+                        reason="insufficient_resources", item_name=item_name,
+                        breakdown=format_insufficient_resources(
+                            player, resource_cost))
+            return False
+
+        # Effective floor: bench level lever + rarity guarantee (§4.4).
+        level = int(get_building_level(building))
+        level_floor = REROLL_FLOOR_PER_LEVEL * max(level - 1, 0)
+        rarity = self._read_instance_field(item, "rarity")
+        floor = min(max(level_floor, rarity_roll_floor(rarity)), 0.95)
+
+        rolled = reroll_base_stats(
+            roll_spec, floor=floor, rng=getattr(self, "_rng", random),
+            default_skew=getattr(balance, "loot_roll_skew",
+                                 DEFAULT_LOOT_ROLL_SKEW),
+        )
+        if not rolled:
+            # Unreachable after gate 2 on well-formed data; refund on the
+            # never-raise principle rather than eat the charge (R1.5 spirit).
+            if salvage_cost and callable(getattr(player, "add_salvage", None)):
+                player.add_salvage(salvage_cost)
+            for res, amt in resource_cost.items():
+                player.add_resource(res, amt)
+            self.notify(player, "reroll_failed", reason="reroll_error",
+                        item_name=item_name)
+            return False
+
+        # Fresh base rolls in, then re-apply insert deltas on top so the
+        # permanent (irreversible) inserts keep their value (R5.4 spirit —
+        # a reroll re-rolls BASE stats, it never strips a modification).
+        write_instance_field(item, "rolled_stats", rolled)
+        for applied in list(self._read_instance_field(item, "inserts") or []):
+            effect = applied.get("effect") if hasattr(applied, "get") else None
+            if not isinstance(effect, dict):
+                continue
+            etype = effect.get("type")
+            if etype == "range":
+                self._bump_rolled_stat(item, "range", effect.get("value"))
+            elif etype == "stat":
+                self._bump_rolled_stat(item, effect.get("stat"),
+                                       effect.get("value"))
+                for t_stat, t_val in (effect.get("tradeoff") or {}).items():
+                    self._bump_rolled_stat(item, t_stat, t_val)
+            # damage_type inserts live in db.damage_type — untouched here.
+
+        # Re-stamp IQS through the single writer (R2.4).
+        new_iqs = recompute_iqs(item, roll_spec)
+
+        logger.info("%s rerolled %s at Blacksmith L%d (floor %.2f)",
+                    getattr(player, "key", "?"), item_def.key, level, floor)
+        self.notify(player, "rerolled", item_name=item_name, iqs=new_iqs,
+                    salvage_cost=salvage_cost)
+        return True
+
+    def salvage(self, player: Any, item_token: str, building: Any) -> bool:
+        """Break a carried item down into Salvage at the Blacksmith (R7).
+
+        The ``salvage <item>`` command backend (item-loot-economy §5/§4.4,
+        task 5.2): standing in their own operational Blacksmith, a player
+        destroys a loose carried item and is credited Salvage per the
+        design §5 yield formula::
+
+            round((base_salvage + iqs * salvage_per_iqs)
+                  * (1 + salvage_level_bonus * (blacksmith_level - 1)))
+
+        The yield scales with BOTH the item's IQS and the bench level
+        (R7.1) and is monotonic non-decreasing in each (R7.2): at the
+        defaults (5 / 0.5 / 0.125) a 70-IQS item is ≈ 40 Salvage at L1 and
+        ≈ 60 at L5 (L1 1.0× → L5 1.5×).
+
+        **Eligibility (decided, task 5.2):** any loose CARRIED gear item —
+        equipped gear is refused (unequip first; mirrors ``sell``, so a
+        player never silently strips their loadout), counted Supply-bag
+        stacks are not gear, and an UNROLLED item (no ``iqs``) salvages at
+        the ``base_salvage`` floor with ``iqs = 0`` — R7's "a use for the
+        loot I don't want" keeps even junk/legacy gear salvageable.
+
+        Gate order mirrors :meth:`reroll` (each failure emits a
+        ``salvage_failed`` notification with a reason; no active-HQ or
+        rank gate — destroying your own item needs no rank):
+
+        1. ``unknown_item`` / ``equipped`` / ``not_gear`` — target
+           resolution (possession, R7.4): the token must match a loose
+           carried gear item with a known def.
+        2. ``wrong_building`` — not standing in a ``blacksmith``-capability
+           building (also covers "nothing here").
+        3. ``not_owner`` — the Blacksmith is not the player's (R7.4).
+        4. ``building_offline`` / ``building_upgrading`` — operational gate.
+
+        On success the source item is destroyed (R7.4) and the yield is
+        credited to the player's ``db.salvage`` via ``add_salvage``
+        (R7.3). Never raises into the command layer.
+
+        Args:
+            player: The salvaging player.
+            item_token: Name/key of a carried item (lenient matching, same
+                as the reroll target check).
+            building: The building the player is standing in (or ``None``).
+
+        Returns:
+            ``True`` if the item was salvaged, ``False`` otherwise.
+        """
+        from world.constants import BLACKSMITH
+        from world.utils import building_has_capability, get_building_level
+
+        # 1. Resolve the target — a loose CARRIED item only (equipped gear
+        #    is refused with its own reason; counted stacks aren't gear).
+        item, reason = self._find_salvage_target(player, item_token)
+        if item is None:
+            self.notify(player, "salvage_failed", reason=reason,
+                        item_name=item_token)
+            return False
+        item_name = self._item_name(item)
+
+        # Only registry-known items are salvageable (mirrors
+        # _resolve_sellable — arbitrary world objects aren't gear).
+        item_key = (self._item_attr(item, "item_key", None)
+                    or getattr(item, "key", None) or "")
+        item_def = self.registry.resolve_item(str(item_key))
+        if item_def is None:
+            self.notify(player, "salvage_failed", reason="unknown_item",
+                        item_name=item_name)
+            return False
+
+        # 2. Right-building gate — the bench is any building with the
+        #    `blacksmith` capability (mirrors reroll/apply_insert).
+        if building is None or not building_has_capability(
+            building, BLACKSMITH, provider=self.registry
+        ):
+            self.notify(player, "salvage_failed", reason="wrong_building",
+                        item_name=item_name)
+            return False
+
+        # 3-4. Ownership + operational gate (shared bench tail, R7.4).
+        if not self._check_owner_operational(
+            player, building, "salvage_failed", item_name=item_name
+        ):
+            return False
+
+        # Yield (design §5): unrolled/legacy items read iqs 0 → the
+        # base_salvage floor still applies (decided above).
+        balance = getattr(self.registry, "balance", None)
+        base = float(getattr(balance, "base_salvage", 5) or 0)
+        per_iqs = float(getattr(balance, "salvage_per_iqs", 0.5) or 0)
+        level_bonus = float(getattr(balance, "salvage_level_bonus", 0.125)
+                            or 0)
+        try:
+            iqs = int(self._read_instance_field(item, "iqs") or 0)
+        except (TypeError, ValueError):
+            iqs = 0
+        level = int(get_building_level(building))
+        level_mult = 1.0 + level_bonus * max(level - 1, 0)
+        amount = max(0, int(round((base + iqs * per_iqs) * level_mult)))
+
+        # Destroy the source item (R7.4), then credit the yield (R7.3).
+        if hasattr(item, "delete"):
+            item.delete()
+        add_salvage = getattr(player, "add_salvage", None)
+        if callable(add_salvage):
+            add_salvage(amount)
+        get_salvage = getattr(player, "get_salvage", None)
+        total = int(get_salvage()) if callable(get_salvage) else amount
+
+        logger.info("%s salvaged %s (iqs %d) at Blacksmith L%d for %d",
+                    getattr(player, "key", "?"), item_def.key, iqs, level,
+                    amount)
+        self.notify(player, "salvaged", item_name=item_name,
+                    salvage=amount, salvage_total=total)
+        return True
+
+    def _find_salvage_target(self, player: Any, token: str):
+        """Resolve a salvage target: a loose CARRIED item matching *token*.
+
+        Returns ``(item, "")`` on success or ``(None, reason)`` where
+        *reason* is one of:
+
+        - ``unknown_item`` — nothing carried or equipped matches;
+        - ``equipped`` — the only match is currently worn (unequip first —
+          salvage never silently strips gear, mirroring ``sell``);
+        - ``not_gear`` — the match is a counted supply drop/stack, not a
+          loose Gear object.
+
+        Carried objects (``player.contents``) are searched FIRST so a
+        player holding a spare copy of an equipped item can salvage the
+        spare. Matching is the same lenient item_key/key/name prefix match
+        the reroll target check uses. Never raises.
+        """
+        if not token or not str(token).strip():
+            return None, "unknown_item"
+        try:
+            carried = list(getattr(player, "contents", None) or [])
+        except Exception:  # noqa: BLE001 - exotic contents proxy
+            carried = []
+        for item in carried:
+            if item is None or not self._weapon_matches(item, token):
+                continue
+            if getattr(getattr(item, "db", None), "count", None) is not None:
+                return None, "not_gear"
+            return item, ""
+        # An EQUIPPED match gets a dedicated message: unequip it first.
+        handler = getattr(player, "equipment", None)
+        if handler is not None and hasattr(handler, "get_all_equipped"):
+            try:
+                equipped = list(handler.get_all_equipped().values())
+            except Exception:  # noqa: BLE001 - handler stub without the view
+                equipped = []
+            for item in equipped:
+                if item is not None and self._weapon_matches(item, token):
+                    return None, "equipped"
+        return None, "unknown_item"
+
+    def refine(self, player: Any, resource_token: str,
+               amount: int | None, building: Any) -> bool:
+        """Convert a carried resource into Salvage at the Refinery (R10.4).
+
+        The ``refine <resource> [<amount>|all]`` command backend
+        (item-loot-economy §7, task 5.3): standing in their own
+        operational Refinery, a player burns *amount* units of a resource
+        and is credited Salvage at a building-level-scaled rate (R10.5)::
+
+            round(amount * refine_salvage_per_unit
+                  * (1 + refine_level_bonus * (refinery_level - 1)))
+
+        At the defaults (0.5 / 0.125) that is L1 1.0× → L5 1.5× —
+        the same curve as the Blacksmith salvage yield, monotonic
+        non-decreasing in level.
+
+        **The Nexium sink (R10.4, anti-loop):** every ``RESOURCE_TYPES``
+        entry is a valid INPUT — Nexium included, that is the point of
+        the sink — but the conversion outputs Salvage ONLY. There is no
+        code path here that credits Nexium (or any resource): the single
+        credit call is ``player.add_salvage``.
+
+        Gate order mirrors :meth:`salvage` (each failure emits a
+        ``refine_failed`` notification with a reason; no active-HQ or
+        rank gate — burning your own resources needs no rank):
+
+        1. ``unknown_resource`` — the token is not a known resource type.
+        2. ``wrong_building`` — not standing in a ``resource_converter``-
+           capability building (also covers "nothing here").
+        3. ``not_owner`` — the Refinery is not the player's.
+        4. ``building_offline`` / ``building_upgrading`` — operational gate.
+        5. ``insufficient_resources`` — the player carries less than
+           *amount* of the resource (or none at all for ``all``).
+        6. ``too_little`` — the conversion would round to 0 Salvage; the
+           batch is refused with NOTHING deducted (never burn resources
+           for no yield).
+
+        Args:
+            player: The refining player.
+            resource_token: Resource name (case-insensitive; canonicalized
+                to Title Case against ``RESOURCE_TYPES``).
+            amount: Units to convert; ``None`` means "all carried".
+            building: The building the player is standing in (or ``None``).
+
+        Returns:
+            ``True`` if the batch was converted, ``False`` otherwise.
+        """
+        from world.constants import RESOURCE_CONVERTER, RESOURCE_TYPES
+        from world.utils import building_has_capability, get_building_level
+
+        # 1. Resolve the resource — any known type is a valid input
+        #    (Nexium included: the sink accepts it, R10.4).
+        resource = str(resource_token or "").strip().title()
+        if resource not in RESOURCE_TYPES:
+            self.notify(player, "refine_failed", reason="unknown_resource",
+                        resource=resource_token)
+            return False
+
+        # 2. Right-building gate — any building with the
+        #    `resource_converter` capability (mirrors the Blacksmith
+        #    bench's capability check).
+        if building is None or not building_has_capability(
+            building, RESOURCE_CONVERTER, provider=self.registry
+        ):
+            self.notify(player, "refine_failed", reason="wrong_building",
+                        resource=resource)
+            return False
+
+        # 3-4. Ownership + operational gate (shared bench tail).
+        if not self._check_owner_operational(
+            player, building, "refine_failed", resource=resource
+        ):
+            return False
+
+        # 5. Stock check — `all` (amount None) resolves to the full stock.
+        get_resource = getattr(player, "get_resource", None)
+        have = int(get_resource(resource)) if callable(get_resource) else 0
+        if amount is None:
+            amount = have
+        amount = int(amount)
+        if amount <= 0 or have < amount:
+            self.notify(player, "refine_failed",
+                        reason="insufficient_resources",
+                        resource=resource, have=have, need=max(amount, 1))
+            return False
+
+        # Conversion rate (R10.5): per-unit rate × the per-level
+        # multiplier (L1 1.0× → L5 1.5× at the defaults).
+        balance = getattr(self.registry, "balance", None)
+        per_unit = float(getattr(balance, "refine_salvage_per_unit", 0.5)
+                         or 0)
+        level_bonus = float(getattr(balance, "refine_level_bonus", 0.125)
+                            or 0)
+        level = int(get_building_level(building))
+        level_mult = 1.0 + level_bonus * max(level - 1, 0)
+        yielded = max(0, int(round(amount * per_unit * level_mult)))
+
+        # 6. A batch that rounds to nothing is refused BEFORE any deduction
+        #    — never burn resources for zero yield.
+        if yielded < 1:
+            self.notify(player, "refine_failed", reason="too_little",
+                        resource=resource, amount=amount)
+            return False
+
+        # Deduct the input, then credit the yield. Salvage is the ONLY
+        # output (R10.4 anti-loop) — no resource is ever credited here.
+        if not player.deduct_resources({resource: amount}):
+            # Unreachable after the stock check; refuse rather than raise.
+            self.notify(player, "refine_failed",
+                        reason="insufficient_resources",
+                        resource=resource, have=have, need=amount)
+            return False
+        add_salvage = getattr(player, "add_salvage", None)
+        if callable(add_salvage):
+            add_salvage(yielded)
+        get_salvage = getattr(player, "get_salvage", None)
+        total = int(get_salvage()) if callable(get_salvage) else yielded
+
+        logger.info("%s refined %d %s at Refinery L%d for %d Salvage",
+                    getattr(player, "key", "?"), amount, resource, level,
+                    yielded)
+        self.notify(player, "refined", resource=resource, amount=amount,
+                    salvage=yielded, salvage_total=total)
+        return True
+
+    def _find_carried_or_equipped(self, player: Any, token: str) -> Any:
+        """The first equipped or carried item matching *token*, or ``None``.
+
+        Reroll targets "a held/equipped rolled item" (R4.2): equipped gear
+        is searched first (the common case — reroll the rifle you're
+        holding), then loose carried objects (``player.contents``). Matching
+        is the same lenient item_key/key/name prefix match the insert
+        weapon check uses. Counted Supply-bag stacks aren't objects and are
+        naturally excluded. Never raises.
+        """
+        if not token or not str(token).strip():
+            return None
+        candidates: list[Any] = []
+        handler = getattr(player, "equipment", None)
+        if handler is not None and hasattr(handler, "get_all_equipped"):
+            try:
+                candidates.extend(handler.get_all_equipped().values())
+            except Exception:  # noqa: BLE001 - handler stub without the view
+                pass
+        try:
+            candidates.extend(getattr(player, "contents", None) or [])
+        except Exception:  # noqa: BLE001 - exotic contents proxy
+            pass
+        for item in candidates:
+            if item is not None and self._weapon_matches(item, token):
+                return item
+        return None
 
     def sell_item(self, player: Any, item: Any) -> bool:
         """Sell a carried Gear *item* for a partial (50%) craft_cost refund.
@@ -1275,6 +2193,37 @@ class EquipmentSystem(CarryWeightMixin, StorageMixin, BaseSystem):
             item_def = None
         return getattr(item_def, "name", None) or ammo_type
 
+    def _check_owner_operational(
+        self, player: Any, building: Any, fail_kind: str, **payload: Any
+    ) -> bool:
+        """Shared bench gate: ownership + operational (offline/upgrading).
+
+        Returns ``True`` when *building* is owned by *player* and neither
+        offline nor mid-upgrade. On failure emits *fail_kind* with the
+        matching ``reason`` (``not_owner`` / ``building_offline`` /
+        ``building_upgrading``) plus the caller's *payload* (e.g.
+        ``item_name=...`` or ``resource=...``) and returns ``False``.
+
+        The building-capability/catalog gate is the caller's job and must
+        pass first (so *building* is non-``None`` here). Extracted from the
+        five identical tails in craft/insert/reroll/salvage/refine — there
+        is deliberately NO active-HQ usage gate (design §4.1).
+        """
+        from world.utils import is_owner, get_building_attr, get_obj_attr
+        owner = getattr(building, "owner", None)
+        if owner is None:
+            owner = get_building_attr(building, "owner")
+        if not is_owner(player, owner):
+            self.notify(player, fail_kind, reason="not_owner", **payload)
+            return False
+        if getattr(building, "is_offline", False):
+            self.notify(player, fail_kind, reason="building_offline", **payload)
+            return False
+        if get_obj_attr(building, "under_construction", False):
+            self.notify(player, fail_kind, reason="building_upgrading", **payload)
+            return False
+        return True
+
     def _rank_allows(
         self, player: Any, required_rank: str | None, item_name: str
     ) -> bool:
@@ -1380,7 +2329,7 @@ class EquipmentSystem(CarryWeightMixin, StorageMixin, BaseSystem):
                 # killer) instead of being destroyed — the underdog bounty.
                 if (drop_chance > 0 and key
                         and rng.random() < drop_chance
-                        and self._drop_gear_on_death(player, key)):
+                        and self._drop_gear_on_death(player, key, item=item)):
                     summary["dropped"][key] = summary["dropped"].get(key, 0) + 1
                     self._destroy_item(item)  # original stripped; a fresh drop spawned
                 else:
@@ -1482,7 +2431,8 @@ class EquipmentSystem(CarryWeightMixin, StorageMixin, BaseSystem):
         chance = base + per_level * max(0, gap)
         return max(0.0, min(chance, max_chance))
 
-    def _drop_gear_on_death(self, victim: Any, item_key: str) -> bool:
+    def _drop_gear_on_death(self, victim: Any, item_key: str,
+                            item: Any = None) -> bool:
         """Spawn *item_key* as a ground-pickup Gear drop on *victim*'s tile.
 
         Delegates to the injected PvP gear-drop spawner (composition root; over
@@ -1490,6 +2440,12 @@ class EquipmentSystem(CarryWeightMixin, StorageMixin, BaseSystem):
         spawner is unwired, the key has no ItemDef, or the spawn was refused
         (e.g. tile full) — in which case the caller destroys the item as normal.
         Never raises.
+
+        **R1.6 preservation contract (item-loot-economy, design §1.2):** the
+        spawner creates a FRESH ``GameItem`` from the ItemDef, so when the
+        stripped instance *item* is given, its per-item state — ``rolled_stats``,
+        ``affixes``, ``rarity``, ``iqs``, ``inserts`` — is copied onto the drop.
+        The PvP death drop NEVER re-rolls: dropped gear keeps its rolls, always.
         """
         spawner = self._pvp_gear_drop_spawner
         if spawner is None:
@@ -1498,10 +2454,73 @@ class EquipmentSystem(CarryWeightMixin, StorageMixin, BaseSystem):
         if item_def is None:
             return False
         try:
-            return spawner(victim, item_def) is not None
+            drop = spawner(victim, item_def)
         except Exception:  # noqa: BLE001 - a drop must not break death loss
             logger.exception("PvP gear drop failed for %s", item_key)
             return False
+        if drop is None:
+            return False
+        if item is not None:
+            self._preserve_instance_state(item, drop)
+        return True
+
+    #: Per-instance state a PvP death drop carries with it (R1.6, R5.4):
+    #: rolls, affixes, rarity, IQS, applied Blacksmith inserts, and the
+    #: instance damage_type a damage-type insert wrote (range/stat inserts
+    #: live in rolled_stats, but a conversion lives in its own field — it
+    #: must carry too, or a dropped fire-converted weapon reverts, task 4.3).
+    _INSTANCE_STATE_FIELDS = ("rolled_stats", "affixes", "rarity",
+                              "iqs", "inserts", "damage_type")
+
+    @classmethod
+    def _preserve_instance_state(cls, source: Any, drop: Any) -> None:
+        """Copy *source*'s per-instance item state onto the fresh *drop* (R1.6).
+
+        Only fields actually SET on the source are written — an unrolled item
+        drops as an unrolled item, never gaining empty roll attributes (R12.1).
+        Values are deep-copied so the drop owns its state after the original
+        is destroyed. Best-effort per field; never raises into death loss.
+        """
+        import copy as _copy
+        from world.systems.loot_roller import write_instance_field
+        for name in cls._INSTANCE_STATE_FIELDS:
+            try:
+                value = cls._read_instance_field(source, name)
+                if value is None or value == {} or value == []:
+                    continue  # unset on the source → stays unset on the drop
+                write_instance_field(drop, name, _copy.deepcopy(value))
+            except Exception:  # noqa: BLE001 - a copy must not break death loss
+                logger.exception(
+                    "PvP drop: failed to carry %s across", name)
+
+    @staticmethod
+    def _read_instance_field(item: Any, name: str) -> Any:
+        """Read a per-instance roll-state field off *item* robustly.
+
+        Works for a live ``GameItem`` (named properties over ``db``), a stub
+        exposing plain attributes or a ``db`` bag, an Evennia ``attributes``
+        handler, or the dict-shaped test factory item. Returns ``None`` when
+        the field is unset anywhere.
+        """
+        value = getattr(item, name, None)
+        if value not in (None, "", {}, []) and not callable(value):
+            return value
+        db = getattr(item, "db", None)
+        if db is not None:
+            value = getattr(db, name, None)
+            if value is not None:
+                return value
+        attrs = getattr(item, "attributes", None)
+        if attrs is not None and hasattr(attrs, "get"):
+            try:
+                value = attrs.get(name, default=None)
+            except TypeError:
+                value = attrs.get(name)
+            if value is not None:
+                return value
+        if isinstance(item, dict):
+            return item.get(name)
+        return None
 
     def _find_respawn_building(self, player: Any):
         """Return the player's owned RESPAWN_POINT building on their death planet.

@@ -75,6 +75,31 @@ class TestItemDef:
         assert i.classification == "modern"
         assert i.required_rank is None
 
+    def test_roll_spec_defaults_to_none(self):
+        # item-loot-economy R12.2: existing ItemDef(...) construction keeps
+        # working; an item without a roll_spec is a fixed (unrolled) item.
+        i = ItemDef(key="basic_vest", name="Basic Vest", slot="torso")
+        assert i.roll_spec is None
+
+    def test_roll_spec_accepts_dict(self):
+        spec = {"stats": {"damage": {"min": 18, "max": 30, "weight": 3}}}
+        i = ItemDef(key="rifle", name="Rifle", slot="weapon", roll_spec=spec)
+        assert i.roll_spec == spec
+
+    def test_insert_effect_defaults_to_none(self):
+        # item-loot-economy task 4.2: existing ItemDef(...) construction keeps
+        # working; only category "insert" items carry an insert_effect.
+        i = ItemDef(key="basic_vest", name="Basic Vest", slot="torso")
+
+        assert i.insert_effect is None
+
+    def test_insert_effect_accepts_dict(self):
+        effect = {"type": "damage_type", "value": "poison"}
+        i = ItemDef(key="venom_coating", name="Venom Coating",
+                    category="insert", insert_effect=effect)
+
+        assert i.insert_effect == effect
+
 
 class TestRankDef:
     def test_basic(self):
@@ -219,8 +244,11 @@ class TestBalanceConfig:
         assert bc.save_interval == 30
         assert bc.metrics_enabled is False
         assert bc.metrics_interval == 60
-        assert bc.player_vision_radius == 10
+        assert bc.player_vision_radius == 7
         assert bc.building_vision_radius == 7
+        # Viewport radius is DECOUPLED from vision: 10 preserves the map size
+        # from before player_vision_radius was rebalanced 10 -> 7.
+        assert bc.map_viewport_radius == 10
         assert bc.room_cache_max_size == 1000
         assert bc.gc_interval_ticks == 100
         assert bc.gc_min_age_ticks == 50
@@ -243,7 +271,10 @@ class TestDataclassContracts:
 
     def test_item_def_field_count(self):
         # 16 after adding craft_cost (resource cost for the `craft` command).
-        assert len(fields(ItemDef)) == 17
+        # 18 after adding roll_spec (item-loot-economy R12.2 — deliberate bump).
+        # 19 after adding insert_effect (item-loot-economy task 4.2 —
+        # deliberate bump).
+        assert len(fields(ItemDef)) == 19
 
     def test_rank_def_field_count(self):
         assert len(fields(RankDef)) == 6
@@ -310,8 +341,46 @@ class TestDataclassContracts:
         #    pvp_gear_drop_underdog_bonus_per_level, pvp_gear_drop_max_chance) —
         #    a slain player's destroyed gear can drop for the killer, scaled by
         #    the underdog gap.
+        #  + 1 rolled-loot skew (loot_roll_skew) — item-loot-economy Phase 1:
+        #    global default for the U**skew roll distribution (design §1.3).
+        #  + 1 rarity table (rarity_table) — item-loot-economy Phase 2 (task
+        #    2.2): per-source-bucket rarity weights (design §3.2/§9).
+        #  + 1 guard-kill gear drop (guard_gear_drop_chance) — item-loot-economy
+        #    Phase 2 (task 2.5, R3.6): the NEW small-chance rolled-gear drop on
+        #    guard elimination (lowest rarity bucket).
+        #  + 1 build-cost tech clamp (build_cost_mult_floor) — item-loot-economy
+        #    Phase 3 (task 3.3, R11.1): the build/upgrade cost consumer clamps
+        #    the researched build_cost_mult to [floor, 1.0].
+        #  + 1 range cap (max_weapon_range) — item-loot-economy Phase 3 (task
+        #    3.1, R8.3): hard clamp on effective weapon range after all bonuses
+        #    (weapon instance + weapon_range tech + tile), so stacking can't
+        #    make a global sniper.
+        #  + 2 poison DoT (poison_dot_fraction, poison_dot_ticks) —
+        #    item-loot-economy Phase 3 (task 3.2, R9.2): the poison DoT
+        #    mirrors the fire burn (lower per-tick, longer duration).
+        #  + 2 Blacksmith reroll cost (reroll_salvage_cost,
+        #    reroll_resource_cost) — item-loot-economy Phase 4 (task 4.4,
+        #    R4.4/R4.5): the Salvage + resource charge per `reroll <item>`
+        #    (design §9: ~30–60 Salvage + a small resource cost).
+        #  + 3 Blacksmith salvage yield (base_salvage, salvage_per_iqs,
+        #    salvage_level_bonus) — item-loot-economy Phase 5 (task 5.2,
+        #    R7.1/R7.2): yield = round((base_salvage + iqs*salvage_per_iqs)
+        #    * (1 + salvage_level_bonus*(level-1))) per `salvage <item>`.
+        #  + 2 Refinery conversion (refine_salvage_per_unit,
+        #    refine_level_bonus) — item-loot-economy Phase 5 (task 5.3,
+        #    R10.4/R10.5): `refine <resource> <amount>` yields
+        #    round(amount * refine_salvage_per_unit
+        #    * (1 + refine_level_bonus*(level-1))) Salvage; never Nexium.
+        #  + 1 crafted-rarity table (craft_rarity_table) — post-spec change
+        #    (deliberate deviation from R6.1, per user request): crafting-
+        #    building level → crafted rarity weights, capped at Rare
+        #    (exactly 5% at L5, none at L1); affixes stay loot-only.
+        #  + 1 map viewport radius (map_viewport_radius) — decouples the
+        #    rendered map size from player_vision_radius so vision balance
+        #    changes never resize the minimap (regression fix; 10 preserves
+        #    the pre-rebalance viewport).
         # Bump this when adding a balance tunable.
-        assert len(fields(BalanceConfig)) == 135
+        assert len(fields(BalanceConfig)) == 151
 
     def test_coordinate_space_def_field_count(self):
         # 14 core + 2 graduation-economy scales (yield_scale, npc_scale).

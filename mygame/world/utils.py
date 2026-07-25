@@ -765,6 +765,86 @@ def building_has_capability(building: Any, capability: str, provider: Any = None
     return bdef is not None and bdef.has_capability(capability)
 
 
+def _aura_owning_player(entity: Any) -> Any | None:
+    """Default owner attribution for :func:`tile_aura_level`.
+
+    A player is its own owner; a player-owned unit (agent) resolves through
+    its ``db.owner`` — so an owner's AGENT standing on the aura tile benefits
+    on the owner's behalf, mirroring ``CombatEngine._owning_player``'s
+    attribution for tech bonuses and kills. Callers with a richer resolver
+    (e.g. the combat engine, which additionally excludes enemy-NPC guards)
+    inject their own via ``resolve_owner``.
+    """
+    owner = getattr(getattr(entity, "db", None), "owner", None)
+    return owner or entity
+
+
+def tile_aura_level(
+    entity: Any,
+    capability: str,
+    provider: Any = None,
+    *,
+    resolve_owner: Any = None,
+) -> int:
+    """Level-scaled tile-aura bonus at *entity*'s tile (0..3).
+
+    THE single implementation of the positional-aura read shared by the
+    Sniper Nest range aura (``RANGE_AURA``, R10.1), the Watchtower vision
+    aura (``VISION_AURA``, R10.2), and the Field Hospital heal aura
+    (``HEAL_AURA``, R10.3) — previously three hand-rolled copies in
+    CombatEngine / FogOfWarSystem / RegenSystem that had already diverged
+    on owner attribution and error guards (DRY H2 fix).
+
+    Grants ``1 + (level - 1) // 2`` → L1 +1, L3 +2, L5 +3 (the shared aura
+    curve: meaningful at L1, +1 per two levels so a maxed aura never
+    exceeds +3 — matching the tech-bonus magnitude ceiling) when the
+    building on *entity*'s tile (the same ``_building_on_tile`` read
+    ``player_is_sheltered`` uses):
+
+    - declares *capability* (checked via :func:`building_has_capability`
+      against *provider*, falling back to the live registry when None),
+    - is OWNED by the entity's owning player — resolved via
+      *resolve_owner* (default :func:`_aura_owning_player`: a player is
+      its own owner; an owner's AGENT on the tile also benefits). NOTE:
+      this unifies the fog-of-war aura on the owning-player attribution
+      the range/heal auras already used — an owned agent on a Watchtower
+      tile extending its owner's vision is consistent with the other two
+      auras (previously fog attributed to the raw player only), and
+    - is operational (not offline / mid-upgrade / mid-construction —
+      the same "is it doing its job" gate as turrets/production).
+
+    Strictly ON-TILE and OWNER-ONLY — positional, not permanent (decided
+    §12: adjacency/radius is an explicit later extension, not shipped;
+    standing on someone ELSE's aura building grants nothing). Returns 0 in
+    every other case and NEVER raises (full-body guard): a corrupted
+    building read — e.g. ``building_level`` stored as None — degrades to 0
+    instead of blowing up combat/fog/regen (the L1 TypeError fix).
+    """
+    try:
+        room = getattr(entity, "location", None)
+        coords = coords_of(entity)
+        if room is None or coords is None:
+            return 0
+        x, y, _planet = coords
+        building = _building_on_tile(room, int(x), int(y))
+        if building is None:
+            return 0
+        if not building_has_capability(building, capability, provider=provider):
+            return 0
+        resolver = resolve_owner if resolve_owner is not None else _aura_owning_player
+        owner_player = resolver(entity)
+        if owner_player is None:
+            return 0
+        if not is_owner(owner_player, get_obj_attr(building, "owner")):
+            return 0
+        if not building_is_operational(building):
+            return 0
+        level = max(1, int(get_building_level(building)))
+        return 1 + (level - 1) // 2
+    except Exception:  # noqa: BLE001 - an aura read must never break its system
+        return 0
+
+
 def building_is_operational(building: Any) -> bool:
     """Return True if *building* is currently functioning.
 

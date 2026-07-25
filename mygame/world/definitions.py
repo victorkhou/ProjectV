@@ -81,6 +81,24 @@ class ItemDef:
     # gating
     required_rank: str | None = None  # enforced on equip/use/throw
     classification: str = "modern"
+    # loot rolling (item-loot-economy §1.1) — None = fixed item, never rolled.
+    # Shape (validated at load by SchemaValidator._validate_roll_spec):
+    #   {
+    #     "stats": {"<stat>": {"min": float, "max": float, "weight": float}},
+    #     "craft": {"<stat>": {"min": float, "max": float}},  # tighter craft band
+    #     "skew": float,        # optional; U**skew, >= 1 (default from balance)
+    #     "affix_pool": str,    # optional; which affix pool this item draws from
+    #   }
+    roll_spec: dict | None = None
+    # Blacksmith insert payload (item-loot-economy §4.3) — required for
+    # ``category: "insert"`` items, forbidden on everything else (enforced by
+    # SchemaValidator._validate_insert_effect). Applied to an equipped weapon
+    # instance via the `insert` command (task 4.3). Shape:
+    #   {"type": "damage_type", "value": "fire"|"psychic"|"blast"|"poison"}
+    #   {"type": "range",       "value": <number>}
+    #   {"type": "stat", "stat": "<stat>", "value": <number>,
+    #    "tradeoff": {"<stat>": <number>}}   # tradeoff optional
+    insert_effect: dict | None = None
 
 
 @dataclass
@@ -291,6 +309,16 @@ class BaseTemplateDef:
     #: round rolls the normal pool AND the rare pool once. >1 lets a fortress
     #: rain several upgrades from one wipe. Defaults to 1 (single roll each).
     gear_rolls: int = 1
+    #: Rarity source weight for this tier's HQ-destroy gear drops
+    #: (item-loot-economy R3.2): selects the rarity-table bucket in
+    #: ``loot_roller.resolve_rarity_bucket`` (guard_kill 0 < outpost 1 <
+    #: stronghold 2 < fortress 3 < citadel 4). 0.0 = the lowest bucket —
+    #: WITHOUT per-tier values here, Epic/Legendary are unreachable.
+    rarity_weight: float = 0.0
+    #: Per-guard-kill GEAR-drop chance (R3.6); overrides the balance
+    #: ``guard_gear_drop_chance`` default. Distinct from guard_loot_chance
+    #: (the resource mini-drop).
+    guard_gear_drop_chance: float | None = None
 
 
 @dataclass
@@ -364,6 +392,96 @@ class BalanceConfig:
     pvp_gear_drop_base_chance: float = 0.15
     pvp_gear_drop_underdog_bonus_per_level: float = 0.02
     pvp_gear_drop_max_chance: float = 0.50
+    # --- Item loot economy (rolled loot) ------------------------------ #
+    #: Global default for the loot-roll skew exponent (design §1.3):
+    #: ``rolled = min + (max - min) * U^skew``. ``skew=2`` puts the median
+    #: roll at ~25% of the band, so near-max rolls are genuinely scarce —
+    #: that scarcity is the economy (R1.2). A per-item ``roll_spec.skew``
+    #: overrides this. Must be >= 1; the roller falls back to its module
+    #: default on an invalid value (never raises — R1.5).
+    loot_roll_skew: float = 2.0
+    #: Rarity table (design §3.2/§9, task 2.2): source bucket →
+    #: ``{min_weight, weights}``. A drop source's numeric rarity weight
+    #: (guard kill 0 < outpost 1 < stronghold 2 < fortress 3 < citadel 4)
+    #: activates the highest-threshold bucket it reaches; ``weights`` are
+    #: the relative rarity odds for drops from that source. Mirrors
+    #: ``loot_roller.DEFAULT_RARITY_TABLE`` (a sync test guards the pair).
+    #: Crafted items never consult this table (R6.1); PvP death drops
+    #: bypass it entirely (R1.6 preservation contract).
+    rarity_table: dict[str, dict] = field(default_factory=lambda: {
+        "guard_kill": {
+            "min_weight": 0.0,
+            "weights": {"common": 70, "uncommon": 25, "rare": 5},
+        },
+        "outpost": {
+            "min_weight": 1.0,
+            "weights": {"common": 50, "uncommon": 33, "rare": 15, "epic": 2},
+        },
+        "stronghold": {
+            "min_weight": 2.0,
+            "weights": {"common": 30, "uncommon": 35, "rare": 27, "epic": 7,
+                        "legendary": 1},
+        },
+        "fortress": {
+            "min_weight": 3.0,
+            "weights": {"common": 15, "uncommon": 27, "rare": 33, "epic": 20,
+                        "legendary": 5},
+        },
+        "citadel": {
+            "min_weight": 4.0,
+            "weights": {"common": 8, "uncommon": 12, "rare": 25, "epic": 40,
+                        "legendary": 15},
+        },
+    })
+    #: Crafted-rarity table (post-spec change — DELIBERATE DEVIATION from
+    #: R6.1's "no crafted rarity", per user request): the CRAFTING
+    #: BUILDING's level (1–5, generic over Armory/Lab/Medbay) selects a
+    #: row; a crafted roll draws its rarity from the row's relative
+    #: weights, HARD-CAPPED at Rare (Epic/Legendary stay loot-only; crafted
+    #: items still never roll affixes — R6.1's no-affix rule is intact).
+    #: The curve: no Rare at L1, rising to EXACTLY 5% Rare at L5. Rows sum
+    #: to 100 so they read as percentages. Mirrors
+    #: ``loot_roller.DEFAULT_CRAFT_RARITY_TABLE`` (a sync test guards the
+    #: pair). A Rare craft gets the normal 0.25 roll-floor benefit inside
+    #: its craft band.
+    craft_rarity_table: dict[int, dict] = field(default_factory=lambda: {
+        1: {"common": 90, "uncommon": 10},
+        2: {"common": 79, "uncommon": 20, "rare": 1},
+        3: {"common": 68, "uncommon": 30, "rare": 2},
+        4: {"common": 57, "uncommon": 40, "rare": 3},
+        5: {"common": 45, "uncommon": 50, "rare": 5},
+    })
+    #: Blacksmith reroll Salvage charge (design §4.2/§9, task 4.4): each
+    #: ``reroll <item>`` costs this much Salvage (the §9 band is ~30–60 —
+    #: flat to start, tuned so a god-roll chase burns many mediocre drops).
+    reroll_salvage_cost: int = 40
+    #: Blacksmith reroll resource cost (design §9 "+ resources", task 4.4):
+    #: a small resource-map charge on top of the Salvage, deducted with the
+    #: same deduct-first discipline as ``craft``.
+    reroll_resource_cost: dict[str, int] = field(
+        default_factory=lambda: {"Iron": 10})
+    #: Blacksmith salvage yield floor (design §5/§9, task 5.2): every
+    #: salvaged item is worth at least this much before the level
+    #: multiplier — the low-value floor that keeps junk gear salvageable.
+    base_salvage: int = 5
+    #: Salvage yield per IQS point (design §5/§9, task 5.2): a 70-IQS item
+    #: at 0.5/point ≈ 40 Salvage at a L1 bench (5 + 70 × 0.5).
+    salvage_per_iqs: float = 0.5
+    #: Blacksmith salvage per-level yield bonus (design §4.4, task 5.2):
+    #: yield multiplier = ``1 + salvage_level_bonus × (level − 1)`` —
+    #: L1 1.0× → L5 1.5× at the 0.125 default, monotonic per R7.2.
+    salvage_level_bonus: float = 0.125
+    #: Refinery conversion rate (item-loot-economy §7/R10.4, task 5.3):
+    #: Salvage credited per resource unit refined at a L1 Refinery —
+    #: ``yield = round(amount × refine_salvage_per_unit × level_mult)``.
+    #: At 0.5/unit, 80 surplus Nexium ≈ 40 Salvage (one reroll) at L1.
+    #: The conversion outputs Salvage ONLY — never Nexium (anti-loop).
+    refine_salvage_per_unit: float = 0.5
+    #: Refinery per-level rate bonus (R10.5, task 5.3): conversion
+    #: multiplier = ``1 + refine_level_bonus × (level − 1)`` — L1 1.0× →
+    #: L5 1.5× at the 0.125 default, mirroring the Blacksmith salvage
+    #: yield curve (monotonic in level).
+    refine_level_bonus: float = 0.125
     tick_interval: float = 1.0
     # --- Passive HP regeneration (players and agents only) ------------ #
     #: HP regenerated per interval, as a PERCENT of the entity's hp_max.
@@ -397,8 +515,15 @@ class BalanceConfig:
     save_interval: int = 30
     metrics_enabled: bool = False
     metrics_interval: int = 60
-    player_vision_radius: int = 10
+    player_vision_radius: int = 7
     building_vision_radius: int = 7
+    #: Radius (in tiles) of the rendered map viewport around the player,
+    #: DECOUPLED from ``player_vision_radius`` so vision balance changes never
+    #: resize the map. Both renderers (ASCII + webclient) size their bounds
+    #: from this; fog membership (which tiles are revealed) uses
+    #: ``player_vision_radius``. Tiles inside the viewport but beyond vision
+    #: render as fog/unexplored. 10 preserves the pre-rebalance map size.
+    map_viewport_radius: int = 10
     room_cache_max_size: int = 1000
     gc_interval_ticks: int = 100
     gc_min_age_ticks: int = 50
@@ -443,6 +568,11 @@ class BalanceConfig:
     upgrade_cost_base: int = 2
     #: Upgrade time multiplier base: time = build_time × TIME_BASE^(level-1).
     upgrade_time_base: int = 3
+    #: Floor for the ``build_cost_mult`` tech multiplier (item-loot-economy
+    #: R11.1, design §6.3): the build/upgrade cost consumer clamps the
+    #: researched multiplier to ``[floor, 1.0]`` so stacked cost-reduction
+    #: techs can never trivialize construction costs (nor raise them).
+    build_cost_mult_floor: float = 0.6
     #: Per-level Turret damage bonus: base × (1 + BONUS × (level-1)).
     turret_level_bonus: float = 0.20
     #: Demolish refund rate by building level (fraction of invested cost).
@@ -627,6 +757,11 @@ class BalanceConfig:
     gear_drop_chance: float = 0.15
     #: Chance of a rare gear drop on NPC-HQ destruction (outpost default).
     rare_gear_chance: float = 0.03
+    #: Chance per NPC-guard kill of a rolled GEAR drop (item-loot-economy
+    #: R3.6, design §1.2 — the NEW guard-kill gear-drop path). Rolls the
+    #: lowest rarity source bucket (guard kill, weight 0). The resource
+    #: mini-drop (guard_loot_chance) stays unchanged alongside it.
+    guard_gear_drop_chance: float = 0.05
 
     # --- Agent rebalance (R3, R5) ------------------------------------- #
     #: Fog-of-war vision radius around patrolling scout agents.
@@ -656,12 +791,24 @@ class BalanceConfig:
     fire_burn_fraction: float = 0.2  # 20% of raw per burn tick
     #: Number of ticks the burn lasts after a fire hit.
     fire_burn_ticks: int = 3
+    #: Poison DoT (item-loot-economy R9): fraction of the hit's raw damage
+    #: dealt per tick as poison. Lower per-tick than fire but lasts longer
+    #: (design §9 — total ~0.6× raw over 4 ticks, below fire's 0.6 over 3).
+    poison_dot_fraction: float = 0.15
+    #: Number of ticks the poison DoT lasts after a poison hit.
+    poison_dot_ticks: int = 4
     #: Blast armor-shred: flat DR removed from the target per blast hit.
     #: Stacks additively; makes subsequent physical hits hurt more.
     blast_shred_per_hit: int = 5
     #: Blast armor-shred recovery: DR restored per tick (shred is not permanent —
     #: it decays so a target recovers after the blast assault ends).
     blast_shred_decay_per_tick: int = 1
+    #: Hard cap on the effective weapon range after all bonuses (item-loot-
+    #: economy R8.3): weapon instance (rolled + inserts) + weapon_range tech +
+    #: tile bonus is clamped here so stacking can't make a global sniper
+    #: (range has no chip-floor equivalent and directly beats kiting).
+    #: 0 disables the cap.
+    max_weapon_range: int = 16
 
     #: Outgrown-planet throttle (§4 graduation): levels of grace past the next
     #: planet's gate before the throttle reaches its floor.

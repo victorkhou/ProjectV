@@ -194,6 +194,15 @@ class FakeSentinel(_Entity):
         self.location = room
         self._buildings = []
 
+    def delete(self):
+        # Mirror Django/Evennia: Collector.delete() nulls the pk attname
+        # ("id") on the deleted instance. The elimination handler deletes the
+        # sentinel BEFORE publishing BASE_ELIMINATED, so the spawner sees a
+        # sentinel whose .id is None — the fake must reproduce that or the
+        # untrack path is not exercised realistically.
+        super().delete()
+        self.id = None
+
     def get_buildings(self):
         return [b for b in self._buildings if not b.deleted]
 

@@ -570,7 +570,20 @@ def _fmt_unequip_failed(d: dict) -> str:
 
 
 def _fmt_crafted(d: dict) -> str:
-    return f"|g[Craft] Crafted {d.get('item_name', 'item')}.|n"
+    # Rolled gear shows its value: the stamped quality score, plus the
+    # rarity when the crafting building's level draw assigned one — the
+    # same `[Rare · 73%]` tag GameItem.get_quality_tag renders. Unrolled
+    # crafts (supplies, fixed defs) pass no iqs and keep the plain line
+    # (R2.5: the readout only appears where it is meaningful).
+    name = d.get("item_name", "item")
+    iqs = d.get("iqs")
+    if iqs is None:
+        return f"|g[Craft] Crafted {name}.|n"
+    score = min(int(round(float(iqs))), 999)
+    rarity = d.get("rarity")
+    tag = (f"[{str(rarity).capitalize()} · {score}%]" if rarity
+           else f"[{score}%]")
+    return f"|g[Craft] Crafted {name} {tag}.|n"
 
 
 def _fmt_produced(d: dict) -> str:
@@ -717,6 +730,181 @@ def _fmt_craft_failed(d: dict) -> str:
     return f"|r[Craft] {messages.get(reason, f'Cannot craft {item}.')}|n"
 
 
+def _fmt_insert_applied(d: dict) -> str:
+    # Blacksmith bench success (item-loot-economy §4.3): an insert consumable
+    # was consumed and the equipped weapon permanently mutated (irreversible).
+    return (
+        f"|g[Blacksmith] {d.get('item_name', 'Insert')} applied to your "
+        f"{d.get('weapon_name', 'weapon')} "
+        f"({d.get('slots_used', '?')}/{d.get('slot_limit', '?')} insert "
+        f"slots used). The modification is permanent.|n"
+    )
+
+
+def _fmt_insert_failed(d: dict) -> str:
+    item = d.get("item_name", "insert")
+    reason = d.get("reason")
+    messages = {
+        "unknown_item": f"No such item '{item}'.",
+        "not_an_insert": f"{item} is not a weapon insert.",
+        "wrong_building": (
+            f"You can't apply {item} here. Stand in your |cBlacksmith|n."
+        ),
+        "not_owner": "You can only use your own Blacksmith.",
+        "building_offline": "This Blacksmith is offline — repair it first.",
+        "building_upgrading": (
+            "This Blacksmith is being upgraded — it can't be used until the "
+            "upgrade finishes (or you 'upgrade cancel')."
+        ),
+        "no_weapon": (
+            f"Equip the weapon you want to modify first, then apply {item}."
+        ),
+        "weapon_not_equipped": (
+            f"You don't have {d.get('weapon_name', 'that weapon')} equipped — "
+            f"inserts apply to your equipped weapon."
+        ),
+        "no_slots": (
+            f"Your {d.get('weapon_name', 'weapon')} has no free insert slots "
+            f"({d.get('slot_limit', 1)} at this Blacksmith's level) — upgrade "
+            f"the Blacksmith for more."
+        ),
+        "insufficient_supply": (
+            f"You don't carry a {item} — craft one first."
+        ),
+    }
+    return f"|r[Blacksmith] {messages.get(reason, f'Cannot apply {item}.')}|n"
+
+
+def _fmt_rerolled(d: dict) -> str:
+    # Blacksmith bench success (item-loot-economy §4.2/§4.4, task 4.4): the
+    # item's base stats were re-rolled (affixes/inserts/rarity untouched) and
+    # its quality score re-stamped.
+    iqs = d.get("iqs")
+    quality = f" — now |w{iqs}%|n quality" if iqs is not None else ""
+    return (
+        f"|g[Blacksmith] Rerolled your {d.get('item_name', 'item')}"
+        f"{quality} (-{d.get('salvage_cost', '?')} Salvage).|n"
+    )
+
+
+def _fmt_reroll_failed(d: dict) -> str:
+    item = d.get("item_name", "item")
+    reason = d.get("reason")
+    # Insufficient resources gets the shared have/need breakdown appended.
+    if reason == "insufficient_resources":
+        breakdown = d.get("breakdown")
+        head = f"|r[Blacksmith] Can't afford to reroll {item}.|n"
+        return f"{head}\n{breakdown}" if breakdown else head
+    messages = {
+        "unknown_item": (
+            f"You don't have '{item}' — reroll works on an item you carry "
+            f"or have equipped."
+        ),
+        "not_rerollable": (
+            f"{item} has fixed stats — it can't be rerolled."
+        ),
+        "wrong_building": (
+            f"You can't reroll {item} here. Stand in your |cBlacksmith|n."
+        ),
+        "not_owner": "You can only use your own Blacksmith.",
+        "building_offline": "This Blacksmith is offline — repair it first.",
+        "building_upgrading": (
+            "This Blacksmith is being upgraded — it can't be used until the "
+            "upgrade finishes (or you 'upgrade cancel')."
+        ),
+        "insufficient_salvage": (
+            f"Rerolling {item} costs {d.get('salvage_cost', '?')} Salvage — "
+            f"you have {d.get('salvage_have', 0)}. Salvage unwanted gear "
+            f"here to earn more."
+        ),
+        "reroll_error": (
+            f"Something went wrong rerolling {item}; your Salvage and "
+            f"resources were refunded."
+        ),
+    }
+    return f"|r[Blacksmith] {messages.get(reason, f'Cannot reroll {item}.')}|n"
+
+
+def _fmt_salvaged(d: dict) -> str:
+    # Blacksmith bench success (item-loot-economy §5, task 5.2): a carried
+    # item was destroyed and its Salvage yield credited (higher IQS and a
+    # higher-level bench yield more).
+    total = d.get("salvage_total")
+    balance = f" (you now have {total})" if total is not None else ""
+    return (
+        f"|g[Blacksmith] Salvaged your {d.get('item_name', 'item')} into "
+        f"|y{d.get('salvage', '?')}|n|g Salvage{balance}.|n"
+    )
+
+
+def _fmt_salvage_failed(d: dict) -> str:
+    item = d.get("item_name", "item")
+    reason = d.get("reason")
+    messages = {
+        "unknown_item": (
+            f"You don't carry '{item}' — salvage works on a loose item "
+            f"you carry."
+        ),
+        "equipped": (
+            f"{item} is equipped — unequip it first to salvage it."
+        ),
+        "not_gear": (
+            f"{item} isn't salvageable gear."
+        ),
+        "wrong_building": (
+            f"You can't salvage {item} here. Stand in your |cBlacksmith|n."
+        ),
+        "not_owner": "You can only use your own Blacksmith.",
+        "building_offline": "This Blacksmith is offline — repair it first.",
+        "building_upgrading": (
+            "This Blacksmith is being upgraded — it can't be used until the "
+            "upgrade finishes (or you 'upgrade cancel')."
+        ),
+    }
+    return f"|r[Blacksmith] {messages.get(reason, f'Cannot salvage {item}.')}|n"
+
+
+def _fmt_refined(d: dict) -> str:
+    # Refinery success (item-loot-economy §7, task 5.3): a resource batch
+    # was burned and its Salvage yield credited (a higher-level Refinery
+    # converts at a better rate). Salvage is the ONLY output — never Nexium.
+    total = d.get("salvage_total")
+    balance = f" (you now have {total})" if total is not None else ""
+    return (
+        f"|g[Refinery] Refined |w{d.get('amount', '?')} "
+        f"{d.get('resource', 'resources')}|n|g into "
+        f"|y{d.get('salvage', '?')}|n|g Salvage{balance}.|n"
+    )
+
+
+def _fmt_refine_failed(d: dict) -> str:
+    resource = d.get("resource", "that")
+    reason = d.get("reason")
+    messages = {
+        "unknown_resource": (
+            f"'{resource}' isn't a refinable resource."
+        ),
+        "wrong_building": (
+            f"You can't refine {resource} here. Stand in your |cRefinery|n."
+        ),
+        "not_owner": "You can only use your own Refinery.",
+        "building_offline": "This Refinery is offline — repair it first.",
+        "building_upgrading": (
+            "This Refinery is being upgraded — it can't be used until the "
+            "upgrade finishes (or you 'upgrade cancel')."
+        ),
+        "insufficient_resources": (
+            f"You don't have enough {resource} — you carry "
+            f"{d.get('have', 0)}, need {d.get('need', '?')}."
+        ),
+        "too_little": (
+            f"That little {resource} wouldn't yield any Salvage — refine "
+            f"a bigger batch."
+        ),
+    }
+    return f"|r[Refinery] {messages.get(reason, f'Cannot refine {resource}.')}|n"
+
+
 class NotificationPresenter:
     """Formats ``PLAYER_NOTIFICATION`` events and delivers them to players."""
 
@@ -792,6 +980,14 @@ class NotificationPresenter:
         "unequip_failed": _fmt_unequip_failed,
         "crafted": _fmt_crafted,
         "craft_failed": _fmt_craft_failed,
+        "insert_applied": _fmt_insert_applied,
+        "insert_failed": _fmt_insert_failed,
+        "rerolled": _fmt_rerolled,
+        "reroll_failed": _fmt_reroll_failed,
+        "salvaged": _fmt_salvaged,
+        "salvage_failed": _fmt_salvage_failed,
+        "refined": _fmt_refined,
+        "refine_failed": _fmt_refine_failed,
         "sold": _fmt_sold,
         "junked": _fmt_junked,
         "sell_failed": _fmt_sell_failed,

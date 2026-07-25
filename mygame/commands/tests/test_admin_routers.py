@@ -1023,6 +1023,393 @@ class TestItemPermissions(unittest.TestCase):
         cmd.func()
         self.assertTrue(any("Permission denied" in m for m in caller._messages))
 
+    def test_set_denied_for_player(self):
+        registry = FakeItemRegistry([_RIFLE, _GRENADE])
+        caller = FakeCaller(perm_level="Player", systems={"registry": registry})
+        cmd = _make_cmd(CmdAdminItem, caller, " set rifle damage 50")
+        cmd.func()
+        self.assertTrue(any("Permission denied" in m for m in caller._messages))
+
+    def test_stats_denied_for_player(self):
+        registry = FakeItemRegistry([_RIFLE, _GRENADE])
+        caller = FakeCaller(perm_level="Player", systems={"registry": registry})
+        cmd = _make_cmd(CmdAdminItem, caller, " stats rifle")
+        cmd.func()
+        self.assertTrue(any("Permission denied" in m for m in caller._messages))
+
+
+# -------------------------------------------------------------- #
+#  @item spawn iqs=/rarity= + @item set + @item stats
+#  (rolled-gear admin tooling)
+# -------------------------------------------------------------- #
+
+# A rolled Gear def: a roll_spec with stat bands, like weapons.yaml ships.
+_SNIPER_SPEC = {
+    "stats": {
+        "damage": {"min": 40, "max": 60, "weight": 3},
+        "range": {"min": 8, "max": 12, "weight": 1},
+    },
+}
+_SNIPER = FakeItemDef("sniper_rifle", "Sniper Rifle", "weapon",
+                      slot="weapon", weight=12.0)
+_SNIPER.roll_spec = _SNIPER_SPEC
+
+
+def _rolled_item_caller(perm_level="Builder"):
+    registry = FakeItemRegistry([_RIFLE, _GRENADE, _SNIPER])
+    return FakeCaller(perm_level=perm_level, systems={"registry": registry})
+
+
+def _patch_create_game_item(created):
+    """Patch typeclasses.objects.create_game_item to mint dict-shaped items.
+
+    The loot roller's instance writes are duck-typed and accept plain
+    dicts, so the created dict records exactly what the spawn path stamped
+    (rolled_stats / rarity / iqs).
+    """
+    fake_objects = types.ModuleType("typeclasses.objects")
+
+    def create(owner, idef):
+        item = {}
+        created.append((owner, idef, item))
+        return item
+
+    fake_objects.create_game_item = create
+    return mock.patch.dict(sys.modules, {
+        "typeclasses": types.ModuleType("typeclasses"),
+        "typeclasses.objects": fake_objects,
+    })
+
+
+class FakeGameItem:
+    """Live GameItem stand-in for @item set/stats: db bag + object key."""
+
+    def __init__(self, item_key, key=None, **fields):
+        self.key = key or item_key
+        self.db = FakeDB(item_key=item_key, **fields)
+
+
+class TestItemSpawnWithQuality(unittest.TestCase):
+    """@item spawn iqs=<N> stamps a deterministic roll at that quality."""
+
+    def test_iqs_stamps_stats_at_the_quality_fraction(self):
+        caller = _rolled_item_caller()
+        created = []
+        with _patch_create_game_item(created):
+            cmd = _make_cmd(CmdAdminItem, caller, " spawn sniper_rifle iqs=90")
+            cmd.func()
+
+        self.assertEqual(len(created), 1)
+        item = created[0][2]
+        # rolled = min + 0.9 * (max - min), per stat.
+        self.assertAlmostEqual(item["rolled_stats"]["damage"], 58.0)
+        self.assertAlmostEqual(item["rolled_stats"]["range"], 11.6)
+        # The stamped base IQS reads back exactly the requested value.
+        self.assertEqual(item["iqs"], 90)
+        # No rarity requested → none stamped (neutral read).
+        self.assertNotIn("rarity", item)
+        self.assertTrue(any("[iqs 90]" in m for m in caller._messages))
+
+    def test_iqs_with_rarity_stamps_the_tier(self):
+        caller = _rolled_item_caller()
+        created = []
+        with _patch_create_game_item(created):
+            cmd = _make_cmd(
+                CmdAdminItem, caller,
+                " spawn sniper_rifle iqs=90 rarity=legendary")
+            cmd.func()
+
+        item = created[0][2]
+        self.assertEqual(item["rarity"], "legendary")
+        self.assertEqual(item["iqs"], 90)
+
+    def test_iqs_out_of_range_is_clamped(self):
+        caller = _rolled_item_caller()
+        created = []
+        with _patch_create_game_item(created):
+            cmd = _make_cmd(CmdAdminItem, caller,
+                            " spawn sniper_rifle iqs=150")
+            cmd.func()
+
+        item = created[0][2]
+        self.assertEqual(item["rolled_stats"]["damage"], 60)  # band max
+        self.assertEqual(item["iqs"], 100)
+        self.assertTrue(any("clamped" in m for m in caller._messages))
+
+    def test_invalid_rarity_rejected_nothing_created(self):
+        caller = _rolled_item_caller()
+        created = []
+        with _patch_create_game_item(created):
+            cmd = _make_cmd(CmdAdminItem, caller,
+                            " spawn sniper_rifle rarity=mythic")
+            cmd.func()
+
+        self.assertEqual(created, [])
+        self.assertTrue(any("Unknown rarity" in m for m in caller._messages))
+
+    def test_non_numeric_iqs_rejected(self):
+        caller = _rolled_item_caller()
+        created = []
+        with _patch_create_game_item(created):
+            cmd = _make_cmd(CmdAdminItem, caller,
+                            " spawn sniper_rifle iqs=high")
+            cmd.func()
+
+        self.assertEqual(created, [])
+        self.assertTrue(any("must be a number" in m for m in caller._messages))
+
+    def test_forced_rarity_alone_rolls_with_the_tier_floor(self):
+        # rarity= without iqs=: a random roll forced to the tier — its roll
+        # floor applies, so every stat lands at or above floor**skew of the
+        # band (legendary 0.75² = 0.5625 → damage ≥ 40 + 20·0.5625 = 51.25).
+        caller = _rolled_item_caller()
+        created = []
+        with _patch_create_game_item(created):
+            cmd = _make_cmd(CmdAdminItem, caller,
+                            " spawn sniper_rifle rarity=legendary")
+            cmd.func()
+
+        item = created[0][2]
+        self.assertEqual(item["rarity"], "legendary")
+        self.assertGreaterEqual(item["rolled_stats"]["damage"], 51.25 - 1e-9)
+        self.assertLessEqual(item["rolled_stats"]["damage"], 60)
+
+
+class TestItemSpawnDefaultRoll(unittest.TestCase):
+    """Without iqs=, rolled defs get a normal random roll on spawn; defs
+    without roll bands stay fixed exactly as always."""
+
+    def test_rolled_def_gets_random_roll(self):
+        caller = _rolled_item_caller()
+        created = []
+        with _patch_create_game_item(created):
+            cmd = _make_cmd(CmdAdminItem, caller, " spawn sniper_rifle")
+            cmd.func()
+
+        item = created[0][2]
+        self.assertIn("rolled_stats", item)
+        self.assertTrue(40 <= item["rolled_stats"]["damage"] <= 60)
+        self.assertTrue(8 <= item["rolled_stats"]["range"] <= 12)
+        self.assertTrue(0 <= item["iqs"])
+
+    def test_unrolled_def_stays_fixed(self):
+        caller = _rolled_item_caller()
+        created = []
+        with _patch_create_game_item(created):
+            cmd = _make_cmd(CmdAdminItem, caller, " spawn assault_rifle")
+            cmd.func()
+
+        item = created[0][2]
+        self.assertNotIn("rolled_stats", item)
+        self.assertNotIn("iqs", item)
+
+    def test_unrolled_def_with_iqs_notes_ignored(self):
+        caller = _rolled_item_caller()
+        created = []
+        with _patch_create_game_item(created):
+            cmd = _make_cmd(CmdAdminItem, caller,
+                            " spawn assault_rifle iqs=50")
+            cmd.func()
+
+        item = created[0][2]
+        self.assertNotIn("rolled_stats", item)
+        self.assertTrue(any("ignored" in m for m in caller._messages))
+
+    def test_supply_with_iqs_notes_ignored_but_grants(self):
+        caller = _rolled_item_caller()
+        caller.equipment = FakeEquipment()
+        cmd = _make_cmd(CmdAdminItem, caller, " spawn frag_grenade 3 iqs=50")
+        cmd.func()
+        self.assertEqual(caller.equipment.supplies.get("frag_grenade"), 3)
+        self.assertTrue(any("ignored" in m for m in caller._messages))
+
+
+class TestItemSet(unittest.TestCase):
+    """@item set <item> <stat> <value> writes the rolled_stats override
+    (clamped to the roll band) and re-stamps IQS."""
+
+    def _caller_with_item(self, item_key="sniper_rifle", **fields):
+        caller = _rolled_item_caller()
+        item = FakeGameItem(item_key, **fields)
+        caller.contents = [item]
+        return caller, item
+
+    def test_set_in_band_writes_rolled_stat_and_restamps_iqs(self):
+        caller, item = self._caller_with_item()
+        cmd = _make_cmd(CmdAdminItem, caller, " set sniper damage 50")
+        cmd.func()
+
+        self.assertEqual(item.db.rolled_stats, {"damage": 50.0})
+        # Only damage is rolled: q = (50-40)/20 = 0.5 → IQS 50.
+        self.assertEqual(item.db.iqs, 50)
+        output = "\n".join(caller._messages)
+        self.assertIn("Set damage to 50", output)
+        self.assertIn("IQS now 50", output)
+
+    def test_set_above_band_clamps_with_note(self):
+        caller, item = self._caller_with_item()
+        cmd = _make_cmd(CmdAdminItem, caller, " set sniper damage 999")
+        cmd.func()
+
+        self.assertEqual(item.db.rolled_stats["damage"], 60.0)
+        self.assertEqual(item.db.iqs, 100)
+        self.assertTrue(any("clamped" in m for m in caller._messages))
+
+    def test_set_below_band_clamps_with_note(self):
+        caller, item = self._caller_with_item()
+        cmd = _make_cmd(CmdAdminItem, caller, " set sniper damage -5")
+        cmd.func()
+
+        self.assertEqual(item.db.rolled_stats["damage"], 40.0)
+        self.assertTrue(any("clamped" in m for m in caller._messages))
+
+    def test_set_preserves_other_rolled_stats(self):
+        caller, item = self._caller_with_item(
+            rolled_stats={"damage": 45.0, "range": 9.0})
+        cmd = _make_cmd(CmdAdminItem, caller, " set sniper damage 50")
+        cmd.func()
+
+        self.assertEqual(item.db.rolled_stats,
+                         {"damage": 50.0, "range": 9.0})
+
+    def test_set_stat_not_in_roll_spec_rejected(self):
+        caller, item = self._caller_with_item()
+        cmd = _make_cmd(CmdAdminItem, caller, " set sniper accuracy 5")
+        cmd.func()
+
+        self.assertIsNone(item.db.rolled_stats)
+        output = "\n".join(caller._messages)
+        self.assertIn("not a modifiable stat", output)
+        self.assertIn("@item stats", output)
+
+    def test_set_on_fixed_item_rejected(self):
+        # assault_rifle's def declares no roll_spec — nothing is settable.
+        caller, item = self._caller_with_item(item_key="assault_rifle")
+        cmd = _make_cmd(CmdAdminItem, caller, " set assault damage 50")
+        cmd.func()
+
+        self.assertIsNone(item.db.rolled_stats)
+        self.assertTrue(
+            any("not a modifiable stat" in m for m in caller._messages))
+
+    def test_set_rarity_valid_tier(self):
+        caller, item = self._caller_with_item()
+        cmd = _make_cmd(CmdAdminItem, caller, " set sniper rarity epic")
+        cmd.func()
+
+        self.assertEqual(item.db.rarity, "epic")
+        self.assertTrue(any("rarity to epic" in m for m in caller._messages))
+
+    def test_set_rarity_invalid_tier_rejected(self):
+        caller, item = self._caller_with_item()
+        cmd = _make_cmd(CmdAdminItem, caller, " set sniper rarity mythic")
+        cmd.func()
+
+        self.assertIsNone(item.db.rarity)
+        self.assertTrue(any("Unknown rarity" in m for m in caller._messages))
+
+    def test_set_unknown_item_reports(self):
+        caller = _rolled_item_caller()
+        cmd = _make_cmd(CmdAdminItem, caller, " set ghost damage 50")
+        cmd.func()
+        self.assertTrue(
+            any("No carried, equipped, or nearby item" in m
+                for m in caller._messages))
+
+    def test_set_non_numeric_value_rejected(self):
+        caller, item = self._caller_with_item()
+        cmd = _make_cmd(CmdAdminItem, caller, " set sniper damage high")
+        cmd.func()
+        self.assertIsNone(item.db.rolled_stats)
+        self.assertTrue(
+            any("must be a number" in m for m in caller._messages))
+
+    def test_set_too_few_args_shows_usage(self):
+        caller = _rolled_item_caller()
+        cmd = _make_cmd(CmdAdminItem, caller, " set sniper")
+        cmd.func()
+        self.assertTrue(any("Usage" in m for m in caller._messages))
+
+    def test_set_finds_equipped_items(self):
+        caller = _rolled_item_caller()
+        item = FakeGameItem("sniper_rifle")
+
+        class _Handler:
+            def get_all_equipped(self):
+                return {"weapon": item}
+
+        caller.equipment = _Handler()
+        cmd = _make_cmd(CmdAdminItem, caller, " set sniper damage 44")
+        cmd.func()
+        self.assertEqual(item.db.rolled_stats, {"damage": 44.0})
+
+
+class TestItemStats(unittest.TestCase):
+    """@item stats <item> lists each modifiable stat with its current
+    value and [min–max] band, plus IQS/rarity/affixes/inserts."""
+
+    def _caller_with_item(self, item_key="sniper_rifle", **fields):
+        caller = _rolled_item_caller()
+        item = FakeGameItem(item_key, **fields)
+        caller.contents = [item]
+        return caller, item
+
+    def test_stats_shows_bands_and_current_values(self):
+        caller, item = self._caller_with_item(
+            rolled_stats={"damage": 50.0}, iqs=50, rarity="rare")
+        cmd = _make_cmd(CmdAdminItem, caller, " stats sniper")
+        cmd.func()
+
+        output = "\n".join(caller._messages)
+        self.assertIn("damage", output)
+        self.assertIn("[40–60]", output)
+        self.assertIn("50", output)          # current rolled value
+        self.assertIn("range", output)
+        self.assertIn("[8–12]", output)
+        self.assertIn("IQS: 50", output)
+        self.assertIn("rare", output)
+
+    def test_stats_marks_rolled_vs_base_source(self):
+        caller, item = self._caller_with_item(
+            rolled_stats={"damage": 50.0})
+        cmd = _make_cmd(CmdAdminItem, caller, " stats sniper")
+        cmd.func()
+        output = "\n".join(caller._messages)
+        self.assertIn("(rolled)", output)
+
+    def test_stats_lists_affixes_and_inserts(self):
+        caller, item = self._caller_with_item(
+            rolled_stats={"damage": 50.0},
+            affixes=[{"key": "keen", "stat": "damage_bonus",
+                      "magnitude": 4.0, "value": 5.0}],
+            inserts=[{"key": "hollowpoint", "name": "Hollowpoint Rounds"}],
+        )
+        cmd = _make_cmd(CmdAdminItem, caller, " stats sniper")
+        cmd.func()
+        output = "\n".join(caller._messages)
+        self.assertIn("damage_bonus", output)
+        self.assertIn("Hollowpoint Rounds", output)
+
+    def test_stats_fixed_item_reports_no_bands(self):
+        caller, item = self._caller_with_item(item_key="assault_rifle")
+        cmd = _make_cmd(CmdAdminItem, caller, " stats assault")
+        cmd.func()
+        self.assertTrue(any("Fixed item" in m for m in caller._messages))
+
+    def test_stats_unknown_item_reports(self):
+        caller = _rolled_item_caller()
+        cmd = _make_cmd(CmdAdminItem, caller, " stats ghost")
+        cmd.func()
+        self.assertTrue(
+            any("No carried, equipped, or nearby item" in m
+                for m in caller._messages))
+
+    def test_stats_no_args_shows_usage(self):
+        caller = _rolled_item_caller()
+        cmd = _make_cmd(CmdAdminItem, caller, " stats")
+        cmd.func()
+        self.assertTrue(any("Usage" in m for m in caller._messages))
+
 
 class _RecordingRoom:
     """PlanetRoom stand-in that records move_entity's notify kwarg."""

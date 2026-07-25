@@ -599,6 +599,70 @@ class TestOutpostStaleStep(unittest.TestCase):
         self.assertNotIn("outpost_stale", [n for n, _ in steps])
 
 
+class TestEffectTicksStep(unittest.TestCase):
+    """The effect_ticks step drives DoT/shred ticking (burn, poison, shred).
+
+    Regression guard (review H — the item-loot-economy poison DoT, and the
+    pre-existing fire burn, were dead in production): a step registered in
+    ``_build_tick_steps`` but MISSING from ``TICK_STEP_ORDER`` is silently
+    dropped, so ``tick_effects_on_entity`` would never run on a live server
+    despite every DoT unit test calling it directly.
+    """
+
+    class _FakeCombatEngine:
+        def __init__(self):
+            self.ticked = []
+
+        def resolve_tick(self, buildings):
+            pass
+
+        def process_turrets(self, buildings, active_owner_ids=None):
+            pass
+
+        def tick_effects_on_entity(self, entity):
+            self.ticked.append(entity)
+
+    def _script(self):
+        script = GameTickScript()
+        script._get_online_players = lambda: ["p1"]
+        script._get_all_buildings = lambda: []
+        script._get_all_agents = lambda agent_system: []
+        script._get_all_enemies = lambda agent_system: []
+        return script
+
+    def test_step_emitted_and_ticks_entities(self):
+        script = self._script()
+        engine = self._FakeCombatEngine()
+        systems = {"combat_engine": engine, "event_bus": FakeEventBus()}
+        steps = dict(script._build_tick_steps(systems, tick_number=7))
+        # Must actually be EMITTED (present in TICK_STEP_ORDER), not just in
+        # the `registered` dict — the exact wiring gap being guarded.
+        self.assertIn("effect_ticks", steps)
+        # active_chunks populates tick_data["online_players"], as in the
+        # real loop's ordering.
+        steps["active_chunks"]()
+        steps["effect_ticks"]()
+        self.assertEqual(engine.ticked, ["p1"])
+
+    def test_effects_tick_after_combat_before_regen(self):
+        # DoTs land post-resolution and regen must be able to counter a
+        # same-tick DoT (R9.4 counterplay), so the order is combat -> effects
+        # -> hp_regen.
+        script = self._script()
+        engine = self._FakeCombatEngine()
+        systems = {"combat_engine": engine, "event_bus": FakeEventBus()}
+        names = [n for n, _ in script._build_tick_steps(systems, tick_number=1)]
+        self.assertLess(names.index("combat_resolution"), names.index("effect_ticks"))
+        regen_like = [n for n in names if n == "hp_regen"]
+        if regen_like:
+            self.assertLess(names.index("effect_ticks"), names.index("hp_regen"))
+
+    def test_step_absent_without_combat_engine(self):
+        script = self._script()
+        steps = script._build_tick_steps({"event_bus": FakeEventBus()}, tick_number=1)
+        self.assertNotIn("effect_ticks", [n for n, _ in steps])
+
+
 class TestBuildingCacheInvalidation(unittest.TestCase):
     """_get_all_buildings caches the tag search and re-runs it only when a
     building is created/destroyed (the building-index generation advances)."""

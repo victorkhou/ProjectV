@@ -313,3 +313,172 @@
     - launch_pad
     - upgradable
   map_symbol: LP
+
+# Blacksmith — the gear workbench (item-loot-economy §4). A pure bench: it
+# does NOT produce items (not in the production_map / EQUIPMENT_BUILDING_TYPES);
+# standing in your own operational Blacksmith enables insert / reroll / salvage.
+# The `blacksmith` capability exists so those commands can locate the bench.
+# Level scaling (reroll floor, insert slots, salvage yield) makes upgrades
+# matter, hence `upgradable`. Mid-tier gate mirrors the Lab (level 11 +
+# outpost deeds).
+- name: Blacksmith
+  abbreviation: BS
+  cost:
+    Wood: 20
+    Stone: 20
+    Iron: 25
+  build_time_seconds: 35
+  max_level: 5
+  rank_requirement: 11
+  unlock_deed: outpost_cleared
+  unlock_deed_count: 3
+  max_health: 250
+  requires_hq: true
+  required_terrain: null
+  category: equipment
+  produces: null
+  # Bench usage is gated on operational status only (R4.4 deviation,
+  # documented): NO code consumes requires_agent for bench commands
+  # (insert/reroll/salvage) — only production buildings check assigned
+  # agents, via a different list. Flip to true only when a consumer
+  # exists; the field is otherwise dead (schema validates but nothing
+  # reads it), and advertising an agent requirement that is never
+  # enforced was a false promise (F4/R4.1 review fix).
+  requires_agent: false
+  storage_capacity: 0
+  capabilities:
+    - blacksmith
+    - upgradable
+  map_symbol: BS
+
+# Refinery — the economy's Nexium sink (item-loot-economy §7, R10.4). A
+# player-operated converter, not a producer: standing in your own operational
+# Refinery, `refine <resource> <amount>` burns a resource stock (Nexium
+# included — that's the point of the sink) and credits Salvage at a
+# level-scaled rate. It NEVER outputs Nexium or any other resource
+# (anti-loop). Later-game than the Blacksmith (Nexium is late-game):
+# rank 13 + a fortress deed. Upgradable — the conversion rate improves
+# with level (R10.5), hence `upgradable`.
+- name: Refinery
+  abbreviation: RF
+  cost:
+    Stone: 25
+    Iron: 30
+    Circuits: 15
+  build_time_seconds: 40
+  max_level: 5
+  rank_requirement: 13
+  unlock_deed: fortress_cleared
+  max_health: 300
+  requires_hq: true
+  required_terrain: null
+  category: economy
+  produces: null
+  # Bench usage is gated on operational status only (R4.4 deviation,
+  # documented) — same rationale as the Blacksmith above: nothing
+  # consumes requires_agent for the `refine` bench, so declaring true
+  # was dead data falsely advertising an agent gate. Flip to true only
+  # when a consumer exists.
+  requires_agent: false
+  storage_capacity: 0
+  capabilities:
+    - resource_converter
+    - upgradable
+  map_symbol: RF
+
+# Sniper Nest — the flagship of "positional, not permanent" range power
+# (item-loot-economy §7, R10.1). While its OWNER stands on the nest's tile,
+# an operational nest grants a level-scaled weapon +range via the R8
+# range-resolution hook (`1 + (level-1)//2` → L1 +1, L3 +2, L5 +3), still
+# clamped by balance.max_weapon_range. Strictly on-tile and owner-only
+# (decided §12: adjacency is a possible later extension, not shipped).
+# The owner CAN fire ranged from INSIDE their own operational nest (M1
+# review fix): buildings spawn closed and stepping on the tile auto-enters,
+# so the symmetric no-ranged-from-cover gate is exempted for the attacker's
+# own range-aura building — shooting from the nest is the whole fantasy,
+# and the closed nest still shelters its owner from incoming ranged fire.
+# Inside an ENEMY's nest (or any own non-aura building) the gate holds.
+# Defense building gated a step past the Turret (rank 9 vs 5) since +range
+# is the spiciest stat; no agent needed — the player mans it themselves.
+- name: Sniper Nest
+  abbreviation: SN
+  cost:
+    Wood: 15
+    Stone: 20
+    Iron: 20
+  build_time_seconds: 30
+  max_level: 5
+  rank_requirement: 9
+  max_health: 250
+  requires_hq: true
+  required_terrain: null
+  category: defense
+  produces: null
+  requires_agent: false
+  storage_capacity: 0
+  capabilities:
+    - range_aura
+    - upgradable
+  map_symbol: SN
+
+# Watchtower — the vision counterpart of the Sniper Nest (item-loot-economy
+# §7, R10.2). While its OWNER stands on the tower's tile, an operational
+# watchtower extends the player's fog-of-war vision circle by a level-scaled
+# +sight_range (`1 + (level-1)//2` → L1 +1, L3 +2, L5 +3), read by
+# FogOfWarSystem._tile_vision_bonus. Same aura shape as the nest: strictly
+# on-tile and owner-only (decided: a radius aura around the tower is a
+# possible later extension, not shipped). Intelligence building like the
+# Radar but earlier and cheaper (rank 7, no agent) — vision is low-risk
+# compared to +range, and the player climbs the tower themselves.
+- name: Watchtower
+  abbreviation: WT
+  cost:
+    Wood: 20
+    Stone: 15
+    Iron: 5
+  build_time_seconds: 25
+  max_level: 5
+  rank_requirement: 7
+  max_health: 200
+  requires_hq: true
+  required_terrain: null
+  category: intelligence
+  produces: null
+  requires_agent: false
+  storage_capacity: 0
+  capabilities:
+    - vision_aura
+    - upgradable
+  map_symbol: WT
+
+# Field Hospital — the sustain member of the positional-aura trio (item-loot-
+# economy §7, R10.3). While its OWNER stands on the hospital's tile, an
+# operational field hospital heals them a flat level-scaled amount on the
+# passive HP-regen cadence (`1 + (level-1)//2` extra HP per regen interval →
+# L1 +1, L3 +2, L5 +3), applied by RegenSystem._tile_heal_bonus — so it obeys
+# the regen rules (interval gating, no heal while dead/incapacitated, never
+# past hp_max). Same aura shape as the nest/tower: strictly on-tile and
+# owner-only (a radius aura is a possible later extension, not shipped).
+# Medical building like the Medbay but positional and self-serve (rank 10,
+# no agent) — camp your own tile to heal up between fights. Slots between
+# the Sniper Nest (9) and Blacksmith (11) in the unlock cadence.
+- name: Field Hospital
+  abbreviation: FH
+  cost:
+    Wood: 20
+    Stone: 15
+    Iron: 10
+  build_time_seconds: 30
+  max_level: 5
+  rank_requirement: 10
+  max_health: 250
+  requires_hq: true
+  required_terrain: null
+  category: medical
+  produces: null
+  requires_agent: false
+  storage_capacity: 0
+  capabilities:
+    - heal_aura
+    - upgradable
+  map_symbol: FH

@@ -179,6 +179,98 @@ def _owner_label(entity):
     return getattr(owner, "key", None) or "?"
 
 
+def _get_item_field(item, name):
+    """Best-effort read of one per-instance field off an item instance.
+
+    The same duck-typing (and precedence) as the loot roller's instance
+    reads: a live ``GameItem`` through its ``db`` proxy, an Evennia object
+    without a ``db`` shim through the ``attributes`` handler, a dict-shaped
+    test item by plain key. Returns ``None`` when unset. Never raises.
+    """
+    try:
+        db = getattr(item, "db", None)
+        if db is not None:
+            value = getattr(db, name, None)
+            if value is not None:
+                return value
+        attrs = getattr(item, "attributes", None)
+        if attrs is not None and hasattr(attrs, "get"):
+            value = attrs.get(name)
+            if value is not None:
+                return value
+        if isinstance(item, dict):
+            return item.get(name)
+    except Exception:
+        pass
+    return None
+
+
+def _item_instance_matches(item, token_norm):
+    """True if *token_norm* names *item* — the lenient gear match.
+
+    Case-, space- and underscore-insensitive against the instance's
+    ``item_key`` and object key; a token that is a prefix of either also
+    matches (the same leniency the Blacksmith bench commands use).
+    """
+    for cand in (_get_item_field(item, "item_key"),
+                 getattr(item, "key", None)):
+        if not cand:
+            continue
+        cand_norm = " ".join(str(cand).lower().replace("_", " ").split())
+        if cand_norm == token_norm or cand_norm.startswith(token_norm):
+            return True
+    return False
+
+
+def _find_item_instance(caller, token):
+    """The first item instance matching *token* around *caller*, or None.
+
+    Search order (mirrors the bench commands' "a held/equipped item", plus
+    the admin convenience of a location search): equipped gear first, then
+    loose carried objects (``caller.contents``), then ``caller.search`` —
+    which covers items on the ground at the caller's location. Never
+    raises.
+    """
+    token_norm = " ".join(str(token or "").lower().replace("_", " ").split())
+    if not token_norm:
+        return None
+
+    candidates = []
+    handler = getattr(caller, "equipment", None)
+    if handler is not None and hasattr(handler, "get_all_equipped"):
+        try:
+            candidates.extend(handler.get_all_equipped().values())
+        except Exception:  # noqa: BLE001 - handler stub without the view
+            pass
+    try:
+        candidates.extend(getattr(caller, "contents", None) or [])
+    except Exception:  # noqa: BLE001 - exotic contents proxy
+        pass
+    if hasattr(caller, "search"):
+        try:
+            res = caller.search(token, quiet=True)
+            if res:
+                candidates.extend(
+                    res if isinstance(res, (list, tuple)) else [res])
+        except Exception:  # noqa: BLE001
+            pass
+
+    for item in candidates:
+        if item is None or item is caller:
+            continue
+        if _item_instance_matches(item, token_norm):
+            return item
+    return None
+
+
+def _format_band_value(value):
+    """Compact numeric formatting for stat/band readouts (1 not 1.0)."""
+    try:
+        return f"{float(value):g}"
+    except (TypeError, ValueError):
+        return str(value)
+
+
 class CmdAdminBuilding(AdminSubcommandRouter):
     """Manage buildings on the overworld.
 
@@ -913,27 +1005,52 @@ class CmdAdminResource(AdminSubcommandRouter):
 
 
 class CmdAdminItem(AdminSubcommandRouter):
-    """Spawn equipment, weapons, and supplies for players.
+    """Spawn, inspect, and modify equipment, weapons, and supplies.
 
     Usage:
-      @item spawn <key> [count] [player]
+      @item spawn <key> [count] [player] [iqs=<0-100>] [rarity=<tier>]
+      @item set <item> <stat> <value>
+      @item set <item> rarity <tier>
+      @item stats <item>
       @item list [filter]
 
     Options:
-      <key>     item key or full name (assault_rifle | "Assault Rifle")
-      [count]   how many to grant (default 1)
-      [player]  recipient; defaults to you
-      [filter]  restrict 'list' to a category (weapon, armor, accessory,
-                ammo, consumable, throwable) or a slot (torso, weapon, ...)
+      <key>          item key or full name (assault_rifle | "Assault Rifle")
+      [count]        how many to grant (default 1)
+      [player]       recipient; defaults to you
+      [iqs=<0-100>]  spawn rolled Gear at this base quality score: every
+                     stat lands at that fraction of its roll band
+                     (deterministic — no randomness). Clamped to 0-100.
+      [rarity=<tier>] force the rarity tier (common, uncommon, rare, epic,
+                     legendary). Without iqs=, the roll still happens but
+                     is forced to that tier (its roll floor and affix
+                     budget apply).
+      <item>         a Gear item YOU carry or have equipped (name, key, or
+                     prefix; ground items at your location also match)
+      <stat>         a stat the item's roll bands declare — see '@item
+                     stats <item>' for what a given item accepts
+      <value>        the new value; clamped into the stat's [min, max] band
+      [filter]       restrict 'list' to a category (weapon, armor,
+                     accessory, ammo, consumable, throwable) or a slot
 
     Subcommands:
       spawn — Grant item(s) to a player, bypassing cost (Builder+)
+      set   — Set a rolled stat (or rarity) on a carried item (Builder+)
+      stats — Show an item's modifiable stats with min/max bands (Builder+)
       list  — List item definitions available to spawn (Builder+)
 
     Gear (armor/weapon/accessory) is created as equippable object(s) in the
     recipient's inventory; Supplies (ammo/consumable/throwable) are added to
     their Supply_Bag as counts. Admin grants bypass the carry-weight cap,
     matching '@resource give'.
+
+    Rolled Gear defs are rolled on spawn (random roll, exactly like a loot
+    drop) unless iqs= pins the quality. Defs without roll bands stay fixed,
+    always — iqs=/rarity= are ignored on them (with a note), and Supplies
+    never carry per-instance rolls. '@item set' only accepts stats the
+    item's roll bands declare (that is where min/max come from); values
+    outside the band are clamped with a note, and the item's quality score
+    is re-stamped after every change.
     """
 
     key = "@item"
@@ -942,21 +1059,59 @@ class CmdAdminItem(AdminSubcommandRouter):
         """Grant item(s) to a player, bypassing production cost.
 
         Args:
-            args: "<key> [count] [player]"
+            args: "<key> [count] [player] [iqs=<0-100>] [rarity=<tier>]"
         """
         caller = self.caller
+        usage = ("Usage: @item spawn <key> [count] [player] "
+                 "[iqs=<0-100>] [rarity=<tier>]")
         if not args:
-            caller.msg("Usage: @item spawn <key> [count] [player]")
+            caller.msg(usage)
             return
 
-        parts = args.split()
-        token = parts[0]
+        from world.systems.loot_roller import RARITY_ORDER
+
+        # Pull out the kwarg-style options first (mirrors '@building spawn
+        # owner=/level='); the leftovers keep the positional
+        # <key> [count] [player] shape. Kwargs rather than positionals so a
+        # bare number stays unambiguously the count.
+        iqs = None
+        rarity = None
+        positional = []
+        for part in args.split():
+            low = part.lower()
+            if low.startswith("iqs=") or low.startswith("value="):
+                raw = part.split("=", 1)[1]
+                try:
+                    iqs = float(raw)
+                except ValueError:
+                    caller.msg("iqs must be a number 0-100.")
+                    return
+                if iqs < 0 or iqs > 100:
+                    clamped = min(max(iqs, 0.0), 100.0)
+                    caller.msg(f"iqs {iqs:g} clamped to {clamped:g} "
+                               f"(valid range 0-100).")
+                    iqs = clamped
+            elif low.startswith("rarity="):
+                rarity = part.split("=", 1)[1].strip().lower()
+                if rarity not in RARITY_ORDER:
+                    caller.msg(
+                        f"Unknown rarity '{rarity}'. "
+                        f"Valid: {', '.join(RARITY_ORDER)}."
+                    )
+                    return
+            else:
+                positional.append(part)
+
+        if not positional:
+            caller.msg(usage)
+            return
+        token = positional[0]
 
         # Optional [count] then optional [player]. The first extra token is a
         # count only if it parses as an int; otherwise it's a player name.
         count = 1
         player_name = None
-        rest = parts[1:]
+        rest = positional[1:]
         if rest:
             try:
                 count = int(rest[0])
@@ -1003,8 +1158,25 @@ class CmdAdminItem(AdminSubcommandRouter):
 
         from world.constants import GEAR_CATEGORIES
         is_gear = item_def.category in GEAR_CATEGORIES
+
+        # Per-instance rolls exist only on Gear objects; Supplies are bag
+        # counts. A rollable def is one whose roll_spec declares stat bands.
+        spec = getattr(item_def, "roll_spec", None)
+        rollable = (isinstance(spec, dict)
+                    and isinstance(spec.get("stats"), dict)
+                    and bool(spec.get("stats")))
+        if (iqs is not None or rarity is not None) and not (is_gear and rollable):
+            reason = ("Supplies carry no per-instance rolls"
+                      if not is_gear
+                      else f"{item_def.name} has no roll bands (fixed def)")
+            caller.msg(f"Note: iqs/rarity ignored — {reason}.")
+            iqs = None
+            rarity = None
+
         if is_gear:
-            granted = self._spawn_gear(target, item_def, count)
+            granted = self._spawn_gear(target, item_def, count,
+                                       iqs=iqs, rarity=rarity,
+                                       registry=registry)
         else:
             granted = self._grant_supply(target, item_def, count)
 
@@ -1017,9 +1189,16 @@ class CmdAdminItem(AdminSubcommandRouter):
         suffix = ""
         if granted < count:
             suffix = f" ({count - granted} exceeded the stack cap)"
-        self._log_admin("spawn", f"{granted}x {item_def.key} for {target_name}")
+        quality = ""
+        if iqs is not None:
+            quality = f" [iqs {iqs:g}{', ' + rarity if rarity else ''}]"
+        elif rarity is not None:
+            quality = f" [{rarity}]"
+        self._log_admin(
+            "spawn", f"{granted}x {item_def.key} for {target_name}{quality}")
         caller.msg(
-            f"Spawned {granted}x {item_def.name} ({kind}) for {target_name}{suffix}."
+            f"Spawned {granted}x {item_def.name} ({kind}) for "
+            f"{target_name}{quality}{suffix}."
         )
         if hasattr(target, "msg") and target is not caller:
             target.msg(
@@ -1027,21 +1206,85 @@ class CmdAdminItem(AdminSubcommandRouter):
                 f"from {caller.key}.|n"
             )
 
-    def _spawn_gear(self, target, item_def, count):
+    def _spawn_gear(self, target, item_def, count, iqs=None, rarity=None,
+                    registry=None):
         """Create *count* equippable GameItem objects in *target*'s inventory.
 
-        Returns the number successfully created.
+        Rollable defs (a ``roll_spec`` with stat bands) are ROLLED on spawn
+        — an admin grant should produce the same rolled-gear a loot drop
+        does, not the pre-loot-economy unrolled instance:
+
+        - ``iqs=<0-100>``: deterministic stamp — every stat lands at that
+          fraction of its loot band (``stats_at_quality``), so the base
+          quality score reads back exactly the requested value. A
+          ``rarity=`` is stamped verbatim alongside (no affixes — this is
+          a surgical spawn, not a loot roll).
+        - ``rarity=<tier>`` alone: a normal random roll forced to that
+          tier (a single-entry rarity table), so the tier's roll floor and
+          affix budget genuinely apply.
+        - neither: a normal random roll through ``roll_and_stamp`` with the
+          live balance skew/rarity table and affix pools (the loot-drop
+          treatment at source weight 0).
+
+        Defs without a roll_spec stay fixed exactly as always (R1.3) — the
+        roll wiring never touches them. Returns the number successfully
+        created.
         """
+        import random as _rng
+
         from typeclasses.objects import create_game_item
+        from world.systems.loot_roller import (
+            DEFAULT_LOOT_ROLL_SKEW, recompute_iqs, roll_and_stamp,
+            stats_at_quality, write_instance_field,
+        )
+
+        spec = getattr(item_def, "roll_spec", None)
+        rollable = (isinstance(spec, dict)
+                    and isinstance(spec.get("stats"), dict)
+                    and bool(spec.get("stats")))
+        balance = getattr(registry, "balance", None) if registry else None
 
         created = 0
         for _ in range(count):
             try:
-                create_game_item(target, item_def)
+                item = create_game_item(target, item_def)
                 created += 1
             except Exception:
                 logger.exception("Failed to create item %s", item_def.key)
                 break
+            if not rollable or item is None:
+                continue  # fixed def stays fixed, exactly as always (R1.3)
+            try:
+                if iqs is not None:
+                    rolled = stats_at_quality(spec, float(iqs) / 100.0)
+                    if rolled:
+                        write_instance_field(item, "rolled_stats", rolled)
+                        if rarity:
+                            write_instance_field(item, "rarity", str(rarity))
+                        recompute_iqs(item, spec)
+                else:
+                    if rarity:
+                        # Forced tier: a one-entry table makes the weighted
+                        # choice deterministic while the tier's roll floor
+                        # and affix budget still apply.
+                        table = {"admin": {"min_weight": 0.0,
+                                           "weights": {str(rarity): 1}}}
+                    else:
+                        table = getattr(balance, "rarity_table", None)
+                    roll_and_stamp(
+                        item, item_def,
+                        source_rarity_weight=0.0,
+                        crafted=False,
+                        rng=_rng,
+                        default_skew=getattr(
+                            balance, "loot_roll_skew", DEFAULT_LOOT_ROLL_SKEW),
+                        rarity_table=table,
+                        affix_pools=getattr(registry, "affixes", None),
+                    )
+            except Exception:
+                # A failed roll degrades to a fixed item (R1.5 spirit) —
+                # never a lost grant.
+                logger.exception("Roll failed for spawned %s", item_def.key)
         return created
 
     def _grant_supply(self, target, item_def, count):
@@ -1056,6 +1299,221 @@ class CmdAdminItem(AdminSubcommandRouter):
         return int(
             equipment.add_supply(item_def.key, count, max_stack=item_def.max_stack)
         )
+
+    # ------------------------------------------------------------------ #
+    #  set / stats — modify + inspect a live item instance
+    # ------------------------------------------------------------------ #
+
+    def _resolve_instance_def(self, item):
+        """The ItemDef governing a live *item* instance, or ``None``.
+
+        Looks the instance's ``item_key`` (object key as fallback) up in
+        the registry — the def is where the roll bands live.
+        """
+        registry = _get_system(self.caller, "registry")
+        if registry is None:
+            return None
+        token = _get_item_field(item, "item_key") or getattr(item, "key", "")
+        if not token:
+            return None
+        resolver = getattr(registry, "resolve_item", None)
+        item_def = resolver(str(token)) if callable(resolver) else None
+        if item_def is None and hasattr(registry, "get_item"):
+            try:
+                item_def = registry.get_item(str(token))
+            except KeyError:
+                item_def = None
+        return item_def
+
+    @staticmethod
+    def _roll_bands(item_def):
+        """The def's ``roll_spec.stats`` band dict, or ``{}`` when fixed."""
+        spec = getattr(item_def, "roll_spec", None) if item_def else None
+        stats = spec.get("stats") if isinstance(spec, dict) else None
+        return stats if isinstance(stats, dict) else {}
+
+    def sub_set(self, args):
+        """Set a rolled stat (or the rarity) on a carried item instance.
+
+        Args:
+            args: "<item> <stat> <value>" — the item token may span words
+                ("assault rifle damage 40"); the last two tokens are always
+                <stat> <value>.
+        """
+        caller = self.caller
+        usage = ("Usage: @item set <item> <stat> <value>  |  "
+                 "@item set <item> rarity <tier>")
+        parts = args.split()
+        if len(parts) < 3:
+            caller.msg(usage)
+            return
+        value_token = parts[-1]
+        stat = parts[-2].lower()
+        item_token = " ".join(parts[:-2])
+
+        item = _find_item_instance(caller, item_token)
+        if item is None:
+            caller.msg(
+                f"No carried, equipped, or nearby item matches "
+                f"'{item_token}'."
+            )
+            return
+        item_name = getattr(item, "key", None) or item_token
+
+        from world.systems.loot_roller import (
+            RARITY_ORDER, recompute_iqs, write_instance_field,
+        )
+
+        # Rarity is a named tier, not a banded stat — handled first.
+        if stat == "rarity":
+            tier = value_token.strip().lower()
+            if tier not in RARITY_ORDER:
+                caller.msg(
+                    f"Unknown rarity '{tier}'. "
+                    f"Valid: {', '.join(RARITY_ORDER)}."
+                )
+                return
+            write_instance_field(item, "rarity", tier)
+            self._log_admin("set", f"rarity={tier} on {item_name}")
+            caller.msg(f"Set {item_name} rarity to {tier}.")
+            return
+
+        # A numeric stat must be one the def's roll bands declare — that is
+        # the only place a [min, max] comes from. Anything else (arbitrary
+        # stats, unrolled defs) is rejected, pointing at the inspector.
+        item_def = self._resolve_instance_def(item)
+        bands = self._roll_bands(item_def)
+        band = bands.get(stat)
+        lo = band.get("min") if isinstance(band, dict) else None
+        hi = band.get("max") if isinstance(band, dict) else None
+        if (not isinstance(lo, (int, float)) or isinstance(lo, bool)
+                or not isinstance(hi, (int, float)) or isinstance(hi, bool)
+                or lo > hi):
+            settable = ", ".join(sorted(bands)) or "none — fixed item"
+            caller.msg(
+                f"'{stat}' is not a modifiable stat on {item_name}. "
+                f"Settable: {settable}. "
+                f"See '@item stats {item_token}'."
+            )
+            return
+
+        try:
+            value = float(value_token)
+        except ValueError:
+            caller.msg(f"Value must be a number (got '{value_token}').")
+            return
+
+        clamped = min(max(value, float(lo)), float(hi))
+        note = ""
+        if clamped != value:
+            note = (f" (clamped from {_format_band_value(value)} into band "
+                    f"{_format_band_value(lo)}–{_format_band_value(hi)})")
+
+        # Write the per-instance override get_stat prefers, then re-stamp
+        # the quality score through the single writer (R2.4).
+        rolled = dict(_get_item_field(item, "rolled_stats") or {})
+        rolled[stat] = clamped
+        write_instance_field(item, "rolled_stats", rolled)
+        new_iqs = recompute_iqs(item, getattr(item_def, "roll_spec", None))
+
+        iqs_str = f" IQS now {new_iqs}." if new_iqs is not None else ""
+        self._log_admin(
+            "set", f"{stat}={_format_band_value(clamped)} on {item_name}")
+        caller.msg(
+            f"Set {stat} to {_format_band_value(clamped)} on "
+            f"{item_name}{note}.{iqs_str}"
+        )
+
+    def sub_stats(self, args):
+        """Show an item instance's modifiable stats with their roll bands.
+
+        The admin-grade inspect: every stat '@item set' accepts, with its
+        current value and [min–max] band, plus IQS/rarity/affixes/inserts.
+
+        Args:
+            args: "<item>" — a carried/equipped/nearby item instance.
+        """
+        caller = self.caller
+        item_token = args.strip()
+        if not item_token:
+            caller.msg("Usage: @item stats <item>")
+            return
+
+        item = _find_item_instance(caller, item_token)
+        if item is None:
+            caller.msg(
+                f"No carried, equipped, or nearby item matches "
+                f"'{item_token}'."
+            )
+            return
+        item_name = getattr(item, "key", None) or item_token
+
+        item_def = self._resolve_instance_def(item)
+        bands = self._roll_bands(item_def)
+        rolled = _get_item_field(item, "rolled_stats") or {}
+        base = _get_item_field(item, "stat_modifiers") \
+            or (dict(getattr(item_def, "stat_modifiers", None) or {})
+                if item_def else {})
+
+        from world.systems.loot_roller import RARITY_ORDER
+
+        lines = [f"|w=== {item_name} ===|n"]
+        rarity = _get_item_field(item, "rarity")
+        iqs = _get_item_field(item, "iqs")
+        lines.append(f"  IQS: {iqs if iqs is not None else '—'}    "
+                     f"Rarity: {rarity or '—'} "
+                     f"(settable: {', '.join(RARITY_ORDER)})")
+
+        if bands:
+            lines.append("|cModifiable stats ('@item set <item> <stat> "
+                         "<value>', clamped to band):|n")
+            for stat in sorted(bands):
+                band = bands.get(stat)
+                if not isinstance(band, dict):
+                    continue
+                lo, hi = band.get("min"), band.get("max")
+                current = rolled.get(stat, base.get(stat) if hasattr(base, "get") else None)
+                cur_str = (_format_band_value(current)
+                           if current is not None else "—")
+                src = "rolled" if stat in rolled else "base"
+                lines.append(
+                    f"  {stat:<18s} {cur_str:>8s}  "
+                    f"[{_format_band_value(lo)}–{_format_band_value(hi)}]"
+                    f"  ({src})"
+                )
+            extras = [s for s in rolled if s not in bands]
+            for stat in sorted(extras):
+                lines.append(
+                    f"  {stat:<18s} {_format_band_value(rolled[stat]):>8s}  "
+                    f"[no band — not settable]"
+                )
+        else:
+            lines.append("  Fixed item — no roll bands; '@item set' accepts "
+                         "only rarity here.")
+
+        affixes = _get_item_field(item, "affixes") or []
+        if affixes:
+            lines.append("|cAffixes:|n")
+            for affix in affixes:
+                if not hasattr(affix, "get"):
+                    lines.append(f"  {affix}")
+                    continue
+                axis = (affix.get("stat") or affix.get("proc")
+                        or affix.get("key", "affix"))
+                magnitude = affix.get("magnitude", affix.get("value"))
+                mag_str = (f"+{_format_band_value(magnitude)} "
+                           if magnitude is not None else "")
+                lines.append(f"  {mag_str}{axis}")
+        inserts = _get_item_field(item, "inserts") or []
+        if inserts:
+            lines.append("|cInserts:|n")
+            for ins in inserts:
+                name = (ins.get("name") or ins.get("key")
+                        if hasattr(ins, "get") else None) or str(ins)
+                lines.append(f"  {name}")
+
+        self._log_admin("stats", f"inspect {item_name}")
+        caller.msg("\n".join(lines))
 
     @staticmethod
     def _item_index(registry):
@@ -1111,6 +1569,9 @@ class CmdAdminItem(AdminSubcommandRouter):
 
     subcommands = {
         "spawn": (sub_spawn, "Spawn item(s) for a player", "Builder"),
+        "set": (sub_set, "Set a stat/rarity on a carried item", "Builder"),
+        "stats": (sub_stats, "Show an item's modifiable stats + bands",
+                  "Builder"),
         "list": (sub_list, "List item definitions", "Builder"),
     }
 

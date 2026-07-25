@@ -141,7 +141,10 @@ class FakeSentinel:
 
     def delete(self):
         self.deleted = True
+        # Mirror Django/Evennia: Collector.delete() nulls the pk attname
+        # ("id"), so a deleted object reads BOTH .pk and .id as None.
         self.pk = None
+        self.id = None
 
 
 class FakeGuard:
@@ -678,6 +681,50 @@ class TestBaseElimination(unittest.TestCase):
         self.assertFalse(hq_proxy.deleted)
         self.assertTrue(sentinel.deleted)  # sentinel still wiped
 
+    def test_hq_destruction_untracks_base_in_spawner(self):
+        """Regression: eliminating a base must remove it from the spawner's
+        tracking, even though the handler deletes the sentinel (nulling its
+        .id, as Django does) BEFORE publishing BASE_ELIMINATED.
+
+        The bug: the spawner popped ``_active_bases`` by ``sentinel.id``,
+        which is None by the time the event arrives, so the pop silently
+        missed. The phantom record kept the eliminated base in
+        '@outpost list' and in the minimap proximity warning (both read
+        ``_active_bases``) while nothing remained on the actual map.
+        """
+        registry = _make_registry()
+        bus = EventBus()
+        spawner, npc, bf, room, _ = _make_spawner(
+            registry=registry, event_bus=bus, tick=100)
+        base = spawner.spawn_base("earth", "outpost", coords=(10, 10))
+        self.assertIsNotNone(base)
+        sentinel = base["sentinel"]
+
+        def owned(s):
+            return (s.get_buildings()
+                    + [g for g in npc.guards if g.db.owner is s])
+
+        handler, _, _ = _make_handler(
+            registry=registry, event_bus=bus,
+            owned={sentinel: owned(sentinel)})
+
+        hq = next(b for b in bf.created if b.db.building_type == "HQ")
+        # The combat engine deletes the HQ, then BUILDING_DESTROYED fires and
+        # the elimination handler wipes the rest of the base + the sentinel.
+        hq.delete()
+        bus.publish(BUILDING_DESTROYED, building=hq,
+                    attacker=FakePlayer(oid=2), tile=room)
+
+        self.assertTrue(sentinel.deleted)
+        self.assertIsNone(sentinel.id)  # Django nulls the pk on delete
+        # The single source of truth for '@outpost list' and the minimap
+        # proximity warning must agree with the (now empty) map.
+        self.assertEqual(spawner._active_bases, {})
+        self.assertEqual(
+            spawner.bases_near("earth", 10, 10, 15, 100), [])
+        # The respawn is still queued as usual.
+        self.assertEqual(len(spawner._pending_respawns), 1)
+
     def test_non_hq_building_ignored(self):
         """Destroying a non-HQ sentinel building does NOT wipe the base."""
         room = FakeRoom()
@@ -1066,3 +1113,255 @@ class TestWipeBasesInArea(unittest.TestCase):
         wiped = spawner.wipe_bases_in_area("mars", 8, 8, 12, 12)
         self.assertEqual(wiped, 0)
         self.assertEqual(len(spawner._active_bases), 1)
+
+
+# -------------------------------------------------------------- #
+#  Gear-drop rolling (item-loot-economy task 1.5)
+# -------------------------------------------------------------- #
+
+class TestGearDropRolling(unittest.TestCase):
+    """Base-elimination gear drops are rolled at spawn: the drop carries
+    per-instance rolled_stats + iqs (R1.1); defs without a roll_spec stay
+    fixed exactly as today (R1.3)."""
+
+    _ROLL_SPEC = {
+        "stats": {
+            "damage": {"min": 18, "max": 30, "weight": 3},
+            "range": {"min": 4, "max": 7, "weight": 1},
+        },
+    }
+
+    def _handler(self, with_roll_spec=True):
+        registry = _make_registry()
+        registry.items = {
+            "combat_knife": types.SimpleNamespace(
+                key="combat_knife", name="Combat Knife",
+                roll_spec=self._ROLL_SPEC if with_roll_spec else None,
+            ),
+        }
+        handler, _bus, _drops = _make_handler(registry=registry)
+        return handler
+
+    def _spawn_with_stub(self, handler, **kwargs):
+        """Run _spawn_gear_item against a stubbed spawn_gear_drop that
+        returns a db-bag drop; return that drop stub."""
+        import typeclasses.objects as objects_mod
+        stub = types.SimpleNamespace(db=types.SimpleNamespace())
+        original = getattr(objects_mod, "spawn_gear_drop", None)
+        objects_mod.spawn_gear_drop = (
+            lambda location, item_def, x=None, y=None: stub
+        )
+        try:
+            handler._spawn_gear_item(FakeRoom(), "combat_knife", 5, 5,
+                                     **kwargs)
+        finally:
+            if original is not None:
+                objects_mod.spawn_gear_drop = original
+            else:
+                del objects_mod.spawn_gear_drop
+        return stub
+
+    def test_won_roll_stamps_rolled_stats_and_iqs(self):
+        handler = self._handler(with_roll_spec=True)
+        stub = self._spawn_with_stub(handler, source_rarity_weight=2.0)
+
+        rolled = stub.db.rolled_stats
+        self.assertEqual(set(rolled), {"damage", "range"})
+        self.assertTrue(18 <= rolled["damage"] <= 30)
+        self.assertTrue(4 <= rolled["range"] <= 7)
+        self.assertIsInstance(stub.db.iqs, int)
+        self.assertTrue(0 <= stub.db.iqs <= 100)
+        # Phase 2 (task 2.2): the base tier's rarity weight selects the
+        # source bucket and a rarity is stamped on the drop (design §3.2).
+        from world.systems.loot_roller import RARITY_ORDER
+        self.assertIn(stub.db.rarity, RARITY_ORDER)
+        # Task 2.3: this def names no affix_pool (and the registry has no
+        # pools), so no affixes attribute is ever written (R12).
+        self.assertIsNone(getattr(stub.db, "affixes", None))
+
+    def test_affix_pools_flow_through_to_the_drop(self):
+        """Task 2.3 wiring: _spawn_gear_item passes registry.affixes
+        through roll_and_stamp, so a high-rarity drop carries affixes
+        drawn (no dups) from its item's category pool."""
+        registry = _make_registry()
+        registry.items = {
+            "combat_knife": types.SimpleNamespace(
+                key="combat_knife", name="Combat Knife",
+                roll_spec=dict(self._ROLL_SPEC, affix_pool="weapon"),
+            ),
+        }
+        registry.affixes = {"weapon": [
+            {"key": f"affix_{i}", "name": f"of Test {i}",
+             "stat": "fire_resist", "min": 2, "max": 6, "weight": 1.0}
+            for i in range(5)
+        ]}
+        # Force legendary so the affix budget (4) is deterministic.
+        registry.balance = types.SimpleNamespace(
+            loot_roll_skew=2.0,
+            rarity_table={"only": {"min_weight": 0.0,
+                                   "weights": {"legendary": 1}}},
+        )
+        handler, _bus, _drops = _make_handler(registry=registry)
+        stub = self._spawn_with_stub(handler, source_rarity_weight=0.0)
+
+        self.assertEqual(stub.db.rarity, "legendary")
+        affixes = stub.db.affixes
+        self.assertEqual(len(affixes), 4)
+        keys = [affix["key"] for affix in affixes]
+        self.assertEqual(len(set(keys)), 4)  # drawn without replacement
+        for affix in affixes:
+            self.assertTrue(2 <= affix["magnitude"] <= 6)
+
+    def test_unrolled_def_drop_stays_fixed(self):
+        """No roll_spec → the spawned drop gains no roll state (R1.3)."""
+        handler = self._handler(with_roll_spec=False)
+        stub = self._spawn_with_stub(handler)
+
+        self.assertIsNone(getattr(stub.db, "rolled_stats", None))
+        self.assertIsNone(getattr(stub.db, "iqs", None))
+
+    def test_try_gear_drops_passes_template_rarity_weight(self):
+        """_try_gear_drops resolves the base tier's rarity weight and hands
+        it to _spawn_gear_item (which selects the rarity bucket from it)."""
+        handler = self._handler(with_roll_spec=True)
+        template = types.SimpleNamespace(
+            gear_drop_chance=1.0, gear_pool=["combat_knife"],
+            rare_gear_chance=0.0, rare_pool=[], rarity_weight=3.5,
+        )
+        seen = []
+        handler._spawn_gear_item = (
+            lambda room, key, x, y, source_rarity_weight=0.0:
+            seen.append((key, source_rarity_weight))
+        )
+        handler._try_gear_drops(FakeRoom(), template, 3, 4)
+        self.assertEqual(seen, [("combat_knife", 3.5)])
+
+
+# -------------------------------------------------------------- #
+#  Guard-kill gear drops (item-loot-economy task 2.5, R3.6)
+# -------------------------------------------------------------- #
+
+class TestGuardKillGearDrop(unittest.TestCase):
+    """The NEW guard-kill gear-drop path (R3.6, design §1.2): a small
+    ``guard_gear_drop_chance`` roll on each Sentinel-guard kill spawns one
+    rolled item from the template's gear pool using the LOWEST rarity source
+    bucket (guard kill, weight 0). The existing resource mini-drop (R8.2)
+    stays unchanged alongside — neither roll suppresses the other."""
+
+    _ROLL_SPEC = {
+        "stats": {
+            "damage": {"min": 18, "max": 30, "weight": 3},
+        },
+    }
+
+    def _handler(self, gear_chance, loot_chance=0.0, loot_sink=None):
+        registry = _make_registry()
+        registry.balance.guard_gear_drop_chance = gear_chance
+        registry.balance.guard_loot_chance = loot_chance
+        # The outpost template carries no per-template overrides for either
+        # chance, so the balance values above drive both rolls; give it a
+        # gear pool for the new path to draw from.
+        registry.base_templates["outpost"].gear_pool.append("combat_knife")
+        registry.items = {
+            "combat_knife": types.SimpleNamespace(
+                key="combat_knife", name="Combat Knife",
+                roll_spec=self._ROLL_SPEC,
+            ),
+        }
+        handler, bus, drops = _make_handler(
+            registry=registry, loot_sink=loot_sink)
+        return handler
+
+    @staticmethod
+    def _kill_guard(handler):
+        """Publish-shape call: run on_npc_eliminated for one guard kill."""
+        room = FakeRoom()
+        sentinel = FakeSentinel("Outpost #1", room, "earth")
+        sentinel.db.base_tier = "outpost"
+        sentinel.attributes.add("base_tier", "outpost")
+        guard = FakeGuard(sentinel, room, 4, 6, "guard", 80)
+        handler.on_npc_eliminated(victim=guard, attacker=None, tile=room)
+
+    def _kills_with_spawn_stub(self, handler, kills):
+        """Run *kills* guard kills against a stubbed spawn_gear_drop;
+        return the list of spawned drop stubs."""
+        import typeclasses.objects as objects_mod
+        spawned = []
+
+        def _stub(location, item_def, x=None, y=None):
+            stub = types.SimpleNamespace(db=types.SimpleNamespace())
+            spawned.append(stub)
+            return stub
+
+        original = getattr(objects_mod, "spawn_gear_drop", None)
+        objects_mod.spawn_gear_drop = _stub
+        try:
+            for _ in range(kills):
+                self._kill_guard(handler)
+        finally:
+            if original is not None:
+                objects_mod.spawn_gear_drop = original
+            else:
+                del objects_mod.spawn_gear_drop
+        return spawned
+
+    def test_zero_chance_never_drops_gear(self):
+        handler = self._handler(gear_chance=0.0)
+        spawned = self._kills_with_spawn_stub(handler, 50)
+        self.assertEqual(spawned, [])
+
+    def test_certain_chance_always_drops_gear(self):
+        handler = self._handler(gear_chance=1.0)
+        spawned = self._kills_with_spawn_stub(handler, 25)
+        self.assertEqual(len(spawned), 25)
+
+    def test_chance_gate_statistical(self):
+        # p=0.5 over n=400 kills: mean 200, σ=10 — the [140, 260] window is
+        # ±6σ, so a correctly-gated roll essentially never fails this while
+        # an always/never bug always does.
+        handler = self._handler(gear_chance=0.5)
+        spawned = self._kills_with_spawn_stub(handler, 400)
+        self.assertTrue(140 <= len(spawned) <= 260,
+                        f"expected ~200/400 drops at p=0.5, got {len(spawned)}")
+
+    def test_rolled_item_drawn_from_lowest_bucket(self):
+        # The guard drop passes source weight 0.0 → the guard_kill bucket:
+        # every stamped rarity must come from that (lowest) distribution.
+        from world.systems.loot_roller import DEFAULT_RARITY_TABLE
+        lowest = set(DEFAULT_RARITY_TABLE["guard_kill"]["weights"])
+        handler = self._handler(gear_chance=1.0)
+        spawned = self._kills_with_spawn_stub(handler, 40)
+        self.assertEqual(len(spawned), 40)
+        for stub in spawned:
+            self.assertIn(stub.db.rarity, lowest)
+            self.assertIn("damage", stub.db.rolled_stats)
+
+    def test_resource_mini_drops_still_fire_alongside(self):
+        # R3.6: both rolls at 100% → every kill yields BOTH the resource
+        # mini-drop AND the gear drop; neither path suppresses the other.
+        drops = []
+        handler = self._handler(gear_chance=1.0, loot_chance=1.0,
+                                loot_sink=drops)
+        spawned = self._kills_with_spawn_stub(handler, 10)
+        self.assertEqual(len(spawned), 10)      # gear drops
+        self.assertEqual(len(drops), 10)        # resource mini-drops
+        for resource, amount, x, y in drops:
+            self.assertIn(resource, {"Iron", "Stone"})  # outpost loot table
+            self.assertGreater(amount, 0)
+            self.assertEqual((x, y), (4, 6))    # at the guard's tile
+
+    def test_mini_drop_unaffected_when_gear_chance_zero(self):
+        # The pre-existing mini-drop behavior is untouched by the new gate.
+        drops = []
+        handler = self._handler(gear_chance=0.0, loot_chance=1.0,
+                                loot_sink=drops)
+        spawned = self._kills_with_spawn_stub(handler, 10)
+        self.assertEqual(spawned, [])
+        self.assertEqual(len(drops), 10)
+
+    def test_empty_gear_pool_skips_gear_roll(self):
+        # A tier with no gear pool can never gear-drop, whatever the chance.
+        handler = self._handler(gear_chance=1.0)
+        handler.registry.base_templates["outpost"].gear_pool.clear()
+        spawned = self._kills_with_spawn_stub(handler, 10)
+        self.assertEqual(spawned, [])

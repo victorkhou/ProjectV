@@ -350,6 +350,14 @@ def initialize_game() -> dict:
     guard_combat_system.set_sight_blocked_func(_sight_blocked)
     # Ranged lock-on ('target'/'shoot'): per-tick lock upkeep + accuracy model.
     targeting_system = TargetingSystem(registry, event_bus)
+    # R8 (item-loot-economy): the lock re-validation resolves range through
+    # the SAME combat-engine helper as the queue/resolve checks (weapon
+    # instance + owner tech + tile bonus, capped at max_weapon_range), so the
+    # three range sites never diverge. Wired via the PUBLIC alias
+    # ``resolve_weapon_range`` (not the private ``_resolve_weapon_range``) —
+    # the supported cross-system surface. The command layer's directional
+    # shoot / attack reach resolve through the same public method at runtime.
+    targeting_system.set_range_resolver(combat_engine.resolve_weapon_range)
     # Spawn-location resolver (state 3.1): HQ / place-of-death / random tile,
     # with fallbacks. Collaborators (planet spawn/bounds/size, HQ locator) are
     # wired once the PlanetRegistry exists (see _wire_spawn_resolver below).
@@ -548,6 +556,10 @@ def initialize_game() -> dict:
         # Terrain vision modifiers (terrain-strategy Req 3.1/3.3): late-bound
         # like set_in_bounds_func, since the resolver is built above in 2b.
         fog_system.set_terrain_modifier_resolver(terrain_modifier_system)
+        # Building definitions for the Watchtower vision-aura capability
+        # check (item-loot-economy R10.2) — same provider shape the
+        # CombatEngine uses for the Sniper Nest range aura.
+        fog_system.set_definitions_provider(registry)
         logger.info("FogOfWarSystem initialized.")
 
         # 5. ProceduralMapRenderer

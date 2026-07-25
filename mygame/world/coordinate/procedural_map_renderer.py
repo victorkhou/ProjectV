@@ -172,12 +172,18 @@ class ProceduralMapRenderer:
         # Bounds from player vision radius, not building vision
         px = _get_coord(player, "coord_x")
         py = _get_coord(player, "coord_y")
-        pvr = self._fog_system.player_vision_radius
+        # Viewport bounds come from the dedicated viewport radius, NOT the
+        # vision radius — vision balance changes must never resize the map.
+        # Tiles inside the viewport but beyond vision render as fog/unexplored.
+        viewport = getattr(
+            self._fog_system, "map_viewport_radius",
+            self._fog_system.player_vision_radius,
+        )
         _BORDER = getattr(self._fog_system, '_map_border', 5)
-        min_x = px - pvr - _BORDER
-        max_x = px + pvr + _BORDER
-        min_y = py - pvr - _BORDER
-        max_y = py + pvr + _BORDER
+        min_x = px - viewport - _BORDER
+        max_x = px + viewport + _BORDER
+        min_y = py - viewport - _BORDER
+        max_y = py + viewport + _BORDER
 
         # Pre-fetch discovery memory once
         buildings_mem = self._fog_system.get_discovered_buildings_map(player)

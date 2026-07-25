@@ -80,22 +80,45 @@ class BaseEliminationHandler(BaseSystem):
         self, event_name: str = "", victim: Any = None, attacker: Any = None,
         tile: Any = None, attacker_owner: Any = None, **kwargs
     ) -> None:
-        """Roll the per-guard-kill mini-drop (R8.2).
+        """Roll the per-guard-kill rewards: mini-drop (R8.2) + gear drop.
 
-        Each NPC-base guard kill has ``guard_loot_chance`` of dropping
-        ``guard_loot_amount`` of one random resource from the base's loot
-        table at the guard's tile — the instant-gratification beat between
-        HQ payouts. Only guards owned by a Sentinel (outpost/fortress)
-        qualify; template values override the balance defaults.
+        Two INDEPENDENT rolls per Sentinel-guard kill:
+
+        1. The resource mini-drop — ``guard_loot_chance`` of dropping
+           ``guard_loot_amount`` of one random resource from the base's loot
+           table at the guard's tile (the instant-gratification beat between
+           HQ payouts). Unchanged behavior.
+        2. The NEW rolled-gear drop (item-loot-economy task 2.5, R3.6,
+           design §1.2) — ``guard_gear_drop_chance`` of spawning one rolled
+           item from the template's gear pool, using the LOWEST rarity
+           source bucket (guard kill, weight 0).
+
+        Only guards owned by a Sentinel (outpost/fortress) qualify; template
+        values override the balance defaults for both rolls. One roll failing
+        never suppresses the other (R3.6: mini-drops stay alongside).
         """
-        import random as _rng
-        if victim is None or self._loot_drop_func is None:
+        if victim is None:
             return
         owner = get_obj_attr(victim, "owner")
         if owner is None or not self._is_sentinel(owner):
             return
         tier = get_obj_attr(owner, "base_tier", "outpost")
         template = self.registry.get_base_template(tier)
+        room = getattr(victim, "location", None) or tile
+        if room is None:
+            return
+        x = get_obj_attr(victim, "coord_x")
+        y = get_obj_attr(victim, "coord_y")
+        self._roll_guard_mini_drop(template, room, x, y, attacker_owner)
+        self._roll_guard_gear_drop(template, room, x, y)
+
+    def _roll_guard_mini_drop(
+        self, template: Any, room: Any, x: Any, y: Any, attacker_owner: Any
+    ) -> None:
+        """The per-guard-kill resource mini-drop (R8.2) — behavior unchanged."""
+        import random as _rng
+        if self._loot_drop_func is None:
+            return
         loot_table = dict(getattr(template, "loot", None) or {})
         if not loot_table:
             return
@@ -105,11 +128,6 @@ class BaseEliminationHandler(BaseSystem):
         if amount <= 0:
             return
         resource = _rng.choice(sorted(loot_table))
-        room = getattr(victim, "location", None) or tile
-        x = get_obj_attr(victim, "coord_x")
-        y = get_obj_attr(victim, "coord_y")
-        if room is None:
-            return
         try:
             self._loot_drop_func(room, resource, amount, x, y)
         except Exception:  # noqa: BLE001 - a bad drop must not break the kill
@@ -120,6 +138,35 @@ class BaseEliminationHandler(BaseSystem):
                 attacker_owner, "guard_loot",
                 resource=resource, amount=amount, x=x, y=y,
             )
+
+    def _roll_guard_gear_drop(self, template: Any, room: Any,
+                              x: Any, y: Any) -> None:
+        """The NEW guard-kill gear-drop roll (item-loot-economy R3.6, §1.2).
+
+        ``guard_gear_drop_chance`` (template-overrides-balance, like every
+        variable-reward knob) gates a single spawn of one random item from
+        the template's ``gear_pool`` via ``_spawn_gear_item`` — which rolls
+        the instance through the loot roller. The source rarity weight is
+        pinned to 0.0: the guard-kill bucket, the LOWEST row of the rarity
+        table (mostly Common/Uncommon — design §3.2). A malformed chance
+        disables the roll rather than raising (never break the kill).
+        """
+        import random as _rng
+        try:
+            chance = float(self._tunable(template, "guard_gear_drop_chance", 0)
+                           or 0.0)
+        except (TypeError, ValueError):
+            chance = 0.0
+        if chance <= 0:
+            return
+        pool = getattr(template, "gear_pool", None) or []
+        if not pool:
+            return
+        if _rng.random() >= chance:
+            return
+        # Weight 0.0 → the guard_kill (lowest) rarity source bucket.
+        self._spawn_gear_item(room, _rng.choice(pool), x, y,
+                              source_rarity_weight=0.0)
 
     def on_building_destroyed(
         self, event_name: str = "", building: Any = None, attacker: Any = None,
@@ -161,6 +208,14 @@ class BaseEliminationHandler(BaseSystem):
         tier = get_obj_attr(sentinel, "base_tier", "outpost")
         planet = get_obj_attr(sentinel, "base_planet")
         template = self.registry.get_base_template(tier)
+        # The sentinel's DB id — read BEFORE deleting it. Django nulls a
+        # deleted instance's pk ("id"), so by the time BASE_ELIMINATED is
+        # published (step 5) the object alone can no longer identify the
+        # spawner's tracking record; the id travels in the payload instead.
+        # Without it the spawner's pop silently missed and the eliminated
+        # base lingered as a phantom in '@outpost list' and the minimap
+        # proximity warning while nothing remained on the map.
+        sentinel_id = getattr(sentinel, "id", None)
 
         # HQ tile coords (for the loot drop + event) — read BEFORE deleting.
         hx = get_obj_attr(hq, "coord_x")
@@ -221,11 +276,12 @@ class BaseEliminationHandler(BaseSystem):
                 loot=loot, x=hx, y=hy,
             )
 
-        # 5. Publish so the spawner queues a respawn.
+        # 5. Publish so the spawner queues a respawn. sentinel_id carries the
+        #    pre-delete DB id (the sentinel object's own .id is None by now).
         self.event_bus.publish(
             BASE_ELIMINATED,
-            attacker=attacker, sentinel=sentinel, tier=tier,
-            planet=planet, x=hx, y=hy,
+            attacker=attacker, sentinel=sentinel, sentinel_id=sentinel_id,
+            tier=tier, planet=planet, x=hx, y=hy,
         )
 
     # ------------------------------------------------------------------ #
@@ -262,6 +318,16 @@ class BaseEliminationHandler(BaseSystem):
         if self._loot_drop_func is None or room is None:
             return
         rounds = max(1, int(getattr(template, "gear_rolls", 1) or 1))
+        # Base-tier rarity weight for the loot roller (item-loot-economy
+        # R3.2): reads BaseTemplateDef.rarity_weight (per-tier in
+        # outposts.yaml: outpost 1 < stronghold 2 < fortress 3 < citadel 4),
+        # falling back to any balance override then 0.0. This is the ONLY
+        # path that can reach the Epic/Legendary rarity buckets.
+        try:
+            rarity_weight = float(
+                self._tunable(template, "rarity_weight", 0.0) or 0.0)
+        except (TypeError, ValueError):
+            rarity_weight = 0.0
         for _ in range(rounds):
             for chance_key, pool_key in (
                 ("gear_drop_chance", "gear_pool"),
@@ -270,7 +336,8 @@ class BaseEliminationHandler(BaseSystem):
                 chance = self._tunable(template, chance_key, 0)
                 pool = getattr(template, pool_key, None) or []
                 if pool and _rng.random() < chance:
-                    self._spawn_gear_item(room, _rng.choice(pool), x, y)
+                    self._spawn_gear_item(room, _rng.choice(pool), x, y,
+                                          source_rarity_weight=rarity_weight)
 
     def _tunable_xp(self, template: Any) -> int:
         """HQ-destroy XP for *template*: its ``xp_reward``, else ``xp_hq_destroy``.
@@ -314,7 +381,8 @@ class BaseEliminationHandler(BaseSystem):
         except (TypeError, ValueError):
             return 0
 
-    def _spawn_gear_item(self, room: Any, item_key: str, x: Any, y: Any) -> None:
+    def _spawn_gear_item(self, room: Any, item_key: str, x: Any, y: Any,
+                         source_rarity_weight: float = 0.0) -> None:
         """Spawn the gear item *item_key* as a ground drop at (x, y).
 
         Resolves the key to its ``ItemDef`` via the registry (pool keys are
@@ -323,7 +391,17 @@ class BaseEliminationHandler(BaseSystem):
         ItemDef, not a key string). Failures are logged at ERROR — a won gear
         roll must never vanish silently (the anti-dopamine failure R11.5
         exists to prevent).
+
+        The spawned drop is then ROLLED (item-loot-economy task 1.5, design
+        §1.2): per-instance ``rolled_stats`` + ``iqs`` are stamped onto the
+        item, carrying the base tier's *source_rarity_weight* — which
+        selects the rarity bucket (task 2.2) and, through the rarity's
+        affix budget, how many affixes are drawn from the item's category
+        pool (task 2.3; the pools are ``registry.affixes``). Defs without
+        a ``roll_spec`` stay fixed exactly as today (R1.3); a roll failure
+        degrades to a fixed item, never a lost drop (R1.5).
         """
+        import random as _rng
         item_def = (self.registry.items or {}).get(item_key)
         if item_def is None:
             # Should be impossible after load-time pool validation (R11.5).
@@ -335,9 +413,25 @@ class BaseEliminationHandler(BaseSystem):
             logger.debug("Gear drop %s: Evennia unavailable (test env)", item_key)
             return
         try:
-            if spawn_gear_drop(room, item_def, x=int(x), y=int(y)) is None:
+            drop = spawn_gear_drop(room, item_def, x=int(x), y=int(y))
+            if drop is None:
                 logger.warning("Gear drop %s refused (tile full) at (%s, %s)",
                                item_key, x, y)
+                return
+            from world.systems.loot_roller import (
+                DEFAULT_LOOT_ROLL_SKEW, roll_and_stamp,
+            )
+            balance = getattr(self.registry, "balance", None)
+            roll_and_stamp(
+                drop, item_def,
+                source_rarity_weight=source_rarity_weight,
+                crafted=False,
+                rng=_rng,
+                default_skew=getattr(
+                    balance, "loot_roll_skew", DEFAULT_LOOT_ROLL_SKEW),
+                rarity_table=getattr(balance, "rarity_table", None),
+                affix_pools=getattr(self.registry, "affixes", None),
+            )
         except Exception:  # noqa: BLE001 - a bad drop must not abort the wipe
             logger.exception("Gear drop failed for %s", item_key)
 

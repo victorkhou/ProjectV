@@ -177,7 +177,9 @@ class BuildingSystem(BaseSystem):
             lambda: self._validate_tile_empty(tile, x=x, y=y),
             lambda: self._validate_build_range(player, tile, x=x, y=y),
             lambda: self._validate_combat_lockout(player),
-            lambda: self._validate_resources(player, building_def.cost),
+            lambda: self._validate_resources(
+                player, self.get_build_cost(building_def, player)
+            ),
         ]:
             err = validator()
             if err:
@@ -243,7 +245,7 @@ class BuildingSystem(BaseSystem):
         if err:
             return False, err + terrain_note
 
-        player.deduct_resources(building_def.cost)
+        player.deduct_resources(self.get_build_cost(building_def, player))
         building = self._call_create_building(building_def, tile, player, x=x, y=y)
 
         self.event_bus.publish(
@@ -259,15 +261,67 @@ class BuildingSystem(BaseSystem):
     #  Upgrade
     # ------------------------------------------------------------------ #
 
-    def get_upgrade_cost(self, building_def: BuildingDef, target_level: int) -> dict[str, int]:
+    def _build_cost_multiplier(self, owner: Any) -> float:
+        """Resolve *owner*'s build-cost tech multiplier (R11.1, design §6.3).
+
+        Reads the NEW ``build_cost_mult`` tech key via ``get_tech_bonus`` with
+        ``default=1.0`` (no research → costs unchanged). The Efficient
+        Construction tech ships ``effect_value: {build_cost_mult: 0.85}``
+        meaning "costs ×0.85" (−15%).
+
+        Accumulator semantics (documented decision): ``TechSystem.
+        _apply_tech_effect`` ADDS effect values for every key except
+        ``production_multiplier``, so a single ``build_cost_mult`` tech stores
+        its multiplier verbatim (0 + 0.85), which this consumer reads directly.
+        Two such techs would SUM (0.85 + 0.85 = 1.7 — nonsense as a
+        multiplier), so the value is clamped to
+        ``[balance.build_cost_mult_floor, 1.0]``: research can never RAISE
+        costs (upper clamp absorbs additive stacking) and stacking can never
+        trivialize them (the floor, default 0.6). Only one build_cost_mult
+        tech is the supported data shape.
+
+        MUST NOT read ``production_multiplier`` (R11.1) — that key belongs to
+        the production path and would stack multiplicatively with Rapid
+        Production.
+        """
+        from world.utils import get_tech_bonus
+
+        mult = get_tech_bonus(owner, "build_cost_mult", default=1.0)
+        floor = float(getattr(self.registry.balance, "build_cost_mult_floor", 0.6))
+        return min(1.0, max(floor, float(mult)))
+
+    def get_build_cost(
+        self, building_def: BuildingDef, owner: Any = None
+    ) -> dict[str, int]:
+        """Resource cost to construct *building_def* for *owner* (R11.1).
+
+        ``building_def.cost`` × the owner's clamped ``build_cost_mult`` tech
+        multiplier (see :meth:`_build_cost_multiplier`), rounded per resource.
+        With no owner or no research this is exactly the definition cost.
+        """
+        mult = self._build_cost_multiplier(owner)
+        return {
+            res: int(round(amt * mult)) for res, amt in building_def.cost.items()
+        }
+
+    def get_upgrade_cost(
+        self, building_def: BuildingDef, target_level: int, owner: Any = None
+    ) -> dict[str, int]:
         """Calculate upgrade cost: base_cost × COST_BASE^(target_level - 1).
 
         Exponential scaling makes higher levels increasingly expensive,
         creating the resource sink that drives agent utilization. The base is
-        the hot-tunable ``balance.upgrade_cost_base``.
+        the hot-tunable ``balance.upgrade_cost_base``. When *owner* is given,
+        the owner's clamped ``build_cost_mult`` tech multiplier applies on top
+        (R11.1, design §6.3) — pass the owner on every charge/refund path so
+        the two always match.
         """
         multiplier = self.registry.balance.upgrade_cost_base ** (target_level - 1)
-        return {res: amt * multiplier for res, amt in building_def.cost.items()}
+        tech_mult = self._build_cost_multiplier(owner)
+        return {
+            res: int(round(amt * multiplier * tech_mult))
+            for res, amt in building_def.cost.items()
+        }
 
     def get_upgrade_time(self, building_def: BuildingDef, target_level: int) -> int:
         """Calculate upgrade time: build_time × TIME_BASE^(target_level - 1).
@@ -316,7 +370,7 @@ class BuildingSystem(BaseSystem):
             )
 
         target_level = current_level + 1
-        upgrade_cost = self.get_upgrade_cost(building_def, target_level)
+        upgrade_cost = self.get_upgrade_cost(building_def, target_level, owner=player)
         err = self._validate_resources(player, upgrade_cost)
         if err:
             return False, None, 0, {}, err
@@ -438,7 +492,7 @@ class BuildingSystem(BaseSystem):
         building_type = self._get_building_attr(building, "building_type")
         try:
             building_def = self.registry.get_building(building_type)
-            refund = self.get_upgrade_cost(building_def, target_level)
+            refund = self.get_upgrade_cost(building_def, target_level, owner=player)
         except (KeyError, AttributeError):
             refund = {}
 
@@ -558,7 +612,7 @@ class BuildingSystem(BaseSystem):
         if err:
             return False, err + terrain_note
 
-        player.deduct_resources(building_def.cost)
+        player.deduct_resources(self.get_build_cost(building_def, player))
         building = self._call_create_building(building_def, tile, player, x=x, y=y)
 
         # Initialise construction timer
@@ -1081,7 +1135,9 @@ class BuildingSystem(BaseSystem):
     #  Repair
     # ------------------------------------------------------------------ #
 
-    def get_building_investment(self, building_def: BuildingDef, level: int) -> dict[str, int]:
+    def get_building_investment(
+        self, building_def: BuildingDef, level: int, owner: Any = None
+    ) -> dict[str, int]:
         """Return the CUMULATIVE resource investment in a *level* building.
 
         The base construction cost PLUS every upgrade cost up to *level*: a
@@ -1090,10 +1146,22 @@ class BuildingSystem(BaseSystem):
         build cost. This is the basis the tick-based repair charges against —
         repairing a heavily-invested, upgraded building costs proportionally
         more than a fresh one.
+
+        When *owner* is given, every term is priced with the owner's clamped
+        ``build_cost_mult`` tech discount — the SAME discounted basis
+        :meth:`get_build_cost` / :meth:`get_upgrade_cost` charged on the way
+        in (F5 review fix: repair previously billed against the UNDISCOUNTED
+        investment, overcharging Efficient Construction players; pass the
+        building's owner on every pricing path so charge and basis match).
         """
-        total: dict[str, float] = {res: float(amt) for res, amt in building_def.cost.items()}
+        total: dict[str, float] = {
+            res: float(amt)
+            for res, amt in self.get_build_cost(building_def, owner=owner).items()
+        }
         for lvl in range(2, max(1, int(level or 1)) + 1):
-            for res, amt in self.get_upgrade_cost(building_def, lvl).items():
+            for res, amt in self.get_upgrade_cost(
+                building_def, lvl, owner=owner
+            ).items():
                 total[res] = total.get(res, 0.0) + float(amt)
         return {res: int(round(amt)) for res, amt in total.items()}
 
@@ -1125,7 +1193,10 @@ class BuildingSystem(BaseSystem):
             return {}
 
         level = int(self._get_building_attr(building, "building_level", 1) or 1)
-        investment = self.get_building_investment(building_def, level)
+        # Price the investment with the OWNER's build_cost_mult discount (F5):
+        # the repair basis must be what the owner actually paid, not list price.
+        owner = self._get_building_attr(building, "owner")
+        investment = self.get_building_investment(building_def, level, owner=owner)
         percent = float(getattr(self.registry.balance, "repair_hp_percent_per_tick", 5.0))
         if percent <= 0:
             return {}

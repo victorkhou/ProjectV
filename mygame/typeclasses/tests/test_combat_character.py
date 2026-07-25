@@ -220,6 +220,87 @@ class TestResourceHelpers(unittest.TestCase):
 
 
 # -------------------------------------------------------------- #
+#  Tests: Salvage currency helpers (item-loot-economy R7, R12)
+# -------------------------------------------------------------- #
+
+class TestSalvageHelpers(unittest.TestCase):
+    def test_default_zero_for_legacy_character(self):
+        """A character that never touched salvage reads 0 (R12.1)."""
+        char = _make_char()
+        self.assertEqual(char.get_salvage(), 0)
+
+    def test_default_zero_without_attribute(self):
+        """db.salvage unset (legacy save) reads 0, never raises."""
+        char = _make_char()
+        self.assertIsNone(char.db.salvage)
+        self.assertEqual(char.get_salvage(), 0)
+
+    def test_add_salvage_increments(self):
+        char = _make_char()
+        char.add_salvage(25)
+        self.assertEqual(char.get_salvage(), 25)
+        char.add_salvage(15)
+        self.assertEqual(char.get_salvage(), 40)
+
+    def test_spend_salvage_decrements(self):
+        char = _make_char()
+        char.add_salvage(50)
+        self.assertTrue(char.spend_salvage(30))
+        self.assertEqual(char.get_salvage(), 20)
+
+    def test_spend_exact_balance(self):
+        char = _make_char()
+        char.add_salvage(30)
+        self.assertTrue(char.spend_salvage(30))
+        self.assertEqual(char.get_salvage(), 0)
+
+    def test_spend_refuses_overdraft(self):
+        """Overdraft returns False and leaves the balance unchanged."""
+        char = _make_char()
+        char.add_salvage(10)
+        self.assertFalse(char.spend_salvage(11))
+        self.assertEqual(char.get_salvage(), 10)
+
+    def test_spend_refuses_on_empty_balance(self):
+        char = _make_char()
+        self.assertFalse(char.spend_salvage(1))
+        self.assertEqual(char.get_salvage(), 0)
+
+    def test_spend_negative_amount_refused(self):
+        """A negative spend can't be used to mint salvage."""
+        char = _make_char()
+        char.add_salvage(10)
+        self.assertFalse(char.spend_salvage(-5))
+        self.assertEqual(char.get_salvage(), 10)
+
+    def test_add_negative_clamps_at_zero(self):
+        """A negative credit drains to 0, never below."""
+        char = _make_char()
+        char.add_salvage(5)
+        char.add_salvage(-100)
+        self.assertEqual(char.get_salvage(), 0)
+
+    def test_balance_never_negative(self):
+        char = _make_char()
+        char.add_salvage(7)
+        char.spend_salvage(7)
+        char.spend_salvage(3)  # refused: empty
+        self.assertGreaterEqual(char.get_salvage(), 0)
+        self.assertEqual(char.get_salvage(), 0)
+
+    def test_salvage_in_structured_status(self):
+        """Salvage shows where resources/currencies show."""
+        char = _make_char()
+        char.add_salvage(42)
+        status = char.get_structured_status()
+        self.assertEqual(status["salvage"], 42)
+
+    def test_salvage_not_in_resource_types(self):
+        """Salvage is deliberately NOT a validator-enforced resource."""
+        self.assertNotIn("Salvage", RESOURCE_TYPES)
+
+
+# -------------------------------------------------------------- #
 #  Tests: get_structured_status
 # -------------------------------------------------------------- #
 

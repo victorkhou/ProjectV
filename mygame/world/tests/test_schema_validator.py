@@ -348,6 +348,541 @@ class TestValidateItems:
         assert self.v.validate_items(data) == []
 
 
+def make_valid_roll_spec(**overrides):
+    base = {
+        "stats": {
+            "damage": {"min": 18, "max": 30, "weight": 3},
+            "range": {"min": 4, "max": 7, "weight": 1},
+        },
+        "craft": {
+            "damage": {"min": 20, "max": 25},
+            "range": {"min": 4, "max": 5},
+        },
+        "skew": 2.0,
+        "affix_pool": "weapon",
+    }
+    base.update(overrides)
+    return base
+
+
+class TestValidateRollSpec:
+    """roll_spec shape validation (item-loot-economy §1.1, R1/R12).
+
+    Invalid roll_spec data must fail at LOAD, not at runtime (design Error
+    Handling table).
+    """
+
+    def setup_method(self):
+        self.v = SchemaValidator()
+
+    def _errs(self, roll_spec):
+        item = make_valid_item(category="weapon", weapon_type="ranged",
+                               magazine_size=10, roll_spec=roll_spec)
+        return self.v.validate_items({"items": [item], "production_map": {}})
+
+    # ---- accepted shapes ------------------------------------------------ #
+    def test_valid_roll_spec_accepted(self):
+        assert self._errs(make_valid_roll_spec()) == []
+
+    def test_stats_only_roll_spec_accepted(self):
+        # craft / skew / affix_pool are all optional.
+        spec = {"stats": {"damage": {"min": 1, "max": 5, "weight": 1}}}
+        assert self._errs(spec) == []
+
+    def test_absent_roll_spec_accepted(self):
+        item = make_valid_item()
+        assert self.v.validate_items({"items": [item]}) == []
+
+    def test_equal_min_max_accepted(self):
+        spec = {"stats": {"damage": {"min": 5, "max": 5, "weight": 1}}}
+        assert self._errs(spec) == []
+
+    # ---- rejected shapes ------------------------------------------------ #
+    def test_non_dict_roll_spec_rejected(self):
+        errs = self._errs("weapon")
+        assert any("roll_spec must be a dict" in e for e in errs)
+
+    def test_unknown_top_level_key_rejected(self):
+        errs = self._errs(make_valid_roll_spec(affixes="weapon"))
+        assert any("unknown keys" in e for e in errs)
+
+    def test_missing_stats_rejected(self):
+        spec = make_valid_roll_spec()
+        del spec["stats"]
+        errs = self._errs(spec)
+        assert any("roll_spec.stats must be a non-empty dict" in e for e in errs)
+
+    def test_empty_stats_rejected(self):
+        errs = self._errs(make_valid_roll_spec(stats={}))
+        assert any("roll_spec.stats must be a non-empty dict" in e for e in errs)
+
+    def test_stats_band_min_above_max_rejected(self):
+        spec = {"stats": {"damage": {"min": 30, "max": 18, "weight": 3}}}
+        errs = self._errs(spec)
+        assert any("min (30) must be <= max (18)" in e for e in errs)
+
+    def test_stats_band_non_numeric_rejected(self):
+        spec = {"stats": {"damage": {"min": "low", "max": 30, "weight": 1}}}
+        errs = self._errs(spec)
+        assert any("requires numeric 'min' and 'max'" in e for e in errs)
+
+    def test_stats_band_missing_weight_rejected(self):
+        spec = {"stats": {"damage": {"min": 18, "max": 30}}}
+        errs = self._errs(spec)
+        assert any("weight must be a number > 0" in e for e in errs)
+
+    def test_stats_band_zero_weight_rejected(self):
+        spec = {"stats": {"damage": {"min": 18, "max": 30, "weight": 0}}}
+        errs = self._errs(spec)
+        assert any("weight must be a number > 0" in e for e in errs)
+
+    def test_stats_band_not_a_dict_rejected(self):
+        spec = {"stats": {"damage": [18, 30]}}
+        errs = self._errs(spec)
+        assert any("roll_spec.stats['damage'] must be a dict" in e for e in errs)
+
+    def test_craft_stat_without_loot_band_rejected(self):
+        spec = {
+            "stats": {"damage": {"min": 18, "max": 30, "weight": 3}},
+            "craft": {"range": {"min": 4, "max": 5}},
+        }
+        errs = self._errs(spec)
+        assert any("no matching entry in roll_spec.stats" in e for e in errs)
+
+    def test_craft_band_rejects_weight_key(self):
+        spec = {
+            "stats": {"damage": {"min": 18, "max": 30, "weight": 3}},
+            "craft": {"damage": {"min": 20, "max": 25, "weight": 1}},
+        }
+        errs = self._errs(spec)
+        assert any("roll_spec.craft['damage'] has unknown keys" in e for e in errs)
+
+    def test_craft_not_a_dict_rejected(self):
+        errs = self._errs(make_valid_roll_spec(craft="tight"))
+        assert any("roll_spec.craft must be a dict" in e for e in errs)
+
+    def test_skew_below_one_rejected(self):
+        errs = self._errs(make_valid_roll_spec(skew=0.5))
+        assert any("skew must be a number >= 1" in e for e in errs)
+
+    def test_skew_non_numeric_rejected(self):
+        errs = self._errs(make_valid_roll_spec(skew="steep"))
+        assert any("skew must be a number >= 1" in e for e in errs)
+
+    def test_affix_pool_non_string_rejected(self):
+        errs = self._errs(make_valid_roll_spec(affix_pool=3))
+        assert any("affix_pool must name a known affix pool" in e for e in errs)
+
+    def test_affix_pool_empty_string_rejected(self):
+        errs = self._errs(make_valid_roll_spec(affix_pool=""))
+        assert any("affix_pool must name a known affix pool" in e for e in errs)
+
+    def test_affix_pool_typo_rejected(self):
+        # Review F3: `affix_pool: waepon` used to load silently — the item
+        # simply never rolled affixes. The pool namespace is closed (one
+        # pool per Gear category), so a typo fails the load.
+        errs = self._errs(make_valid_roll_spec(affix_pool="waepon"))
+        assert any("affix_pool must name a known affix pool" in e for e in errs)
+        assert any("'waepon'" in e for e in errs)
+
+    def test_all_known_pool_names_accepted(self):
+        from mygame.world.schema_validator import AFFIX_POOL_NAMES
+        for pool in AFFIX_POOL_NAMES:
+            assert self._errs(make_valid_roll_spec(affix_pool=pool)) == [], pool
+
+    # ---- craft ⊂ loot containment (review M2) ------------------------- #
+    def test_craft_band_outside_loot_band_rejected(self):
+        # The exact case the review verified loading clean: craft
+        # {26..40} escaping loot [18, 30] is authoring error at LOAD.
+        spec = {
+            "stats": {"damage": {"min": 18, "max": 30, "weight": 3}},
+            "craft": {"damage": {"min": 26, "max": 40}},
+        }
+        errs = self._errs(spec)
+        assert any("must be contained in the loot band" in e for e in errs)
+
+    def test_craft_band_below_loot_min_rejected(self):
+        spec = {
+            "stats": {"damage": {"min": 18, "max": 30, "weight": 3}},
+            "craft": {"damage": {"min": 10, "max": 25}},
+        }
+        errs = self._errs(spec)
+        assert any("must be contained in the loot band" in e for e in errs)
+
+    def test_craft_band_equal_to_loot_band_accepted(self):
+        # Containment is inclusive: craft == loot is legal (if pointless).
+        spec = {
+            "stats": {"damage": {"min": 18, "max": 30, "weight": 3}},
+            "craft": {"damage": {"min": 18, "max": 30}},
+        }
+        assert self._errs(spec) == []
+
+    def test_malformed_craft_band_reports_shape_not_containment(self):
+        # A band that already failed the shape check must not ALSO emit a
+        # confusing containment error (min="low" cannot be compared).
+        spec = {
+            "stats": {"damage": {"min": 18, "max": 30, "weight": 3}},
+            "craft": {"damage": {"min": "low", "max": 40}},
+        }
+        errs = self._errs(spec)
+        assert any("requires numeric 'min' and 'max'" in e for e in errs)
+        assert not any("must be contained" in e for e in errs)
+
+    # ---- NaN / inf hardening (review M1) ------------------------------ #
+    def test_nan_band_bounds_rejected(self):
+        # YAML `.nan` parses fine; every NaN comparison is False, so a NaN
+        # bound used to sail through `min <= max` and reach combat as
+        # rolled_stats = nan. Non-finite numbers now fail the load.
+        nan = float("nan")
+        for band in ({"min": nan, "max": 30, "weight": 1},
+                     {"min": 18, "max": nan, "weight": 1}):
+            errs = self._errs({"stats": {"damage": band}})
+            assert any("requires numeric 'min' and 'max'" in e
+                       for e in errs), band
+
+    def test_inf_band_bounds_rejected(self):
+        inf = float("inf")
+        for band in ({"min": -inf, "max": 30, "weight": 1},
+                     {"min": 18, "max": inf, "weight": 1}):
+            errs = self._errs({"stats": {"damage": band}})
+            assert any("requires numeric 'min' and 'max'" in e
+                       for e in errs), band
+
+    def test_nan_craft_band_rejected(self):
+        spec = {
+            "stats": {"damage": {"min": 18, "max": 30, "weight": 3}},
+            "craft": {"damage": {"min": float("nan"), "max": 25}},
+        }
+        errs = self._errs(spec)
+        assert any("requires numeric 'min' and 'max'" in e for e in errs)
+
+    def test_nan_weight_rejected(self):
+        spec = {"stats": {"damage": {"min": 18, "max": 30,
+                                     "weight": float("nan")}}}
+        errs = self._errs(spec)
+        assert any("weight must be a number > 0" in e for e in errs)
+
+    def test_nan_skew_rejected(self):
+        errs = self._errs(make_valid_roll_spec(skew=float("nan")))
+        assert any("skew must be a number >= 1" in e for e in errs)
+
+
+def make_valid_insert(**overrides):
+    """A minimal valid insert item (item-loot-economy §4.3)."""
+    base = {
+        "key": "venom_coating", "name": "Venom Coating", "category": "insert",
+        "insert_effect": {"type": "damage_type", "value": "poison"},
+    }
+    base.update(overrides)
+    return base
+
+
+class TestValidateInsertEffect:
+    """insert_effect shape validation (item-loot-economy §4.3, task 4.2).
+
+    ``category: insert`` items must carry a well-formed insert_effect;
+    non-insert items must not carry one. Malformed payloads fail at LOAD,
+    not when the Blacksmith `insert` command first fires.
+    """
+
+    def setup_method(self):
+        self.v = SchemaValidator()
+
+    def _errs(self, item):
+        return self.v.validate_items({"items": [item], "production_map": {}})
+
+    # ---- accepted shapes ------------------------------------------------ #
+    def test_damage_type_insert_accepted(self):
+        assert self._errs(make_valid_insert()) == []
+
+    def test_range_insert_accepted(self):
+        item = make_valid_insert(
+            insert_effect={"type": "range", "value": 2})
+        assert self._errs(item) == []
+
+    def test_stat_insert_with_tradeoff_accepted(self):
+        item = make_valid_insert(insert_effect={
+            "type": "stat", "stat": "damage", "value": 4,
+            "tradeoff": {"range": -1},
+        })
+        assert self._errs(item) == []
+
+    def test_stat_insert_without_tradeoff_accepted(self):
+        item = make_valid_insert(
+            insert_effect={"type": "stat", "stat": "damage", "value": 4})
+        assert self._errs(item) == []
+
+    # ---- category coupling ---------------------------------------------- #
+    def test_insert_without_insert_effect_rejected(self):
+        item = make_valid_insert()
+        del item["insert_effect"]
+        errs = self._errs(item)
+        assert any("must declare an insert_effect" in e for e in errs)
+
+    def test_non_insert_with_insert_effect_rejected(self):
+        item = make_valid_item(
+            insert_effect={"type": "range", "value": 2})
+        errs = self._errs(item)
+        assert any("only valid on 'insert' items" in e for e in errs)
+
+    def test_insert_needs_no_slot(self):
+        # Inserts are supplies (counted stacks): slotless is the valid shape.
+        item = make_valid_insert()
+        assert "slot" not in item
+        assert self._errs(item) == []
+
+    # ---- rejected shapes ------------------------------------------------ #
+    def test_non_dict_insert_effect_rejected(self):
+        item = make_valid_insert(insert_effect="poison")
+        errs = self._errs(item)
+        assert any("insert_effect must be a dict" in e for e in errs)
+
+    def test_unknown_key_rejected(self):
+        item = make_valid_insert(insert_effect={
+            "type": "range", "value": 2, "duration": 5})
+        errs = self._errs(item)
+        assert any("insert_effect has unknown keys" in e for e in errs)
+
+    def test_unknown_type_rejected(self):
+        item = make_valid_insert(
+            insert_effect={"type": "proc", "value": 1})
+        errs = self._errs(item)
+        assert any("insert_effect.type must be one of" in e for e in errs)
+
+    def test_damage_type_value_outside_vocabulary_rejected(self):
+        # "physical" is the default damage type — converting TO it is an
+        # authoring error, like any unknown type string.
+        for bad in ("physical", "acid", 3, None):
+            item = make_valid_insert(
+                insert_effect={"type": "damage_type", "value": bad})
+            errs = self._errs(item)
+            assert any("insert_effect.value must be one of" in e
+                       for e in errs), f"value {bad!r} was accepted"
+
+    def test_range_value_non_numeric_rejected(self):
+        item = make_valid_insert(
+            insert_effect={"type": "range", "value": "far"})
+        errs = self._errs(item)
+        assert any("insert_effect.value must be numeric" in e for e in errs)
+
+    def test_stat_insert_missing_stat_rejected(self):
+        item = make_valid_insert(
+            insert_effect={"type": "stat", "value": 4})
+        errs = self._errs(item)
+        assert any("insert_effect.stat must be a non-empty string" in e
+                   for e in errs)
+
+    def test_stat_key_on_non_stat_type_rejected(self):
+        item = make_valid_insert(insert_effect={
+            "type": "range", "value": 2, "stat": "damage"})
+        errs = self._errs(item)
+        assert any("insert_effect.stat is only valid for type 'stat'" in e
+                   for e in errs)
+
+    def test_tradeoff_on_non_stat_type_rejected(self):
+        item = make_valid_insert(insert_effect={
+            "type": "damage_type", "value": "fire", "tradeoff": {"range": -1}})
+        errs = self._errs(item)
+        assert any("insert_effect.tradeoff is only valid for type 'stat'" in e
+                   for e in errs)
+
+    def test_tradeoff_non_dict_rejected(self):
+        item = make_valid_insert(insert_effect={
+            "type": "stat", "stat": "damage", "value": 4, "tradeoff": -1})
+        errs = self._errs(item)
+        assert any("insert_effect.tradeoff must be a non-empty dict" in e
+                   for e in errs)
+
+    def test_tradeoff_non_numeric_value_rejected(self):
+        item = make_valid_insert(insert_effect={
+            "type": "stat", "stat": "damage", "value": 4,
+            "tradeoff": {"range": "short"},
+        })
+        errs = self._errs(item)
+        assert any("must be numeric" in e for e in errs)
+
+
+def make_valid_affix(**overrides):
+    """A minimal valid affix entry (design §3.3); overrides replace fields."""
+    entry = {
+        "key": "keen", "stat": "damage_bonus", "min": 2, "max": 6,
+        "weight": 1.0, "name": "of Power",
+    }
+    entry.update(overrides)
+    return entry
+
+
+class TestValidateAffixes:
+    """Affix registry validation (item-loot-economy §3.3, task 2.1).
+
+    Invalid affix data must fail at LOAD, not at runtime (design Error
+    Handling table): unknown stat/proc axes, malformed bands, duplicate
+    keys, and unknown pool names are all load errors.
+    """
+
+    def setup_method(self):
+        self.v = SchemaValidator()
+
+    # ---- accepted shapes ------------------------------------------------ #
+    def test_valid_pools_accepted(self):
+        data = {
+            "weapon": [make_valid_affix()],
+            "armor": [
+                make_valid_affix(key="sturdy", stat="damage_reduction",
+                                 name="of the Bulwark"),
+                make_valid_affix(key="warded", stat="psychic_resist",
+                                 weight=0.8, name="of Clarity"),
+            ],
+        }
+        assert self.v.validate_affixes(data) == []
+
+    def test_every_aggregating_axis_accepted(self):
+        for stat in ("damage_bonus", "damage_reduction", "fire_resist",
+                     "psychic_resist", "blast_resist", "poison_resist"):
+            data = {"weapon": [make_valid_affix(stat=stat)]}
+            assert self.v.validate_affixes(data) == [], stat
+
+    def test_range_axis_accepted(self):
+        # Task 3.4: `range` unlocked now that the R8 hook exists (design §9:
+        # band 1–3, spicy — low + weighted rare).
+        data = {"weapon": [make_valid_affix(
+            key="long", stat="range", min=1, max=3, weight=1.4,
+            name="of Reach",
+        )]}
+        assert self.v.validate_affixes(data) == []
+
+    def test_poison_proc_accepted(self):
+        # Task 3.4: `proc: poison` unlocked now that the R9 DoT hook exists.
+        entry = make_valid_affix(key="venomous", min=1, max=3, weight=1.6,
+                                 name="of the Viper")
+        del entry["stat"]
+        entry["proc"] = "poison"
+        assert self.v.validate_affixes({"weapon": [entry]}) == []
+
+    def test_equal_min_max_accepted(self):
+        data = {"weapon": [make_valid_affix(min=4, max=4)]}
+        assert self.v.validate_affixes(data) == []
+
+    def test_empty_pool_list_accepted(self):
+        assert self.v.validate_affixes({"accessory": []}) == []
+
+    # ---- rejected shapes ------------------------------------------------ #
+    def test_non_dict_top_level_rejected(self):
+        errs = self.v.validate_affixes([make_valid_affix()])
+        assert any("expected a dict of pool -> list" in e for e in errs)
+
+    def test_unknown_pool_name_rejected(self):
+        errs = self.v.validate_affixes({"trinket": [make_valid_affix()]})
+        assert any("unknown pool 'trinket'" in e for e in errs)
+
+    def test_non_list_pool_rejected(self):
+        errs = self.v.validate_affixes({"weapon": make_valid_affix()})
+        assert any("expected a list of affix entries" in e for e in errs)
+
+    def test_non_dict_entry_rejected(self):
+        errs = self.v.validate_affixes({"weapon": ["keen"]})
+        assert any("expected dict" in e for e in errs)
+
+    def test_unknown_stat_axis_rejected(self):
+        # An axis no system reads is a load error (e.g. `accuracy` has no
+        # combat consumer as an affix).
+        errs = self.v.validate_affixes(
+            {"weapon": [make_valid_affix(stat="accuracy")]}
+        )
+        assert any(
+            "stat 'accuracy' is not a known affix axis" in e for e in errs
+        )
+
+    def test_unknown_proc_key_rejected(self):
+        # Only procs with a combat consumer are allowed (task 3.4 unlocked
+        # `poison`; anything else stays a load error).
+        entry = make_valid_affix(key="bleeder", name="of Rending")
+        del entry["stat"]
+        entry["proc"] = "bleed"
+        errs = self.v.validate_affixes({"weapon": [entry]})
+        assert any("proc 'bleed' is not a known proc key" in e for e in errs)
+
+    def test_both_stat_and_proc_rejected(self):
+        errs = self.v.validate_affixes(
+            {"weapon": [make_valid_affix(proc="poison")]}
+        )
+        assert any("exactly one of 'stat' or 'proc'" in e for e in errs)
+
+    def test_neither_stat_nor_proc_rejected(self):
+        entry = make_valid_affix()
+        del entry["stat"]
+        errs = self.v.validate_affixes({"weapon": [entry]})
+        assert any("exactly one of 'stat' or 'proc'" in e for e in errs)
+
+    def test_min_above_max_rejected(self):
+        errs = self.v.validate_affixes(
+            {"weapon": [make_valid_affix(min=6, max=2)]}
+        )
+        assert any("min (6) must be <= max (2)" in e for e in errs)
+
+    def test_non_numeric_band_rejected(self):
+        errs = self.v.validate_affixes(
+            {"weapon": [make_valid_affix(min="low")]}
+        )
+        assert any("requires numeric 'min' and 'max'" in e for e in errs)
+
+    def test_zero_min_rejected(self):
+        errs = self.v.validate_affixes(
+            {"weapon": [make_valid_affix(min=0)]}
+        )
+        assert any("min must be > 0" in e for e in errs)
+
+    def test_zero_weight_rejected(self):
+        errs = self.v.validate_affixes(
+            {"weapon": [make_valid_affix(weight=0)]}
+        )
+        assert any("weight must be a number > 0" in e for e in errs)
+
+    def test_missing_weight_rejected(self):
+        entry = make_valid_affix()
+        del entry["weight"]
+        errs = self.v.validate_affixes({"weapon": [entry]})
+        assert any("weight must be a number > 0" in e for e in errs)
+
+    def test_duplicate_key_within_pool_rejected(self):
+        errs = self.v.validate_affixes(
+            {"weapon": [make_valid_affix(), make_valid_affix()]}
+        )
+        assert any("duplicate key 'keen' in pool" in e for e in errs)
+
+    def test_same_key_in_different_pools_accepted(self):
+        # Uniqueness is per-pool (draws are per-pool, no cross-pool dup risk).
+        data = {
+            "weapon": [make_valid_affix()],
+            "armor": [make_valid_affix()],
+        }
+        assert self.v.validate_affixes(data) == []
+
+    def test_empty_key_rejected(self):
+        errs = self.v.validate_affixes({"weapon": [make_valid_affix(key="")]})
+        assert any("key must be a non-empty string" in e for e in errs)
+
+    def test_empty_name_rejected(self):
+        errs = self.v.validate_affixes({"weapon": [make_valid_affix(name="")]})
+        assert any("name must be a non-empty string" in e for e in errs)
+
+    def test_unknown_entry_key_rejected(self):
+        errs = self.v.validate_affixes(
+            {"weapon": [make_valid_affix(magnitude=3)]}
+        )
+        assert any("unknown keys ['magnitude']" in e for e in errs)
+
+    def test_nan_band_and_weight_rejected(self):
+        # Review M1: NaN magnitudes/weights fail the load like non-numbers.
+        nan = float("nan")
+        errs = self.v.validate_affixes({"weapon": [make_valid_affix(min=nan)]})
+        assert any("requires numeric 'min' and 'max'" in e for e in errs)
+        errs = self.v.validate_affixes(
+            {"weapon": [make_valid_affix(weight=nan)]}
+        )
+        assert any("weight must be a number > 0" in e for e in errs)
+
+
 class TestValidateRanks:
     def setup_method(self):
         self.v = SchemaValidator()
@@ -746,6 +1281,67 @@ class TestValidateBalance:
         assert self.v.validate_balance({"hp_regen_interval_ticks": 2}) == []
         assert self.v.validate_balance({"repair_hp_percent_per_tick": 5.0}) == []
 
+    # --- craft_rarity_table (crafted-rarity deviation from R6.1) ---- #
+
+    def test_craft_rarity_table_valid(self):
+        errs = self.v.validate_balance({"craft_rarity_table": {
+            1: {"common": 90, "uncommon": 10},
+            5: {"common": 45, "uncommon": 50, "rare": 5},
+        }})
+        assert errs == []
+
+    def test_craft_rarity_table_string_level_keys_tolerated(self):
+        errs = self.v.validate_balance(
+            {"craft_rarity_table": {"3": {"rare": 1}}})
+        assert errs == []
+
+    def test_craft_rarity_table_rejects_tier_above_rare(self):
+        # Crafted gear is capped at Rare — an epic weight in a craft row
+        # is authoring error and fails the load.
+        errs = self.v.validate_balance(
+            {"craft_rarity_table": {5: {"epic": 5, "rare": 1}}})
+        assert any("capped at rare" in e for e in errs)
+
+    def test_craft_rarity_table_rejects_bad_level_key(self):
+        errs = self.v.validate_balance(
+            {"craft_rarity_table": {7: {"rare": 1}}})
+        assert any("building level 1-5" in e for e in errs)
+
+    def test_craft_rarity_table_rejects_bad_weights(self):
+        errs = self.v.validate_balance(
+            {"craft_rarity_table": {2: {"common": -1}}})
+        assert any(">= 0" in e for e in errs)
+        errs = self.v.validate_balance(
+            {"craft_rarity_table": {2: {"common": 0}}})
+        assert any("positive weight" in e for e in errs)
+        errs = self.v.validate_balance({"craft_rarity_table": {2: "junk"}})
+        assert any("non-empty dict" in e for e in errs)
+
+    def test_craft_rarity_table_not_a_dict(self):
+        errs = self.v.validate_balance({"craft_rarity_table": [1, 2]})
+        assert any("craft_rarity_table: expected dict" in e for e in errs)
+
+    # --- NaN hardening (review M1) ----------------------------------- #
+
+    def test_rarity_table_nan_min_weight_rejected(self):
+        errs = self.v.validate_balance({"rarity_table": {
+            "guard_kill": {"min_weight": float("nan"),
+                           "weights": {"common": 1}},
+        }})
+        assert any("min_weight" in e and ">= 0" in e for e in errs)
+
+    def test_rarity_table_nan_weight_rejected(self):
+        errs = self.v.validate_balance({"rarity_table": {
+            "guard_kill": {"min_weight": 0.0,
+                           "weights": {"common": float("nan")}},
+        }})
+        assert any(">= 0" in e for e in errs)
+
+    def test_craft_rarity_table_nan_weight_rejected(self):
+        errs = self.v.validate_balance(
+            {"craft_rarity_table": {2: {"common": float("nan")}}})
+        assert any(">= 0" in e for e in errs)
+
     # --- Migrated economy tunables ---------------------------------- #
 
     def test_migrated_scalar_fields_valid(self):
@@ -794,7 +1390,8 @@ class TestValidateBalance:
         """Vision/GC knobs read generically by _build_balance are validated."""
         for field in ("player_vision_radius", "building_vision_radius",
                       "room_cache_max_size", "gc_interval_ticks",
-                      "gc_min_age_ticks", "map_border_tiles"):
+                      "gc_min_age_ticks", "map_border_tiles",
+                      "map_viewport_radius"):
             errs = self.v.validate_balance({field: "not-an-int"})
             assert any(field in e and "expected int" in e for e in errs), field
 
@@ -806,6 +1403,7 @@ class TestValidateBalance:
             "gc_interval_ticks": 200,
             "gc_min_age_ticks": 25,
             "map_border_tiles": 5,
+            "map_viewport_radius": 10,
         })
         assert errs == []
 

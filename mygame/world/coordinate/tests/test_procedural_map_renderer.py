@@ -71,9 +71,13 @@ class _FakeDB:
 
 
 class _FakeBalance:
-    def __init__(self, pvr=2, bvr=1):
+    def __init__(self, pvr=2, bvr=1, mvr=None):
         self.player_vision_radius = pvr
         self.building_vision_radius = bvr
+        # map_viewport_radius is only set when given, so legacy tests keep
+        # the fall-back-to-vision behavior of a balance without the field.
+        if mvr is not None:
+            self.map_viewport_radius = mvr
 
 
 class _FakePlayer:
@@ -282,9 +286,9 @@ class _FakeTileResolver:
 
 def _make_renderer(
     pvr=2, bvr=1, planet="earth",
-    rooms=None, terrain="Plains", terrain_map=None,
+    rooms=None, terrain="Plains", terrain_map=None, mvr=None,
 ):
-    balance = _FakeBalance(pvr=pvr, bvr=bvr)
+    balance = _FakeBalance(pvr=pvr, bvr=bvr, mvr=mvr)
     fog = FogOfWarSystem(balance)
     gen = _FakeTerrainGenerator(default_terrain=terrain, terrain_map=terrain_map)
     resolver = _FakeTileResolver(rooms=rooms or {})
@@ -368,6 +372,26 @@ class TestBasicRendering:
 # -------------------------------------------------------------- #
 
 class TestTerrainSymbols:
+    def test_grid_dimensions_from_viewport_radius(self):
+        """With a configured map_viewport_radius, grid size derives from IT,
+        not the vision radius (regression: vision rebalance resized the map)."""
+        renderer, _ = _make_renderer(pvr=1, mvr=3)
+        player = _FakePlayer(x=5, y=5)
+        lines = renderer.render(player, []).strip().split("\n")
+        # viewport 3 + 5 border each side = 17x17
+        assert len(lines) == 17
+        assert all(len(line.split(" ")) == 17 for line in lines)
+
+    def test_grid_dimensions_independent_of_vision_radius(self):
+        """Changing player_vision_radius must not change the rendered map
+        dimensions when a viewport radius is configured."""
+        dims = set()
+        for pvr in (1, 2, 4):
+            renderer, _ = _make_renderer(pvr=pvr, mvr=3)
+            lines = renderer.render(_FakePlayer(x=5, y=5), []).strip().split("\n")
+            dims.add((len(lines), len(lines[0].split(" "))))
+        assert dims == {(17, 17)}
+
     def test_terrain_fallback_first_two_chars(self):
         """Terrain symbol renders correctly for visible tiles."""
         renderer, _ = _make_renderer(pvr=1, terrain="Forest")

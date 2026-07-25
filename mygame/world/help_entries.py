@@ -220,6 +220,10 @@ HELP_ENTRY_DICTS = [
             |wtarget <enemy>|n (|wlock|n) — lock a ranged weapon onto an enemy
             |wshoot|n (|wfire|n) — fire ranged: at a locked target, or a direction
             |wcraft <item>|n — make gear/ammo at an Armory, Lab, or Medbay
+            |winsert <item>|n — permanently mod your equipped weapon (at your Blacksmith)
+            |wreroll <item>|n — re-roll an item's base stats (at your Blacksmith)
+            |wsalvage <item>|n — break an item into Salvage (at your Blacksmith)
+            |wrefine <resource>|n — convert resources into Salvage (at your Refinery)
             |wequip <item>|n / |wunequip <slot>|n — manage worn gear (or |wall|n)
             |wequipment|n (|weq|n) — your full loadout (paperdoll)
             |wuse <item>|n — use a consumable (medkit, stim)
@@ -373,12 +377,17 @@ HELP_ENTRY_DICTS = [
             |wRL|n |cRelay|n — boosts nearby Turret damage. (L15)
             |wSG|n |cShield Generator|n — projects a regenerating shield onto nearby buildings. (L15, max 4 per planet)
             |wMB|n |cMedbay|n — crafts medkits and stims; reduces respawn time. (L18)
+            |wWT|n |cWatchtower|n — +sight range while you stand on it. (L7)
+            |wSN|n |cSniper Nest|n — +weapon range while you stand on it. (L9)
+            |wFH|n |cField Hospital|n — heals you over time while you stand on it. (L10)
+            |wBS|n |cBlacksmith|n — the gear bench: insert, reroll, salvage. (L11, requires deed: destroy 3 outposts)
+            |wRF|n |cRefinery|n — converts surplus resources into Salvage. (L13, requires deed: destroy a fortress)
 
             Higher-tier buildings unlock as you gain |clevels|n; a few also require a |cdeed|n (Barracks needs one destroyed outpost, Lab needs three). Check |wscore|n for your current level, |wbuild|n to see what's available now, and |whelp level|n for the full progression picture.
 
             # Per-Building Guides
 
-            Every building has its own help topic with costs, level, dependencies, and examples: |whelp hq|n · |whelp extractor|n · |whelp academy|n · |whelp armory|n · |whelp wall|n · |whelp barracks|n · |whelp lab|n · |whelp radar|n · |whelp turret|n · |whelp vault|n · |whelp relay|n · |whelp shield|n · |whelp medbay|n.
+            Every building has its own help topic with costs, level, dependencies, and examples: |whelp hq|n · |whelp extractor|n · |whelp academy|n · |whelp armory|n · |whelp wall|n · |whelp barracks|n · |whelp lab|n · |whelp radar|n · |whelp turret|n · |whelp vault|n · |whelp relay|n · |whelp shield|n · |whelp medbay|n · |whelp watchtower|n · |whelp sniper nest|n · |whelp field hospital|n · |whelp blacksmith|n · |whelp refinery|n.
 
             # See Also
 
@@ -399,7 +408,7 @@ HELP_ENTRY_DICTS = [
 
             # Getting Gear
 
-            Build an |cArmory|n (|wbuild AR|n) for weapons, armor, and ammo, a |cLab|n (|wbuild LB|n) for advanced gear, or a |cMedbay|n (|wbuild MB|n) for medkits and stims. Two ways to get items from them: stand in the building and |wcraft <item>|n to make one instantly for resources, or assign an |cEngineer|n agent and it crafts the same catalog passively while you're away (see |whelp craft|n). Made gear lands in your inventory; pick up dropped items with |wget|n.
+            Build an |cArmory|n (|wbuild AR|n) for weapons, armor, and ammo, a |cLab|n (|wbuild LB|n) for advanced gear, or a |cMedbay|n (|wbuild MB|n) for medkits and stims. Two ways to get items from them: stand in the building and |wcraft <item>|n to make one instantly for resources, or assign an |cEngineer|n agent and it crafts the same catalog passively while you're away (see |whelp craft|n). Gear also drops as |cloot|n from enemy bases and guards — dropped gear is |crolled|n (two copies of the same item differ) and can carry a rarity and affixes; see |whelp loot|n. Made gear lands in your inventory; pick up dropped items with |wget|n.
 
             # Slots
 
@@ -408,6 +417,8 @@ HELP_ENTRY_DICTS = [
             # Stat Bonuses
 
             Beyond |carmor|n (less incoming damage) and |cdamage|n, gear can grant utility: |cmove speed|n, |csight range|n, |ccarry capacity|n, and |cmax HP|n. Stats from every worn piece stack, and |wequipment|n shows your combined totals. Max-HP gear raises your health ceiling — equipping it adds headroom (it doesn't heal you on the spot), and taking it off lowers the ceiling, trimming any HP above the new max.
+
+            Looted and crafted gear is |crolled|n — a quality tag like |c[Rare · 73%]|n on the name tells you how good this copy is, and |wlook <item>|n shows each stat's roll. See |whelp loot|n and |whelp rarity|n.
 
             # Wearing Gear
 
@@ -432,7 +443,7 @@ HELP_ENTRY_DICTS = [
 
             # See Also
 
-            |whelp combat|n · |whelp storage|n · |whelp buildings|n
+            |whelp combat|n · |whelp loot|n · |whelp storage|n · |whelp buildings|n
         """,
     },
     # ----------------------------------------------------------------- #
@@ -475,7 +486,7 @@ HELP_ENTRY_DICTS = [
 
             # Armor & Defense
 
-            Every armor piece you |wequip|n reduces incoming damage, and they stack across all slots. |cTurrets|n auto-attack intruders; |cWalls|n block movement. A |cVault|n protects your stored resources while you're offline. A |cShield Generator|n wraps nearby buildings in a regenerating |cshield|n that soaks damage before their HP (|whelp shield|n). You and your agents heal over time, but |cbuildings do not|n — repair a damaged building with |wrepair|n (see |whelp buildings|n).
+            Every armor piece you |wequip|n reduces incoming damage, and they stack across all slots. Some weapons deal |ctyped|n damage that lingers — |cfire|n burns and |cpoison|n keeps hurting for a few ticks after the hit (|whelp poison|n); matching |cresist|n gear and affixes blunt them. |cTurrets|n auto-attack intruders; |cWalls|n block movement. A |cVault|n protects your stored resources while you're offline. A |cShield Generator|n wraps nearby buildings in a regenerating |cshield|n that soaks damage before their HP (|whelp shield|n). You and your agents heal over time, but |cbuildings do not|n — repair a damaged building with |wrepair|n (see |whelp buildings|n).
 
             # Buildings as Cover
 
@@ -503,7 +514,7 @@ HELP_ENTRY_DICTS = [
 
             # See Also
 
-            |whelp level|n · |whelp equipment|n · |whelp bombs|n · |whelp outposts|n · |whelp agents|n · |whelp buildings|n
+            |whelp level|n · |whelp equipment|n · |whelp poison|n · |whelp bombs|n · |whelp outposts|n · |whelp agents|n · |whelp buildings|n
         """,
     },
     # ----------------------------------------------------------------- #
@@ -689,6 +700,10 @@ HELP_ENTRY_DICTS = [
 
             Gear (weapons, armor, accessories) goes into your inventory — |wequip|n it or see it with |winventory|n. Supplies (ammo, medkits, stims, grenades) go into your supply bag — |wuse|n or |wreload|n them. Powerful items may need a minimum |crank|n.
 
+            # Crafting Quality
+
+            Crafted gear is |crolled|n like loot, but in a tighter, more reliable band — a craft is dependable where a drop gambles (|whelp loot|n). The craft message shows the result's value: its quality tag, e.g. |c[73%]|n. A higher-level crafting building can even land a rarity — up to a |c5%|n chance of |cRare|n at level 5 — and the |cMaster Gunsmithing|n research raises the floor of every roll you craft. Crafted gear |wnever|n carries affixes; those are loot-only (|whelp affixes|n).
+
             # Examples
 
             |wcraft|n — list this building's items and costs
@@ -697,7 +712,193 @@ HELP_ENTRY_DICTS = [
 
             # See Also
 
-            |whelp equipment|n · |whelp armory|n · |whelp lab|n · |whelp medbay|n · |whelp agents|n
+            |whelp equipment|n · |whelp loot|n · |whelp armory|n · |whelp lab|n · |whelp medbay|n · |whelp agents|n
+        """,
+    },
+    # ----------------------------------------------------------------- #
+    #  Loot & item quality (item-loot-economy)
+    # ----------------------------------------------------------------- #
+    {
+        "key": "loot",
+        "aliases": ["loot guide", "quality", "item quality", "iqs",
+                    "rolled stats", "item rolls"],
+        "category": "Game",
+        "text": """
+            |wLoot & Item Quality|n
+
+            Gear that drops as loot is |crolled|n: each stat is drawn fresh from that item's roll band, so two copies of the same item are rarely equal — one Assault Rifle hits harder, another shoots further. Hunting a great roll is the point.
+
+            # The Quality Score
+
+            A rolled item carries a quality tag on its name — |c[73%]|n — summing how good its rolls are. Rarity shows in the same tag (|c[Rare · 73%]|n) and colors the name (|whelp rarity|n). Affix bonuses add to the score, so a great Legendary can read |cabove 100%|n. Unrolled things (ammo, consumables, fixed starter gear) show no tag — they're identical by design.
+
+            # Inspecting an Item
+
+            |wlook <item>|n shows the full picture: each stat as |crolled (min–max)|n so you can see where in the band this copy landed, plus any affixes. |wequipment|n and |winventory|n show the tags at a glance.
+
+            # Where Rolls Come From
+
+            Enemy-base loot and guard kills drop rolled gear — the source decides the rarity odds (|whelp rarity|n, |whelp outposts|n). Crafting rolls too, in a tighter, reliable band (|whelp craft|n). Top rolls are rare — most land low in the band — which is why the |cBlacksmith|n reroll bench exists (|whelp blacksmith|n). And gear is loseable power: in PvP, an item that drops on death keeps its rolls, so your god-roll is something someone else can take.
+
+            # See Also
+
+            |whelp rarity|n · |whelp affixes|n · |whelp blacksmith|n · |whelp craft|n · |whelp equipment|n
+        """,
+    },
+    # ----------------------------------------------------------------- #
+    #  Rarity tiers (item-loot-economy)
+    # ----------------------------------------------------------------- #
+    {
+        "key": "rarity",
+        "aliases": ["rarities", "common", "uncommon", "rare", "epic",
+                    "legendary"],
+        "category": "Game",
+        "text": """
+            |wRarity|n
+
+            Looted gear rolls a rarity tier that colors its name and quality tag: |wCommon|n, |gUncommon|n, |cRare|n, |mEpic|n, |yLegendary|n.
+
+            # What Rarity Gives
+
+            Two things. |cBetter base rolls|n — each tier above Uncommon guarantees a higher floor inside the item's roll bands, so a Legendary can never roll near the bottom. |cMore affixes|n — Common 0, Uncommon 1, Rare 2, Epic 3, Legendary 4 bonus properties (|whelp affixes|n).
+
+            # Where the Tiers Drop
+
+            The source shifts the odds: |cguard kills|n are mostly Common with a sliver of Rare; |cOutposts|n reach Epic; |cStrongholds|n and |cFortresses|n drop Rares and Epics regularly with a taste of Legendary; |cCitadels|n are where Epics and Legendaries actually live. Raid up the ladder for better colors (|whelp outposts|n).
+
+            # Crafted Gear
+
+            Crafting caps at |cRare|n — a higher-level crafting building has a small chance of one (up to 5% at level 5) — and crafted gear never carries affixes. Epic and above come from loot only (|whelp craft|n).
+
+            # Gear Is Loseable Power
+
+            Rarity doesn't bind: gear that drops when a player dies keeps its rolls, rarity, and affixes — the winner picks up exactly what was lost.
+
+            # See Also
+
+            |whelp loot|n · |whelp affixes|n · |whelp outposts|n · |whelp craft|n
+        """,
+    },
+    # ----------------------------------------------------------------- #
+    #  Affixes (item-loot-economy)
+    # ----------------------------------------------------------------- #
+    {
+        "key": "affixes",
+        "aliases": ["affix", "item affixes"],
+        "category": "Game",
+        "text": """
+            |wAffixes|n
+
+            Affixes are bonus properties on looted gear, shown as a name suffix — an Assault Rifle |cof Power|n hits harder, |cof Reach|n shoots further, |cof the Viper|n poisons what it hits.
+
+            # How They Roll
+
+            An item's |crarity|n sets how many affixes it draws (Common 0 up to Legendary 4), each rolled from a pool matching the item. Weapons draw things like |cof Power|n (+damage), |cof Reach|n (+range), |cof the Viper|n (a |cpoison|n proc on every landed hit — |whelp poison|n), and typed-resist wards; armor draws |cof the Bulwark|n (+armor) and resists like |cof Antitoxin|n (poison) or |cof Ashes|n (fire). No duplicates on one item.
+
+            # Loot-Only
+
+            Affixes come from |cloot only|n — crafted gear never has them, which is why raid drops can beat the craft bench. Affix values add to the item's quality tag, so an affixed item can read above 100%.
+
+            # Permanent
+
+            Affixes are part of the item: the Blacksmith |wreroll|n bench re-rolls only |cbase stats|n and leaves affixes (and rarity) untouched, and salvaging destroys them with the item.
+
+            # See Also
+
+            |whelp loot|n · |whelp rarity|n · |whelp poison|n · |whelp blacksmith|n
+        """,
+    },
+    # ----------------------------------------------------------------- #
+    #  Poison damage type (item-loot-economy)
+    # ----------------------------------------------------------------- #
+    {
+        "key": "poison",
+        "aliases": ["poison damage", "venom", "toxin", "damage over time"],
+        "category": "Game",
+        "text": """
+            |wPoison|n
+
+            Poison is a damage type that keeps hurting after the hit lands: a poisoned target takes extra damage each tick for a few ticks — roughly half the hit again, spread over four ticks.
+
+            # Poisoning Your Enemies
+
+            Two sources: a |cVenom Coating|n insert applied to your equipped weapon at the |cBlacksmith|n converts its damage to poison (|whelp insert|n), and a looted weapon |cof the Viper|n adds a poison proc to every landed hit (|whelp affixes|n). The |cToxicology|n research makes your poison tick a quarter harder.
+
+            # Countering It
+
+            |cPoison resist|n gear and affixes (|cof Antitoxin|n) blunt the poisoned hit itself, and the lingering ticks are light enough that natural |cregeneration|n and a |cmedkit|n out-heal them — heal through it rather than panic.
+
+            # See Also
+
+            |whelp combat|n · |whelp affixes|n · |whelp blacksmith|n · |whelp equipment|n
+        """,
+    },
+    # ----------------------------------------------------------------- #
+    #  Salvage currency (item-loot-economy)
+    # ----------------------------------------------------------------- #
+    {
+        "key": "salvage currency",
+        "aliases": ["currency"],
+        "category": "Game",
+        "text": """
+            |wSalvage (Currency)|n
+
+            Salvage is the currency of the gear economy: weightless scrap that pays for Blacksmith work. Your balance shows on |wscore|n alongside your resources.
+
+            # Earning It
+
+            |wsalvage <item>|n at your |cBlacksmith|n breaks an unwanted item into Salvage — the better the item's quality and the higher the bench's level, the more it pays. |wrefine <resource> [<amount> || all]|n at your |cRefinery|n burns surplus resources (Nexium included) into Salvage at a level-scaled rate.
+
+            # Spending It
+
+            A Blacksmith |wreroll|n costs Salvage plus a little Iron — the chase for a god roll is what the currency is for. The |cSalvage Protocols|n research cuts the reroll charge by a quarter.
+
+            # See Also
+
+            |whelp blacksmith|n · |whelp refinery|n · |whelp loot|n
+        """,
+    },
+    # ----------------------------------------------------------------- #
+    #  Technologies — the research tree at a glance
+    # ----------------------------------------------------------------- #
+    {
+        "key": "technologies",
+        "aliases": ["techs", "tech tree", "research guide"],
+        "category": "Game",
+        "text": """
+            |wTechnologies|n
+
+            Research permanent bonuses at a |cLab|n: |wtechnology|n shows the tree and your progress, |wresearch <tech>|n starts one (an |cEngineer|n drives it). Each tech is gated by |crank|n and paid in resources. The tree at a glance:
+
+            # Combat
+
+            |cImproved Armor|n — +5 armor.
+            |cReactive Plating|n — +3 more armor (stacks with Improved Armor, up to the cap).
+            |cAdvanced Weapons|n — +10 damage.
+            |cBallistics Optimization|n — +1 weapon range.
+            |cToxicology|n — your poison damage-over-time ticks 25% harder (|whelp poison|n).
+
+            # Base & Economy
+
+            |cReinforced Walls|n — your buildings gain +50 HP.
+            |cRapid Production|n — production buildings work 1.5x faster.
+            |cEfficient Construction|n — build and upgrade costs cut by 15%.
+            |cSalvage Protocols|n — Blacksmith rerolls cost 25% less (|whelp blacksmith|n).
+            |cMaster Gunsmithing|n — gear you craft rolls with a raised floor (|whelp craft|n).
+            |cExtended Range|n — +2 sight range.
+
+            # Terrain
+
+            |cForest Warfare|n — move faster through Forest.
+            |cMountain Surveying|n — +2 vision on Mountains.
+            |cRuin Fortification|n — +2 defense in Ruins.
+            |cGlacier Traversal|n — move faster on Glaciers and Frozen Lakes.
+
+            Permanent damage and armor bonuses from research (and alliance perks) are capped — past the cap, |cgear|n is where power grows, and gear is loseable (|whelp loot|n).
+
+            # See Also
+
+            |whelp lab|n · |whelp level|n · |whelp craft|n · |whelp loot|n
         """,
     },
     # ================================================================= #
@@ -1158,6 +1359,182 @@ HELP_ENTRY_DICTS = [
             # See Also
 
             |whelp craft|n · |whelp combat|n · |whelp equipment|n
+        """,
+    },
+    {
+        "key": "blacksmith",
+        "aliases": ["bs", "blacksmith building", "bench"],
+        "category": "Buildings",
+        "text": """
+            |wBlacksmith (BS)|n
+
+            The gear workbench. Standing in your own Blacksmith (online, not mid-upgrade) unlocks three bench commands: |winsert|n, |wreroll|n, and |wsalvage|n. It produces nothing on its own — it's where you improve and recycle what you already have.
+
+            # Build Requirements
+
+            Cost:
+              Wood - |c20|n
+              Stone - |c20|n
+              Iron - |c25|n
+
+            Requirements:
+              Player - |clevel 11|n
+              HQ - |crequired|n
+              Deed - destroy |c3 outposts|n
+
+            # The Bench
+
+            |winsert <item> [weapon]|n — permanently apply a crafted insert to your equipped weapon: a damage-type coating (|cVenom Coating|n → poison, |cIncendiary Core|n → fire), an |cExtended Barrel|n (+range), or a |cHollow-Point Kit|n (+damage, -range). Inserts |rcannot be removed|n and a weapon has limited insert slots. Craft inserts at the Armory/Lab first.
+            |wreroll <item>|n — draw fresh base stats for a rolled item and re-stamp its quality score. Costs |cSalvage|n plus a little Iron. Affixes, rarity, and applied inserts are untouched.
+            |wsalvage <item>|n — destroy a carried item and pocket |cSalvage|n; better items pay more.
+
+            # Level Scaling
+
+            Upgrading improves every bench: the |creroll floor|n rises (a higher-level bench can't roll near the bottom of the band), weapons gain a second |cinsert slot|n from level 3, and |csalvage yield|n grows up to +50% at level 5.
+
+            # Costs & Research
+
+            Rerolls charge Salvage plus resources; the |cSalvage Protocols|n research cuts the charge by 25%. Earn Salvage by salvaging here or refining resources at a |cRefinery|n (|whelp salvage currency|n).
+
+            # See Also
+
+            |whelp loot|n · |whelp salvage currency|n · |whelp refinery|n · |whelp craft|n
+        """,
+    },
+    {
+        "key": "refinery",
+        "aliases": ["rf", "refinery building"],
+        "category": "Buildings",
+        "text": """
+            |wRefinery (RF)|n
+
+            A resource converter that turns surplus stockpile into |cSalvage|n — the late-game sink for resources you no longer need, |cNexium|n included.
+
+            # Build Requirements
+
+            Cost:
+              Stone - |c25|n
+              Iron - |c30|n
+              Circuits - |c15|n
+
+            Requirements:
+              Player - |clevel 13|n
+              HQ - |crequired|n
+              Deed - destroy a |cfortress|n
+
+            # What It Does
+
+            Stand in your own Refinery (online, not mid-upgrade) and |wrefine <resource> [<amount> || all]|n: the batch is |rburned|n and you're credited Salvage — roughly 1 Salvage per 2 units at level 1, and each level improves the rate (1.5x at level 5). The conversion is one-way: the Refinery outputs |cSalvage only|n, never resources.
+
+            # Using It
+
+            |wrefine nexium all|n — convert your whole Nexium surplus
+            |wrefine iron 100|n — convert 100 Iron
+
+            Spend the Salvage on Blacksmith |wreroll|ns. See |whelp salvage currency|n.
+
+            # See Also
+
+            |whelp salvage currency|n · |whelp blacksmith|n · |whelp resources|n
+        """,
+    },
+    {
+        "key": "sniper nest",
+        "aliases": ["sniper", "nest", "sniper nest building"],
+        "category": "Buildings",
+        "text": """
+            |wSniper Nest (SN)|n
+
+            An elevated firing position: while |cyou|n stand on it, your weapon shoots further.
+
+            # Build Requirements
+
+            Cost:
+              Wood - |c15|n
+              Stone - |c20|n
+              Iron - |c20|n
+
+            Requirements:
+              Player - |clevel 9|n
+              HQ - |crequired|n
+
+            # What It Does
+
+            While its |cowner|n stands on the nest's tile (and it's online), your equipped weapon gains bonus |crange|n: |c+1|n at level 1, |c+2|n at level 3, |c+3|n at level 5. The bonus is strictly positional — step off the tile and it's gone — and it helps no one but you. Total weapon range is hard-capped, so stacking every range bonus can never make a global sniper.
+
+            # Using It
+
+            |wbuild SN|n at a commanding spot — covering a chokepoint or your walls — climb on, then |wtarget|n and |wshoot|n. Pairs naturally with a |csniper rifle|n. See |whelp combat|n.
+
+            # See Also
+
+            |whelp combat|n · |whelp watchtower|n · |whelp turret|n
+        """,
+    },
+    {
+        "key": "watchtower",
+        "aliases": ["wt", "watchtower building"],
+        "category": "Buildings",
+        "text": """
+            |wWatchtower (WT)|n
+
+            A lookout post: while |cyou|n stand on it, you see further through the fog of war.
+
+            # Build Requirements
+
+            Cost:
+              Wood - |c20|n
+              Stone - |c15|n
+              Iron - |c5|n
+
+            Requirements:
+              Player - |clevel 7|n
+              HQ - |crequired|n
+
+            # What It Does
+
+            While its |cowner|n stands on the tower's tile (and it's online), your |csight range|n grows: |c+1|n at level 1, |c+2|n at level 3, |c+3|n at level 5 — on top of your base 7-tile vision. Strictly positional and owner-only: step off and it's gone. Cheaper and earlier than a |cRadar|n, but you have to climb it yourself.
+
+            # Using It
+
+            |wbuild WT|n at a viewpoint near your perimeter, stand on it, and check |wmap|n and |wscan|n. For always-on coverage, see |whelp radar|n.
+
+            # See Also
+
+            |whelp radar|n · |whelp sniper nest|n · |whelp combat|n
+        """,
+    },
+    {
+        "key": "field hospital",
+        "aliases": ["fh", "hospital", "field hospital building"],
+        "category": "Buildings",
+        "text": """
+            |wField Hospital (FH)|n
+
+            A patch-up station: while |cyou|n stand on it, you heal faster.
+
+            # Build Requirements
+
+            Cost:
+              Wood - |c20|n
+              Stone - |c15|n
+              Iron - |c10|n
+
+            Requirements:
+              Player - |clevel 10|n
+              HQ - |crequired|n
+
+            # What It Does
+
+            While its |cowner|n stands on the hospital's tile (and it's online), each natural regeneration tick heals extra HP: |c+1|n at level 1, |c+2|n at level 3, |c+3|n at level 5. It follows the normal regen rules — never past your max HP, and it can't raise the dead. Strictly positional and owner-only: camp the tile between fights, top up, move out.
+
+            # Using It
+
+            |wbuild FH|n behind your walls and retreat to it after a raid. For burst healing mid-fight, a |cmedkit|n is still faster (|whelp medbay|n).
+
+            # See Also
+
+            |whelp medbay|n · |whelp combat|n · |whelp buildings|n
         """,
     },
     # ----------------------------------------------------------------- #

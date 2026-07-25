@@ -14,7 +14,7 @@ from mygame.world.help_entries import HELP_ENTRY_DICTS
 
 _BY_KEY = {e["key"]: e for e in HELP_ENTRY_DICTS}
 # Opening color codes in this codebase's help; |n is the reset/close.
-_OPEN = re.compile(r"\|[wcrRgyYBG]")
+_OPEN = re.compile(r"\|[wcrRgyYBGm]")
 _CLOSE = re.compile(r"\|n")
 
 
@@ -140,6 +140,131 @@ def test_shield_generator_topic_exists_and_is_discoverable():
 def test_progression_topic_names_do_not_collide():
     """level + directives keys/aliases must not clash with any OTHER topic."""
     for this_key in ("level", "directives"):
+        entry = _BY_KEY[this_key]
+        my_names = {entry["key"], *entry.get("aliases", [])}
+        other_names = set()
+        for other in HELP_ENTRY_DICTS:
+            if other["key"] == this_key:
+                continue
+            other_names.add(other["key"])
+            other_names.update(other.get("aliases", []))
+        clashes = my_names & other_names
+        assert not clashes, f"{this_key} topic names collide: {clashes}"
+
+
+# ------------------------------------------------------------------ #
+#  Item-loot-economy topics — loot/rarity/affixes/poison/salvage/tech
+#  + the Blacksmith/Refinery/Sniper Nest/Watchtower/Field Hospital
+# ------------------------------------------------------------------ #
+
+_LOOT_GAME_TOPICS = ("loot", "rarity", "affixes", "poison",
+                     "salvage currency", "technologies")
+_LOOT_BUILDING_TOPICS = ("blacksmith", "refinery", "sniper nest",
+                         "watchtower", "field hospital")
+
+
+def test_loot_economy_topics_exist_in_expected_categories():
+    for key in _LOOT_GAME_TOPICS:
+        assert key in _BY_KEY, f"missing help topic '{key}'"
+        assert _BY_KEY[key]["category"] == "Game"
+    for key in _LOOT_BUILDING_TOPICS:
+        assert key in _BY_KEY, f"missing help topic '{key}'"
+        assert _BY_KEY[key]["category"] == "Buildings"
+
+
+def test_loot_topic_covers_key_concepts():
+    """The loot topic must teach the tag, the inspect flow, and loseability."""
+    text = _BY_KEY["loot"]["text"].lower()
+    for concept in ("roll", "quality", "73%", "look", "rarity", "pvp"):
+        assert concept in text, f"loot topic missing '{concept}'"
+
+
+def test_rarity_topic_lists_all_five_tiers():
+    text = _BY_KEY["rarity"]["text"]
+    for tier in ("Common", "Uncommon", "Rare", "Epic", "Legendary"):
+        assert tier in text, f"rarity topic missing tier '{tier}'"
+    # Crafted cap + affix budgets are the two rules players trip over.
+    lowered = text.lower()
+    assert "craft" in lowered
+    assert "affix" in lowered
+
+
+def test_affixes_topic_states_loot_only_rule():
+    text = _BY_KEY["affixes"]["text"].lower()
+    assert "loot only" in text or "loot-only" in text
+    assert "crafted" in text
+    assert "of the viper" in text  # the signature proc affix
+
+
+def test_poison_topic_covers_sources_and_counters():
+    text = _BY_KEY["poison"]["text"].lower()
+    for concept in ("venom coating", "viper", "resist", "medkit",
+                    "toxicology"):
+        assert concept in text, f"poison topic missing '{concept}'"
+
+
+def test_salvage_currency_topic_covers_earn_and_spend():
+    text = _BY_KEY["salvage currency"]["text"].lower()
+    for concept in ("salvage", "refine", "reroll", "score"):
+        assert concept in text, f"salvage currency topic missing '{concept}'"
+
+
+def test_technologies_topic_lists_new_research():
+    text = _BY_KEY["technologies"]["text"]
+    for tech in ("Reactive Plating", "Salvage Protocols",
+                 "Efficient Construction", "Toxicology",
+                 "Ballistics Optimization", "Master Gunsmithing"):
+        assert tech in text, f"technologies topic missing '{tech}'"
+
+
+def test_blacksmith_topic_covers_bench_commands_and_scaling():
+    text = _BY_KEY["blacksmith"]["text"].lower()
+    for concept in ("insert", "reroll", "salvage", "level", "deed"):
+        assert concept in text, f"blacksmith topic missing '{concept}'"
+
+
+def test_refinery_topic_states_salvage_only_output():
+    text = _BY_KEY["refinery"]["text"].lower()
+    assert "refine" in text
+    assert "salvage only" in text
+    assert "never" in text  # never outputs resources (anti-loop)
+
+
+def test_positional_building_topics_state_owner_on_tile_rule():
+    """The aura trio's defining rule: owner-only, on-tile-only."""
+    for key in ("sniper nest", "watchtower", "field hospital"):
+        text = _BY_KEY[key]["text"].lower()
+        assert "owner" in text, f"{key} topic missing the owner-only rule"
+        assert "stand" in text, f"{key} topic missing the on-tile rule"
+
+
+def test_loot_topics_reachable_from_front_door_topics():
+    """Discoverability: the new systems are cross-linked from the topics a
+    player already reads (equipment, craft, combat, buildings, commands)."""
+    assert "help loot" in _BY_KEY["equipment"]["text"]
+    assert "help loot" in _BY_KEY["craft"]["text"]
+    assert "help poison" in _BY_KEY["combat"]["text"]
+    buildings_text = _BY_KEY["buildings"]["text"].lower()
+    for name in ("blacksmith", "refinery", "sniper nest", "watchtower",
+                 "field hospital"):
+        assert name in buildings_text, f"buildings overview missing '{name}'"
+    commands_text = _BY_KEY["commands"]["text"]
+    for cmd in ("insert", "reroll", "salvage", "refine"):
+        assert f"|w{cmd}" in commands_text, f"commands topic missing '{cmd}'"
+
+
+def test_loot_economy_topic_color_tags_balanced():
+    for key in (*_LOOT_GAME_TOPICS, *_LOOT_BUILDING_TOPICS):
+        text = _BY_KEY[key]["text"]
+        assert len(_OPEN.findall(text)) <= len(_CLOSE.findall(text)), (
+            f"{key}: unbalanced color tags"
+        )
+
+
+def test_loot_economy_topic_names_do_not_collide():
+    """New keys/aliases must not clash with any OTHER topic's key or aliases
+    (a clash would let one shadow the other)."""
+    for this_key in (*_LOOT_GAME_TOPICS, *_LOOT_BUILDING_TOPICS):
         entry = _BY_KEY[this_key]
         my_names = {entry["key"], *entry.get("aliases", [])}
         other_names = set()

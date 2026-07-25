@@ -25,6 +25,17 @@ from world.services import get_service
 from world.systems.base_system import BaseSystem
 
 
+#: Upper clamp on the researched ``poison_dot_mult`` tech multiplier read
+#: by :meth:`CombatEngine._apply_poison_dot` (Toxicology, item-loot-economy
+#: R11.5, task 6.4). The tech accumulator ADDS effect values, so a second
+#: poison tech would SUM multipliers (1.25 + 1.25 = 2.5 — nonsense as a
+#: multiplier); the clamp to ``[1.0, cap]`` absorbs additive stacking and
+#: keeps a boosted DoT counterable (regen/medkits still out-heal a light
+#: DoT — the R9.4 counter). Only one poison_dot_mult tech is the supported
+#: data shape; promote to balance.yaml if a second ships.
+POISON_DOT_MULT_CAP = 1.5
+
+
 def _tile_distance(x1: int, y1: int, x2: int, y2: int) -> int:
     """Return the tile-reach distance between two coords (Chebyshev).
 
@@ -299,12 +310,22 @@ class CombatEngine(BaseSystem):
         # fire ranged OUT either (no incoming ranged, no outgoing ranged — they
         # must leave or use melee). Prevents a one-way "turtle" that snipes from
         # total ranged immunity. Melee attacks from cover are still allowed.
-        # Exception: a breaching directional 'shoot' at a BUILDING — a player
+        # Exception 1: a breaching directional 'shoot' at a BUILDING — a player
         # firing at the very structure enclosing them, to shoot their way out —
         # is allowed (it can't reach an external target, only the building).
+        # Exception 2 (M1 — the Sniper Nest fantasy, R10.1): a shooter inside
+        # their OWN, OPERATIONAL range-aura building may fire ranged OUT —
+        # that's the point of manning the nest (and the tile range bonus then
+        # applies naturally). `_tile_range_bonus > 0` IS exactly that check
+        # (RANGE_AURA + owned-by-attacker's-owning-player + operational), so
+        # the exemption can never drift from the bonus. Inside an ENEMY nest,
+        # or any own non-aura building, the block still applies — and the nest
+        # still shelters its owner from INCOMING ranged fire (gate 2b), which
+        # is the deliberate owner-side perk of a closed aura building.
         target_is_building = self._is_building(target)
         if (not is_melee and self._is_sheltered(attacker)
-                and not (breach and target_is_building)):
+                and not (breach and target_is_building)
+                and self._tile_range_bonus(attacker) <= 0):
             return False, "You can't fire ranged from inside — step out, or use melee.", None
 
         # 2d. Melee same-tile gate: a mobile combatant (player/agent/enemy) can
@@ -313,12 +334,11 @@ class CombatEngine(BaseSystem):
         if is_melee and self._melee_blocked(attacker, target):
             return False, "You must be on the same tile to melee them — close in first.", None
 
-        # 3. Range validation. A melee weapon's effective range is always 1,
-        # ignoring any `range` stat on the item.
-        if is_melee:
-            weapon_range = 1
-        else:
-            weapon_range = self._get_stat(weapon_item, "range", 1)
+        # 3. Range validation — through the single R8 resolver (weapon
+        # instance range + owner tech + tile bonus, capped; melee is always
+        # 1), so this queue check can never diverge from the resolve-time
+        # re-check or the targeting-system lock re-validation.
+        weapon_range = self._resolve_weapon_range(attacker, weapon_item)
         if not self._validate_range(attacker, target, weapon_range):
             a_coords = self._get_coords(attacker)
             if a_coords is None:
@@ -449,12 +469,10 @@ class CombatEngine(BaseSystem):
             # Re-check RANGE at resolution, not just at queue time. A turret (or
             # any queued shot) locks on one tick and resolves the next, so a
             # target that stepped out of range in that gap must not still be hit
-            # by the in-flight shot. A melee weapon's effective range is always
-            # 1; a ranged weapon reads its `range` stat, matching the queue-time
-            # check. Out of range → drop the shot and refund its ammo.
-            weapon_range = 1 if is_melee else int(
-                self._get_stat(weapon_item, "range", 1)
-            )
+            # by the in-flight shot. Resolved through the SAME R8 helper as the
+            # queue-time check (melee always 1; ranged = weapon instance + tech
+            # + tile, capped). Out of range → drop the shot and refund its ammo.
+            weapon_range = self._resolve_weapon_range(attacker, weapon_item)
             if not self._validate_range(attacker, target, weapon_range):
                 self._refund_ammo(action)
                 continue
@@ -559,8 +577,9 @@ class CombatEngine(BaseSystem):
         self._notify_target(target, attacker, weapon_item, damage,
                             notify_attacker_hit=notify_attacker_hit)
 
-        # Typed on-hit effects (Phase 3): fire applies a burn DoT, blast
-        # shreds armor. Applied HERE — the one choke point every hit path
+        # Typed on-hit effects (Phase 3): fire applies a burn DoT, poison
+        # applies a poison DoT (item-loot-economy R9), blast shreds armor.
+        # Applied HERE — the one choke point every hit path
         # (queued, instant resolve_now, direct/AoE) flows through — so typed
         # weapons behave identically regardless of how the shot resolved.
         # Buildings are excluded: burns never tick on structures and shred
@@ -570,8 +589,15 @@ class CombatEngine(BaseSystem):
             if damage_type == "fire":
                 raw = self._get_stat(weapon_item, "damage", 0)
                 self._apply_fire_dot(target, raw, attacker)
+            elif damage_type == "poison":
+                raw = self._get_stat(weapon_item, "damage", 0)
+                self._apply_poison_dot(target, raw, attacker)
             elif damage_type == "blast":
                 self._apply_blast_shred(target)
+            # Proc affixes on the weapon instance ride the hit AFTER the
+            # damage-type dispatch (item-loot-economy task 3.4): a proc is
+            # an on-hit rider, not a damage-type conversion.
+            self._apply_weapon_procs(target, weapon_item, attacker)
 
         # Defeat / destruction when HP has reached zero.
         self._handle_zero_hp(target, attacker)
@@ -757,6 +783,28 @@ class CombatEngine(BaseSystem):
         base_dr = self._get_target_armor_reduction(target, include_shred=False)
         target.db.armor_shred = min(current_shred + shred_amount, max(0, base_dr))
 
+    @staticmethod
+    def _add_active_effect(target: Any, effect_type: str, damage: int,
+                           ticks_remaining: int, source: Any) -> None:
+        """Append one DoT/status effect dict to ``target.db.active_effects``.
+
+        The single writer for the read-append-reassign pattern shared by the
+        fire burn, the poison DoT, and the viper on-hit proc. The reassign is
+        required for the SaverList write to persist on a real Evennia object
+        (mutating in place is not enough). ``source`` is a live entity ref
+        whose liveness is re-checked at tick time (see :meth:`_live_or_none`).
+        """
+        effects = getattr(getattr(target, "db", None), "active_effects", None)
+        if effects is None:
+            effects = []
+        effects.append({
+            "type": effect_type,
+            "damage": damage,
+            "ticks_remaining": ticks_remaining,
+            "source": source,
+        })
+        target.db.active_effects = effects
+
     def _apply_fire_dot(self, target: Any, raw_damage: int, attacker: Any) -> None:
         """Apply a burn DoT effect when a fire-type weapon hits.
 
@@ -780,18 +828,97 @@ class CombatEngine(BaseSystem):
             return
 
         burn_per_tick = max(1, int(round(raw_damage * burn_fraction)))
+        self._add_active_effect(target, "burn", burn_per_tick, burn_ticks,
+                                attacker)
 
-        # Store on target's db.active_effects
-        effects = getattr(getattr(target, "db", None), "active_effects", None)
-        if effects is None:
-            effects = []
-        effects.append({
-            "type": "burn",
-            "damage": burn_per_tick,
-            "ticks_remaining": burn_ticks,
-            "source": attacker,
-        })
-        target.db.active_effects = effects
+    def _apply_poison_dot(self, target: Any, raw_damage: int, attacker: Any) -> None:
+        """Apply a poison DoT effect when a poison-type weapon hits.
+
+        Mirrors :meth:`_apply_fire_dot` (item-loot-economy R9, design §6.2):
+        poison deals a LOWER per-tick amount than fire but lasts LONGER
+        (``poison_dot_fraction`` < ``fire_burn_fraction``;
+        ``poison_dot_ticks`` > ``fire_burn_ticks`` — design §9). Like the
+        burn, the DoT is independent of armor: it's already in the blood.
+        The counter (R9.4) is passive HP regen / medkits out-healing a light
+        DoT, plus ``poison_resist`` mitigating the typed hit itself.
+
+        Effect dict format (stored on ``db.active_effects``)::
+
+            {"type": "poison", "damage": <int per tick>,
+             "ticks_remaining": <int>, "source": <attacking entity ref>}
+
+        ``source`` follows the same liveness contract as the burn's (see
+        :meth:`_live_or_none`).
+
+        Toxicology research (item-loot-economy R11.5, task 6.4): the
+        attacker's OWNING PLAYER's ``poison_dot_mult`` tech scales the
+        per-tick amount — owner attribution mirrors the damage/DR tech
+        reads, so a turret/agent hit benefits from its owner's research.
+        The multiplier is clamped to ``[1.0, POISON_DOT_MULT_CAP]``
+        (research can never weaken the DoT; stacking can never run away)
+        and scales the FRACTION only: ``poison_resist`` still mitigates
+        the typed hit and regen/medkits still out-heal a light DoT — both
+        R9 counters are preserved. The viper-affix proc (a flat rolled
+        magnitude, not fraction-based) is deliberately NOT boosted — the
+        tech strengthens poison WEAPONS, not every poison rider.
+        """
+        bal = getattr(self.registry, "balance", None)
+        dot_fraction = float(getattr(bal, "poison_dot_fraction", 0.15) or 0)
+        dot_ticks = int(getattr(bal, "poison_dot_ticks", 4) or 0)
+        if dot_fraction <= 0 or dot_ticks <= 0:
+            return
+
+        from world.utils import get_tech_bonus
+        mult = 1.0
+        owner = self._owning_player(attacker)
+        if owner is not None:
+            mult = get_tech_bonus(owner, "poison_dot_mult", default=1.0)
+        mult = min(max(float(mult), 1.0), POISON_DOT_MULT_CAP)
+
+        dot_per_tick = max(1, int(round(raw_damage * dot_fraction * mult)))
+        self._add_active_effect(target, "poison", dot_per_tick, dot_ticks,
+                                attacker)
+
+    def _apply_weapon_procs(self, target: Any, weapon_item: Any,
+                            attacker: Any) -> None:
+        """Apply the weapon instance's proc affixes to a landed hit (task 3.4).
+
+        A ``proc`` affix (e.g. "of the Viper", ``proc: poison``) is an
+        ON-HIT RIDER, not a damage-type conversion: the weapon keeps its own
+        ``damage_type`` and hit math untouched, and the proc adds its effect
+        on top. Called from ``_finalize_hit`` — the one choke point every
+        hit path flows through — right after the damage-type dispatch, and
+        only for damaging hits on non-buildings (same gate as the typed
+        DoTs).
+
+        Semantics for ``proc: poison`` (design §3.3/§9, R3.5/R9): every
+        landed hit applies a poison DoT whose PER-TICK damage is the affix's
+        rolled magnitude (band 1–3 — deliberately below a poison-typed
+        weapon's fraction-based DoT) for the standard ``poison_dot_ticks``
+        duration. The effect dict is identical to :meth:`_apply_poison_dot`'s,
+        so it ticks, kills (through ``_handle_zero_hp``), and is countered
+        (regen/medkit, R9.4) through the exact same model. A poison-TYPED
+        weapon that also carries a viper affix stacks both DoTs — the affix
+        keeps its value on any weapon.
+        """
+        affixes = self._get_weapon_attr(weapon_item, "affixes", None)
+        if not affixes:
+            return
+        bal = getattr(self.registry, "balance", None)
+        dot_ticks = int(getattr(bal, "poison_dot_ticks", 4) or 0)
+        for affix in affixes:
+            if not hasattr(affix, "get") or affix.get("proc") != "poison":
+                continue
+            if dot_ticks <= 0:
+                continue
+            magnitude = affix.get("magnitude")
+            if not isinstance(magnitude, (int, float)) or isinstance(
+                magnitude, bool
+            ):
+                continue
+            self._add_active_effect(target, "poison",
+                                    max(1, int(round(magnitude))),
+                                    dot_ticks, attacker)
 
     @staticmethod
     def _live_or_none(entity: Any) -> Any:
@@ -811,12 +938,13 @@ class CombatEngine(BaseSystem):
     def tick_effects_on_entity(self, entity: Any) -> None:
         """Process active effects on a single entity (called from the tick loop).
 
-        Applies pending burn damage, decrements counters, removes expired
-        effects, and decays blast armor-shred so it recovers over time (not
-        permanent). Runs for EVERY effect-capable entity — players, agents,
-        and enemy NPCs — so typed weapons work against PvE targets too.
+        Applies pending DoT damage (burn + poison), decrements counters,
+        removes expired effects, and decays blast armor-shred so it recovers
+        over time (not permanent). Runs for EVERY effect-capable entity —
+        players, agents, and enemy NPCs — so typed weapons work against PvE
+        targets too.
 
-        Burn deaths route through :meth:`_handle_zero_hp` (the shared defeat
+        DoT deaths route through :meth:`_handle_zero_hp` (the shared defeat
         branch), so a burn that kills an enemy NPC still results in permanent
         death — never the player-respawn path.
         """
@@ -842,7 +970,11 @@ class CombatEngine(BaseSystem):
             if ticks <= 0:
                 continue
 
-            if etype == "burn":
+            if etype in ("burn", "poison"):
+                # Both DoT effects tick identically: fixed per-tick damage,
+                # armor-independent, with kills routed through the shared
+                # defeat branch. Only the applied fraction/duration differ
+                # (fire_burn_* vs poison_dot_* — see the _apply_* helpers).
                 dmg = effect.get("damage", 1)
                 source = self._live_or_none(effect.get("source"))
                 self._apply_damage(entity, dmg, source)
@@ -1796,6 +1928,81 @@ class CombatEngine(BaseSystem):
             t_coords[0], t_coords[1],
         )
         return dist <= weapon_range
+
+    def _tile_range_bonus(self, attacker: Any) -> int:
+        """Tile/building range bonus at *attacker*'s tile (R8, R10.1).
+
+        The Sniper Nest term of the R8 range formula, delegated to the ONE
+        shared aura read :func:`world.utils.tile_aura_level` (DRY H2 —
+        also used by the Watchtower vision and Field Hospital heal auras),
+        with the ``RANGE_AURA`` capability and this engine's
+        ``_owning_player`` as the owner resolver (R10.1 — the aura serves
+        the player who built it; an owner's AGENT on the tile also
+        benefits, mirroring the tech-bonus attribution; an enemy-NPC guard
+        resolves no owner and gets nothing).
+
+        Strictly ON-TILE and OWNER-ONLY — positional, not permanent
+        (decided §12). Returns 0 in every other case and never raises; the
+        caller (:meth:`resolve_weapon_range`) still clamps the stacked
+        total to ``balance.max_weapon_range``.
+        """
+        from world.constants import RANGE_AURA
+        from world.utils import tile_aura_level
+
+        return tile_aura_level(
+            attacker, RANGE_AURA, provider=self.registry,
+            resolve_owner=self._owning_player,
+        )
+
+    def _resolve_weapon_range(self, attacker: Any, weapon_item: Any) -> int:
+        """Resolve the effective combat range of *weapon_item* (R8).
+
+        The SINGLE range-resolution path shared by queue validation,
+        resolve-time re-validation, and the targeting-system lock
+        re-validation (injected at the composition root), so the three
+        sites can never diverge:
+
+        - melee → always 1 (ignores any ``range`` stat on the item);
+        - base = the weapon INSTANCE's ``range`` — via ``get_stat``, so
+          rolled stats and affixes/inserts on the weapon itself flow in;
+        - + owner tech bonus ``get_tech_bonus(owner, "weapon_range")``,
+          attributed to the OWNING PLAYER so a turret/agent shot benefits
+          from its owner's research (mirrors the damage/DR tech reads);
+        - + tile bonus (:meth:`_tile_range_bonus` — Sniper Nest, Phase 6);
+        - clamped to ``balance.max_weapon_range`` when > 0 (R8.3).
+
+        Range never aggregates across other equipped items (R8.1): a
+        ``+range`` value on an accessory has NO effect by design — range
+        is the highest-risk stat, so it gets the narrowest surface
+        (weapon instance + owner tech + tile bonus only).
+        """
+        if self._get_weapon_attr(weapon_item, "weapon_type", None) == "melee":
+            return 1
+        try:
+            total = int(self._get_stat(weapon_item, "range", 1))
+        except (TypeError, ValueError):
+            total = 1
+        from world.utils import get_tech_bonus
+        owner = self._owning_player(attacker)
+        if owner is not None:
+            total += int(get_tech_bonus(owner, "weapon_range"))
+        total += int(self._tile_range_bonus(attacker))
+        bal = getattr(self.registry, "balance", None)
+        cap = int(getattr(bal, "max_weapon_range", 0) or 0)
+        if cap > 0 and total > cap:
+            total = cap
+        return int(total)
+
+    def resolve_weapon_range(self, attacker: Any, weapon_item: Any) -> int:
+        """Public alias of :meth:`_resolve_weapon_range` (R8).
+
+        The name external collaborators wire against: the targeting
+        system's ``set_range_resolver`` and the command layer's
+        directional-shoot / attack-reach reads all consume THIS public
+        surface at the composition root instead of reaching for the
+        private helper. Pure delegation — no behavior change.
+        """
+        return self._resolve_weapon_range(attacker, weapon_item)
 
     @staticmethod
     def _validate_ammo(attacker: Any, ammo_cost: dict[str, int]) -> str | None:

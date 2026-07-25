@@ -45,6 +45,11 @@
 outpost:
   display_name: Outpost
   difficulty_class: outpost
+  # Rarity source weight (item-loot-economy R3.2): selects the rarity-table
+  # bucket for this tier's HQ-destroy gear drops. guard_kill 0 < outpost 1 <
+  # stronghold 2 < fortress 3 < citadel 4 — must match balance.yaml's
+  # rarity_table min_weight thresholds or the tier lands in a lower bucket.
+  rarity_weight: 1
   spawn_count: 4
   buildings:
     - type: HQ
@@ -77,6 +82,7 @@ outpost:
 stronghold:
   display_name: Stronghold
   difficulty_class: outpost
+  rarity_weight: 2          # R3.2 rarity bucket (see outpost tier's note)
   spawn_count: 3
   buildings:
     - type: HQ
@@ -137,6 +143,7 @@ stronghold:
 fortress:
   display_name: Fortress
   difficulty_class: fortress
+  rarity_weight: 3          # R3.2 rarity bucket (see outpost tier's note)
   spawn_count: 2
   buildings:
     - type: HQ
@@ -208,6 +215,7 @@ fortress:
 citadel:
   display_name: Citadel
   difficulty_class: fortress
+  rarity_weight: 4          # R3.2 rarity bucket — the ONLY Legendary-tier source
   spawn_count: 1
   buildings:
     - type: HQ

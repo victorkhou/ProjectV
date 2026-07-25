@@ -57,6 +57,42 @@
   effect_type: production_bonus
   effect_value:
     production_multiplier: 1.5
+
+# Reactive Plating (item-loot-economy R11.3): a second damage_reduction tech
+# stacking with Improved Armor toward the aggregate permanent-DR cap
+# (perm_bonus_cap_dr = 6). Improved Armor (5) + Reactive Plating (3) = 8,
+# clamped to 6 by the existing combat_engine armor path — data-only.
+- name: Reactive Plating
+  key: reactive_plating
+  required_rank: Major
+  resource_cost:
+    Iron: 250
+    Circuits: 80
+    Energy: 60
+  research_ticks: 80
+  effect_type: stat_bonus
+  effect_value:
+    damage_reduction: 3
+
+# Salvage Protocols (item-loot-economy R11.2, task 5.4): economy research
+# that cuts the Blacksmith reroll bench charge (Salvage + resources) to
+# ×0.75 (−25%). Consumed by EquipmentSystem._salvage_cost_multiplier —
+# clamped to [SALVAGE_COST_MULT_FLOOR, 1.0] so stacked cost research can
+# never trivialize the reroll sink nor raise costs (R11.7: live consumer,
+# no dead key). The insert "cost" is the consumed insert item itself, so
+# this tech deliberately reduces the reroll charge only. Captain-gated:
+# a mid/late economy tech that lands with the Phase-5 salvage loop.
+- name: Salvage Protocols
+  key: salvage_protocols
+  required_rank: Captain
+  resource_cost:
+    Iron: 200
+    Circuits: 60
+    Energy: 80
+  research_ticks: 75
+  effect_type: stat_bonus
+  effect_value:
+    salvage_cost_mult: 0.75
 # ── Terrain technologies (terrain-strategy, Req 7.1) ─────────────────
 # effect_value keys follow terrain_affinity:{terrain_type}:{kind};
 # terrain types must exist in terrain.yaml (cross-validated at load).
@@ -104,3 +140,81 @@
   effect_value:
     "terrain_affinity:Glacier:movement": 1
     "terrain_affinity:Frozen_Lake:movement": 1
+
+# ── item-loot-economy Phase-6 research (R11, task 6.4) ───────────────
+# Every key below has a live consumer (R11.7 — no dead tech keys):
+#   build_cost_mult  → building_system._build_cost_multiplier (task 3.3)
+#   poison_dot_mult  → combat_engine._apply_poison_dot (task 3.2 hook)
+#   weapon_range     → combat_engine._resolve_weapon_range (task 3.1)
+#   craft_iqs_floor  → equipment_system._craft_iqs_floor → loot_roller
+# Rank gates follow the existing mid/late ladder (Lieutenant → Colonel).
+
+# Efficient Construction (R11.1): building/upgrade costs ×0.85 (−15%).
+# Consumer clamps to [balance.build_cost_mult_floor (0.6), 1.0] so stacked
+# cost research can never trivialize nor raise costs. Deliberately does
+# NOT touch production_multiplier (design §6.3 guardrail).
+- name: Efficient Construction
+  key: efficient_construction
+  required_rank: Lieutenant
+  resource_cost:
+    Iron: 150
+    Stone: 100
+  research_ticks: 60
+  effect_type: stat_bonus
+  effect_value:
+    build_cost_mult: 0.85
+
+# Toxicology (R11.5): strengthens the poison DoT — a poison-typed hit's
+# per-tick amount is scaled ×1.25. The consumer clamps the multiplier to
+# [1.0, POISON_DOT_MULT_CAP (1.5)] so research can never weaken the DoT
+# nor stack past the cap; poison_resist mitigates the typed hit itself
+# and regen/medkits still out-heal a light DoT (the R9.4 counter is
+# preserved — the boost scales the fraction, it does not bypass either
+# counter). Captain-gated: lands with the Phase-3 poison hook, mid/late.
+- name: Toxicology
+  key: toxicology
+  required_rank: Captain
+  resource_cost:
+    Iron: 180
+    Circuits: 60
+    Energy: 70
+  research_ticks: 70
+  effect_type: stat_bonus
+  effect_value:
+    poison_dot_mult: 1.25
+
+# Ballistics Optimization (R11.4): +1 weapon range through the R8 range
+# hook (_resolve_weapon_range) — attributed to the owning player, so
+# turret/agent shots benefit too, and always clamped by
+# balance.max_weapon_range. Kept at +1 (design §8/§9: range techs stay
+# small — the big range numbers live on the positional Sniper Nest).
+# Major-gated: range is the highest-risk stat, so it lands late.
+- name: Ballistics Optimization
+  key: ballistics_optimization
+  required_rank: Major
+  resource_cost:
+    Iron: 250
+    Circuits: 100
+    Energy: 80
+  research_ticks: 85
+  effect_type: stat_bonus
+  effect_value:
+    weapon_range: 1
+
+# Master Gunsmithing (R11.6): items the player CRAFTS roll with a raised
+# floor — the value is a U-clamp (like the rarity roll floors) applied
+# inside the craft band, so crafted rolls land in the upper part of the
+# band but can NEVER exceed it (crafted stays craft-band-bounded, R6.1).
+# Consumer clamps to [0.0, CRAFT_IQS_FLOOR_CAP (0.5)]; loot rolls are
+# untouched. Colonel-gated: late-game mastery of the craft bench.
+- name: Master Gunsmithing
+  key: master_gunsmithing
+  required_rank: Colonel
+  resource_cost:
+    Iron: 300
+    Circuits: 120
+    Energy: 100
+  research_ticks: 100
+  effect_type: stat_bonus
+  effect_value:
+    craft_iqs_floor: 0.25

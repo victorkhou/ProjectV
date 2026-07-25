@@ -1,5 +1,6 @@
 """Unit tests for DataRegistry."""
 
+import copy
 import os
 import shutil
 import tempfile
@@ -145,6 +146,22 @@ VALID_ABILITY_GATES = [
     {"key": "delivery", "required_level": 5},
 ]
 
+# Affix pools (item-loot-economy §3.3) — optional definitions/affixes.yaml.
+VALID_AFFIXES = {
+    "weapon": [
+        {"key": "keen", "stat": "damage_bonus", "min": 2, "max": 6,
+         "weight": 1.0, "name": "of Power"},
+        {"key": "warding_f", "stat": "fire_resist", "min": 2, "max": 6,
+         "weight": 0.8, "name": "of Embers"},
+    ],
+    "armor": [
+        {"key": "sturdy", "stat": "damage_reduction", "min": 2, "max": 6,
+         "weight": 1.0, "name": "of the Bulwark"},
+        {"key": "warded", "stat": "psychic_resist", "min": 2, "max": 6,
+         "weight": 0.8, "name": "of Clarity"},
+    ],
+}
+
 VALID_BALANCE = {
     "turret_damage": 15,
     "turret_radius": 10,
@@ -211,6 +228,23 @@ def data_dir_no_balance():
 def _write_yaml(path: str, data) -> None:
     with open(path, "w") as f:
         yaml.dump(data, f)
+
+
+def _items_with_roll_spec(roll_spec) -> dict:
+    """A deep copy of VALID_ITEMS with *roll_spec* on the combat_knife entry."""
+    items = copy.deepcopy(VALID_ITEMS)
+    items["items"][0]["roll_spec"] = roll_spec
+    return items
+
+
+def _items_with_insert(insert_effect) -> dict:
+    """A deep copy of VALID_ITEMS plus an insert item with *insert_effect*."""
+    items = copy.deepcopy(VALID_ITEMS)
+    items["items"].append({
+        "key": "venom_coating", "name": "Venom Coating",
+        "category": "insert", "insert_effect": insert_effect,
+    })
+    return items
 
 
 # Agent-XP balance values deliberately chosen to differ from every
@@ -296,12 +330,182 @@ class TestLoadAll:
         levels = [r.level for r in reg.ranks]
         assert levels == sorted(levels)
 
+    def test_roll_spec_loaded_from_items_yaml(self, data_dir):
+        """A declared roll_spec loads onto the ItemDef (item-loot-economy 1.1)."""
+        roll_spec = {
+            "stats": {
+                "damage": {"min": 8, "max": 14, "weight": 3},
+                "range": {"min": 1, "max": 2, "weight": 1},
+            },
+            "craft": {"damage": {"min": 9, "max": 11}},
+            "skew": 2.0,
+            "affix_pool": "weapon",
+        }
+        items = _items_with_roll_spec(roll_spec)
+        _write_yaml(
+            os.path.join(data_dir, "definitions", "items.yaml"), items
+        )
+        reg = DataRegistry()
+        reg.load_all(data_dir)
+        assert reg.get_item("combat_knife").roll_spec == roll_spec
+
+    def test_roll_spec_defaults_none_when_absent(self, data_dir):
+        """Items without a roll_spec load as fixed items (R12.1/R12.2)."""
+        reg = DataRegistry()
+        reg.load_all(data_dir)
+        assert reg.get_item("combat_knife").roll_spec is None
+        assert reg.get_item("kevlar_vest").roll_spec is None
+
+    def test_invalid_roll_spec_fails_load(self, data_dir):
+        """Invalid roll_spec shape aborts the load, not the runtime."""
+        items = _items_with_roll_spec({"stats": "not_a_dict"})
+        _write_yaml(
+            os.path.join(data_dir, "definitions", "items.yaml"), items
+        )
+        reg = DataRegistry()
+        with pytest.raises(DataRegistryError, match="roll_spec"):
+            reg.load_all(data_dir)
+
+    def test_insert_effect_loaded_from_items_yaml(self, data_dir):
+        """A declared insert_effect loads onto the ItemDef (task 4.2)."""
+        effect = {"type": "damage_type", "value": "poison"}
+        items = _items_with_insert(effect)
+
+        _write_yaml(
+            os.path.join(data_dir, "definitions", "items.yaml"), items
+        )
+        reg = DataRegistry()
+        reg.load_all(data_dir)
+
+        idef = reg.get_item("venom_coating")
+        assert idef.category == "insert"
+        assert idef.insert_effect == effect
+
+    def test_insert_effect_defaults_none_when_absent(self, data_dir):
+        """Non-insert items load with insert_effect None (task 4.2)."""
+        reg = DataRegistry()
+        reg.load_all(data_dir)
+
+        assert reg.get_item("combat_knife").insert_effect is None
+
+    def test_invalid_insert_effect_fails_load(self, data_dir):
+        """Malformed insert_effect aborts the load, not the runtime."""
+        items = _items_with_insert({"type": "damage_type", "value": "acid"})
+
+        _write_yaml(
+            os.path.join(data_dir, "definitions", "items.yaml"), items
+        )
+        reg = DataRegistry()
+
+        with pytest.raises(DataRegistryError, match="insert_effect"):
+            reg.load_all(data_dir)
+
+    def test_roll_spec_band_min_above_max_fails_load(self, data_dir):
+        items = _items_with_roll_spec(
+            {"stats": {"damage": {"min": 14, "max": 8, "weight": 1}}}
+        )
+        _write_yaml(
+            os.path.join(data_dir, "definitions", "items.yaml"), items
+        )
+        reg = DataRegistry()
+        with pytest.raises(DataRegistryError, match="roll_spec"):
+            reg.load_all(data_dir)
+
     def test_production_map_loaded(self, data_dir):
         reg = DataRegistry()
         reg.load_all(data_dir)
 
         assert "AA" in reg.item_production_map
         assert "combat_knife" in reg.item_production_map["AA"]
+
+    # ---- affix pools (item-loot-economy task 2.1) -------------------- #
+
+    def test_affixes_absent_loads_empty(self, data_dir):
+        """No affixes.yaml → empty pools; the game runs without affixes."""
+        reg = DataRegistry()
+        reg.load_all(data_dir)
+        assert reg.affixes == {}
+        assert reg.get_affix_pool("weapon") == []
+
+    def test_affixes_loaded_from_yaml(self, data_dir):
+        """Pools land on registry.affixes keyed by pool name (for task 2.3)."""
+        _write_yaml(
+            os.path.join(data_dir, "definitions", "affixes.yaml"),
+            VALID_AFFIXES,
+        )
+        reg = DataRegistry()
+        reg.load_all(data_dir)
+
+        assert set(reg.affixes) == {"weapon", "armor"}
+        keen = reg.get_affix_pool("weapon")[0]
+        assert keen == {"key": "keen", "stat": "damage_bonus", "min": 2,
+                        "max": 6, "weight": 1.0, "name": "of Power"}
+        armor_keys = [e["key"] for e in reg.get_affix_pool("armor")]
+        assert armor_keys == ["sturdy", "warded"]
+
+    def test_get_affix_pool_unknown_returns_empty(self, data_dir):
+        _write_yaml(
+            os.path.join(data_dir, "definitions", "affixes.yaml"),
+            VALID_AFFIXES,
+        )
+        reg = DataRegistry()
+        reg.load_all(data_dir)
+        assert reg.get_affix_pool("accessory") == []
+
+    def test_affixes_unknown_stat_fails_load(self, data_dir):
+        """An affix targeting an unknown axis fails the LOAD (design EH).
+
+        (`accuracy` has no combat consumer as an affix axis; `range` is no
+        longer usable as the bad example — task 3.4 unlocked it.)
+        """
+        bad = {"weapon": [{"key": "true", "stat": "accuracy", "min": 1,
+                           "max": 3, "weight": 1.4, "name": "of Truth"}]}
+        _write_yaml(
+            os.path.join(data_dir, "definitions", "affixes.yaml"), bad
+        )
+        reg = DataRegistry()
+        with pytest.raises(DataRegistryError, match="not a known affix axis"):
+            reg.load_all(data_dir)
+
+    def test_affixes_bad_band_fails_load(self, data_dir):
+        bad = {"weapon": [{"key": "keen", "stat": "damage_bonus", "min": 6,
+                           "max": 2, "weight": 1.0, "name": "of Power"}]}
+        _write_yaml(
+            os.path.join(data_dir, "definitions", "affixes.yaml"), bad
+        )
+        reg = DataRegistry()
+        with pytest.raises(DataRegistryError, match="must be <= max"):
+            reg.load_all(data_dir)
+
+    def test_affixes_duplicate_key_fails_load(self, data_dir):
+        entry = {"key": "keen", "stat": "damage_bonus", "min": 2, "max": 6,
+                 "weight": 1.0, "name": "of Power"}
+        bad = {"weapon": [dict(entry), dict(entry)]}
+        _write_yaml(
+            os.path.join(data_dir, "definitions", "affixes.yaml"), bad
+        )
+        reg = DataRegistry()
+        with pytest.raises(DataRegistryError, match="duplicate key"):
+            reg.load_all(data_dir)
+
+    def test_affixes_unknown_pool_fails_load(self, data_dir):
+        bad = {"trinket": [{"key": "keen", "stat": "damage_bonus", "min": 2,
+                            "max": 6, "weight": 1.0, "name": "of Power"}]}
+        _write_yaml(
+            os.path.join(data_dir, "definitions", "affixes.yaml"), bad
+        )
+        reg = DataRegistry()
+        with pytest.raises(DataRegistryError, match="unknown pool"):
+            reg.load_all(data_dir)
+
+    def test_affixes_non_dict_shape_fails_load(self, data_dir):
+        _write_yaml(
+            os.path.join(data_dir, "definitions", "affixes.yaml"),
+            [{"key": "keen"}],
+        )
+        reg = DataRegistry()
+        with pytest.raises(DataRegistryError, match="expected a dict of pool"):
+            reg.load_all(data_dir)
 
     def test_balance_loaded(self, data_dir):
         reg = DataRegistry()
@@ -517,6 +721,43 @@ class TestReload:
         assert len(errors) > 0
         # Original data preserved
         assert reg.buildings == original_buildings
+
+    def test_reload_swaps_affix_pools(self, data_dir):
+        """A hot-reload picks up newly-added affix pools (task 2.1)."""
+        reg = DataRegistry()
+        reg.load_all(data_dir)
+        assert reg.affixes == {}
+
+        _write_yaml(
+            os.path.join(data_dir, "definitions", "affixes.yaml"),
+            VALID_AFFIXES,
+        )
+        success, errors = reg.reload_all()
+        assert success is True
+        assert errors == []
+        assert [e["key"] for e in reg.get_affix_pool("weapon")] == \
+            ["keen", "warding_f"]
+
+    def test_reload_with_invalid_affixes_preserves_data(self, data_dir):
+        """A broken affixes.yaml fails the reload atomically."""
+        reg = DataRegistry()
+        reg.load_all(data_dir)
+        _write_yaml(
+            os.path.join(data_dir, "definitions", "affixes.yaml"),
+            VALID_AFFIXES,
+        )
+        assert reg.reload_all()[0] is True
+        before = {p: list(e) for p, e in reg.affixes.items()}
+
+        bad = {"weapon": [{"key": "true", "stat": "accuracy", "min": 1,
+                           "max": 3, "weight": 1.4, "name": "of Truth"}]}
+        _write_yaml(
+            os.path.join(data_dir, "definitions", "affixes.yaml"), bad
+        )
+        success, errors = reg.reload_all()
+        assert success is False
+        assert any("not a known affix axis" in e for e in errors)
+        assert reg.affixes == before
 
     def test_reload_rebuilds_progression_thresholds(self, data_dir):
         """A ranks.yaml hot-reload must rebuild the shared level<->XP curve.

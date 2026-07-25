@@ -168,6 +168,24 @@ class FakePlayer:
             self.db.resources[key] = self.db.resources.get(key, 0) - int(amt)
         return True
 
+    # Salvage currency (item-loot-economy R7, task 5.1) — mirrors the
+    # CombatCharacter accessors in typeclasses/characters.py.
+    def get_salvage(self):
+        return int(getattr(self.db, "salvage", 0) or 0)
+
+    def add_salvage(self, amount):
+        self.db.salvage = max(0, self.get_salvage() + int(amount))
+
+    def spend_salvage(self, amount):
+        amount = int(amount)
+        if amount < 0:
+            return False
+        balance = self.get_salvage()
+        if balance < amount:
+            return False
+        self.db.salvage = balance - amount
+        return True
+
 
 class FakeTarget:
     """A damageable target: a player-like entity at fixed coords."""
@@ -2113,6 +2131,64 @@ class TestCraft(unittest.TestCase):
         self.assertTrue(system.craft(player, "rifle_rounds", ar))
         self.assertEqual(player.equipment.get_supply("rifle_rounds"), 1)
 
+    def test_craft_notification_shows_no_value_for_unrolled_item(self):
+        """A def without a roll_spec crafts with NO iqs/rarity in the
+        success payload — the value readout only appears where it is
+        meaningful (R2.5)."""
+        system, _created, sink = self._make()
+        player = self._player(Iron=100, Stone=100)
+        ar = FakeProductionBuilding("AR", owner=player)
+        self.assertTrue(system.craft(player, "kevlar_vest", ar))
+        kind, data = sink.last()
+        self.assertEqual(kind, "crafted")
+        self.assertNotIn("iqs", data)
+        self.assertNotIn("rarity", data)
+
+    def test_craft_notification_shows_iqs_and_rarity(self):
+        """Crafting rolled gear surfaces the stamped value in the success
+        notification: the IQS quality score, plus the rarity when the
+        crafting building's level draw assigned one (forced rare here)."""
+        system, _created, sink = self._make(
+            create_item_func=lambda idef, owner: {"key": idef.key})
+        system.registry.items["rolled_rifle"] = _rolled_rifle_def()
+        system.registry.item_production_map["AR"].append("rolled_rifle")
+        system.registry.balance = BalanceConfig(
+            equipment_production_ticks=1,
+            craft_rarity_table={5: {"rare": 1}},
+        )
+        player = self._player(Iron=100, Stone=100)
+        ar = FakeProductionBuilding("AR", owner=player)
+        ar.db.building_level = 5
+
+        self.assertTrue(system.craft(player, "rolled_rifle", ar))
+
+        kind, data = sink.last()
+        self.assertEqual(kind, "crafted")
+        self.assertIsInstance(data.get("iqs"), int)
+        self.assertEqual(data.get("rarity"), "rare")
+
+    def test_craft_notification_iqs_without_rarity_below_table(self):
+        """A rolled craft whose building level reaches no table row still
+        shows its IQS — value without a rarity tag."""
+        system, _created, sink = self._make(
+            create_item_func=lambda idef, owner: {"key": idef.key})
+        system.registry.items["rolled_rifle"] = _rolled_rifle_def()
+        system.registry.item_production_map["AR"].append("rolled_rifle")
+        system.registry.balance = BalanceConfig(
+            equipment_production_ticks=1,
+            craft_rarity_table={3: {"rare": 1}},
+        )
+        player = self._player(Iron=100, Stone=100)
+        ar = FakeProductionBuilding("AR", owner=player)
+        ar.db.building_level = 1
+
+        self.assertTrue(system.craft(player, "rolled_rifle", ar))
+
+        kind, data = sink.last()
+        self.assertEqual(kind, "crafted")
+        self.assertIsInstance(data.get("iqs"), int)
+        self.assertNotIn("rarity", data)
+
     def test_craft_wrong_building(self):
         system, _c, sink = self._make()
         player = self._player(Iron=100, Stone=100)
@@ -2300,6 +2376,1404 @@ class TestSellAndJunk(unittest.TestCase):
         kind, data = sink.last()
         self.assertEqual(kind, "sell_failed")
         self.assertEqual(data.get("reason"), "not_gear")
+
+
+# -------------------------------------------------------------- #
+#  Loot-roller spawn wiring (item-loot-economy task 1.5)
+# -------------------------------------------------------------- #
+
+#: A roll_spec matching the design §1.1 example: loot bands + tighter,
+#: contained craft bands. The craft bands are STRICT sub-bands so a
+#: crafted-band assertion can never pass by accident of the loot band.
+_ROLL_SPEC = {
+    "stats": {
+        "damage": {"min": 18, "max": 30, "weight": 3},
+        "range": {"min": 4, "max": 7, "weight": 1},
+    },
+    "craft": {
+        "damage": {"min": 20, "max": 25},
+        "range": {"min": 4, "max": 5},
+    },
+}
+
+
+def _rolled_rifle_def():
+    return ItemDef(
+        key="rolled_rifle", name="Rolled Rifle", slot="weapon",
+        category="weapon", stat_modifiers={"damage": 25, "range": 5},
+        craft_cost={"Iron": 5}, roll_spec=_ROLL_SPEC,
+    )
+
+
+class _DropStub:
+    """A spawned-drop stand-in carrying a ``db`` bag like a GameItem."""
+
+    def __init__(self):
+        self.db = DB()
+
+
+class TestSpawnPathRolling(unittest.TestCase):
+    """Task 1.5: production drops and crafted items are rolled; unrolled
+    defs stay fixed on every path (R1.1, R1.3, R1.4, R6.1)."""
+
+    def _registry(self):
+        registry = _make_registry()
+        registry.items["rolled_rifle"] = _rolled_rifle_def()
+        return registry
+
+    def test_production_drop_is_rolled(self):
+        """The passive/agent production-drop path stamps rolled_stats + iqs
+        and (task 2.2) a lowest-bucket rarity — design §3.2: production
+        drops pass weight 0, the guard_kill/safe-floor treatment."""
+        system, _, _ = _make_system(self._registry())
+        stub = _DropStub()
+        system.set_gear_drop_spawner(lambda building, item_def: stub)
+        building = FakeProductionBuilding("AR", owner=FakePlayer())
+
+        ok = system._route_produced_item(
+            system.registry.items["rolled_rifle"], FakePlayer(),
+            building=building,
+        )
+
+        self.assertTrue(ok)
+        rolled = stub.db.rolled_stats
+        self.assertEqual(set(rolled), {"damage", "range"})
+        self.assertTrue(18 <= rolled["damage"] <= 30)
+        self.assertTrue(4 <= rolled["range"] <= 7)
+        self.assertIsInstance(stub.db.iqs, int)
+        self.assertTrue(0 <= stub.db.iqs <= 100)
+        # Task 2.2: weight 0 → lowest bucket; only its rarities are possible.
+        from world.systems.loot_roller import DEFAULT_RARITY_TABLE
+        lowest = DEFAULT_RARITY_TABLE["guard_kill"]["weights"]
+        self.assertIn(stub.db.rarity, set(lowest))
+        # Affix draw is task 2.3 — never written here yet.
+        self.assertIsNone(getattr(stub.db, "affixes", None))
+
+    def test_crafted_item_rolls_in_craft_band(self):
+        """The craft path (building=None) rolls crafted=True: every stat
+        lands in the tighter craft band, never merely the loot band."""
+        registry = self._registry()
+        created = []
+
+        def factory(item_def, owner):
+            item = {"key": item_def.key}
+            created.append(item)
+            return item
+
+        system = EquipmentSystem(registry, EventBus(),
+                                 create_item_func=factory)
+
+        ok = system._route_produced_item(
+            registry.items["rolled_rifle"], FakePlayer())
+
+        self.assertTrue(ok)
+        item = created[0]
+        rolled = item["rolled_stats"]
+        self.assertTrue(20 <= rolled["damage"] <= 25)  # craft band (R6.1)
+        self.assertTrue(4 <= rolled["range"] <= 5)
+        self.assertIsInstance(item["iqs"], int)
+        # Crafted-rarity change (deviation from R6.1): rarity now comes from
+        # the crafting BUILDING's level. With no craft_building supplied
+        # (level unknown), the draw is skipped — the original no-rarity
+        # behavior stays for this path.
+        self.assertNotIn("rarity", item)
+
+    def _craft_via_route(self, craft_rarity_table, level):
+        """Route one manual craft of the rolled rifle at a leveled building."""
+        registry = self._registry()
+        registry.balance = BalanceConfig(
+            equipment_production_ticks=1,
+            craft_rarity_table=craft_rarity_table,
+        )
+        created = []
+        system = EquipmentSystem(
+            registry, EventBus(),
+            create_item_func=lambda idef, owner: created.append(
+                {"key": idef.key}) or created[-1],
+        )
+        armory = FakeProductionBuilding("AR", owner=FakePlayer())
+        armory.db.building_level = level
+        ok = system._route_produced_item(
+            registry.items["rolled_rifle"], FakePlayer(),
+            craft_building=armory,
+        )
+        self.assertTrue(ok)
+        return created[0]
+
+    def test_craft_building_level_drives_crafted_rarity(self):
+        """Crafted-rarity change (deviation from R6.1): the crafting
+        building's level selects the craft_rarity_table row — a forced-rare
+        L5 row stamps `rarity`, applies the 0.25 roll floor INSIDE the
+        craft band, and still never draws affixes."""
+        item = self._craft_via_route({5: {"rare": 1}}, level=5)
+        self.assertEqual(item["rarity"], "rare")
+        self.assertNotIn("affixes", item)
+        rolled = item["rolled_stats"]
+        # Rare floor guarantee inside the CRAFT band [20, 25] at skew 2:
+        # rolled >= 20 + 5 * 0.25**2, and never above the craft max.
+        self.assertGreaterEqual(rolled["damage"], 20 + 5 * 0.25 ** 2 - 1e-9)
+        self.assertLessEqual(rolled["damage"], 25)
+
+    def test_craft_rarity_hard_capped_at_rare(self):
+        """Even a (mis-)authored epic/legendary weight in a craft row can
+        never mint an epic craft — the roller filters tiers above rare."""
+        item = self._craft_via_route(
+            {5: {"legendary": 99, "epic": 99, "rare": 1}}, level=5)
+        self.assertEqual(item["rarity"], "rare")
+
+    def test_craft_below_lowest_table_level_keeps_no_rarity(self):
+        """A building level below the lowest table row (defensive: odd
+        data) keeps the original no-rarity crafted behavior."""
+        item = self._craft_via_route({3: {"rare": 1}}, level=1)
+        self.assertNotIn("rarity", item)
+
+    def test_rolled_stats_read_back_through_get_stat(self):
+        """The rolled value is what combat's read path sees: a GameItem-like
+        stub prefers rolled_stats over the def base (R1.1)."""
+        system, _, _ = _make_system(self._registry())
+        stub = _DropStub()
+        system.set_gear_drop_spawner(lambda building, item_def: stub)
+        building = FakeProductionBuilding("AR", owner=FakePlayer())
+        system._route_produced_item(
+            system.registry.items["rolled_rifle"], FakePlayer(),
+            building=building,
+        )
+
+        # Mirror GameItem.get_stat: rolled_stats wins over stat_modifiers.
+        def get_stat(stat, default=0):
+            rolled = getattr(stub.db, "rolled_stats", None) or {}
+            if stat in rolled:
+                return float(rolled[stat])
+            return float(_ROLL_SPEC["stats"].get(stat, {}).get("min", default))
+
+        self.assertEqual(get_stat("damage"), stub.db.rolled_stats["damage"])
+
+    def test_unrolled_def_stays_fixed_on_production_drop(self):
+        """No roll_spec → no rolled_stats/iqs written, drop still routes (R1.3)."""
+        system, _, _ = _make_system(self._registry())
+        stub = _DropStub()
+        system.set_gear_drop_spawner(lambda building, item_def: stub)
+        building = FakeProductionBuilding("AR", owner=FakePlayer())
+
+        ok = system._route_produced_item(
+            system.registry.items["kevlar_vest"], FakePlayer(),
+            building=building,
+        )
+
+        self.assertTrue(ok)
+        self.assertIsNone(getattr(stub.db, "rolled_stats", None))
+        self.assertIsNone(getattr(stub.db, "iqs", None))
+
+    def test_unrolled_def_stays_fixed_on_craft(self):
+        registry = self._registry()
+        created = []
+
+        def factory(item_def, owner):
+            item = {"key": item_def.key}
+            created.append(item)
+            return item
+
+        system = EquipmentSystem(registry, EventBus(),
+                                 create_item_func=factory)
+
+        ok = system._route_produced_item(
+            registry.items["kevlar_vest"], FakePlayer())
+
+        self.assertTrue(ok)
+        self.assertNotIn("rolled_stats", created[0])
+        self.assertNotIn("iqs", created[0])
+
+
+class TestPvPDropPreservesInstanceState(unittest.TestCase):
+    """R1.6/R5.4: the PvP death drop carries the dropped instance's
+    rolled_stats/affixes/rarity/iqs/inserts — never re-rolled."""
+
+    _STATE = {
+        "rolled_stats": {"damage": 27.5},
+        "affixes": [{"key": "keen", "magnitude": 4}],
+        "rarity": "Rare",
+        "iqs": 73,
+        "inserts": [{"key": "incendiary_core"}],
+        # A damage-type insert writes db.damage_type on the instance
+        # (task 4.3) — the conversion must carry with the drop (R5.4).
+        "damage_type": "fire",
+    }
+
+    def _victim_with_rolled_rifle(self):
+        victim = FakePlayer(level=10)
+        victim.db.coord_planet = "earth"
+        victim._buildings = []
+        victim.get_buildings = lambda: list(victim._buildings)
+        rifle = FakeItem("assault_rifle", "weapon", {"damage": 25})
+        for name, value in self._STATE.items():
+            setattr(rifle, name, value)
+        victim.equipment.equip(rifle)
+        return victim, rifle
+
+    def _system_with_stub_spawner(self):
+        system, _, _ = _make_system(_death_registry())
+        spawned = []  # (item_def, stub)
+
+        def _spawner(victim, item_def):
+            stub = _DropStub()
+            spawned.append((item_def, stub))
+            return stub
+
+        system.set_pvp_gear_drop_spawner(_spawner)
+        return system, spawned
+
+    def test_death_drop_carries_exact_instance_state(self):
+        system, spawned = self._system_with_stub_spawner()
+        victim, rifle = self._victim_with_rolled_rifle()
+        killer = FakePlayer(level=10)
+        system._rng = _DeterministicRNG(0.0)  # not recovered → drop roll wins
+
+        summary = system.apply_death_loss(victim, killer)
+
+        self.assertEqual(summary["dropped"].get("assault_rifle"), 1)
+        self.assertEqual(len(spawned), 1)
+        _, drop = spawned[0]
+        for name, value in self._STATE.items():
+            self.assertEqual(getattr(drop.db, name), value,
+                             f"{name} not preserved across the death drop")
+        # Deep-copied, not shared with the destroyed original (mutables).
+        self.assertIsNot(drop.db.rolled_stats, rifle.rolled_stats)
+        self.assertIsNot(drop.db.affixes, rifle.affixes)
+        self.assertIsNot(drop.db.inserts, rifle.inserts)
+
+    def test_unrolled_item_drops_unrolled(self):
+        """An item with no roll state drops with none — never gains empty
+        roll attributes (R12.1)."""
+        system, spawned = self._system_with_stub_spawner()
+        victim = FakePlayer(level=10)
+        victim.db.coord_planet = "earth"
+        victim._buildings = []
+        victim.get_buildings = lambda: list(victim._buildings)
+        victim.equipment.equip(FakeItem("kevlar_vest", "torso",
+                                        {"damage_reduction": 5}))
+        killer = FakePlayer(level=10)
+        system._rng = _DeterministicRNG(0.0)
+
+        system.apply_death_loss(victim, killer)
+
+        self.assertEqual(len(spawned), 1)
+        _, drop = spawned[0]
+        for name in ("rolled_stats", "affixes", "rarity", "iqs", "inserts",
+                     "damage_type"):
+            self.assertIsNone(getattr(drop.db, name, None))
+
+
+# ================================================================== #
+#  Item-loot-economy task 4.3 — Blacksmith inserts (apply_insert)
+# ================================================================== #
+
+INSERT_DEFS = {
+    "venom_coating": ItemDef(
+        key="venom_coating", name="Venom Coating", slot="", category="insert",
+        insert_effect={"type": "damage_type", "value": "poison"},
+        weight=1.0, max_stack=10),
+    "incendiary_core": ItemDef(
+        key="incendiary_core", name="Incendiary Core", slot="",
+        category="insert",
+        insert_effect={"type": "damage_type", "value": "fire"},
+        weight=1.0, max_stack=10),
+    "extended_barrel": ItemDef(
+        key="extended_barrel", name="Extended Barrel", slot="",
+        category="insert",
+        insert_effect={"type": "range", "value": 2},
+        weight=2.0, max_stack=10),
+    "hollowpoint": ItemDef(
+        key="hollowpoint", name="Hollow-Point Kit", slot="", category="insert",
+        insert_effect={"type": "stat", "stat": "damage", "value": 4,
+                       "tradeoff": {"range": -1}},
+        weight=0.5, max_stack=10),
+    # A rank-gated insert for the rank-gate test (Captain = level 6).
+    "elite_core": ItemDef(
+        key="elite_core", name="Elite Core", slot="", category="insert",
+        insert_effect={"type": "range", "value": 1},
+        weight=1.0, max_stack=10, required_rank="Captain"),
+}
+
+
+class FakeBlacksmith:
+    """Stand-in for a built Blacksmith bench (BS building instance)."""
+
+    def __init__(self, owner=None, level=1, offline=False,
+                 under_construction=False, building_type="BS"):
+        self.key = "Blacksmith"
+        self.db = DB(building_type=building_type, offline=offline,
+                     under_construction=under_construction,
+                     building_level=level)
+        self._owner = owner
+
+    @property
+    def owner(self):
+        return self._owner
+
+    @property
+    def is_offline(self):
+        return bool(getattr(self.db, "offline", False))
+
+
+class InsertableWeapon(FakeWeapon):
+    """FakeWeapon with GameItem-style rolled-first reads.
+
+    ``get_stat`` prefers ``db.rolled_stats`` and ``damage_type`` reads the
+    instance override off ``db`` — mirroring the real ``GameItem``
+    accessors (which are themselves covered by the typeclasses tests), so
+    these tests can assert the exact reads combat performs
+    (``CombatEngine._get_stat`` / ``_get_damage_type``).
+    """
+
+    def __init__(self, key="assault_rifle", stat_modifiers=None, **kwargs):
+        super().__init__(key=key, weapon_type=kwargs.pop("weapon_type",
+                                                         "ranged"), **kwargs)
+        self.name = "Assault Rifle"
+        self.stat_modifiers = dict(stat_modifiers
+                                   if stat_modifiers is not None
+                                   else {"damage": 25, "range": 5})
+
+    def get_stat(self, stat_name, default=0):
+        rolled = getattr(self.db, "rolled_stats", None) or {}
+        if stat_name in rolled:
+            return float(rolled[stat_name])
+        return float(self.stat_modifiers.get(stat_name, default))
+
+    @property
+    def damage_type(self):
+        return getattr(self.db, "damage_type", None)
+
+
+class TestApplyInsert(unittest.TestCase):
+    """Blacksmith inserts mutate the equipped weapon (task 4.3, R5).
+
+    Covers the three insert effect types (mutation lands where combat
+    reads), the slot limit ``1 + level//3``, the craft-mirroring gate
+    order (wrong building / ownership / operational / rank / cost — no
+    active-HQ gate), consumption of the insert supply on success, and the
+    IQS re-stamp through the single writer.
+
+    Validates: Requirements 4.2, 4.3, 5.1, 5.2, 5.3, 5.4
+    """
+
+    ROLL_SPEC = {"stats": {"damage": {"min": 18, "max": 30, "weight": 3},
+                           "range": {"min": 4, "max": 7, "weight": 1}}}
+
+    def _make(self):
+        registry = _make_registry()
+        registry.items.update(INSERT_DEFS)
+        registry.items["assault_rifle"] = ItemDef(
+            key="assault_rifle", name="Assault Rifle", slot="weapon",
+            category="weapon", stat_modifiers={"damage": 25, "range": 5},
+            roll_spec=self.ROLL_SPEC, weight=8.0)
+        registry.buildings["BS"] = BuildingDef(
+            name="Blacksmith", abbreviation="BS", cost={"Iron": 50},
+            max_health=300, requires_hq=True, required_terrain=None,
+            category="equipment", produces=None,
+            capabilities=frozenset({"blacksmith"}),
+        )
+        event_bus = EventBus()
+        sink = NotificationSink()
+        event_bus.subscribe(PLAYER_NOTIFICATION, sink)
+        system = EquipmentSystem(registry, event_bus)
+        return system, registry, sink
+
+    def _player_with_weapon(self, supplies=("extended_barrel",), level=10):
+        player = FakePlayer(level=level)
+        weapon = InsertableWeapon()
+        player.equipment.equip(weapon)
+        for key in supplies:
+            player.equipment.add_supply(key, 1, max_stack=10)
+        return player, weapon
+
+    # ---------------- effect types mutate + combat reads ---------------- #
+
+    def test_damage_type_insert_converts_weapon(self):
+        from mygame.world.systems.combat_engine import CombatEngine
+        system, _r, sink = self._make()
+        player, weapon = self._player_with_weapon(supplies=("venom_coating",))
+        bs = FakeBlacksmith(owner=player)
+
+        self.assertTrue(system.apply_insert(player, "venom_coating", bs))
+        # Mutated where combat's damage-type dispatch reads it.
+        self.assertEqual(weapon.db.damage_type, "poison")
+        self.assertEqual(CombatEngine._get_damage_type(weapon), "poison")
+        self.assertEqual(sink.last()[0], "insert_applied")
+
+    def test_fire_conversion_read_by_combat(self):
+        from mygame.world.systems.combat_engine import CombatEngine
+        system, _r, _s = self._make()
+        player, weapon = self._player_with_weapon(
+            supplies=("incendiary_core",))
+        bs = FakeBlacksmith(owner=player)
+
+        self.assertTrue(system.apply_insert(player, "incendiary_core", bs))
+        self.assertEqual(CombatEngine._get_damage_type(weapon), "fire")
+
+    def test_range_insert_extends_combat_range_read(self):
+        from mygame.world.systems.combat_engine import CombatEngine
+        system, _r, _s = self._make()
+        player, weapon = self._player_with_weapon(
+            supplies=("extended_barrel",))
+        bs = FakeBlacksmith(owner=player)
+
+        self.assertTrue(system.apply_insert(player, "extended_barrel", bs))
+        # Base 5 seeded into rolled_stats, +2 — the exact read
+        # _resolve_weapon_range performs (task 3.1) via _get_stat/get_stat.
+        self.assertEqual(weapon.db.rolled_stats["range"], 7)
+        self.assertEqual(CombatEngine._get_stat(weapon, "range", 1), 7.0)
+
+    def test_stat_insert_bumps_damage_and_applies_tradeoff(self):
+        from mygame.world.systems.combat_engine import CombatEngine
+        system, _r, _s = self._make()
+        player, weapon = self._player_with_weapon(supplies=("hollowpoint",))
+        bs = FakeBlacksmith(owner=player)
+
+        self.assertTrue(system.apply_insert(player, "hollowpoint", bs))
+        self.assertEqual(weapon.db.rolled_stats["damage"], 29)  # 25 + 4
+        self.assertEqual(weapon.db.rolled_stats["range"], 4)    # 5 - 1
+        self.assertEqual(CombatEngine._get_stat(weapon, "damage", 0), 29.0)
+        self.assertEqual(CombatEngine._get_stat(weapon, "range", 1), 4.0)
+
+    def test_insert_on_rolled_weapon_adds_to_rolled_value(self):
+        """A rolled weapon's per-instance value is the base, not the def."""
+        system, _r, _s = self._make()
+        player, weapon = self._player_with_weapon(
+            supplies=("extended_barrel",))
+        weapon.db.rolled_stats = {"damage": 27, "range": 6}
+        bs = FakeBlacksmith(owner=player)
+
+        self.assertTrue(system.apply_insert(player, "extended_barrel", bs))
+        self.assertEqual(weapon.db.rolled_stats["range"], 8)   # 6 + 2
+        self.assertEqual(weapon.db.rolled_stats["damage"], 27)  # untouched
+
+    def test_insert_recorded_and_supply_consumed(self):
+        system, _r, _s = self._make()
+        player, weapon = self._player_with_weapon(
+            supplies=("extended_barrel",))
+        bs = FakeBlacksmith(owner=player)
+
+        self.assertTrue(system.apply_insert(player, "extended_barrel", bs))
+        inserts = weapon.db.inserts
+        self.assertEqual(len(inserts), 1)
+        self.assertEqual(inserts[0]["key"], "extended_barrel")
+        self.assertEqual(inserts[0]["effect"], {"type": "range", "value": 2})
+        # The consumable was the cost — gone from the Supply_Bag.
+        self.assertEqual(player.equipment.get_supply("extended_barrel"), 0)
+
+    def test_iqs_restamped_after_insert(self):
+        """recompute_iqs (the single writer) re-stamps after the mutation."""
+        system, registry, _s = self._make()
+        player, weapon = self._player_with_weapon(
+            supplies=("extended_barrel",))
+        weapon.item_def = registry.items["assault_rifle"]  # supplies roll_spec
+        weapon.db.rolled_stats = {"damage": 24, "range": 5}
+        weapon.db.iqs = 1  # stale stamp
+        bs = FakeBlacksmith(owner=player)
+
+        self.assertTrue(system.apply_insert(player, "extended_barrel", bs))
+        # range 5 → 7 (band max): u = ((24-18)/12*3 + 1.0*1) / 4 = 0.625.
+        self.assertEqual(weapon.db.iqs, 62)
+
+    # ---------------- slot limit = 1 + level // 3 ---------------- #
+
+    def test_slot_limit_level1_refuses_second_insert(self):
+        system, _r, sink = self._make()
+        player, weapon = self._player_with_weapon(
+            supplies=("extended_barrel", "venom_coating"))
+        bs = FakeBlacksmith(owner=player, level=1)  # 1 + 1//3 = 1 slot
+
+        self.assertTrue(system.apply_insert(player, "extended_barrel", bs))
+        self.assertFalse(system.apply_insert(player, "venom_coating", bs))
+        kind, data = sink.last()
+        self.assertEqual(kind, "insert_failed")
+        self.assertEqual(data.get("reason"), "no_slots")
+        self.assertEqual(data.get("slot_limit"), 1)
+        # Refused = weapon unchanged AND the insert NOT consumed (R5.3).
+        self.assertIsNone(getattr(weapon.db, "damage_type", None))
+        self.assertEqual(len(weapon.db.inserts), 1)
+        self.assertEqual(player.equipment.get_supply("venom_coating"), 1)
+
+    def test_slot_limit_level3_allows_two_then_refuses(self):
+        system, _r, sink = self._make()
+        player, _w = self._player_with_weapon(
+            supplies=("extended_barrel", "venom_coating", "hollowpoint"))
+        bs = FakeBlacksmith(owner=player, level=3)  # 1 + 3//3 = 2 slots
+
+        self.assertTrue(system.apply_insert(player, "extended_barrel", bs))
+        self.assertTrue(system.apply_insert(player, "venom_coating", bs))
+        self.assertFalse(system.apply_insert(player, "hollowpoint", bs))
+        self.assertEqual(sink.last()[1].get("reason"), "no_slots")
+
+    # ---------------- gate order mirrors craft ---------------- #
+
+    def test_unknown_item(self):
+        system, _r, sink = self._make()
+        player, _w = self._player_with_weapon()
+        bs = FakeBlacksmith(owner=player)
+        self.assertFalse(system.apply_insert(player, "nonexistent", bs))
+        self.assertEqual(sink.last()[1].get("reason"), "unknown_item")
+
+    def test_not_an_insert(self):
+        system, _r, sink = self._make()
+        player, _w = self._player_with_weapon()
+        bs = FakeBlacksmith(owner=player)
+        self.assertFalse(system.apply_insert(player, "medkit", bs))
+        self.assertEqual(sink.last()[1].get("reason"), "not_an_insert")
+
+    def test_wrong_building_none(self):
+        system, _r, sink = self._make()
+        player, _w = self._player_with_weapon()
+        self.assertFalse(system.apply_insert(player, "extended_barrel", None))
+        self.assertEqual(sink.last()[1].get("reason"), "wrong_building")
+
+    def test_wrong_building_non_blacksmith(self):
+        """An equipment building without the capability is not a bench."""
+        system, _r, sink = self._make()
+        player, _w = self._player_with_weapon()
+        ar = FakeProductionBuilding("AR", owner=player)
+        self.assertFalse(system.apply_insert(player, "extended_barrel", ar))
+        self.assertEqual(sink.last()[1].get("reason"), "wrong_building")
+
+    def test_not_owner(self):
+        system, _r, sink = self._make()
+        player, _w = self._player_with_weapon()
+        other = FakePlayer(level=10)
+        bs = FakeBlacksmith(owner=other)
+        self.assertFalse(system.apply_insert(player, "extended_barrel", bs))
+        self.assertEqual(sink.last()[1].get("reason"), "not_owner")
+
+    def test_offline_bench(self):
+        system, _r, sink = self._make()
+        player, _w = self._player_with_weapon()
+        bs = FakeBlacksmith(owner=player, offline=True)
+        self.assertFalse(system.apply_insert(player, "extended_barrel", bs))
+        self.assertEqual(sink.last()[1].get("reason"), "building_offline")
+
+    def test_mid_upgrade_bench(self):
+        system, _r, sink = self._make()
+        player, _w = self._player_with_weapon()
+        bs = FakeBlacksmith(owner=player, under_construction=True)
+        self.assertFalse(system.apply_insert(player, "extended_barrel", bs))
+        self.assertEqual(sink.last()[1].get("reason"), "building_upgrading")
+
+    def test_rank_gate(self):
+        """A rank-gated insert is refused below rank (emits equip_denied)."""
+        system, _r, sink = self._make()
+        player, _w = self._player_with_weapon(supplies=("elite_core",),
+                                              level=1)  # below Captain
+        bs = FakeBlacksmith(owner=player)
+        self.assertFalse(system.apply_insert(player, "elite_core", bs))
+        self.assertEqual(sink.last()[0], "equip_denied")
+
+    def test_no_weapon_equipped(self):
+        system, _r, sink = self._make()
+        player = FakePlayer(level=10)
+        player.equipment.add_supply("extended_barrel", 1, max_stack=10)
+        bs = FakeBlacksmith(owner=player)
+        self.assertFalse(system.apply_insert(player, "extended_barrel", bs))
+        self.assertEqual(sink.last()[1].get("reason"), "no_weapon")
+
+    def test_weapon_token_mismatch(self):
+        system, _r, sink = self._make()
+        player, _w = self._player_with_weapon()
+        bs = FakeBlacksmith(owner=player)
+        self.assertFalse(system.apply_insert(player, "extended_barrel", bs,
+                                             "plasma sword"))
+        self.assertEqual(sink.last()[1].get("reason"), "weapon_not_equipped")
+
+    def test_weapon_token_match_tolerates_case_and_underscores(self):
+        system, _r, _s = self._make()
+        player, weapon = self._player_with_weapon()
+        bs = FakeBlacksmith(owner=player)
+        self.assertTrue(system.apply_insert(player, "extended_barrel", bs,
+                                            "Assault_Rifle"))
+        self.assertEqual(weapon.db.rolled_stats["range"], 7)
+
+    def test_insufficient_supply(self):
+        """The cost gate: the insert must be carried in the Supply_Bag."""
+        system, _r, sink = self._make()
+        player, weapon = self._player_with_weapon(supplies=())
+        bs = FakeBlacksmith(owner=player)
+        self.assertFalse(system.apply_insert(player, "extended_barrel", bs))
+        self.assertEqual(sink.last()[1].get("reason"), "insufficient_supply")
+        self.assertIsNone(getattr(weapon.db, "inserts", None))  # unchanged
+
+    # ---------------- persistence on the PvP death drop (R5.4) -------- #
+
+    def test_applied_inserts_persist_on_death_drop(self):
+        """A modified weapon dropped on death carries its inserts AND their
+        effects (rolled_stats mutation + damage_type conversion)."""
+        system, _r, _s = self._make()
+        player, weapon = self._player_with_weapon(
+            supplies=("extended_barrel", "incendiary_core"))
+        bs = FakeBlacksmith(owner=player, level=3)  # 2 slots
+        self.assertTrue(system.apply_insert(player, "extended_barrel", bs))
+        self.assertTrue(system.apply_insert(player, "incendiary_core", bs))
+
+        drop = _DropStub()
+        EquipmentSystem._preserve_instance_state(weapon, drop)
+
+        self.assertEqual(drop.db.rolled_stats["range"], 7)
+        self.assertEqual(drop.db.damage_type, "fire")
+        self.assertEqual([i["key"] for i in drop.db.inserts],
+                         ["extended_barrel", "incendiary_core"])
+
+
+# ================================================================== #
+#  Item-loot-economy task 4.4 — Blacksmith reroll (reroll)
+# ================================================================== #
+
+class _FixedRNG:
+    """Scripted RNG: every ``random()`` returns the same fixed U.
+
+    With ``u=0.0`` a reroll lands on the exact floor of every band:
+    ``rolled = lo + (hi - lo) * floor**skew`` — making the level/rarity
+    floor math exactly assertable.
+    """
+
+    def __init__(self, u=0.0):
+        self._u = float(u)
+
+    def random(self):
+        return self._u
+
+
+class TestReroll(unittest.TestCase):
+    """Blacksmith reroll re-rolls BASE stats only (task 4.4, R4.4/R4.5).
+
+    Covers: fresh in-band base rolls (affixes/rarity/inserts untouched,
+    insert deltas re-applied); the level floor ``0.1 * (level - 1)`` rising
+    with Blacksmith level; the rarity floor still applying if higher; the
+    Salvage + resource charge (checked-then-deducted, refused when short);
+    the IQS re-stamp through the single writer; and the craft-mirroring
+    gate order (unknown/not-rerollable/wrong building/ownership/
+    operational — no active-HQ gate).
+
+    Validates: Requirements 4.2, 4.3, 4.4, 4.5, 2.4
+    """
+
+    ROLL_SPEC = {"stats": {"damage": {"min": 18, "max": 30, "weight": 3},
+                           "range": {"min": 4, "max": 7, "weight": 1}}}
+
+    def _make(self):
+        registry = _make_registry()
+        registry.items.update(INSERT_DEFS)
+        registry.items["assault_rifle"] = ItemDef(
+            key="assault_rifle", name="Assault Rifle", slot="weapon",
+            category="weapon", stat_modifiers={"damage": 25, "range": 5},
+            roll_spec=self.ROLL_SPEC, weight=8.0)
+        # A fixed (unrolled) gear def — never rerollable (R1.3).
+        registry.items["iron_helm"] = ItemDef(
+            key="iron_helm", name="Iron Helm", slot="head",
+            category="armor", stat_modifiers={"damage_reduction": 2},
+            weight=2.0)
+        registry.buildings["BS"] = BuildingDef(
+            name="Blacksmith", abbreviation="BS", cost={"Iron": 50},
+            max_health=300, requires_hq=True, required_terrain=None,
+            category="equipment", produces=None,
+            capabilities=frozenset({"blacksmith"}),
+        )
+        event_bus = EventBus()
+        sink = NotificationSink()
+        event_bus.subscribe(PLAYER_NOTIFICATION, sink)
+        system = EquipmentSystem(registry, event_bus)
+        return system, registry, sink
+
+    def _player_with_weapon(self, salvage=100, iron=50, level=10):
+        player = FakePlayer(level=level, resources={"Iron": iron})
+        player.add_salvage(salvage)
+        weapon = InsertableWeapon()
+        player.equipment.equip(weapon)
+        return player, weapon
+
+    # ------------------- the reroll itself ------------------- #
+
+    def test_rerolls_base_stats_within_band(self):
+        import random
+        system, _r, sink = self._make()
+        system._rng = random.Random(42)
+        player, weapon = self._player_with_weapon()
+        weapon.db.rolled_stats = {"damage": 30, "range": 7}  # god-roll
+        bs = FakeBlacksmith(owner=player)
+
+        self.assertTrue(system.reroll(player, "assault_rifle", bs))
+        rolled = weapon.db.rolled_stats
+        self.assertNotEqual(rolled, {"damage": 30, "range": 7})
+        self.assertTrue(18 <= rolled["damage"] <= 30)
+        self.assertTrue(4 <= rolled["range"] <= 7)
+        self.assertEqual(sink.last()[0], "rerolled")
+
+    def test_affixes_and_rarity_untouched(self):
+        import random
+        system, _r, _s = self._make()
+        system._rng = random.Random(7)
+        player, weapon = self._player_with_weapon()
+        affixes = [{"key": "keen", "name": "of Power", "stat": "damage_bonus",
+                    "magnitude": 4, "value": 6.0}]
+        weapon.db.rarity = "uncommon"
+        weapon.db.affixes = list(affixes)
+        bs = FakeBlacksmith(owner=player)
+
+        self.assertTrue(system.reroll(player, "assault_rifle", bs))
+        self.assertEqual(weapon.db.rarity, "uncommon")
+        self.assertEqual(weapon.db.affixes, affixes)
+
+    def test_insert_deltas_reapplied_after_reroll(self):
+        # An irreversible insert's value is never erased by a reroll: the
+        # fresh base roll gets the recorded insert deltas re-applied on top,
+        # and the inserts record itself is unchanged.
+        system, _r, _s = self._make()
+        player, weapon = self._player_with_weapon()
+        player.equipment.add_supply("extended_barrel", 1, max_stack=10)
+        bs = FakeBlacksmith(owner=player)
+        self.assertTrue(system.apply_insert(player, "extended_barrel", bs))
+
+        system._rng = _FixedRNG(0.0)  # floor rolls: damage 18, range 4
+        self.assertTrue(system.reroll(player, "assault_rifle", bs))
+        self.assertEqual(weapon.db.rolled_stats["range"], 6)   # 4 + 2 insert
+        self.assertAlmostEqual(weapon.db.rolled_stats["damage"], 18.0)
+        self.assertEqual([i["key"] for i in weapon.db.inserts],
+                         ["extended_barrel"])
+
+    # ------------------- floors ------------------- #
+
+    def test_floor_rises_with_blacksmith_level(self):
+        # Worst-case roll (U = 0) at L1 vs L5: level floor 0.1*(level-1)
+        # → L1 lands on the band min, L5 lands 0.4**2 = 16% up the band.
+        system, _r, _s = self._make()
+        system._rng = _FixedRNG(0.0)
+        player, weapon = self._player_with_weapon()
+        self.assertTrue(system.reroll(player, "assault_rifle",
+                                      FakeBlacksmith(owner=player, level=1)))
+        l1_damage = weapon.db.rolled_stats["damage"]
+
+        player2, weapon2 = self._player_with_weapon()
+        self.assertTrue(system.reroll(player2, "assault_rifle",
+                                      FakeBlacksmith(owner=player2, level=5)))
+        l5_damage = weapon2.db.rolled_stats["damage"]
+
+        self.assertAlmostEqual(l1_damage, 18.0)                # band min
+        self.assertAlmostEqual(l5_damage, 18 + 12 * 0.4 ** 2)  # 19.92
+        self.assertGreater(l5_damage, l1_damage)
+
+    def test_rarity_floor_still_applies_when_higher(self):
+        # An Epic item (rarity floor 0.50) at a L1 bench (level floor 0.0)
+        # keeps its rarity guarantee: min roll = lo + (hi-lo) * 0.5**2.
+        system, _r, _s = self._make()
+        system._rng = _FixedRNG(0.0)
+        player, weapon = self._player_with_weapon()
+        weapon.db.rarity = "epic"
+        bs = FakeBlacksmith(owner=player, level=1)
+
+        self.assertTrue(system.reroll(player, "assault_rifle", bs))
+        self.assertAlmostEqual(weapon.db.rolled_stats["damage"],
+                               18 + 12 * 0.5 ** 2)  # 21.0
+
+    # ------------------- cost ------------------- #
+
+    def test_charges_salvage_and_resources(self):
+        system, _r, _s = self._make()
+        player, _w = self._player_with_weapon(salvage=100, iron=50)
+        bs = FakeBlacksmith(owner=player)
+
+        self.assertTrue(system.reroll(player, "assault_rifle", bs))
+        self.assertEqual(player.get_salvage(), 60)        # -40 (balance)
+        self.assertEqual(player.get_resource("Iron"), 40)  # -10 (balance)
+
+    def test_insufficient_salvage_refused(self):
+        system, _r, sink = self._make()
+        player, weapon = self._player_with_weapon(salvage=39, iron=50)
+        weapon.db.rolled_stats = {"damage": 30, "range": 7}
+        bs = FakeBlacksmith(owner=player)
+
+        self.assertFalse(system.reroll(player, "assault_rifle", bs))
+        self.assertEqual(sink.last()[1].get("reason"), "insufficient_salvage")
+        self.assertEqual(player.get_salvage(), 39)          # unchanged
+        self.assertEqual(player.get_resource("Iron"), 50)   # unchanged
+        self.assertEqual(weapon.db.rolled_stats,
+                         {"damage": 30, "range": 7})        # unchanged
+
+    def test_insufficient_resources_refused(self):
+        system, _r, sink = self._make()
+        player, weapon = self._player_with_weapon(salvage=100, iron=0)
+        bs = FakeBlacksmith(owner=player)
+
+        self.assertFalse(system.reroll(player, "assault_rifle", bs))
+        self.assertEqual(sink.last()[1].get("reason"),
+                         "insufficient_resources")
+        self.assertEqual(player.get_salvage(), 100)  # checked before deduct
+        self.assertIsNone(getattr(weapon.db, "rolled_stats", None))
+
+    # ------------------- IQS re-stamp ------------------- #
+
+    def test_iqs_restamped_through_single_writer(self):
+        # A floor roll at L1 lands every stat on its band min → base IQS 0;
+        # the stale god-roll stamp must be overwritten (R2.4).
+        system, _r, _s = self._make()
+        system._rng = _FixedRNG(0.0)
+        player, weapon = self._player_with_weapon()
+        weapon.db.rolled_stats = {"damage": 30, "range": 7}
+        weapon.db.iqs = 100
+        bs = FakeBlacksmith(owner=player)
+
+        self.assertTrue(system.reroll(player, "assault_rifle", bs))
+        self.assertEqual(weapon.db.iqs, 0)
+
+    # ------------------- targeting ------------------- #
+
+    def test_carried_item_rerollable(self):
+        # R4.2: "a held/equipped rolled item" — a loose carried GameItem
+        # (player.contents) is a valid target too.
+        import random
+        system, _r, _s = self._make()
+        system._rng = random.Random(11)
+        player = FakePlayer(level=10, resources={"Iron": 50})
+        player.add_salvage(100)
+        carried = InsertableWeapon()
+        player.contents = [carried]
+        bs = FakeBlacksmith(owner=player)
+
+        self.assertTrue(system.reroll(player, "assault_rifle", bs))
+        rolled = carried.db.rolled_stats
+        self.assertTrue(18 <= rolled["damage"] <= 30)
+
+    # ------------------- gates ------------------- #
+
+    def test_unknown_item_refused(self):
+        system, _r, sink = self._make()
+        player, _w = self._player_with_weapon()
+        bs = FakeBlacksmith(owner=player)
+        self.assertFalse(system.reroll(player, "plasma_sword", bs))
+        self.assertEqual(sink.last()[1].get("reason"), "unknown_item")
+
+    def test_unrolled_item_not_rerollable(self):
+        system, _r, sink = self._make()
+        player, _w = self._player_with_weapon()
+        player.equipment.equip(
+            FakeItem("iron_helm", "head", {"damage_reduction": 2}))
+        bs = FakeBlacksmith(owner=player)
+        self.assertFalse(system.reroll(player, "iron_helm", bs))
+        self.assertEqual(sink.last()[1].get("reason"), "not_rerollable")
+
+    def test_requires_blacksmith(self):
+        system, _r, sink = self._make()
+        player, _w = self._player_with_weapon()
+        self.assertFalse(system.reroll(player, "assault_rifle", None))
+        self.assertEqual(sink.last()[1].get("reason"), "wrong_building")
+        ar = FakeProductionBuilding("AR", owner=player)
+        self.assertFalse(system.reroll(player, "assault_rifle", ar))
+        self.assertEqual(sink.last()[1].get("reason"), "wrong_building")
+
+    def test_not_owner_refused(self):
+        system, _r, sink = self._make()
+        player, _w = self._player_with_weapon()
+        bs = FakeBlacksmith(owner=FakePlayer(level=10))
+        self.assertFalse(system.reroll(player, "assault_rifle", bs))
+        self.assertEqual(sink.last()[1].get("reason"), "not_owner")
+
+    def test_operational_gates(self):
+        system, _r, sink = self._make()
+        player, _w = self._player_with_weapon()
+        offline = FakeBlacksmith(owner=player, offline=True)
+        self.assertFalse(system.reroll(player, "assault_rifle", offline))
+        self.assertEqual(sink.last()[1].get("reason"), "building_offline")
+        upgrading = FakeBlacksmith(owner=player, under_construction=True)
+        self.assertFalse(system.reroll(player, "assault_rifle", upgrading))
+        self.assertEqual(sink.last()[1].get("reason"), "building_upgrading")
+
+
+# ================================================================== #
+#  Item-loot-economy task 5.4 — Salvage Protocols cost consumer
+# ================================================================== #
+
+class TestSalvageProtocolsCostConsumer(unittest.TestCase):
+    """The reroll charge × the clamped ``salvage_cost_mult`` tech (task 5.4).
+
+    The consumer reads ``get_tech_bonus(player, "salvage_cost_mult", 1.0)``
+    and clamps it to ``[SALVAGE_COST_MULT_FLOOR, 1.0]`` before applying it
+    to BOTH reroll cost components (``reroll_salvage_cost`` 40 +
+    ``reroll_resource_cost`` {Iron: 10} at the balance defaults). No
+    research → exactly the balance numbers; research can never raise the
+    charge (upper clamp) nor trivialize the Salvage sink (floor). R11.7:
+    the ``salvage_cost_mult`` key shipped by Salvage Protocols has a live
+    consumer.
+
+    Validates: Requirements 11.2, 11.7
+    """
+
+    ROLL_SPEC = TestReroll.ROLL_SPEC
+
+    def _make(self):
+        registry = _make_registry()
+        registry.items["assault_rifle"] = ItemDef(
+            key="assault_rifle", name="Assault Rifle", slot="weapon",
+            category="weapon", stat_modifiers={"damage": 25, "range": 5},
+            roll_spec=self.ROLL_SPEC, weight=8.0)
+        registry.buildings["BS"] = BuildingDef(
+            name="Blacksmith", abbreviation="BS", cost={"Iron": 50},
+            max_health=300, requires_hq=True, required_terrain=None,
+            category="equipment", produces=None,
+            capabilities=frozenset({"blacksmith"}),
+        )
+        event_bus = EventBus()
+        sink = NotificationSink()
+        event_bus.subscribe(PLAYER_NOTIFICATION, sink)
+        return EquipmentSystem(registry, event_bus), sink
+
+    def _player_with_weapon(self, salvage=100, iron=50, mult=None):
+        player = FakePlayer(level=10, resources={"Iron": iron})
+        player.add_salvage(salvage)
+        if mult is not None:
+            player.db.tech_bonuses = {"salvage_cost_mult": mult}
+        weapon = InsertableWeapon()
+        player.equipment.equip(weapon)
+        return player
+
+    def test_no_research_costs_unchanged(self):
+        # default=1.0 (NOT 0.0 — the "free gear" landmine): an unresearched
+        # player pays exactly the balance numbers (40 Salvage + 10 Iron).
+        system, _s = self._make()
+        player = self._player_with_weapon()
+        self.assertTrue(system.reroll(player, "assault_rifle",
+                                      FakeBlacksmith(owner=player)))
+        self.assertEqual(player.get_salvage(), 60)         # -40
+        self.assertEqual(player.get_resource("Iron"), 40)  # -10
+
+    def test_research_reduces_reroll_cost(self):
+        # Salvage Protocols (0.75) discounts BOTH components:
+        # Salvage 40 → 30, Iron round(10 × 0.75) = 8.
+        system, _s = self._make()
+        player = self._player_with_weapon(mult=0.75)
+        self.assertTrue(system.reroll(player, "assault_rifle",
+                                      FakeBlacksmith(owner=player)))
+        self.assertEqual(player.get_salvage(), 70)         # -30
+        self.assertEqual(player.get_resource("Iron"), 42)  # -8
+
+    def test_floor_clamps_stacked_reduction(self):
+        # A hypothetical 0.1 accumulation clamps at the 0.5 floor — the
+        # Salvage sink can't be trivialized: 40 → 20, 10 → 5.
+        system, _s = self._make()
+        player = self._player_with_weapon(mult=0.1)
+        self.assertTrue(system.reroll(player, "assault_rifle",
+                                      FakeBlacksmith(owner=player)))
+        self.assertEqual(player.get_salvage(), 80)         # -20
+        self.assertEqual(player.get_resource("Iron"), 45)  # -5
+
+    def test_upper_clamp_never_raises_cost(self):
+        # Two stacked 0.85-style techs would SUM to 1.7 (the additive
+        # accumulator) — the upper clamp holds the charge at ×1.0.
+        system, _s = self._make()
+        player = self._player_with_weapon(mult=1.7)
+        self.assertTrue(system.reroll(player, "assault_rifle",
+                                      FakeBlacksmith(owner=player)))
+        self.assertEqual(player.get_salvage(), 60)         # -40, not -68
+        self.assertEqual(player.get_resource("Iron"), 40)  # -10
+
+    def test_insufficiency_gate_uses_discounted_cost(self):
+        # 30 Salvage is short of the base 40 but covers the researched 30 —
+        # the gate checks the DISCOUNTED charge (the consumer is live, not
+        # display-only).
+        system, sink = self._make()
+        player = self._player_with_weapon(salvage=30, mult=0.75)
+        self.assertTrue(system.reroll(player, "assault_rifle",
+                                      FakeBlacksmith(owner=player)))
+        self.assertEqual(player.get_salvage(), 0)
+
+        # …and an unresearched twin at 30 Salvage is refused.
+        player2 = self._player_with_weapon(salvage=30)
+        self.assertFalse(system.reroll(player2, "assault_rifle",
+                                       FakeBlacksmith(owner=player2)))
+        self.assertEqual(sink.last()[1].get("reason"), "insufficient_salvage")
+
+
+# ================================================================== #
+#  Item-loot-economy task 5.2 — Blacksmith salvage (salvage)
+# ================================================================== #
+
+class _SalvageItem:
+    """A loose carried GameItem stand-in with per-instance iqs + delete."""
+
+    def __init__(self, key="assault_rifle", name="Assault Rifle", iqs=None):
+        self.key = key
+        self.name = name
+        self.db = DB()
+        if iqs is not None:
+            self.db.iqs = iqs
+        self.deleted = False
+
+    def delete(self):
+        self.deleted = True
+
+
+class TestSalvage(unittest.TestCase):
+    """Blacksmith salvage destroys a carried item for Salvage (task 5.2, R7).
+
+    Covers: the design §5 yield formula
+    ``round((base_salvage + iqs*salvage_per_iqs)
+    * (1 + salvage_level_bonus*(level-1)))`` scaling with IQS (R7.1) and
+    monotonic non-decreasing in Blacksmith level (R7.2, L1 1.0× → L5 1.5×);
+    the credit landing on ``db.salvage`` (R7.3); item destruction +
+    possession/ownership (R7.4, equipped gear refused — unequip first);
+    the unrolled-item floor (iqs 0 → base_salvage); and the reroll-mirroring
+    gate order (unknown/wrong building/ownership/operational).
+
+    Validates: Requirements 7.1, 7.2, 7.3, 7.4
+    """
+
+    def _make(self):
+        registry = _make_registry()
+        registry.items["assault_rifle"] = ItemDef(
+            key="assault_rifle", name="Assault Rifle", slot="weapon",
+            category="weapon", stat_modifiers={"damage": 25, "range": 5},
+            weight=8.0)
+        # A fixed (unrolled) gear def — still salvageable at the floor.
+        registry.items["iron_helm"] = ItemDef(
+            key="iron_helm", name="Iron Helm", slot="head",
+            category="armor", stat_modifiers={"damage_reduction": 2},
+            weight=2.0)
+        registry.buildings["BS"] = BuildingDef(
+            name="Blacksmith", abbreviation="BS", cost={"Iron": 50},
+            max_health=300, requires_hq=True, required_terrain=None,
+            category="equipment", produces=None,
+            capabilities=frozenset({"blacksmith"}),
+        )
+        event_bus = EventBus()
+        sink = NotificationSink()
+        event_bus.subscribe(PLAYER_NOTIFICATION, sink)
+        system = EquipmentSystem(registry, event_bus)
+        return system, registry, sink
+
+    def _player_with_carried(self, iqs=70):
+        player = FakePlayer(level=10)
+        item = _SalvageItem(iqs=iqs)
+        player.contents = [item]
+        return player, item
+
+    # ------------------- the yield formula ------------------- #
+
+    def test_yield_credits_db_salvage(self):
+        # iqs 70 at L1 (design §9 anchor): round((5 + 70*0.5) * 1.0) = 40.
+        system, _r, sink = self._make()
+        player, item = self._player_with_carried(iqs=70)
+        bs = FakeBlacksmith(owner=player, level=1)
+
+        self.assertTrue(system.salvage(player, "assault_rifle", bs))
+        self.assertEqual(player.db.salvage, 40)
+        kind, data = sink.last()
+        self.assertEqual(kind, "salvaged")
+        self.assertEqual(data.get("salvage"), 40)
+
+    def test_yield_scales_with_iqs(self):
+        # R7.1: a higher-IQS item salvages for more at the same bench.
+        system, _r, _s = self._make()
+        yields = []
+        for iqs in (0, 20, 70, 100):
+            player, _item = self._player_with_carried(iqs=iqs)
+            bs = FakeBlacksmith(owner=player, level=1)
+            self.assertTrue(system.salvage(player, "assault_rifle", bs))
+            yields.append(player.get_salvage())
+        # round((5 + iqs*0.5) * 1.0) at iqs 0/20/70/100.
+        self.assertEqual(yields, [5, 15, 40, 55])
+
+    def test_yield_monotonic_non_decreasing_in_level(self):
+        # R7.2: L1 ≤ L2 ≤ ... ≤ L5 for the same item, exact formula check:
+        # round(40 * (1 + 0.125*(level-1))) → 40, 45, 50, 55, 60.
+        system, _r, _s = self._make()
+        yields = []
+        for level in (1, 2, 3, 4, 5):
+            player, _item = self._player_with_carried(iqs=70)
+            bs = FakeBlacksmith(owner=player, level=level)
+            self.assertTrue(system.salvage(player, "assault_rifle", bs))
+            yields.append(player.get_salvage())
+        self.assertEqual(yields, [40, 45, 50, 55, 60])
+        self.assertEqual(yields, sorted(yields))
+
+    def test_unrolled_item_salvages_at_floor(self):
+        # Decided (task 5.2): no iqs reads as 0 — the base_salvage floor
+        # keeps junk/legacy gear salvageable (R7 "a use for the loot I
+        # don't want").
+        system, _r, _s = self._make()
+        player = FakePlayer(level=10)
+        item = _SalvageItem(key="iron_helm", name="Iron Helm", iqs=None)
+        player.contents = [item]
+        bs = FakeBlacksmith(owner=player, level=1)
+
+        self.assertTrue(system.salvage(player, "iron_helm", bs))
+        self.assertEqual(player.get_salvage(), 5)
+        self.assertTrue(item.deleted)
+
+    # ------------------- destruction + possession ------------------- #
+
+    def test_destroys_the_item(self):
+        system, _r, _s = self._make()
+        player, item = self._player_with_carried(iqs=70)
+        bs = FakeBlacksmith(owner=player)
+
+        self.assertTrue(system.salvage(player, "assault_rifle", bs))
+        self.assertTrue(item.deleted)
+
+    def test_equipped_item_refused(self):
+        # R7.4 possession discipline: salvage never silently strips gear —
+        # an equipped match is refused with its own reason (mirrors sell).
+        system, _r, sink = self._make()
+        player = FakePlayer(level=10)
+        player.equipment.equip(InsertableWeapon())
+        bs = FakeBlacksmith(owner=player)
+
+        self.assertFalse(system.salvage(player, "assault_rifle", bs))
+        self.assertEqual(sink.last()[1].get("reason"), "equipped")
+
+    def test_carried_copy_salvageable_while_another_is_equipped(self):
+        # Carried objects are searched FIRST: a spare copy of an equipped
+        # item salvages the spare, not the loadout.
+        system, _r, _s = self._make()
+        player = FakePlayer(level=10)
+        equipped = InsertableWeapon()
+        player.equipment.equip(equipped)
+        spare = _SalvageItem(iqs=10)
+        player.contents = [spare]
+        bs = FakeBlacksmith(owner=player)
+
+        self.assertTrue(system.salvage(player, "assault_rifle", bs))
+        self.assertTrue(spare.deleted)
+        self.assertIn(equipped,
+                      player.equipment.get_all_equipped().values())
+
+    def test_counted_stack_not_gear(self):
+        system, _r, sink = self._make()
+        player = FakePlayer(level=10)
+        stack = _SalvageItem(key="medkit", name="Medkit")
+        stack.db.count = 5  # a counted supply drop, not loose gear
+        player.contents = [stack]
+        bs = FakeBlacksmith(owner=player)
+
+        self.assertFalse(system.salvage(player, "medkit", bs))
+        self.assertEqual(sink.last()[1].get("reason"), "not_gear")
+        self.assertFalse(stack.deleted)
+
+    # ------------------- gates ------------------- #
+
+    def test_unknown_item_refused(self):
+        system, _r, sink = self._make()
+        player, _item = self._player_with_carried()
+        bs = FakeBlacksmith(owner=player)
+        self.assertFalse(system.salvage(player, "plasma_sword", bs))
+        self.assertEqual(sink.last()[1].get("reason"), "unknown_item")
+
+    def test_requires_blacksmith(self):
+        system, _r, sink = self._make()
+        player, item = self._player_with_carried()
+        self.assertFalse(system.salvage(player, "assault_rifle", None))
+        self.assertEqual(sink.last()[1].get("reason"), "wrong_building")
+        ar = FakeProductionBuilding("AR", owner=player)
+        self.assertFalse(system.salvage(player, "assault_rifle", ar))
+        self.assertEqual(sink.last()[1].get("reason"), "wrong_building")
+        self.assertFalse(item.deleted)
+
+    def test_not_owner_refused(self):
+        system, _r, sink = self._make()
+        player, item = self._player_with_carried()
+        bs = FakeBlacksmith(owner=FakePlayer(level=10))
+        self.assertFalse(system.salvage(player, "assault_rifle", bs))
+        self.assertEqual(sink.last()[1].get("reason"), "not_owner")
+        self.assertFalse(item.deleted)
+
+    def test_operational_gates(self):
+        system, _r, sink = self._make()
+        player, item = self._player_with_carried()
+        offline = FakeBlacksmith(owner=player, offline=True)
+        self.assertFalse(system.salvage(player, "assault_rifle", offline))
+        self.assertEqual(sink.last()[1].get("reason"), "building_offline")
+        upgrading = FakeBlacksmith(owner=player, under_construction=True)
+        self.assertFalse(system.salvage(player, "assault_rifle", upgrading))
+        self.assertEqual(sink.last()[1].get("reason"), "building_upgrading")
+        self.assertFalse(item.deleted)
+        self.assertEqual(player.get_salvage(), 0)
+
+
+class FakeRefinery:
+    """Stand-in for a built Refinery (RF building instance)."""
+
+    def __init__(self, owner=None, level=1, offline=False,
+                 under_construction=False, building_type="RF"):
+        self.key = "Refinery"
+        self.db = DB(building_type=building_type, offline=offline,
+                     under_construction=under_construction,
+                     building_level=level)
+        self._owner = owner
+
+    @property
+    def owner(self):
+        return self._owner
+
+    @property
+    def is_offline(self):
+        return bool(getattr(self.db, "offline", False))
+
+
+class TestRefine(unittest.TestCase):
+    """Refinery converts resources into Salvage — the Nexium sink (task 5.3).
+
+    Covers: the conversion formula ``round(amount * refine_salvage_per_unit
+    * (1 + refine_level_bonus*(level-1)))`` scaling with building level
+    (R10.5, monotonic L1 1.0× → L5 1.5×); Nexium accepted as INPUT and the
+    anti-loop invariant that the conversion outputs Salvage ONLY — never
+    Nexium or any other resource (R10.4); the input deduction + Salvage
+    credit; the `all` batch; the zero-yield refusal (nothing deducted); and
+    the salvage-mirroring gate order (unknown resource / wrong building /
+    ownership / operational / stock).
+
+    Validates: Requirements 10.4, 10.5
+    """
+
+    def _make(self):
+        registry = _make_registry()
+        registry.buildings["RF"] = BuildingDef(
+            name="Refinery", abbreviation="RF", cost={"Iron": 30},
+            max_health=300, requires_hq=True, required_terrain=None,
+            category="economy", produces=None,
+            capabilities=frozenset({"resource_converter"}),
+        )
+        registry.buildings["BS"] = BuildingDef(
+            name="Blacksmith", abbreviation="BS", cost={"Iron": 50},
+            max_health=300, requires_hq=True, required_terrain=None,
+            category="equipment", produces=None,
+            capabilities=frozenset({"blacksmith"}),
+        )
+        event_bus = EventBus()
+        sink = NotificationSink()
+        event_bus.subscribe(PLAYER_NOTIFICATION, sink)
+        system = EquipmentSystem(registry, event_bus)
+        return system, registry, sink
+
+    # ------------------- the conversion formula ------------------- #
+
+    def test_nexium_input_credits_salvage(self):
+        # The sink accepts Nexium (R10.4): 80 Nexium at L1 →
+        # round(80 * 0.5 * 1.0) = 40 Salvage.
+        system, _r, sink = self._make()
+        player = FakePlayer(resources={"Nexium": 100})
+        rf = FakeRefinery(owner=player, level=1)
+
+        self.assertTrue(system.refine(player, "nexium", 80, rf))
+        self.assertEqual(player.get_salvage(), 40)
+        self.assertEqual(player.get_resource("Nexium"), 20)
+        kind, data = sink.last()
+        self.assertEqual(kind, "refined")
+        self.assertEqual(data.get("salvage"), 40)
+        self.assertEqual(data.get("resource"), "Nexium")
+
+    def test_rate_monotonic_non_decreasing_in_level(self):
+        # R10.5 level scaling: round(40 * (1 + 0.125*(level-1))) for 80
+        # units → 40, 45, 50, 55, 60 across L1..L5.
+        system, _r, _s = self._make()
+        yields = []
+        for level in (1, 2, 3, 4, 5):
+            player = FakePlayer(resources={"Nexium": 80})
+            rf = FakeRefinery(owner=player, level=level)
+            self.assertTrue(system.refine(player, "nexium", 80, rf))
+            yields.append(player.get_salvage())
+        self.assertEqual(yields, [40, 45, 50, 55, 60])
+        self.assertEqual(yields, sorted(yields))
+
+    def test_never_outputs_nexium_or_any_resource(self):
+        # The anti-loop invariant (R10.4): after any conversion, NO
+        # resource has increased — the input decreased by exactly the
+        # batch and the only credit is Salvage.
+        system, _r, _s = self._make()
+        for resource in ("Nexium", "Iron", "Wood"):
+            player = FakePlayer(resources={
+                "Nexium": 50, "Iron": 50, "Wood": 50})
+            before = dict(player.db.resources)
+            rf = FakeRefinery(owner=player, level=3)
+            self.assertTrue(system.refine(player, resource, 30, rf))
+            after = player.db.resources
+            for res in before:
+                if res == resource:
+                    self.assertEqual(after[res], before[res] - 30)
+                else:
+                    self.assertEqual(after[res], before[res])
+            self.assertGreater(player.get_salvage(), 0)
+
+    def test_all_converts_full_stock(self):
+        # amount None (`refine nexium` / `refine nexium all`) burns the
+        # whole stock.
+        system, _r, _s = self._make()
+        player = FakePlayer(resources={"Nexium": 60})
+        rf = FakeRefinery(owner=player, level=1)
+
+        self.assertTrue(system.refine(player, "nexium", None, rf))
+        self.assertEqual(player.get_resource("Nexium"), 0)
+        self.assertEqual(player.get_salvage(), 30)
+
+    def test_zero_yield_batch_refused_nothing_deducted(self):
+        # 1 unit at 0.5/unit rounds to 0 Salvage → refused BEFORE any
+        # deduction (never burn resources for nothing).
+        system, _r, sink = self._make()
+        player = FakePlayer(resources={"Nexium": 10})
+        rf = FakeRefinery(owner=player, level=1)
+
+        self.assertFalse(system.refine(player, "nexium", 1, rf))
+        self.assertEqual(sink.last()[1].get("reason"), "too_little")
+        self.assertEqual(player.get_resource("Nexium"), 10)
+        self.assertEqual(player.get_salvage(), 0)
+
+    # ------------------- gates ------------------- #
+
+    def test_unknown_resource_refused(self):
+        system, _r, sink = self._make()
+        player = FakePlayer(resources={"Nexium": 50})
+        rf = FakeRefinery(owner=player)
+        self.assertFalse(system.refine(player, "plasma", 10, rf))
+        self.assertEqual(sink.last()[1].get("reason"), "unknown_resource")
+
+    def test_requires_resource_converter_building(self):
+        # No building, and a NON-converter building (the Blacksmith bench),
+        # both refuse with wrong_building — the capability is the gate.
+        system, _r, sink = self._make()
+        player = FakePlayer(resources={"Nexium": 50})
+        self.assertFalse(system.refine(player, "nexium", 10, None))
+        self.assertEqual(sink.last()[1].get("reason"), "wrong_building")
+        bs = FakeBlacksmith(owner=player)
+        self.assertFalse(system.refine(player, "nexium", 10, bs))
+        self.assertEqual(sink.last()[1].get("reason"), "wrong_building")
+        self.assertEqual(player.get_resource("Nexium"), 50)
+
+    def test_not_owner_refused(self):
+        system, _r, sink = self._make()
+        player = FakePlayer(resources={"Nexium": 50})
+        rf = FakeRefinery(owner=FakePlayer())
+        self.assertFalse(system.refine(player, "nexium", 10, rf))
+        self.assertEqual(sink.last()[1].get("reason"), "not_owner")
+        self.assertEqual(player.get_resource("Nexium"), 50)
+
+    def test_operational_gates(self):
+        system, _r, sink = self._make()
+        player = FakePlayer(resources={"Nexium": 50})
+        offline = FakeRefinery(owner=player, offline=True)
+        self.assertFalse(system.refine(player, "nexium", 10, offline))
+        self.assertEqual(sink.last()[1].get("reason"), "building_offline")
+        upgrading = FakeRefinery(owner=player, under_construction=True)
+        self.assertFalse(system.refine(player, "nexium", 10, upgrading))
+        self.assertEqual(sink.last()[1].get("reason"), "building_upgrading")
+        self.assertEqual(player.get_resource("Nexium"), 50)
+        self.assertEqual(player.get_salvage(), 0)
+
+    def test_insufficient_stock_refused(self):
+        system, _r, sink = self._make()
+        player = FakePlayer(resources={"Nexium": 5})
+        rf = FakeRefinery(owner=player)
+        self.assertFalse(system.refine(player, "nexium", 10, rf))
+        self.assertEqual(sink.last()[1].get("reason"),
+                         "insufficient_resources")
+        self.assertEqual(player.get_resource("Nexium"), 5)
+        # An empty stock refuses `all` too (amount None resolves to 0).
+        broke = FakePlayer()
+        rf2 = FakeRefinery(owner=broke)
+        self.assertFalse(system.refine(broke, "nexium", None, rf2))
+        self.assertEqual(sink.last()[1].get("reason"),
+                         "insufficient_resources")
 
 
 if __name__ == "__main__":

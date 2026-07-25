@@ -1247,6 +1247,72 @@ class TestBuildingInvestment(unittest.TestCase):
         self.assertEqual(inv["Wood"], 50 * 7)
         self.assertEqual(inv["Stone"], 30 * 7)
 
+    @staticmethod
+    def _discount_player(mult=0.8):
+        player = FakePlayer()
+        player.db.tech_bonuses = {"build_cost_mult": mult}
+        return player
+
+    def test_owner_discount_prices_the_investment(self):
+        """F5 review fix: with an owner carrying build_cost_mult tech, the
+        investment is the DISCOUNTED basis (what the owner actually paid) —
+        strictly less than the undiscounted list price."""
+        system, _, _ = _make_building_system()
+        bdef = system.registry.get_building("HQ")
+        owner = self._discount_player(0.8)
+        discounted = system.get_building_investment(bdef, 3, owner=owner)
+        list_price = system.get_building_investment(bdef, 3)
+        for res in list_price:
+            self.assertLess(discounted[res], list_price[res],
+                            f"{res} must be discounted for the tech owner")
+        # Exact: each term rounds separately (base 40/40/24 + L2 ×2 + L3 ×4).
+        self.assertEqual(discounted["Straw"], 40 * 7)
+        self.assertEqual(discounted["Stone"], 24 * 7)
+
+    def test_no_owner_investment_unchanged(self):
+        """Back-compat: no owner (or an owner without the tech) → list price."""
+        system, _, _ = _make_building_system()
+        bdef = system.registry.get_building("HQ")
+        plain = FakePlayer()
+        self.assertEqual(
+            system.get_building_investment(bdef, 2, owner=plain),
+            system.get_building_investment(bdef, 2),
+        )
+
+    def test_repair_cost_per_tick_uses_owner_discount(self):
+        """The repair charge bills against the owner-discounted investment —
+        an Efficient Construction player is no longer overcharged (F5)."""
+        system, _, _ = _make_building_system()
+        owner = self._discount_player(0.8)
+        cheap = FakeBuilding(building_type="HQ", owner=owner,
+                             hp=0, hp_max=500, level=3)
+        full_price = FakeBuilding(building_type="HQ", owner=FakePlayer(),
+                                  hp=0, hp_max=500, level=3)
+        discounted_cost = system.get_repair_cost_per_tick(cheap)
+        list_cost = system.get_repair_cost_per_tick(full_price)
+        for res in list_cost:
+            self.assertLessEqual(discounted_cost[res], list_cost[res])
+        # 5% of discounted 280/280/168 = ceil 14/14/9 (vs 18/18/11 list).
+        self.assertEqual(discounted_cost, {"Straw": 14, "Wood": 14, "Stone": 9})
+
+    def test_refund_on_discounted_basis_never_exceeds_spend(self):
+        """No refund>cost arbitrage: at every level, refund_rate × the
+        discounted investment stays below the discounted spend (rates < 1)."""
+        system, _, _ = _make_building_system()
+        bdef = system.registry.get_building("HQ")
+        owner = self._discount_player(0.8)
+        rates = system.registry.balance.demolish_refund_rates
+        default_rate = system.registry.balance.demolish_refund_default
+        for level in range(1, 6):
+            spend = system.get_building_investment(bdef, level, owner=owner)
+            rate = rates.get(level, default_rate)
+            for res, paid in spend.items():
+                refund = int(paid * rate)
+                self.assertLessEqual(
+                    refund, paid,
+                    f"L{level} {res}: refund {refund} exceeds spend {paid}",
+                )
+
 
 class TestRepairCostPerTick(unittest.TestCase):
     """Per-tick cost = repair_hp_percent_per_tick% of cumulative investment."""
@@ -1828,6 +1894,165 @@ class TestPlacementTerrainDefenseFeedback(unittest.TestCase):
             ok, msg = system.construct(player, self._tile(), "HQ")
         self.assertTrue(ok, msg)
         self.assertIn("[terrain defense +1]", msg)
+
+
+# -------------------------------------------------------------- #
+#  Build-cost tech consumer (item-loot-economy task 3.3, R11.1)
+# -------------------------------------------------------------- #
+
+class TestBuildCostTechConsumer(unittest.TestCase):
+    """get_build_cost / get_upgrade_cost × the clamped build_cost_mult tech.
+
+    The consumer reads ``get_tech_bonus(owner, "build_cost_mult", 1.0)`` and
+    clamps it to ``[balance.build_cost_mult_floor, 1.0]``. It MUST NOT read
+    ``production_multiplier`` (R11.1). HQ base cost in the fake registry:
+    Straw 50, Wood 50, Stone 30. MM: Straw 20, Wood 10.
+    """
+
+    def _player_with_mult(self, mult=None, resources=None, **extra_bonuses):
+        player = FakePlayer(resources=resources or {
+            "Straw": 1000, "Wood": 1000, "Stone": 1000,
+        })
+        bonuses = dict(extra_bonuses)
+        if mult is not None:
+            bonuses["build_cost_mult"] = mult
+        player.db.tech_bonuses = bonuses
+        return player
+
+    def test_no_tech_build_cost_unchanged(self):
+        # No db.tech_bonuses at all → default multiplier 1.0.
+        player = FakePlayer()
+        system, _, _ = _make_building_system()
+        hq = system.registry.get_building("HQ")
+        self.assertEqual(system.get_build_cost(hq, player), dict(hq.cost))
+        # No owner at all behaves the same (back-compat callers).
+        self.assertEqual(system.get_build_cost(hq), dict(hq.cost))
+
+    def test_tech_reduces_build_cost(self):
+        player = self._player_with_mult(0.8)
+        system, _, _ = _make_building_system()
+        hq = system.registry.get_building("HQ")
+        self.assertEqual(
+            system.get_build_cost(hq, player),
+            {"Straw": 40, "Wood": 40, "Stone": 24},
+        )
+
+    def test_construct_deducts_reduced_cost(self):
+        player = self._player_with_mult(
+            0.8, resources={"Straw": 100, "Wood": 100, "Stone": 100},
+        )
+        system, _, _ = _make_building_system()
+        ok, msg = system.construct(player, FakeTile(), "HQ")
+        self.assertTrue(ok, msg)
+        self.assertEqual(player.get_resource("Straw"), 60)
+        self.assertEqual(player.get_resource("Wood"), 60)
+        self.assertEqual(player.get_resource("Stone"), 76)
+
+    def test_validation_accepts_exactly_discounted_resources(self):
+        # A player who can afford only the DISCOUNTED cost may build: the
+        # validation chain checks get_build_cost, not the raw definition cost.
+        player = self._player_with_mult(
+            0.8, resources={"Straw": 40, "Wood": 40, "Stone": 24},
+        )
+        system, _, _ = _make_building_system()
+        ok, msg = system.construct(player, FakeTile(), "HQ")
+        self.assertTrue(ok, msg)
+        self.assertEqual(player.get_resource("Straw"), 0)
+
+    def test_tech_reduces_upgrade_cost(self):
+        # MM upgrade to L2: base × 2^1 × 0.8 → Straw 32, Wood 16.
+        player = self._player_with_mult(0.8)
+        system, _, _ = _make_building_system()
+        mm = system.registry.get_building("MM")
+        self.assertEqual(
+            system.get_upgrade_cost(mm, 2, owner=player),
+            {"Straw": 32, "Wood": 16},
+        )
+        # Without an owner the upgrade cost is undiscounted (back-compat).
+        self.assertEqual(
+            system.get_upgrade_cost(mm, 2),
+            {"Straw": 40, "Wood": 20},
+        )
+
+    def test_upgrade_deducts_reduced_cost(self):
+        player = self._player_with_mult(
+            0.8, resources={"Straw": 100, "Wood": 100},
+        )
+        building = FakeBuilding(building_type="MM", owner=player, level=1)
+        system, _, _ = _make_building_system()
+        ok, msg = system.upgrade(player, building)
+        self.assertTrue(ok, msg)
+        self.assertEqual(player.get_resource("Straw"), 100 - 32)
+        self.assertEqual(player.get_resource("Wood"), 100 - 16)
+
+    def test_floor_clamps_stacked_reduction(self):
+        # A (stacked) multiplier below the floor clamps at 0.6: HQ Straw
+        # 50 × 0.6 = 30, never lower — stacking can't trivialize costs.
+        player = self._player_with_mult(0.3)
+        system, _, _ = _make_building_system()
+        hq = system.registry.get_building("HQ")
+        self.assertEqual(
+            system.get_build_cost(hq, player),
+            {"Straw": 30, "Wood": 30, "Stone": 18},
+        )
+
+    def test_floor_is_balance_tunable(self):
+        registry = _make_registry_with_buildings()
+        registry.balance.build_cost_mult_floor = 0.9
+        system, _, _ = _make_building_system(registry=registry)
+        player = self._player_with_mult(0.5)
+        hq = system.registry.get_building("HQ")
+        self.assertEqual(
+            system.get_build_cost(hq, player),
+            {"Straw": 45, "Wood": 45, "Stone": 27},
+        )
+
+    def test_additive_stacking_above_one_never_raises_cost(self):
+        # tech_system ADDS effect values: two 0.85 techs would store 1.7.
+        # The consumer clamps at 1.0 — research can never RAISE costs.
+        player = self._player_with_mult(1.7)
+        system, _, _ = _make_building_system()
+        hq = system.registry.get_building("HQ")
+        self.assertEqual(system.get_build_cost(hq, player), dict(hq.cost))
+
+    def test_production_multiplier_not_consumed(self):
+        # production_multiplier alone must NOT change build/upgrade costs
+        # (R11.1 — it belongs to the production path).
+        player = self._player_with_mult(None, production_multiplier=2.0)
+        system, _, _ = _make_building_system()
+        hq = system.registry.get_building("HQ")
+        mm = system.registry.get_building("MM")
+        self.assertEqual(system.get_build_cost(hq, player), dict(hq.cost))
+        self.assertEqual(
+            system.get_upgrade_cost(mm, 2, owner=player),
+            {"Straw": 40, "Wood": 20},
+        )
+
+    def test_production_multiplier_untouched_by_consumer(self):
+        # Reading the build-cost multiplier must not mutate tech_bonuses —
+        # production_multiplier keeps its exact value.
+        player = self._player_with_mult(0.8, production_multiplier=2.0)
+        system, _, _ = _make_building_system()
+        hq = system.registry.get_building("HQ")
+        system.get_build_cost(hq, player)
+        system.get_upgrade_cost(hq, 2, owner=player)
+        self.assertEqual(player.db.tech_bonuses["production_multiplier"], 2.0)
+        self.assertEqual(player.db.tech_bonuses["build_cost_mult"], 0.8)
+
+    def test_cancel_upgrade_refunds_discounted_charge(self):
+        # The refund path passes the owner too, so refund == charge.
+        player = self._player_with_mult(
+            0.8, resources={"Straw": 100, "Wood": 100},
+        )
+        building = FakeBuilding(building_type="MM", owner=player, level=1)
+        system, _, _ = _make_building_system()
+        ok, msg = system.start_upgrade(player, building)
+        self.assertTrue(ok, msg)
+        self.assertEqual(player.get_resource("Straw"), 100 - 32)
+        ok, msg = system.cancel_upgrade(player, building)
+        self.assertTrue(ok, msg)
+        self.assertEqual(player.get_resource("Straw"), 100)
+        self.assertEqual(player.get_resource("Wood"), 100)
 
 
 if __name__ == "__main__":

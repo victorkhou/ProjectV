@@ -254,17 +254,39 @@ class OutpostSpawnerSystem(BaseSystem):
 
     def on_base_eliminated(
         self, event_name: str = "", sentinel: Any = None, tier: str = "outpost",
-        planet: Any = None, **kwargs
+        planet: Any = None, sentinel_id: Any = None, **kwargs
     ) -> None:
         """React to a ``BASE_ELIMINATED`` event: drop the base and queue respawn.
 
-        The elimination handler publishes tier/planet in the payload (read
-        before it deletes the sentinel), so we don't depend on the now-deleted
-        object. Schedules a fresh base of the same tier after
+        The elimination handler publishes tier/planet/sentinel_id in the
+        payload (read before it deletes the sentinel), so we don't depend on
+        the now-deleted object. Schedules a fresh base of the same tier after
         ``outpost_respawn_ticks`` (0 disables respawning).
+
+        Untracking prefers the payload's ``sentinel_id``: the handler deletes
+        the sentinel BEFORE publishing, and Django nulls a deleted instance's
+        ``.id`` — so ``_base_key(sentinel)`` computed here would fall back to
+        the Python ``id()`` and never match the key stored at spawn time.
+        That silent miss left a phantom record that kept the eliminated base
+        in '@outpost list' and the minimap proximity warning while nothing
+        remained on the actual map. For publishers that omit ``sentinel_id``,
+        fall back to the object key, then to an identity scan of the records.
         """
-        if sentinel is not None:
-            self._active_bases.pop(self._base_key(sentinel), None)
+        removed = False
+        if sentinel_id is not None:
+            removed = self._active_bases.pop(sentinel_id, None) is not None
+        if not removed and sentinel is not None:
+            removed = (
+                self._active_bases.pop(self._base_key(sentinel), None)
+                is not None
+            )
+        if not removed and sentinel is not None:
+            # Last resort: the same in-memory object was tracked at spawn —
+            # match by identity, which survives deletion.
+            for key, rec in list(self._active_bases.items()):
+                if rec.get("sentinel") is sentinel:
+                    self._active_bases.pop(key, None)
+                    break
 
         respawn_ticks = self.registry.balance.outpost_respawn_ticks
         if respawn_ticks <= 0 or not planet:

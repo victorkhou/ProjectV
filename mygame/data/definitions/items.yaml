@@ -15,6 +15,12 @@ items:
   # ------------------------------------------------------------------ #
   #  Weapons (Gear, slot: weapon)
   # ------------------------------------------------------------------ #
+  # roll_spec calibration (item-loot-economy task 1.7, design §9): loot bands
+  # put today's flat base at ~60-70%+ of max (a "good but not great" roll) with
+  # min ≈ base − 30%; craft bands are a tighter reliable floor topping out AT
+  # the base (never exceeding a good loot roll). Weapons weight damage 3× over
+  # range (§2.1); melee weapons roll damage only (combat forces melee range 1).
+  # Ammo, consumables, fuel, throwables and mines stay unrolled (R1.3).
   - key: combat_knife
     name: Combat Knife
     slot: weapon
@@ -23,6 +29,12 @@ items:
     stat_modifiers:
       damage: 10
       range: 1
+    roll_spec:
+      stats:
+        damage: {min: 7, max: 12, weight: 3}
+      craft:
+        damage: {min: 9, max: 10}
+      affix_pool: weapon
     ammo_cost: null
     craft_cost:
       Iron: 5
@@ -38,6 +50,15 @@ items:
     stat_modifiers:
       damage: 25
       range: 5
+    # The design §1.1 worked example — kept verbatim as the calibration anchor.
+    roll_spec:
+      stats:
+        damage: {min: 18, max: 30, weight: 3}
+        range: {min: 4, max: 7, weight: 1}
+      craft:
+        damage: {min: 20, max: 25}
+        range: {min: 4, max: 5}
+      affix_pool: weapon
     ammo_cost:
       Iron: 1
     craft_cost:
@@ -55,6 +76,14 @@ items:
     stat_modifiers:
       damage: 40
       range: 6
+    roll_spec:
+      stats:
+        damage: {min: 29, max: 48, weight: 3}
+        range: {min: 5, max: 8, weight: 1}
+      craft:
+        damage: {min: 36, max: 40}
+        range: {min: 5, max: 6}
+      affix_pool: weapon
     ammo_cost:
       Energy: 2
     craft_cost:
@@ -73,6 +102,16 @@ items:
     stat_modifiers:
       damage: 50
       range: 12
+    # Range band deliberately tight (§9: range is the spiciest stat; the
+    # max_weapon_range cap catches the worst-case stack).
+    roll_spec:
+      stats:
+        damage: {min: 36, max: 60, weight: 3}
+        range: {min: 10, max: 13, weight: 1}
+      craft:
+        damage: {min: 45, max: 50}
+        range: {min: 11, max: 12}
+      affix_pool: weapon
     ammo_cost:
       Iron: 2
     craft_cost:
@@ -92,6 +131,14 @@ items:
     stat_modifiers:
       damage: 22
       range: 5
+    roll_spec:
+      stats:
+        damage: {min: 16, max: 26, weight: 3}
+        range: {min: 4, max: 7, weight: 1}
+      craft:
+        damage: {min: 20, max: 22}
+        range: {min: 4, max: 5}
+      affix_pool: weapon
     ammo_type: rifle_rounds
     ammo_per_shot: 1
     magazine_size: 30
@@ -115,6 +162,14 @@ items:
     stat_modifiers:
       damage: 20
       range: 5
+    roll_spec:
+      stats:
+        damage: {min: 14, max: 24, weight: 3}
+        range: {min: 4, max: 7, weight: 1}
+      craft:
+        damage: {min: 18, max: 20}
+        range: {min: 4, max: 5}
+      affix_pool: weapon
     ammo_cost:
       Magmite: 1
     craft_cost:
@@ -133,6 +188,12 @@ items:
     stat_modifiers:
       damage: 18
       range: 1
+    roll_spec:
+      stats:
+        damage: {min: 13, max: 22, weight: 3}
+      craft:
+        damage: {min: 16, max: 18}
+      affix_pool: weapon
     craft_cost:
       Aether: 10
       Circuits: 5
@@ -149,6 +210,14 @@ items:
     stat_modifiers:
       damage: 30
       range: 4
+    roll_spec:
+      stats:
+        damage: {min: 22, max: 36, weight: 3}
+        range: {min: 3, max: 6, weight: 1}
+      craft:
+        damage: {min: 27, max: 30}
+        range: {min: 3, max: 4}
+      affix_pool: weapon
     ammo_cost:
       Iron: 3
     craft_cost:
@@ -167,6 +236,12 @@ items:
     category: armor
     stat_modifiers:
       damage_reduction: 3
+    roll_spec:
+      stats:
+        damage_reduction: {min: 2, max: 5, weight: 1}
+      craft:
+        damage_reduction: {min: 2, max: 3}
+      affix_pool: armor
     ammo_cost: null
     craft_cost:
       Iron: 10
@@ -181,6 +256,12 @@ items:
     category: armor
     stat_modifiers:
       damage_reduction: 5
+    roll_spec:
+      stats:
+        damage_reduction: {min: 4, max: 8, weight: 1}
+      craft:
+        damage_reduction: {min: 4, max: 5}
+      affix_pool: armor
     ammo_cost: null
     craft_cost:
       Iron: 20
@@ -195,6 +276,12 @@ items:
     category: armor
     stat_modifiers:
       damage_reduction: 15
+    roll_spec:
+      stats:
+        damage_reduction: {min: 11, max: 22, weight: 1}
+      craft:
+        damage_reduction: {min: 13, max: 15}
+      affix_pool: armor
     ammo_cost: null
     craft_cost:
       Iron: 30
@@ -210,6 +297,12 @@ items:
     category: armor
     stat_modifiers:
       damage_reduction: 2
+    roll_spec:
+      stats:
+        damage_reduction: {min: 1, max: 3, weight: 1}
+      craft:
+        damage_reduction: {min: 1, max: 2}
+      affix_pool: armor
     ammo_cost: null
     craft_cost:
       Iron: 8
@@ -223,6 +316,12 @@ items:
     category: armor
     stat_modifiers:
       damage_reduction: 4
+    roll_spec:
+      stats:
+        damage_reduction: {min: 3, max: 6, weight: 1}
+      craft:
+        damage_reduction: {min: 3, max: 4}
+      affix_pool: armor
     ammo_cost: null
     craft_cost:
       Iron: 15
@@ -237,6 +336,12 @@ items:
     category: armor
     stat_modifiers:
       damage_reduction: 2
+    roll_spec:
+      stats:
+        damage_reduction: {min: 1, max: 3, weight: 1}
+      craft:
+        damage_reduction: {min: 1, max: 2}
+      affix_pool: armor
     ammo_cost: null
     craft_cost:
       Iron: 8
@@ -290,6 +395,56 @@ items:
     weight: 5.0
     classification: modern
     required_rank: null
+
+  # ---- Accessory gear on aggregating axes (item-loot-economy task 0.3) ----
+  # Data-only: EquipmentHandler.get_stat_total sums a stat across ALL equipped
+  # items with no key allowlist, so these fire_resist / damage_bonus values
+  # flow straight into combat (_get_target_typed_resist reads <type>_resist;
+  # _get_attacker_bonus reads damage_bonus) with zero engine changes.
+  - key: thermal_cloak
+    name: Thermal Cloak
+    slot: back
+    category: accessory
+    stat_modifiers:
+      fire_resist: 4
+    ammo_cost: null
+    craft_cost:
+      Wood: 15
+      Stone: 10
+    weight: 4.0
+    classification: modern
+    required_rank: null
+
+  - key: targeting_visor
+    name: Targeting Visor
+    slot: face
+    category: accessory
+    stat_modifiers:
+      damage_bonus: 2
+    ammo_cost: null
+    craft_cost:
+      Iron: 12
+      Wood: 8
+    weight: 2.0
+    classification: modern
+    required_rank: null
+
+  # Futuristic trinket combining both aggregating axes on one item.
+  - key: raider_talisman
+    name: Raider Talisman
+    slot: accessory
+    category: accessory
+    stat_modifiers:
+      damage_bonus: 1
+      fire_resist: 2
+    ammo_cost: null
+    craft_cost:
+      Iron: 10
+      Energy: 15
+      Circuits: 5
+    weight: 1.0
+    classification: futuristic
+    required_rank: Staff_Sergeant
 
   # ------------------------------------------------------------------ #
   #  Ammo (Supply — no slot; counted stacks)
@@ -471,6 +626,75 @@ items:
     classification: futuristic
     required_rank: Staff_Sergeant
 
+  # ------------------------------------------------------------------ #
+  #  Inserts (Supply — Blacksmith weapon mods, item-loot-economy §4.3).
+  #  Counted, slotless consumables applied to an equipped weapon via the
+  #  `insert` command at the Blacksmith bench (task 4.3). insert_effect is
+  #  the applied payload: damage_type converts the weapon's typed damage,
+  #  range adds flat range, stat adds to a rolled stat (with an optional
+  #  tradeoff). Never rolled (no roll_spec — R1.3-adjacent: supplies stay
+  #  fixed). All four are rank-gated because every recipe needs a resource
+  #  that is not on the Terra starter planet (Circuits/Magmite), which the
+  #  freely-craftable invariant forbids for ungated items.
+  # ------------------------------------------------------------------ #
+  - key: venom_coating
+    name: Venom Coating
+    category: insert
+    insert_effect:
+      type: damage_type
+      value: poison
+    craft_cost:
+      Biomass: 20
+      Circuits: 10
+    weight: 1.0
+    max_stack: 10
+    classification: futuristic
+    required_rank: Staff_Sergeant
+
+  - key: extended_barrel
+    name: Extended Barrel
+    category: insert
+    insert_effect:
+      type: range
+      value: 2
+    craft_cost:
+      Iron: 20
+      Circuits: 10
+    weight: 2.0
+    max_stack: 10
+    classification: modern
+    required_rank: Corporal
+
+  - key: incendiary_core
+    name: Incendiary Core
+    category: insert
+    insert_effect:
+      type: damage_type
+      value: fire
+    craft_cost:
+      Magmite: 15
+    weight: 1.0
+    max_stack: 10
+    classification: futuristic
+    required_rank: Major
+
+  - key: hollowpoint
+    name: Hollow-Point Kit
+    category: insert
+    insert_effect:
+      type: stat
+      stat: damage
+      value: 4
+      tradeoff:
+        range: -1
+    craft_cost:
+      Iron: 15
+      Circuits: 5
+    weight: 0.5
+    max_stack: 10
+    classification: modern
+    required_rank: Corporal
+
 # Production routing by building (task 8.3).
 #
 # NOTE: There is no `AA` building — the sole equipment/Armory building is `AR`
@@ -500,17 +724,35 @@ production_map:
     - combat_boots
     - scope
     - hauler_pack
+    - thermal_cloak
+    - targeting_visor
+    # Modern-classification inserts (item-loot-economy task 4.2) follow the
+    # classification routing convention: modern -> AR.
+    - extended_barrel
+    - hollowpoint
   # Medbay: consumables
   MB:
     - medkit
     - combat_stim
   # Lab: futuristic gear + throwables (grenades) + mines
+  # The typed-damage weapons (incendiary_rifle, psi_blade, blast_launcher)
+  # route here as futuristic-class gear (item-loot-economy R10.7 / design §7 —
+  # they shipped with a craft_cost but were absent from every catalog, making
+  # them uncraftable).
   LB:
     - plasma_rifle
+    - incendiary_rifle
+    - psi_blade
+    - blast_launcher
     - power_armor
     - jetpack
+    - raider_talisman
     - energy_cell
     - frag_grenade
     - plasma_grenade
     - land_mine
     - proximity_mine
+    # Futuristic-classification inserts (item-loot-economy task 4.2):
+    # futuristic -> LB.
+    - venom_coating
+    - incendiary_core

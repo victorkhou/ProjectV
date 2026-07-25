@@ -61,6 +61,7 @@ TICK_STEP_ORDER = (
     ("turret_attacks", "Turrets fire at the post-resolution world state."),
     ("bomb_fuse", "Tick down live bombs; detonate + AoE those whose fuse hits 0."),
     ("combat_timer_decrement", "Expire combat lockouts."),
+    ("effect_ticks", "Tick active effects (burn/poison DoTs, shred decay) post-combat."),
     ("hp_regen", "Passive HP regen for players/agents (after combat)."),
     ("shield_regen", "Regenerate building shields from Shield Generators (after combat)."),
     ("powerup_ticks", "Expire powerups after this tick's combat resolved."),

@@ -105,8 +105,10 @@ metrics_enabled: false
 metrics_interval: 60
 
 # --- New: Coordinate World config ---
-player_vision_radius: 10         # tiles visible around the player character
+player_vision_radius: 7          # tiles visible around the player character
 building_vision_radius: 7        # tiles visible around each owned building
+map_viewport_radius: 10          # rendered map viewport radius (decoupled from vision;
+                                 # tiles beyond vision but inside the viewport show as fog)
 room_cache_max_size: 1000        # max rooms held in the LRU cache
 gc_interval_ticks: 100           # how often garbage collection runs
 gc_min_age_ticks: 50             # minimum age before a dynamic room is eligible for GC
@@ -126,6 +128,10 @@ guard_loot_chance: 0.4           # 40% per NPC-guard kill → mini-drop
 guard_loot_amount: 10            # resource units per mini-drop
 gear_drop_chance: 0.15           # HQ-destroy gear-roll (outpost default)
 rare_gear_chance: 0.03           # HQ-destroy rare-roll (outpost default)
+guard_gear_drop_chance: 0.05     # 5% per NPC-guard kill → rolled gear drop
+                                 # (item-loot-economy R3.6 — NEW guard-kill
+                                 # path; lowest rarity bucket; mini-drops
+                                 # above stay unchanged alongside)
 
 # --- Agent rebalance (R3, R5) ---
 scout_vision_radius: 5           # fog-of-war vision circle around patrolling scouts
@@ -157,6 +163,9 @@ vault_capacity_per_level: 20     # extra Vault storage per level above 1
 
 # --- Building scaling (migrated) ---
 upgrade_cost_base: 2             # upgrade cost = base_cost × COST_BASE^(level-1)
+build_cost_mult_floor: 0.6       # build_cost_mult tech clamp [floor, 1.0]
+                                 # (item-loot-economy R11.1 — stacked cost-
+                                 # reduction research can't trivialize costs)
 upgrade_time_base: 3             # upgrade time = build_time × TIME_BASE^(level-1)
 turret_level_bonus: 0.20         # per-level Turret damage bonus
 demolish_refund_default: 0.40    # refund rate for levels not in the table below
@@ -296,9 +305,105 @@ baseline_resist: 2.0
 # Fire burn DoT: fraction of raw damage per tick + duration.
 fire_burn_fraction: 0.2       # 20% of raw per burn tick
 fire_burn_ticks: 3            # burn lasts 3 ticks after hit
+
+# Poison DoT (item-loot-economy R9): fraction of raw damage per tick + duration.
+# Lower per-tick than fire but longer — total ~0.6x raw over 4 ticks.
+poison_dot_fraction: 0.15     # 15% of raw per poison tick
+poison_dot_ticks: 4           # poison lasts 4 ticks after hit
 # Blast armor-shred: flat DR removed per blast hit (stacks), + recovery rate.
 blast_shred_per_hit: 5        # each blast hit shreds 5 DR from the target
 blast_shred_decay_per_tick: 1 # shred recovers 1 DR/tick (not permanent)
+# Hard cap on effective weapon range after ALL bonuses (item-loot-economy
+# R8.3): weapon instance (rolled + inserts) + weapon_range tech + tile bonus
+# is clamped here so stacking can't make a global sniper. Worst case per
+# design §9: sniper_rifle(12) + nest(3) + affix(3) + tech(1) = 19 → 16.
+max_weapon_range: 16
+
+# --- Item loot economy (rolled loot, design §1.3/§9) ---------------------
+# Global default for the loot-roll skew exponent:
+#   rolled = min + (max - min) * U^skew
+# skew=2 puts the median roll at ~25% of the band (top rolls rare — that
+# scarcity is the economy). A per-item roll_spec.skew overrides this.
+loot_roll_skew: 2.0
+
+# Rarity table (design §3.2/§9, task 2.2): source bucket -> {min_weight,
+# weights}. A drop source's numeric rarity weight (base templates set
+# rarity_weight; guard kill/production pass 0) activates the HIGHEST
+# min_weight bucket it reaches; weights are the relative rarity odds for
+# drops from that source. Higher rarity raises the base-roll floor
+# (rare 0.25, epic 0.50, legendary 0.75 — U clamped before the skew) and
+# (task 2.3) grants the affix budget. Crafted items never consult this
+# table (R6.1); PvP death drops carry their instance state instead (R1.6).
+# Starting numbers per design §9 — tune to the raid cadence.
+rarity_table:
+  guard_kill:
+    min_weight: 0.0
+    weights: {common: 70, uncommon: 25, rare: 5}
+  outpost:
+    min_weight: 1.0
+    weights: {common: 50, uncommon: 33, rare: 15, epic: 2}
+  stronghold:
+    min_weight: 2.0
+    weights: {common: 30, uncommon: 35, rare: 27, epic: 7, legendary: 1}
+  fortress:
+    min_weight: 3.0
+    weights: {common: 15, uncommon: 27, rare: 33, epic: 20, legendary: 5}
+  citadel:
+    min_weight: 4.0
+    weights: {common: 8, uncommon: 12, rare: 25, epic: 40, legendary: 15}
+
+# Crafted-rarity table (post-spec change — deliberate deviation from R6.1's
+# "crafted items have no rarity", per user request): the CRAFTING BUILDING's
+# level (whichever equipment building crafts the item — Armory/Lab/Medbay)
+# picks a row; the crafted roll draws its rarity from that row's relative
+# weights. HARD-CAPPED at Rare — epic/legendary weights in a row are ignored
+# (loot stays the only source of Epic+, R6.2) — and crafted items still
+# NEVER roll affixes (R6.1's no-affix rule is intact). A Rare craft gets the
+# normal 0.25 roll-floor U-clamp INSIDE its craft band, so it genuinely
+# rolls better without escaping the band. Rows sum to 100 (read as
+# percentages): no Rare at L1, rising to EXACTLY 5% Rare at L5 (the
+# requested cap). Master Gunsmithing's craft_iqs_floor still applies —
+# when both floors are live the roller takes max(floors), like the reroll
+# bench. Supplies (ammo/consumables) don't roll and are unaffected.
+craft_rarity_table:
+  1: {common: 90, uncommon: 10}
+  2: {common: 79, uncommon: 20, rare: 1}
+  3: {common: 68, uncommon: 30, rare: 2}
+  4: {common: 57, uncommon: 40, rare: 3}
+  5: {common: 45, uncommon: 50, rare: 5}
+
+# Blacksmith reroll bench (design §4.2/§4.4/§9, task 4.4): `reroll <item>`
+# re-rolls the item's BASE stats in their loot bands (affixes/inserts/rarity
+# untouched — R4.5 default) for a Salvage + resource charge. The reroll roll
+# floor rises with Blacksmith level (0.1 x (level - 1): L1 none → L5 0.4 U
+# clamp), and the item's rarity floor still applies if higher (an Epic never
+# rerolls below its 0.50 rarity guarantee). §9 Salvage band ~30-60, flat.
+reroll_salvage_cost: 40
+reroll_resource_cost: {Iron: 10}
+
+# Blacksmith salvage bench (design §5/§4.4/§9, task 5.2): `salvage <item>`
+# destroys a carried item and credits Salvage per
+#   round((base_salvage + iqs * salvage_per_iqs)
+#         * (1 + salvage_level_bonus * (level - 1)))
+# — scales with BOTH the item's quality and the bench level (L1 1.0x → L5
+# 1.5x at the 0.125 default; monotonic per R7.2). §9 anchor: a 70-IQS item
+# ≈ 40 Salvage at L1, ≈ 60 at L5. Unrolled items salvage at the
+# base_salvage floor (iqs 0).
+base_salvage: 5
+salvage_per_iqs: 0.5
+salvage_level_bonus: 0.125
+
+# Refinery converter (design §7/§9, task 5.3, R10.4/R10.5): `refine
+# <resource> <amount>` burns a carried resource stock (Nexium included —
+# the point of the sink) and credits Salvage per
+#   round(amount * refine_salvage_per_unit
+#         * (1 + refine_level_bonus * (level - 1)))
+# — L1 1.0x → L5 1.5x at the 0.125 default, the same monotonic curve as
+# the Blacksmith salvage yield. Anchor: 80 surplus Nexium ≈ 40 Salvage
+# (one reroll) at L1. Salvage is the ONLY output — the conversion never
+# yields Nexium or any other resource (anti-loop, R10.4).
+refine_salvage_per_unit: 0.5
+refine_level_bonus: 0.125
 
 # Outgrown-planet throttle (graduation economy): a player who COULD graduate
 # (level >= the next planet's gate) but keeps farming the lower planet earns

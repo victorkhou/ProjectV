@@ -542,11 +542,34 @@ def clean_item_dict(draw):
                 item["ammo_per_shot"] = draw(st.integers(min_value=1, max_value=10))
     if category in ("consumable", "throwable") and draw(st.booleans()):
         item["effect"] = {"type": draw(st.sampled_from(list(EFFECT_TYPES)))}
+    if category == "insert":
+        # An insert item MUST declare a well-formed insert_effect
+        # (item-loot-economy task 4.2).
+        item["insert_effect"] = draw(_valid_insert_effect())
     if draw(st.booleans()):
         item["weight"] = draw(
             st.floats(min_value=0, max_value=100, allow_nan=False, allow_infinity=False)
         )
     return item
+
+
+@st.composite
+def _valid_insert_effect(draw):
+    """A well-formed insert_effect (any of the three §4.3 shapes)."""
+    etype = draw(st.sampled_from(["damage_type", "range", "stat"]))
+    if etype == "damage_type":
+        return {"type": "damage_type",
+                "value": draw(st.sampled_from(["fire", "psychic", "blast",
+                                               "poison"]))}
+    if etype == "range":
+        return {"type": "range",
+                "value": draw(st.integers(min_value=1, max_value=5))}
+    effect = {"type": "stat", "stat": "damage",
+              "value": draw(st.integers(min_value=1, max_value=10))}
+    if draw(st.booleans()):
+        effect["tradeoff"] = {"range": draw(st.integers(min_value=-3,
+                                                        max_value=-1))}
+    return effect
 
 
 @st.composite
@@ -570,6 +593,10 @@ def item_and_validity(draw):
         defects.append("weapon_type_on_nonweapon")
     if category in ("consumable", "throwable"):
         defects.append("bad_effect_type")
+    if category == "insert":
+        defects.extend(["missing_insert_effect", "bad_insert_effect"])
+    else:
+        defects.append("insert_effect_on_noninsert")
 
     defect = draw(st.sampled_from(defects))
     if defect == "bad_category":
@@ -586,6 +613,18 @@ def item_and_validity(draw):
         item["weapon_type"] = draw(st.sampled_from(list(WEAPON_TYPES)))
     elif defect == "bad_effect_type":
         item["effect"] = {"type": draw(st.sampled_from(["explode", "freeze", "", "damage"]))}
+    elif defect == "missing_insert_effect":
+        del item["insert_effect"]
+    elif defect == "bad_insert_effect":
+        item["insert_effect"] = draw(st.sampled_from([
+            "poison",                                   # not a dict
+            {"type": "proc", "value": 1},               # unknown type
+            {"type": "damage_type", "value": "acid"},   # bad damage type
+            {"type": "range", "value": "far"},          # non-numeric value
+            {"type": "stat", "value": 4},               # missing stat
+        ]))
+    elif defect == "insert_effect_on_noninsert":
+        item["insert_effect"] = draw(_valid_insert_effect())
     return item, True
 
 

@@ -552,6 +552,177 @@ class TestPresenterOwnershipBehavioral:
         assert "full" in msg.lower()
         assert "Rifle Rounds" in msg
 
+    def test_insert_applied_renders_weapon_and_slots(self):
+        """A successful Blacksmith insert names the insert, the weapon, and
+        the slot usage (item-loot-economy task 4.3)."""
+        bus = EventBus()
+        player = _MsgPlayer()
+        NotificationPresenter(bus, player_notifier=EvenniaPlayerNotifier())
+        bus.publish(PLAYER_NOTIFICATION, player=player, kind="insert_applied",
+                    data={"item_name": "Venom Coating",
+                          "weapon_name": "Assault Rifle",
+                          "slots_used": 1, "slot_limit": 2})
+        msg = player.messages[0]
+        assert "Venom Coating" in msg
+        assert "Assault Rifle" in msg
+        assert "1/2" in msg
+
+    def test_insert_failed_no_slots_renders_clear_refusal(self):
+        """The over-slot-limit refusal reads as a clear message (R5.3)."""
+        bus = EventBus()
+        player = _MsgPlayer()
+        NotificationPresenter(bus, player_notifier=EvenniaPlayerNotifier())
+        bus.publish(PLAYER_NOTIFICATION, player=player, kind="insert_failed",
+                    data={"reason": "no_slots", "item_name": "Hollow-Point Kit",
+                          "weapon_name": "Assault Rifle", "slot_limit": 1})
+        msg = player.messages[0]
+        assert "insert slots" in msg.lower()
+        assert "Assault Rifle" in msg
+
+    def test_insert_failed_wrong_building_points_at_blacksmith(self):
+        bus = EventBus()
+        player = _MsgPlayer()
+        NotificationPresenter(bus, player_notifier=EvenniaPlayerNotifier())
+        bus.publish(PLAYER_NOTIFICATION, player=player, kind="insert_failed",
+                    data={"reason": "wrong_building",
+                          "item_name": "Venom Coating"})
+        msg = player.messages[0]
+        assert "blacksmith" in msg.lower()
+
+    def test_crafted_plain_line_for_unrolled_item(self):
+        """A craft with no iqs payload (supplies, fixed defs) keeps the
+        plain success line — no value readout (R2.5)."""
+        bus = EventBus()
+        player = _MsgPlayer()
+        NotificationPresenter(bus, player_notifier=EvenniaPlayerNotifier())
+        bus.publish(PLAYER_NOTIFICATION, player=player, kind="crafted",
+                    data={"item_name": "Rifle Rounds", "category": "ammo"})
+        msg = player.messages[0]
+        assert "Rifle Rounds" in msg
+        assert "%" not in msg
+
+    def test_crafted_renders_quality_score(self):
+        """Crafting rolled gear shows the stamped IQS quality tag."""
+        bus = EventBus()
+        player = _MsgPlayer()
+        NotificationPresenter(bus, player_notifier=EvenniaPlayerNotifier())
+        bus.publish(PLAYER_NOTIFICATION, player=player, kind="crafted",
+                    data={"item_name": "Assault Rifle", "category": "weapon",
+                          "iqs": 73})
+        msg = player.messages[0]
+        assert "Assault Rifle" in msg
+        assert "[73%]" in msg
+
+    def test_crafted_renders_rarity_with_quality(self):
+        """A crafted rarity (the building-level draw, capped at Rare)
+        renders in the same `[Rare · 73%]` tag the item name uses."""
+        bus = EventBus()
+        player = _MsgPlayer()
+        NotificationPresenter(bus, player_notifier=EvenniaPlayerNotifier())
+        bus.publish(PLAYER_NOTIFICATION, player=player, kind="crafted",
+                    data={"item_name": "Assault Rifle", "category": "weapon",
+                          "iqs": 73, "rarity": "rare"})
+        msg = player.messages[0]
+        assert "Assault Rifle" in msg
+        assert "Rare" in msg
+        assert "73%" in msg
+
+    def test_rerolled_renders_item_quality_and_cost(self):
+        """A successful Blacksmith reroll names the item, the re-stamped
+        quality score, and the Salvage charge (item-loot-economy task 4.4)."""
+        bus = EventBus()
+        player = _MsgPlayer()
+        NotificationPresenter(bus, player_notifier=EvenniaPlayerNotifier())
+        bus.publish(PLAYER_NOTIFICATION, player=player, kind="rerolled",
+                    data={"item_name": "Assault Rifle", "iqs": 73,
+                          "salvage_cost": 40})
+        msg = player.messages[0]
+        assert "Assault Rifle" in msg
+        assert "73%" in msg
+        assert "40" in msg
+
+    def test_reroll_failed_insufficient_salvage_shows_have_need(self):
+        bus = EventBus()
+        player = _MsgPlayer()
+        NotificationPresenter(bus, player_notifier=EvenniaPlayerNotifier())
+        bus.publish(PLAYER_NOTIFICATION, player=player, kind="reroll_failed",
+                    data={"reason": "insufficient_salvage",
+                          "item_name": "Assault Rifle",
+                          "salvage_cost": 40, "salvage_have": 12})
+        msg = player.messages[0]
+        assert "40" in msg
+        assert "12" in msg
+        assert "salvage" in msg.lower()
+
+    def test_reroll_failed_not_rerollable_reads_clearly(self):
+        bus = EventBus()
+        player = _MsgPlayer()
+        NotificationPresenter(bus, player_notifier=EvenniaPlayerNotifier())
+        bus.publish(PLAYER_NOTIFICATION, player=player, kind="reroll_failed",
+                    data={"reason": "not_rerollable", "item_name": "Medkit"})
+        msg = player.messages[0]
+        assert "Medkit" in msg
+        assert "fixed" in msg.lower()
+
+    def test_salvaged_renders_item_yield_and_balance(self):
+        """A successful Blacksmith salvage names the item, the Salvage
+        yield, and the new balance (item-loot-economy task 5.2)."""
+        bus = EventBus()
+        player = _MsgPlayer()
+        NotificationPresenter(bus, player_notifier=EvenniaPlayerNotifier())
+        bus.publish(PLAYER_NOTIFICATION, player=player, kind="salvaged",
+                    data={"item_name": "Assault Rifle", "salvage": 40,
+                          "salvage_total": 140})
+        msg = player.messages[0]
+        assert "Assault Rifle" in msg
+        assert "40" in msg
+        assert "140" in msg
+
+    def test_salvage_failed_equipped_reads_clearly(self):
+        bus = EventBus()
+        player = _MsgPlayer()
+        NotificationPresenter(bus, player_notifier=EvenniaPlayerNotifier())
+        bus.publish(PLAYER_NOTIFICATION, player=player, kind="salvage_failed",
+                    data={"reason": "equipped",
+                          "item_name": "Assault Rifle"})
+        msg = player.messages[0]
+        assert "Assault Rifle" in msg
+        assert "unequip" in msg.lower()
+
+    def test_salvage_failed_wrong_building_points_at_blacksmith(self):
+        bus = EventBus()
+        player = _MsgPlayer()
+        NotificationPresenter(bus, player_notifier=EvenniaPlayerNotifier())
+        bus.publish(PLAYER_NOTIFICATION, player=player, kind="salvage_failed",
+                    data={"reason": "wrong_building",
+                          "item_name": "Assault Rifle"})
+        msg = player.messages[0]
+        assert "blacksmith" in msg.lower()
+
+    def test_refined_renders_resource_yield_and_balance(self):
+        """A successful Refinery conversion names the resource batch, the
+        Salvage yield, and the new balance (item-loot-economy task 5.3)."""
+        bus = EventBus()
+        player = _MsgPlayer()
+        NotificationPresenter(bus, player_notifier=EvenniaPlayerNotifier())
+        bus.publish(PLAYER_NOTIFICATION, player=player, kind="refined",
+                    data={"resource": "Nexium", "amount": 80,
+                          "salvage": 40, "salvage_total": 140})
+        msg = player.messages[0]
+        assert "Nexium" in msg
+        assert "80" in msg
+        assert "40" in msg
+        assert "140" in msg
+
+    def test_refine_failed_wrong_building_points_at_refinery(self):
+        bus = EventBus()
+        player = _MsgPlayer()
+        NotificationPresenter(bus, player_notifier=EvenniaPlayerNotifier())
+        bus.publish(PLAYER_NOTIFICATION, player=player, kind="refine_failed",
+                    data={"reason": "wrong_building", "resource": "Nexium"})
+        msg = player.messages[0]
+        assert "refinery" in msg.lower()
+
     def test_base_deactivated_renders_alert(self):
         """Losing the HQ tells the player their base is deactivated."""
         bus = EventBus()

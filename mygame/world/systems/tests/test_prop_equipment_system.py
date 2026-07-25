@@ -442,5 +442,126 @@ class TestProperty5CategoryStorage(unittest.TestCase):
         self.assertFalse(routed)
 
 
+# -------------------------------------------------------------- #
+#  Property 6: PvP drop preserves instance state
+#  # Feature: item-loot-economy, Property 6: PvP drop preserves
+#  # instance state
+#  **Validates: Requirements 1.6, 5.4**
+# -------------------------------------------------------------- #
+
+class _RolledGearStub:
+    """An equipped-gear stand-in carrying per-instance roll state."""
+
+    def __init__(self, key, state):
+        self.key = key
+        self.name = key
+        self.slot = "weapon"
+        self.stat_modifiers = {}
+        self.required_rank = None
+        for name, value in state.items():
+            setattr(self, name, value)
+
+    def get_stat(self, stat_name, default=0):
+        return float(self.stat_modifiers.get(stat_name, default))
+
+
+_finite = {"allow_nan": False, "allow_infinity": False}
+
+_rolled_stats_st = st.dictionaries(
+    st.sampled_from(["damage", "range", "damage_reduction", "fire_resist"]),
+    st.floats(min_value=0, max_value=500, **_finite),
+    min_size=0, max_size=4,
+)
+_affixes_st = st.lists(
+    st.fixed_dictionaries({
+        "key": st.sampled_from(["keen", "long", "sturdy", "warded"]),
+        "magnitude": st.integers(min_value=1, max_value=6),
+    }),
+    max_size=4,
+)
+_rarity_st = st.one_of(
+    st.none(),
+    st.sampled_from(["Common", "Uncommon", "Rare", "Epic", "Legendary"]),
+)
+_iqs_st = st.one_of(st.none(), st.integers(min_value=0, max_value=100))
+_inserts_st = st.lists(
+    st.fixed_dictionaries({
+        "key": st.sampled_from(
+            ["venom_coating", "extended_barrel", "incendiary_core",
+             "hollowpoint"]),
+    }),
+    max_size=2,
+)
+
+_STATE_FIELDS = ("rolled_stats", "affixes", "rarity", "iqs", "inserts")
+
+
+class TestProperty6PvPDropPreservesInstanceState(unittest.TestCase):
+    """Property 6: for ANY combination of rolled_stats, affixes, rarity,
+    iqs, and applied inserts on a dropped instance, the PvP death-drop path
+    produces a drop carrying exactly that per-instance state — never
+    re-rolled, never mutated (R1.6, R5.4).
+
+    # Feature: item-loot-economy, Property 6: PvP drop preserves instance state
+    **Validates: Requirements 1.6, 5.4**
+    """
+
+    @given(
+        rolled_stats=_rolled_stats_st,
+        affixes=_affixes_st,
+        rarity=_rarity_st,
+        iqs=_iqs_st,
+        inserts=_inserts_st,
+    )
+    @settings(max_examples=25)
+    def test_prop_pvp_drop_preserves_instance_state(
+        self, rolled_stats, affixes, rarity, iqs, inserts
+    ):
+        state = {
+            "rolled_stats": rolled_stats,
+            "affixes": affixes,
+            "rarity": rarity,
+            "iqs": iqs,
+            "inserts": inserts,
+        }
+        system, _ = _make_system()
+        spawned = []
+
+        def _spawner(victim, item_def):
+            drop = types.SimpleNamespace(db=types.SimpleNamespace())
+            spawned.append(drop)
+            return drop
+
+        system.set_pvp_gear_drop_spawner(_spawner)
+        item = _RolledGearStub("assault_rifle", state)
+
+        ok = system._drop_gear_on_death(
+            FakePlayer("Victim"), "assault_rifle", item=item)
+
+        self.assertTrue(ok)
+        self.assertEqual(len(spawned), 1)
+        drop = spawned[0]
+        for name in _STATE_FIELDS:
+            value = state[name]
+            carried = getattr(drop.db, name, None)
+            if value is None or value == {} or value == []:
+                # Unset state stays unset on the drop (R12.1) — the drop
+                # never GAINS roll attributes it didn't have.
+                self.assertIsNone(
+                    carried, f"{name} appeared on the drop from nothing")
+            else:
+                # Carried EXACTLY — same values, never re-rolled/mutated.
+                self.assertEqual(
+                    carried, value, f"{name} not preserved exactly")
+                if isinstance(value, (dict, list)):
+                    self.assertIsNot(
+                        carried, value,
+                        f"{name} must be copied, not shared with the "
+                        f"destroyed original")
+        # The source instance itself was never mutated by the copy.
+        for name in _STATE_FIELDS:
+            self.assertEqual(getattr(item, name), state[name])
+
+
 if __name__ == "__main__":
     unittest.main()

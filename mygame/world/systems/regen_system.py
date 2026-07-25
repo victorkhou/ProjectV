@@ -17,6 +17,17 @@ injected via :meth:`add_modifier_provider`.
 Sub-integer healing (e.g. 0.5 HP/tick) is accumulated in
 ``db.hp_regen_accumulator`` so small rates still restore whole HP points over
 time rather than being lost to integer truncation each tick.
+
+The Field Hospital heal aura (item-loot-economy §7, R10.3) also lives here:
+while an entity's owning player stands on their OWN, OPERATIONAL ``heal_aura``
+building's tile, :meth:`RegenSystem._tile_heal_bonus` adds a flat
+``1 + (level - 1) // 2`` HP per regen interval on top of the percent-based
+regen. Riding the regen machinery (rather than a separate tick step) means the
+aura automatically obeys the same rules: the interval cadence, no healing while
+dead/incapacitated, the ``hp_max`` clamp, and the fractional accumulator. The
+flip side — documented deliberately — is that the aura shares the regen
+cadence gate: if passive regen is globally disabled (``hp_regen_percent`` or
+``hp_regen_interval_ticks`` non-positive), the Field Hospital is inert too.
 """
 
 from __future__ import annotations
@@ -123,12 +134,16 @@ class RegenSystem(BaseSystem):
             return
 
         multiplier = self._regen_multiplier(entity)
-        if multiplier <= 0:
+        tile_heal = self._tile_heal_bonus(entity)
+        if multiplier <= 0 and tile_heal <= 0:
             return
 
-        # Base heal for this interval, scaled by all modifiers. Accumulate the
-        # fractional remainder so sub-1-HP rates still heal over time.
-        heal_amount = hp_max * (percent / 100.0) * multiplier
+        # Base heal for this interval, scaled by all modifiers, plus the flat
+        # Field Hospital heal aura (R10.3) — additive, NOT scaled by the regen
+        # multiplier (the facility heals you; it isn't your metabolism, so a
+        # zeroed regen_multiplier doesn't switch the hospital off). Accumulate
+        # the fractional remainder so sub-1-HP rates still heal over time.
+        heal_amount = hp_max * (percent / 100.0) * multiplier + tile_heal
         accumulated = float(getattr(db, "hp_regen_accumulator", 0.0) or 0.0)
         accumulated += heal_amount
 
@@ -143,6 +158,28 @@ class RegenSystem(BaseSystem):
         db.hp = new_hp
         # Keep the sub-HP remainder; drop any surplus once at full HP.
         db.hp_regen_accumulator = 0.0 if new_hp >= hp_max else (accumulated - applied)
+
+    def _tile_heal_bonus(self, entity: Any) -> int:
+        """Field Hospital heal aura at *entity*'s tile (item-loot-economy R10.3).
+
+        The Field Hospital term of the passive heal, delegated to the ONE
+        shared aura read :func:`world.utils.tile_aura_level` (DRY H2 — also
+        used by the Sniper Nest range and Watchtower vision auras) with the
+        ``HEAL_AURA`` capability: grants ``1 + (level - 1) // 2`` → L1 +1,
+        L3 +2, L5 +3 extra HP per regen interval while the entity's owning
+        player stands on their OWN, OPERATIONAL heal-aura building's tile.
+
+        Owner attribution uses the helper's shared owning-player resolver: a
+        player is its own owner; an owner's AGENT on the tile also benefits
+        (the Sniper Nest attribution shape), so an enemy or a stranger
+        camping the tile gets nothing. Strictly ON-TILE and OWNER-ONLY —
+        positional, not permanent. Returns 0 in every other case and never
+        raises, so a bad building read can never break the regen tick.
+        """
+        from world.constants import HEAL_AURA
+        from world.utils import tile_aura_level
+
+        return tile_aura_level(entity, HEAL_AURA, provider=self.registry)
 
     def _regen_multiplier(self, entity: Any) -> float:
         """Combined regen multiplier for *entity* (>= 0).

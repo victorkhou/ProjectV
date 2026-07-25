@@ -712,3 +712,195 @@ class TestMinVisionRadiusDefault:
         player = _FakePlayer(x=5, y=5)
         tiles = fow.get_visible_tiles(player, [])
         assert len(tiles) == 25
+
+
+# -------------------------------------------------------------- #
+#  Tests: Watchtower VISION_AURA tile bonus
+#  (item-loot-economy task 6.2, R10.2)
+# -------------------------------------------------------------- #
+
+class _FakeBuildingDef:
+    """BuildingDef stand-in exposing has_capability."""
+
+    def __init__(self, capabilities=()):
+        self._caps = frozenset(capabilities)
+
+    def has_capability(self, cap):
+        return cap in self._caps
+
+
+class _FakeDefsProvider:
+    """DefinitionsProvider stand-in resolving building abbreviations."""
+
+    def __init__(self, defs):
+        self._defs = dict(defs)
+
+    def resolve_building(self, btype):
+        return self._defs.get(btype)
+
+
+class _AuraRoom:
+    """PlanetRoom-shaped fake answering ``get_buildings_at`` — the tile
+    read ``_tile_vision_bonus`` mirrors from the Sniper Nest's
+    ``_tile_range_bonus``."""
+
+    def __init__(self):
+        self._at = {}
+
+    def place(self, x, y, building):
+        self._at.setdefault((x, y), []).append(building)
+
+    def get_buildings_at(self, x, y):
+        return list(self._at.get((x, y), []))
+
+
+class _FakeTower:
+    """Watchtower building fake; attributes read through the db bag."""
+
+    def __init__(self, btype="WT", owner=None, level=1, offline=False,
+                 under_construction=False):
+        self.db = _FakeDB(
+            building_type=btype,
+            owner=owner,
+            offline=offline,
+            under_construction=under_construction,
+        )
+        self.building_level = level
+
+
+def _aura_fow(pvr=2):
+    """A FogOfWarSystem with a WT (vision_aura) definitions provider."""
+    fow = FogOfWarSystem(_FakeBalance(pvr=pvr, bvr=1))
+    fow.set_definitions_provider(_FakeDefsProvider({
+        "WT": _FakeBuildingDef({"vision_aura", "upgradable"}),
+        "HQ": _FakeBuildingDef({"headquarters"}),
+    }))
+    return fow
+
+
+def _aura_player(room, x, y, oid=1):
+    """A player standing on tile (x, y) of *room*, with a stable id."""
+    player = _FakePlayer(name=f"P{oid}", x=x, y=y)
+    player.id = oid
+    player.location = room
+    return player
+
+
+class TestTileVisionBonus:
+    """R10.2 (item-loot-economy task 6.2): the Watchtower VISION_AURA.
+
+    ``_tile_vision_bonus`` grants ``1 + (level-1)//2`` extra sight_range
+    only while the player stands on their OWN, OPERATIONAL vision-aura
+    building's tile — on-tile only and owner-only, mirroring the Sniper
+    Nest range aura.
+    """
+
+    def test_owner_on_tile_extends_vision_circle(self):
+        """The aura flows into get_visible_tiles: radius 2 + L1 tower = 3."""
+        fow = _aura_fow(pvr=2)
+        room = _AuraRoom()
+        player = _aura_player(room, 5, 5)
+        room.place(5, 5, _FakeTower(owner=player, level=1))
+        tiles = fow.get_visible_tiles(player, [])
+        # Chebyshev radius 3 around (5,5) => 7x7 = 49 tiles
+        assert len(tiles) == 49
+        assert (8, 8) in tiles
+        assert (9, 5) not in tiles
+
+    def test_bonus_applies_only_on_the_tower_tile(self):
+        """On the tower's tile → +1 (L1); one tile off → 0 (no adjacency)."""
+        fow = _aura_fow()
+        room = _AuraRoom()
+        owner = _aura_player(room, 5, 5)
+        room.place(5, 5, _FakeTower(owner=owner, level=1))
+        assert fow._tile_vision_bonus(owner) == 1
+        # Same owner, adjacent tile: strictly on-tile.
+        owner.db.coord_x = 6
+        assert fow._tile_vision_bonus(owner) == 0
+
+    def test_level_scaling_plus_one_to_plus_three(self):
+        """Formula 1 + (lvl-1)//2: L1 +1, L2 +1, L3 +2, L4 +2, L5 +3."""
+        fow = _aura_fow()
+        expected = {1: 1, 2: 1, 3: 2, 4: 2, 5: 3}
+        for level, bonus in expected.items():
+            room = _AuraRoom()
+            player = _aura_player(room, 0, 0)
+            room.place(0, 0, _FakeTower(owner=player, level=level))
+            assert fow._tile_vision_bonus(player) == bonus, (
+                f"level {level} should grant +{bonus}"
+            )
+
+    def test_someone_elses_tower_grants_nothing(self):
+        """Owner-only (R10.2): standing on another player's tower → 0."""
+        fow = _aura_fow()
+        room = _AuraRoom()
+        intruder = _aura_player(room, 2, 3, oid=1)
+        builder = _FakePlayer(name="Builder", x=0, y=0)
+        builder.id = 2
+        room.place(2, 3, _FakeTower(owner=builder, level=5))
+        assert fow._tile_vision_bonus(intruder) == 0
+
+    def test_owners_agent_on_tile_benefits(self):
+        """UNIFIED owner attribution (DRY H2 extraction): an owner's AGENT
+        (db.owner) standing on the tower tile extends the aura on the
+        owner's behalf — consistent with the Sniper Nest / Field Hospital
+        attribution (this reader previously credited the raw player only)."""
+        fow = _aura_fow()
+        room = _AuraRoom()
+        owner = _aura_player(room, 9, 9, oid=1)
+        agent = _aura_player(room, 2, 3, oid=7)
+        agent.db.owner = owner  # agent shape: attributed to its owning player
+        room.place(2, 3, _FakeTower(owner=owner, level=1))
+        assert fow._tile_vision_bonus(agent) == 1
+        # A STRANGER's agent on the tile still gets nothing (owner-only).
+        stranger = _aura_player(room, 9, 0, oid=2)
+        strangers_agent = _aura_player(room, 2, 3, oid=8)
+        strangers_agent.db.owner = stranger
+        assert fow._tile_vision_bonus(strangers_agent) == 0
+
+    def test_corrupted_building_level_none_degrades_to_zero(self):
+        """A tower whose level reads None (corrupted data) grants 0 rather
+        than raising out of the fog computation (shared-helper guard)."""
+        fow = _aura_fow()
+        room = _AuraRoom()
+        player = _aura_player(room, 0, 0)
+        room.place(0, 0, _FakeTower(owner=player, level=None))
+        assert fow._tile_vision_bonus(player) == 0
+
+    def test_non_operational_tower_inert(self):
+        """An offline or mid-upgrade tower grants nothing."""
+        fow = _aura_fow()
+        room = _AuraRoom()
+        player = _aura_player(room, 0, 0)
+        room.place(0, 0, _FakeTower(owner=player, level=3, offline=True))
+        assert fow._tile_vision_bonus(player) == 0
+
+        room2 = _AuraRoom()
+        player2 = _aura_player(room2, 0, 0)
+        room2.place(0, 0, _FakeTower(owner=player2, level=3,
+                                     under_construction=True))
+        assert fow._tile_vision_bonus(player2) == 0
+
+    def test_non_aura_building_grants_nothing(self):
+        """Standing on an owned building WITHOUT vision_aura (an HQ) → 0."""
+        fow = _aura_fow()
+        room = _AuraRoom()
+        player = _aura_player(room, 0, 0)
+        room.place(0, 0, _FakeTower(btype="HQ", owner=player, level=5))
+        assert fow._tile_vision_bonus(player) == 0
+
+    def test_empty_tile_and_missing_location_never_raise(self):
+        """No building / no location / no provider → 0, never an exception."""
+        fow = _aura_fow()
+        room = _AuraRoom()
+        player = _aura_player(room, 0, 0)
+        assert fow._tile_vision_bonus(player) == 0
+        # Player with no location at all.
+        homeless = _FakePlayer(x=0, y=0)
+        assert fow._tile_vision_bonus(homeless) == 0
+        # A provider that can't resolve the building type falls soft → 0.
+        unknown = FogOfWarSystem(_FakeBalance(pvr=2, bvr=1))
+        unknown.set_definitions_provider(_FakeDefsProvider({}))
+        player3 = _aura_player(room, 0, 0)
+        room.place(0, 0, _FakeTower(owner=player3, level=5))
+        assert unknown._tile_vision_bonus(player3) == 0

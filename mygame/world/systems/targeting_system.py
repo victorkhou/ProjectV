@@ -38,6 +38,24 @@ class TargetingSystem(BaseSystem):
 
     def __init__(self, registry: DataRegistry, event_bus: EventBus) -> None:
         super().__init__(registry, event_bus)
+        # R8: the combat engine's single range resolver
+        # ``(attacker, weapon_item) -> int`` (weapon instance + owner tech +
+        # tile bonus, capped), injected at the composition root so the lock
+        # re-validation never diverges from the engine's queue/resolve range
+        # checks. None (un-injected minimal setups) falls back to the raw
+        # weapon-stat read.
+        self._range_resolver = None
+
+    def set_range_resolver(self, resolver) -> None:
+        """Inject the combat engine's R8 range resolver.
+
+        Args:
+            resolver: Callable ``(attacker, weapon_item) -> int`` — the
+                combat engine's public ``resolve_weapon_range``, so acquire /
+                upkeep / fire-time range checks all resolve the SAME
+                effective range as the engine's queue + resolve checks.
+        """
+        self._range_resolver = resolver
 
     # ------------------------------------------------------------------ #
     #  Weapon / accuracy helpers
@@ -64,13 +82,34 @@ class TargetingSystem(BaseSystem):
 
     @staticmethod
     def weapon_range(weapon: Any) -> int:
-        """Return a weapon's ``range`` stat (default 1)."""
+        """Return a weapon's raw ``range`` stat (default 1).
+
+        The bare instance stat only — lock/range validation goes through
+        :meth:`effective_range` (the injected combat-engine R8 resolver)
+        so tech/tile bonuses are included there.
+        """
         if weapon is not None and hasattr(weapon, "get_stat"):
             try:
                 return int(weapon.get_stat("range", 1))
             except (TypeError, ValueError):
                 return 1
         return 1
+
+    def effective_range(self, player: Any, weapon: Any) -> int:
+        """Effective range of *weapon* wielded by *player* (R8).
+
+        Resolves through the injected combat-engine helper (weapon
+        instance range + owner tech + tile bonus, clamped to
+        ``max_weapon_range``) so the lock re-validation can never diverge
+        from the engine's queue/resolve range checks. Falls back to the
+        raw weapon stat when un-injected (isolated minimal setups).
+        """
+        if self._range_resolver is not None:
+            try:
+                return int(self._range_resolver(player, weapon))
+            except (TypeError, ValueError):
+                return 1
+        return self.weapon_range(weapon)
 
     @staticmethod
     def _weapon_stat(weapon: Any, stat: str, default: float = 0.0) -> float:
@@ -114,7 +153,7 @@ class TargetingSystem(BaseSystem):
         that just stepped out of range is refused with feedback rather than
         silently dropped by the engine after consuming ammo.
         """
-        return self._in_range(player, target, self.weapon_range(weapon))
+        return self._in_range(player, target, self.effective_range(player, weapon))
 
     @staticmethod
     def get_target(player: Any) -> Any | None:
@@ -159,7 +198,7 @@ class TargetingSystem(BaseSystem):
         if target is None or target is player:
             return False, "No valid target."
 
-        rng = self.weapon_range(weapon)
+        rng = self.effective_range(player, weapon)
         if not self._in_range(player, target, rng):
             return False, "That target is out of your weapon's range."
 
@@ -220,8 +259,9 @@ class TargetingSystem(BaseSystem):
             self.clear_lock(player, reason="left_area")
             return
 
-        # Still in weapon range?
-        if not self._in_range(player, target, self.weapon_range(weapon)):
+        # Still in weapon range? (Through the R8 resolver — tech/tile bonuses
+        # included, so the lock survives at the same range the engine allows.)
+        if not self._in_range(player, target, self.effective_range(player, weapon)):
             self.clear_lock(player, reason="out_of_range")
             return
 

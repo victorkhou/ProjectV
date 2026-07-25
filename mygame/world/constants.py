@@ -89,7 +89,17 @@ GEAR_CATEGORIES = ("armor", "weapon", "accessory")
 #: ``throwable`` = grenades (thrown in a direction, land, then fuse); ``mine`` =
 #: mines (armed in place via ``arm``, then fuse). Both are "bombs": a fused AoE
 #: explosive placed on a tile, differing only in how they're deployed.
-SUPPLY_CATEGORIES = ("ammo", "consumable", "throwable", "mine")
+#: ``insert`` = Blacksmith weapon-mod consumables (item-loot-economy §4.3): a
+#: counted, slotless supply carrying an ``insert_effect`` payload, consumed by
+#: the `insert` command at the Blacksmith bench. Classified as a SUPPLY (not
+#: Gear) deliberately — the design calls an insert "a consumable item", so it
+#: stacks in the Supply_Bag and rides the existing supply routing in
+#: ``equipment_system._route_produced_item`` (production/craft), the respawn
+#: stash restore, and the admin spawn path with zero code changes. It is NOT
+#: usable via `use` (that command requires category ``consumable``) nor
+#: throwable (gated on BOMB_CATEGORIES); the only consumer is task 4.3's
+#: `insert` command.
+SUPPLY_CATEGORIES = ("ammo", "consumable", "throwable", "mine", "insert")
 
 #: The two bomb families (fused AoE explosives). A ``throwable`` item is a
 #: grenade; a ``mine`` item is a mine. Used to gate the ``throw`` vs ``arm``
@@ -428,6 +438,60 @@ RESPAWN_POINT = "respawn_point"
 #: (agents/cargo for cross-planet transport). See steering doc §7.
 LAUNCH_PAD = "launch_pad"
 
+#: The Blacksmith gear bench (item-loot-economy §4). The capability exists so
+#: the bench commands (``insert``/``reroll``/``salvage``) can LOCATE the
+#: building the player is standing in — the Blacksmith is a pure bench, it does
+#: NOT produce items (deliberately absent from
+#: ``equipment_system.EQUIPMENT_BUILDING_TYPES``). Usage gates on ownership +
+#: operational status (offline / mid-upgrade) mirroring the craft gate order;
+#: there is no active-HQ usage gate.
+BLACKSMITH = "blacksmith"
+
+#: The Refinery resource converter (item-loot-economy §7, R10.4). The
+#: capability exists so the ``refine`` command can LOCATE the building the
+#: player is standing in — like the Blacksmith bench, the Refinery is a
+#: player-operated station, not a producer. It is the economy's **Nexium
+#: sink**: ``refine <resource> <amount>`` converts a carried resource stock
+#: (Nexium included — that is the point) into Salvage at a building-level
+#: scaled rate. The conversion NEVER outputs Nexium or any other resource
+#: (anti-loop, R10.4) — Salvage is the only credit path. Usage gates on
+#: ownership + operational status (offline / mid-upgrade), mirroring the
+#: Blacksmith bench; there is no active-HQ usage gate.
+RESOURCE_CONVERTER = "resource_converter"
+
+#: The Sniper Nest range aura (item-loot-economy §7, R10.1). While the
+#: building's OWNER stands on its tile, an operational range-aura building
+#: grants a level-scaled weapon +range through the R8 range-resolution hook
+#: (``CombatEngine._tile_range_bonus``): ``1 + (level - 1) // 2`` → L1 +1,
+#: L3 +2, L5 +3. Strictly ON-TILE and OWNER-ONLY — positional, not permanent
+#: (design decision §12: adjacency is an explicit later extension, not
+#: shipped). The total is still clamped by ``balance.max_weapon_range``.
+RANGE_AURA = "range_aura"
+
+#: The Watchtower vision aura (item-loot-economy §7, R10.2). While the
+#: building's OWNER stands on its tile, an operational vision-aura building
+#: grants a level-scaled ``sight_range`` bonus to the player vision circle
+#: through the fog-of-war sight read (``FogOfWarSystem._tile_vision_bonus``):
+#: ``1 + (level - 1) // 2`` → L1 +1, L3 +2, L5 +3 — the same modest curve as
+#: the Sniper Nest. Strictly ON-TILE and OWNER-ONLY, mirroring the RANGE_AURA
+#: decision (positional, not permanent; a radius aura around the tower is an
+#: explicit possible later extension, not shipped in this feature).
+VISION_AURA = "vision_aura"
+
+#: The Field Hospital heal aura (item-loot-economy §7, R10.3). While the
+#: building's OWNER (or the owner's agent) stands on its tile, an operational
+#: heal-aura building grants a flat heal-over-time through the passive
+#: HP-regen path (``RegenSystem._tile_heal_bonus``): ``1 + (level - 1) // 2``
+#: extra HP per regen interval (``hp_regen_interval_ticks``) → L1 +1, L3 +2,
+#: L5 +3 — the same modest curve as the other auras. The bonus is ADDITIVE on
+#: top of (not scaled by) the entity's ``regen_multiplier`` — it is the
+#: facility healing you, not your own metabolism — and rides the regen
+#: machinery, so it obeys the same interval cadence, skips the dead /
+#: incapacitated, and never overheals past ``hp_max``. Strictly ON-TILE and
+#: OWNER-ONLY, mirroring the RANGE_AURA/VISION_AURA decisions (positional,
+#: not permanent; a radius aura is an explicit later extension, not shipped).
+HEAL_AURA = "heal_aura"
+
 BUILDING_CAPABILITIES: frozenset[str] = frozenset({
     HARVESTABLE,
     UPGRADABLE,
@@ -440,6 +504,11 @@ BUILDING_CAPABILITIES: frozenset[str] = frozenset({
     SHIELD_GENERATOR,
     RESPAWN_POINT,
     LAUNCH_PAD,
+    BLACKSMITH,
+    RESOURCE_CONVERTER,
+    RANGE_AURA,
+    VISION_AURA,
+    HEAL_AURA,
 })
 
 #: Fraction of carried items/resources a Respawn building recovers, by BUILDING

@@ -77,6 +77,12 @@ class MapDataProvider:
         px = _get_coord(player, "coord_x")
         py = _get_coord(player, "coord_y")
         pvr = self._fog_system.player_vision_radius
+        # Viewport bounds come from the dedicated viewport radius, NOT the
+        # vision radius — vision balance changes must never resize the map.
+        # Tiles inside the viewport but beyond vision render as fog/unexplored.
+        viewport = getattr(
+            self._fog_system, "map_viewport_radius", pvr
+        )
         border = getattr(self._fog_system, "_map_border", 5)
 
         # Compute visibility (unioned with PLAYING allies' if the shared-vision
@@ -92,10 +98,10 @@ class MapDataProvider:
         buildings_mem = self._fog_system.get_discovered_buildings_map(player)
 
         # Bounds
-        min_x = px - pvr - border
-        max_x = px + pvr + border
-        min_y = py - pvr - border
-        max_y = py + pvr + border
+        min_x = px - viewport - border
+        max_x = px + viewport + border
+        min_y = py - viewport - border
+        max_y = py + viewport + border
 
         objects_by_coord: dict[tuple[int, int], list] = {}
         if planet_room is not None and hasattr(planet_room, "get_objects_in_area"):

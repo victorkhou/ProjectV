@@ -276,5 +276,63 @@ class TestAccuracyHelpers(unittest.TestCase):
         self.assertEqual(_clamp01(9.0), 1.0)
 
 
+# -------------------------------------------------------------- #
+#  R8 range resolver injection (item-loot-economy task 3.1)
+# -------------------------------------------------------------- #
+
+class TestRangeResolverInjection(unittest.TestCase):
+    """The lock re-validation resolves range through the injected
+    combat-engine helper (R8.2), so acquire/upkeep/fire-time checks see
+    the SAME effective range (weapon + tech + tile, capped) as the
+    engine's queue/resolve sites — they can never diverge."""
+
+    @staticmethod
+    def _resolver(bonus):
+        """A stand-in for combat_engine._resolve_weapon_range: raw weapon
+        stat + a flat bonus (tech/tile)."""
+        def _resolve(player, weapon):
+            return int(weapon.get_stat("range", 1)) + bonus
+        return _resolve
+
+    def test_effective_range_uses_injected_resolver(self):
+        sys, _ = _make()
+        p = _Player(weapon=_Weapon(weapon_range=4))
+        weapon = p.equipment.get_equipped("weapon")
+        self.assertEqual(sys.effective_range(p, weapon), 4)  # fallback: raw
+        sys.set_range_resolver(self._resolver(bonus=2))
+        self.assertEqual(sys.effective_range(p, weapon), 6)
+
+    def test_in_weapon_range_honors_resolver_bonus(self):
+        sys, _ = _make()
+        sys.set_range_resolver(self._resolver(bonus=2))
+        p = _Player(x=0, y=0)
+        weapon = _Weapon(weapon_range=4)
+        # Distance 6: beyond the raw stat (4) but within resolver range (6).
+        self.assertTrue(sys.in_weapon_range(p, _Enemy(x=6, y=0), weapon))
+        self.assertFalse(sys.in_weapon_range(p, _Enemy(x=7, y=0), weapon))
+
+    def test_acquire_honors_resolver_bonus(self):
+        sys, _ = _make()
+        sys.set_range_resolver(self._resolver(bonus=2))
+        p = _Player(weapon=_Weapon(weapon_range=4))
+        ok, _ = sys.acquire(p, _Enemy(x=6, y=0))
+        self.assertTrue(ok)
+
+    def test_upkeep_keeps_lock_within_resolver_range(self):
+        """A target inside the resolver-extended range (but beyond the raw
+        stat) does NOT break the lock at upkeep."""
+        sys, _ = _make(target_lock_ticks=2)
+        sys.set_range_resolver(self._resolver(bonus=2))
+        p = _Player(weapon=_Weapon(weapon_range=4))
+        enemy = _Enemy(x=3, y=0)
+        sys.acquire(p, enemy)
+        enemy.db.coord_x = 6  # beyond raw stat 4, within 4+2
+        sys.process_tick(1, [p])
+        self.assertIs(p.db.lock_target, enemy)
+        enemy.db.coord_x = 7  # beyond the resolved range → lock breaks
+        sys.process_tick(2, [p])
+        self.assertIsNone(p.db.lock_target)
+
+
 if __name__ == "__main__":
     unittest.main()

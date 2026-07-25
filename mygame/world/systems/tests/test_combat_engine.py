@@ -3105,6 +3105,352 @@ class TestFireBurnDoT(unittest.TestCase):
         self.assertEqual(effects, [])
 
 
+class TestPoisonDoT(unittest.TestCase):
+    """Poison weapons apply a DoT on hit, mirroring the fire burn
+    (item-loot-economy task 3.2, R9, design §6.2): lower per-tick than
+    fire but longer, kills route through the shared defeat branch, and
+    the typed hit itself is mitigated by poison_resist + baseline_resist."""
+
+    def _poison_weapon(self, damage=20):
+        weapon = FakeWeapon(damage=damage)
+        weapon.damage_type = "poison"
+        return weapon
+
+    def test_poison_hit_applies_dot_effect(self):
+        """A poison hit adds a poison entry: max(1, round(raw * fraction))
+        per tick for poison_dot_ticks ticks (R9.1, R9.2)."""
+        registry = _make_registry()
+        registry.balance.poison_dot_fraction = 0.15
+        registry.balance.poison_dot_ticks = 4
+        engine, _ = _make_engine(registry=registry)
+
+        attacker = FakePlayer(name="A")
+        target = FakePlayer(name="T")
+        target.db.active_effects = []
+
+        engine.pending_actions.append({
+            "attacker": attacker,
+            "target": target,
+            "weapon_item": self._poison_weapon(damage=20),
+        })
+        engine.resolve_tick()
+
+        effects = target.db.active_effects
+        self.assertEqual(len(effects), 1)
+        self.assertEqual(effects[0]["type"], "poison")
+        self.assertEqual(effects[0]["damage"], 3)  # max(1, round(20*0.15)) = 3
+        self.assertEqual(effects[0]["ticks_remaining"], 4)
+
+    def test_poison_dot_floors_at_one(self):
+        """A tiny raw hit still poisons for at least 1 per tick."""
+        registry = _make_registry()
+        registry.balance.poison_dot_fraction = 0.15
+        registry.balance.poison_dot_ticks = 4
+        engine, _ = _make_engine(registry=registry)
+
+        target = FakePlayer(name="T")
+        target.db.active_effects = []
+        engine._apply_poison_dot(target, 1, FakePlayer(name="A"))
+
+        self.assertEqual(target.db.active_effects[0]["damage"], 1)
+
+    def test_resolve_now_applies_poison(self):
+        """The INSTANT path (player attack/shoot) applies the poison DoT —
+        _finalize_hit is the one choke point, same as the fire burn."""
+        registry = _make_registry()
+        engine, _ = _make_engine(registry=registry)
+        attacker = FakePlayer(name="A",
+                              location=FakeTile(xyz=(0, 0, "earth")))
+        attacker.equipment.equip(self._poison_weapon())
+        target = FakePlayer(name="T",
+                            location=FakeTile(xyz=(1, 0, "earth")))
+        target.db.active_effects = []
+
+        ok, _ = engine.resolve_now(attacker, target)
+        self.assertTrue(ok)
+        effects = target.db.active_effects
+        self.assertEqual(len(effects), 1, "instant hit must apply the poison")
+        self.assertEqual(effects[0]["type"], "poison")
+
+    def test_poison_ticks_deal_damage(self):
+        """tick_effects_on_entity applies poison damage each tick."""
+        registry = _make_registry()
+        engine, _ = _make_engine(registry=registry)
+
+        target = FakePlayer(name="T", hp=100)
+        target.db.active_effects = [
+            {"type": "poison", "damage": 3, "ticks_remaining": 2, "source": None}
+        ]
+
+        engine.tick_effects_on_entity(target)
+        self.assertEqual(target.db.hp, 97)  # 100 - 3
+        self.assertEqual(len(target.db.active_effects), 1)
+        self.assertEqual(target.db.active_effects[0]["ticks_remaining"], 1)
+
+        engine.tick_effects_on_entity(target)
+        self.assertEqual(target.db.hp, 94)  # 97 - 3
+        self.assertEqual(target.db.active_effects, [])  # expired
+
+    def test_poison_death_of_enemy_npc_is_permanent(self):
+        """A poison tick that kills an enemy NPC routes through the shared
+        defeat branch (_handle_zero_hp) → permanent death, NEVER the
+        player-respawn path — same invariant as the burn."""
+        registry = _make_registry()
+        engine, _ = _make_engine(registry=registry)
+        guard = FakePlayer(name="Guard", hp=3,
+                           location=FakeTile(xyz=(0, 0, "earth")))
+        guard.db.npc_type = "enemy"  # an NPC-base guard
+        deleted = []
+        guard.delete = lambda: deleted.append(True)
+        guard.db.active_effects = [
+            {"type": "poison", "damage": 5, "ticks_remaining": 3, "source": None}
+        ]
+
+        engine.tick_effects_on_entity(guard)
+
+        self.assertTrue(deleted, "poison-killed enemy NPC must be deleted")
+        self.assertLessEqual(guard.db.hp, 0,
+                             "must NOT be respawned to full HP")
+
+    def test_poison_can_defeat_player(self):
+        """A poison tick that drops a player to 0 HP triggers defeat via
+        _handle_zero_hp (respawn resets HP), exactly like a burn death."""
+        registry = _make_registry()
+        engine, _ = _make_engine(registry=registry)
+
+        target = FakePlayer(name="T", hp=2)
+        target.db.active_effects = [
+            {"type": "poison", "damage": 5, "ticks_remaining": 3, "source": None}
+        ]
+
+        engine.tick_effects_on_entity(target)
+        # Defeat ran: effects cleared and HP reset by the respawn handler.
+        self.assertEqual(target.db.active_effects, [])
+        self.assertEqual(target.db.hp, target.db.hp_max)
+
+    def test_poison_typed_hit_mitigated_by_resists(self):
+        """A pure poison typed hit reads poison_resist + baseline_resist via
+        the existing typed-resist math, chip floor included (R9.1, R9.3)."""
+        registry = _make_registry()
+        registry.balance.baseline_resist = 2.0
+        engine, _ = _make_engine(registry=registry)
+
+        resist_gear = FakeArmor(damage_reduction=0)
+        resist_gear.stat_modifiers = {"poison_resist": 5}
+        resist_gear.slot = "back"
+        target = FakePlayer(name="T")
+        target.equipment.equip(resist_gear)
+
+        # 25 poison - (5 poison_resist + 2 baseline) = 18
+        dealt = engine._calculate_damage(
+            attacker=FakePlayer(name="A"), target=target,
+            weapon_item=self._poison_weapon(damage=25),
+        )
+        self.assertEqual(dealt, 18)
+
+    def test_poison_ignores_physical_armor(self):
+        """Poison is non-physical: physical DR does not reduce it."""
+        registry = _make_registry()
+        registry.balance.baseline_resist = 0.0
+        engine, _ = _make_engine(registry=registry)
+
+        target = FakePlayer(name="T", armor=FakeArmor(damage_reduction=50))
+        dealt = engine._calculate_damage(
+            attacker=FakePlayer(name="A"), target=target,
+            weapon_item=self._poison_weapon(damage=25),
+        )
+        self.assertEqual(dealt, 25)
+
+    def test_chip_floor_applies_to_poison(self):
+        """Stacked poison_resist never grants immunity — the 50% chip floor
+        holds for poison exactly as for other typed damage."""
+        registry = _make_registry()
+        engine, _ = _make_engine(registry=registry)
+
+        resist_gear = FakeArmor(damage_reduction=0)
+        resist_gear.stat_modifiers = {"poison_resist": 999}
+        resist_gear.slot = "back"
+        target = FakePlayer(name="T")
+        target.equipment.equip(resist_gear)
+
+        # 25 poison vs 999 resist → chip = ceil(25 * 0.5) = 13
+        dealt = engine._calculate_damage(
+            attacker=FakePlayer(name="A"), target=target,
+            weapon_item=self._poison_weapon(damage=25),
+        )
+        self.assertEqual(dealt, 13)
+
+    def test_regen_counters_light_poison_dot(self):
+        """R9.4 (the counter principle): passive HP regen out-heals a LIGHT
+        poison DoT — over the DoT's lifetime the target ends with MORE HP
+        than it started with."""
+        from mygame.world.systems.regen_system import RegenSystem
+
+        registry = _make_registry()
+        # Regen: 2% of hp_max (2 HP) every tick > 1 poison per tick.
+        registry.balance.hp_regen_percent = 2.0
+        registry.balance.hp_regen_interval_ticks = 1
+        engine, event_bus = _make_engine(registry=registry)
+        regen = RegenSystem(registry, event_bus)
+
+        target = FakePlayer(name="T", hp=50, hp_max=100)
+        target.db.active_effects = [
+            {"type": "poison", "damage": 1, "ticks_remaining": 4, "source": None}
+        ]
+
+        for tick in range(1, 5):  # the DoT's full 4-tick lifetime
+            engine.tick_effects_on_entity(target)
+            regen.process_tick([target], tick_number=tick)
+
+        self.assertEqual(target.db.active_effects, [], "DoT expired")
+        self.assertGreater(target.db.hp, 50,
+                           "light poison DoT must be out-healed by regen")
+
+
+class TestWeaponProcAffixes(unittest.TestCase):
+    """Poison-proc affixes ride weapon hits (item-loot-economy task 3.4).
+
+    An "of the Viper" affix (``{proc: poison, magnitude: m}`` on the weapon
+    instance's ``affixes``) is an on-hit RIDER, not a damage-type
+    conversion: the weapon's own damage math is untouched, and every landed
+    hit additionally applies a poison DoT of ``m`` per tick for
+    ``poison_dot_ticks`` ticks — the same effect model as a poison-typed
+    weapon's DoT, so it ticks/kills/counters identically.
+    """
+
+    @staticmethod
+    def _viper_weapon(damage=25, magnitude=2.0):
+        weapon = FakeWeapon(damage=damage)
+        weapon.affixes = [{"key": "venomous", "name": "of the Viper",
+                           "proc": "poison", "magnitude": magnitude,
+                           "value": 10.0}]
+        return weapon
+
+    def test_viper_proc_applies_poison_dot_on_hit(self):
+        """A physical weapon with the viper affix poisons on hit: per-tick =
+        the rolled magnitude (rounded), duration = poison_dot_ticks."""
+        registry = _make_registry()
+        registry.balance.poison_dot_ticks = 4
+        engine, _ = _make_engine(registry=registry)
+
+        attacker = FakePlayer(name="A")
+        target = FakePlayer(name="T")
+        target.db.active_effects = []
+
+        engine.pending_actions.append({
+            "attacker": attacker,
+            "target": target,
+            "weapon_item": self._viper_weapon(magnitude=2.4),
+        })
+        engine.resolve_tick()
+
+        effects = target.db.active_effects
+        self.assertEqual(len(effects), 1)
+        self.assertEqual(effects[0]["type"], "poison")
+        self.assertEqual(effects[0]["damage"], 2)  # round(2.4)
+        self.assertEqual(effects[0]["ticks_remaining"], 4)
+
+    def test_proc_does_not_convert_damage_type(self):
+        """The proc is a rider: the hit itself stays physical (mitigated by
+        physical DR, not poison_resist)."""
+        registry = _make_registry()
+        registry.balance.baseline_resist = 0.0
+        engine, _ = _make_engine(registry=registry)
+
+        target = FakePlayer(name="T", armor=FakeArmor(damage_reduction=10))
+        dealt = engine._calculate_damage(
+            attacker=FakePlayer(name="A"), target=target,
+            weapon_item=self._viper_weapon(damage=25),
+        )
+        self.assertEqual(dealt, 15)  # 25 - 10 physical DR
+
+    def test_instant_path_applies_proc(self):
+        """resolve_now flows through _finalize_hit → the proc fires there too."""
+        registry = _make_registry()
+        engine, _ = _make_engine(registry=registry)
+        attacker = FakePlayer(name="A",
+                              location=FakeTile(xyz=(0, 0, "earth")))
+        attacker.equipment.equip(self._viper_weapon())
+        target = FakePlayer(name="T",
+                            location=FakeTile(xyz=(1, 0, "earth")))
+        target.db.active_effects = []
+
+        ok, _ = engine.resolve_now(attacker, target)
+        self.assertTrue(ok)
+        self.assertEqual(len(target.db.active_effects), 1)
+        self.assertEqual(target.db.active_effects[0]["type"], "poison")
+
+    def test_poison_typed_weapon_with_viper_stacks_both_dots(self):
+        """A poison-TYPED weapon carrying a viper affix applies BOTH DoTs
+        (the typed fraction-based one + the proc rider) — the affix keeps
+        its value on any weapon."""
+        registry = _make_registry()
+        registry.balance.poison_dot_fraction = 0.15
+        registry.balance.poison_dot_ticks = 4
+        engine, _ = _make_engine(registry=registry)
+
+        weapon = self._viper_weapon(damage=20, magnitude=1.0)
+        weapon.damage_type = "poison"
+        attacker = FakePlayer(name="A")
+        target = FakePlayer(name="T")
+        target.db.active_effects = []
+
+        engine.pending_actions.append({
+            "attacker": attacker, "target": target, "weapon_item": weapon,
+        })
+        engine.resolve_tick()
+
+        effects = target.db.active_effects
+        self.assertEqual(len(effects), 2)
+        self.assertEqual({e["type"] for e in effects}, {"poison"})
+        # Typed DoT: max(1, round(20*0.15)) = 3; proc DoT: magnitude 1.
+        self.assertEqual(sorted(e["damage"] for e in effects), [1, 3])
+
+    def test_proc_magnitude_floors_at_one(self):
+        """A defensively-tiny magnitude still poisons for at least 1/tick."""
+        registry = _make_registry()
+        engine, _ = _make_engine(registry=registry)
+        target = FakePlayer(name="T")
+        target.db.active_effects = []
+
+        engine._apply_weapon_procs(
+            target, self._viper_weapon(magnitude=0.2), FakePlayer(name="A")
+        )
+        self.assertEqual(target.db.active_effects[0]["damage"], 1)
+
+    def test_stat_affix_does_not_proc(self):
+        """An "of Reach" (stat) affix on the weapon procs nothing."""
+        registry = _make_registry()
+        engine, _ = _make_engine(registry=registry)
+
+        weapon = FakeWeapon(damage=25)
+        weapon.affixes = [{"key": "long", "name": "of Reach",
+                           "stat": "range", "magnitude": 2.0, "value": 10.0}]
+        attacker = FakePlayer(name="A")
+        target = FakePlayer(name="T")
+        target.db.active_effects = []
+
+        engine.pending_actions.append({
+            "attacker": attacker, "target": target, "weapon_item": weapon,
+        })
+        engine.resolve_tick()
+        self.assertEqual(target.db.active_effects, [])
+
+    def test_of_reach_affix_extends_combat_range(self):
+        """An "of Reach" affix (stat: range, band 1–3) on the weapon extends
+        the effective combat range through _resolve_weapon_range: a target
+        beyond the base range but within base+affix is attackable."""
+        engine, _ = _make_engine()
+        weapon = FakeRolledWeapon(base_range=3, range_affix=3)
+        attacker = FakePlayer(name="A", weapon=weapon,
+                              location=FakeTile(xyz=(0, 0, "earth")))
+        self.assertEqual(engine._resolve_weapon_range(attacker, weapon), 6)
+        # Distance 6: beyond the def base (3) but within base+affix (6).
+        target = FakePlayer(name="T", location=FakeTile(xyz=(6, 0, "earth")))
+        ok, msg = engine.queue_attack(attacker, target)
+        self.assertTrue(ok, msg)
+
+
 class TestBlastArmorShred(unittest.TestCase):
     """Blast weapons shred target's physical armor, stacking per hit."""
 
@@ -3452,6 +3798,443 @@ class TestTerrainDefense(unittest.TestCase):
         # The typed-resist branch never consults the terrain resolver at all.
         self.assertEqual(resolver.player_calls, [])
         self.assertEqual(resolver.base_calls, [])
+
+
+# -------------------------------------------------------------- #
+#  R8 range resolution (item-loot-economy task 3.1)
+# -------------------------------------------------------------- #
+
+class FakeRolledWeapon:
+    """A ranged-weapon fake with per-instance roll state.
+
+    ``get_stat`` mirrors ``GameItem.get_stat`` semantics: a rolled value
+    (``rolled_stats``) takes precedence over the def base
+    (``stat_modifiers``), and affix magnitudes on the same stat axis add
+    on top — so a ``+range`` roll/affix on the WEAPON flows into
+    ``_resolve_weapon_range`` exactly as it does in production.
+    """
+
+    def __init__(self, base_range=3, rolled_range=None, range_affix=0,
+                 damage=10, key="sniper_rifle"):
+        self.key = key
+        self.slot = "weapon"
+        self.weapon_type = "ranged"
+        self.stat_modifiers = {"damage": damage, "range": base_range}
+        self.rolled_stats = (
+            {"range": rolled_range} if rolled_range is not None else {}
+        )
+        self.affixes = (
+            [{"stat": "range", "magnitude": range_affix}] if range_affix else []
+        )
+        self.ammo_cost = None
+
+    def get_stat(self, stat_name, default=0):
+        base = self.rolled_stats.get(stat_name)
+        if base is None:
+            base = self.stat_modifiers.get(stat_name, default)
+        affix_total = sum(
+            a["magnitude"] for a in self.affixes if a.get("stat") == stat_name
+        )
+        return float(base) + affix_total
+
+
+class FakeAccessory:
+    """A non-weapon gear fake carrying ``range`` in stat_modifiers (R8.1)."""
+
+    def __init__(self, range_value=5, key="scope_charm"):
+        self.key = key
+        self.slot = "accessory"
+        self.category = "gear"
+        self.stat_modifiers = {"range": range_value}
+        self.ammo_cost = None
+
+    def get_stat(self, stat_name, default=0):
+        return float(self.stat_modifiers.get(stat_name, default))
+
+
+class TestResolveWeaponRange(unittest.TestCase):
+    """R8 (item-loot-economy task 3.1): the single range-resolution helper.
+
+    Effective range = weapon instance range (rolled + affixes on the
+    WEAPON) + owner ``weapon_range`` tech + tile bonus, clamped to
+    ``max_weapon_range``; melee is always 1; range never aggregates
+    across other equipped items (R8.1).
+    """
+
+    def test_melee_always_one(self):
+        """A melee weapon resolves to 1 even with a range stat + tech."""
+        engine, _ = _make_engine()
+        weapon = FakeWeapon(damage=25, weapon_range=5, key="knife")
+        weapon.weapon_type = "melee"
+        attacker = FakePlayer(name="A", weapon=weapon)
+        attacker.db.tech_bonuses = {"weapon_range": 3}
+        self.assertEqual(engine._resolve_weapon_range(attacker, weapon), 1)
+
+    def test_base_plus_tech(self):
+        """Ranged range = weapon base + owner weapon_range tech."""
+        engine, _ = _make_engine()
+        weapon = FakeWeapon(damage=25, weapon_range=3)
+        attacker = FakePlayer(name="A", weapon=weapon)
+        self.assertEqual(engine._resolve_weapon_range(attacker, weapon), 3)
+        attacker.db.tech_bonuses = {"weapon_range": 2}
+        self.assertEqual(engine._resolve_weapon_range(attacker, weapon), 5)
+
+    def test_cap_enforced(self):
+        """Stacked range clamps to balance.max_weapon_range."""
+        registry = _make_registry()
+        registry.balance.max_weapon_range = 10
+        engine, _ = _make_engine(registry=registry)
+        weapon = FakeWeapon(damage=25, weapon_range=9)
+        attacker = FakePlayer(name="A", weapon=weapon)
+        attacker.db.tech_bonuses = {"weapon_range": 4}
+        self.assertEqual(engine._resolve_weapon_range(attacker, weapon), 10)
+
+    def test_rolled_range_and_weapon_affix_flow_in(self):
+        """A rolled range + a +range affix ON THE WEAPON both count."""
+        engine, _ = _make_engine()
+        # rolled 5 overrides def base 3; +2 range affix adds on top.
+        weapon = FakeRolledWeapon(base_range=3, rolled_range=5, range_affix=2)
+        attacker = FakePlayer(name="A", weapon=weapon)
+        self.assertEqual(engine._resolve_weapon_range(attacker, weapon), 7)
+
+    def test_accessory_range_has_no_effect(self):
+        """R8.1: `range` in an equipped accessory's stat_modifiers is inert."""
+        engine, _ = _make_engine()
+        weapon = FakeWeapon(damage=25, weapon_range=3)
+        attacker = FakePlayer(name="A", weapon=weapon)
+        attacker.equipment.equip(FakeAccessory(range_value=5))
+        self.assertEqual(engine._resolve_weapon_range(attacker, weapon), 3)
+
+    def test_queue_site_resolves_through_helper(self):
+        """queue_attack honors the tech-extended range (and rejects beyond)."""
+        engine, _ = _make_engine()
+        weapon = FakeWeapon(damage=25, weapon_range=3)
+        attacker = FakePlayer(name="A", weapon=weapon,
+                              location=FakeTile(xyz=(0, 0, "earth")))
+        attacker.db.tech_bonuses = {"weapon_range": 2}
+        # Distance 5: beyond the raw stat (3) but within base+tech (5).
+        target = FakePlayer(name="T", location=FakeTile(xyz=(5, 0, "earth")))
+        ok, msg = engine.queue_attack(attacker, target)
+        self.assertTrue(ok, msg)
+        # Distance 6: beyond even the extended range → rejected.
+        far = FakePlayer(name="F", location=FakeTile(xyz=(6, 0, "earth")))
+        ok, msg = engine.queue_attack(attacker, far)
+        self.assertFalse(ok)
+        self.assertIn("out of range", msg)
+
+    def test_resolve_site_resolves_through_helper(self):
+        """The resolve-time re-check sees the SAME effective range as queue."""
+        engine, _ = _make_engine()
+        weapon = FakeWeapon(damage=25, weapon_range=3)
+        attacker = FakePlayer(name="A", weapon=weapon,
+                              location=FakeTile(xyz=(0, 0, "earth")))
+        attacker.db.tech_bonuses = {"weapon_range": 2}
+        target = FakePlayer(name="T", hp=100, hp_max=100,
+                            location=FakeTile(xyz=(5, 0, "earth")))
+        ok, msg = engine.queue_attack(attacker, target)
+        self.assertTrue(ok, msg)
+        engine.resolve_tick()
+        # The shot landed (was NOT dropped by a diverging resolve range check).
+        self.assertEqual(target.db.hp, 75)
+
+    def test_cap_enforced_at_queue(self):
+        """A target inside the raw stacked range but beyond the cap is
+        rejected — the cap applies at every site."""
+        registry = _make_registry()
+        registry.balance.max_weapon_range = 4
+        engine, _ = _make_engine(registry=registry)
+        weapon = FakeWeapon(damage=25, weapon_range=3)
+        attacker = FakePlayer(name="A", weapon=weapon,
+                              location=FakeTile(xyz=(0, 0, "earth")))
+        attacker.db.tech_bonuses = {"weapon_range": 3}  # raw sum = 6
+        target = FakePlayer(name="T", location=FakeTile(xyz=(5, 0, "earth")))
+        ok, msg = engine.queue_attack(attacker, target)
+        self.assertFalse(ok)
+        self.assertIn("out of range", msg)
+
+
+# -------------------------------------------------------------- #
+#  Sniper Nest RANGE_AURA tile bonus (item-loot-economy task 6.1)
+# -------------------------------------------------------------- #
+
+class _NestRoom(FakeTile):
+    """A FakeTile that also answers ``get_buildings_at`` (PlanetRoom shape).
+
+    ``_building_on_tile`` (the tile read `_tile_range_bonus` mirrors from
+    ``player_is_sheltered``) requires the room's ``get_buildings_at(x, y)``.
+    """
+
+    def __init__(self, xyz=(0, 0, "earth"), buildings_at=None):
+        super().__init__(xyz=xyz)
+        self._buildings_at = dict(buildings_at or {})
+
+    def place(self, x, y, building):
+        self._buildings_at.setdefault((x, y), []).append(building)
+
+    def get_buildings_at(self, x, y):
+        return list(self._buildings_at.get((x, y), []))
+
+
+def _sn_registry():
+    """A registry whose SN def carries the ``range_aura`` capability."""
+    registry = _make_registry()
+    registry.buildings["SN"] = BuildingDef(
+        name="Sniper Nest", abbreviation="SN",
+        cost={"Wood": 15, "Stone": 20, "Iron": 20},
+        max_health=250, requires_hq=True, required_terrain=None,
+        category="defense", produces=None,
+        capabilities=frozenset({"range_aura", "upgradable"}),
+    )
+    return registry
+
+
+def _nest(owner, level=1, offline=False, under_construction=False):
+    """A Sniper Nest building fake at the given level."""
+    nest = FakeBuilding(building_type="SN", owner=owner, hp=250, hp_max=250,
+                        offline=offline)
+    nest.attributes.add("building_level", level)
+    if under_construction:
+        nest.attributes.add("under_construction", True)
+    return nest
+
+
+class TestTileRangeBonus(unittest.TestCase):
+    """R10.1 (item-loot-economy task 6.1): the Sniper Nest RANGE_AURA.
+
+    ``_tile_range_bonus`` grants ``1 + (level-1)//2`` only while the
+    attacker's OWNING PLAYER stands on their OWN, OPERATIONAL range-aura
+    building's tile — on-tile only, owner-only, and still clamped by
+    ``balance.max_weapon_range`` in ``_resolve_weapon_range``.
+    """
+
+    def _player_on(self, room, x, y, oid=1):
+        tile = FakeTile(xyz=(x, y, "earth"))
+        player = FakePlayer(name=f"P{oid}", location=tile, oid=oid)
+        # The room (with get_buildings_at) is the location the helper reads.
+        player.location = room
+        player.db.coord_x = x
+        player.db.coord_y = y
+        return player
+
+    def test_bonus_applies_only_on_the_nest_tile(self):
+        """On the nest's tile → +1 (L1); one tile off → 0 (no adjacency)."""
+        engine, _ = _make_engine(registry=_sn_registry())
+        room = _NestRoom()
+        on_tile = self._player_on(room, 2, 3)
+        room.place(2, 3, _nest(owner=on_tile, level=1))
+        self.assertEqual(engine._tile_range_bonus(on_tile), 1)
+        # Same owner, adjacent tile: strictly on-tile (decided §12).
+        off_tile = self._player_on(room, 3, 3)
+        room._buildings_at[(2, 3)][0].attributes.add("owner", off_tile)
+        self.assertEqual(engine._tile_range_bonus(off_tile), 0)
+
+    def test_someone_elses_nest_grants_nothing(self):
+        """Owner-only (R10.1): standing on another player's nest → 0."""
+        engine, _ = _make_engine(registry=_sn_registry())
+        room = _NestRoom()
+        intruder = self._player_on(room, 2, 3, oid=1)
+        builder = FakePlayer(name="Builder", oid=2)
+        room.place(2, 3, _nest(owner=builder, level=5))
+        self.assertEqual(engine._tile_range_bonus(intruder), 0)
+
+    def test_level_scaling_plus_one_to_plus_three(self):
+        """Formula 1 + (lvl-1)//2: L1 +1, L2 +1, L3 +2, L4 +2, L5 +3."""
+        engine, _ = _make_engine(registry=_sn_registry())
+        expected = {1: 1, 2: 1, 3: 2, 4: 2, 5: 3}
+        for level, bonus in expected.items():
+            room = _NestRoom()
+            player = self._player_on(room, 0, 0)
+            room.place(0, 0, _nest(owner=player, level=level))
+            self.assertEqual(
+                engine._tile_range_bonus(player), bonus,
+                f"level {level} should grant +{bonus}",
+            )
+
+    def test_non_operational_nest_grants_nothing(self):
+        """An offline or mid-upgrade nest is inert (same gate as turrets)."""
+        engine, _ = _make_engine(registry=_sn_registry())
+        # Offline (owner logged out / knocked to 0 HP).
+        room = _NestRoom()
+        player = self._player_on(room, 0, 0)
+        room.place(0, 0, _nest(owner=player, level=3, offline=True))
+        self.assertEqual(engine._tile_range_bonus(player), 0)
+        # Mid-upgrade / under construction.
+        room2 = _NestRoom()
+        player2 = self._player_on(room2, 0, 0)
+        room2.place(0, 0, _nest(owner=player2, level=3,
+                                under_construction=True))
+        self.assertEqual(engine._tile_range_bonus(player2), 0)
+
+    def test_non_aura_building_grants_nothing(self):
+        """Standing on an owned building WITHOUT range_aura (a Turret) → 0."""
+        engine, _ = _make_engine(registry=_sn_registry())
+        room = _NestRoom()
+        player = self._player_on(room, 0, 0)
+        turret = FakeBuilding(building_type="TU", owner=player)
+        room.place(0, 0, turret)
+        self.assertEqual(engine._tile_range_bonus(player), 0)
+
+    def test_empty_tile_grants_nothing(self):
+        """No building on the tile → 0 (and no exception)."""
+        engine, _ = _make_engine(registry=_sn_registry())
+        room = _NestRoom()
+        player = self._player_on(room, 0, 0)
+        self.assertEqual(engine._tile_range_bonus(player), 0)
+
+    def test_aura_flows_into_resolve_weapon_range(self):
+        """The nest term feeds the single R8 helper: base + tech + tile."""
+        engine, _ = _make_engine(registry=_sn_registry())
+        room = _NestRoom()
+        player = self._player_on(room, 0, 0)
+        room.place(0, 0, _nest(owner=player, level=5))  # +3
+        weapon = FakeWeapon(damage=25, weapon_range=5)
+        player.equipment.equip(weapon)
+        self.assertEqual(engine._resolve_weapon_range(player, weapon), 8)
+
+    def test_cap_respected_with_aura_stacked(self):
+        """Design §9 worst case: sniper_rifle rolled 12 + affix 3 + L5 nest
+        3 + tech 1 = 19 → clamped to max_weapon_range 16."""
+        registry = _sn_registry()
+        registry.balance.max_weapon_range = 16
+        engine, _ = _make_engine(registry=registry)
+        room = _NestRoom()
+        player = self._player_on(room, 0, 0)
+        room.place(0, 0, _nest(owner=player, level=5))  # +3
+        weapon = FakeRolledWeapon(base_range=10, rolled_range=12,
+                                  range_affix=3)
+        player.equipment.equip(weapon)
+        player.db.tech_bonuses = {"weapon_range": 1}
+        self.assertEqual(engine._resolve_weapon_range(player, weapon), 16)
+
+    def test_corrupted_building_level_none_degrades_to_zero(self):
+        """A nest whose building_level reads None (corrupted/legacy data)
+        grants 0 instead of raising — the L1 review fix: int(None) used to
+        TypeError out of _resolve_weapon_range and break the attack. The
+        shared tile_aura_level helper's full-body guard absorbs it."""
+        engine, _ = _make_engine(registry=_sn_registry())
+        room = _NestRoom()
+        player = self._player_on(room, 0, 0)
+        broken = _nest(owner=player, level=1)
+        # A direct building_level attribute (the real Building exposes one)
+        # that reads None — get_building_level returns it verbatim, so the
+        # int() coercion is what used to raise.
+        broken.building_level = None
+        room.place(0, 0, broken)
+        self.assertEqual(engine._tile_range_bonus(player), 0)
+        # And the full range resolution still works (no exception).
+        weapon = FakeWeapon(damage=25, weapon_range=5)
+        player.equipment.equip(weapon)
+        self.assertEqual(engine._resolve_weapon_range(player, weapon), 5)
+
+    def test_public_resolve_weapon_range_alias_delegates(self):
+        """L4 (DRY review): the public ``resolve_weapon_range`` — the name
+        game_init wires into the targeting system — delegates to the private
+        implementation with identical results."""
+        engine, _ = _make_engine(registry=_sn_registry())
+        room = _NestRoom()
+        player = self._player_on(room, 0, 0)
+        room.place(0, 0, _nest(owner=player, level=5))  # +3
+        weapon = FakeWeapon(damage=25, weapon_range=5)
+        player.equipment.equip(weapon)
+        self.assertEqual(
+            engine.resolve_weapon_range(player, weapon),
+            engine._resolve_weapon_range(player, weapon),
+        )
+        self.assertEqual(engine.resolve_weapon_range(player, weapon), 8)
+
+
+class TestSniperNestFireFromInside(unittest.TestCase):
+    """M1 review fix: gate 2c (no ranged fire from inside a closed building)
+    is EXEMPTED for the attacker's own operational RANGE_AURA building —
+    inside your own Sniper Nest, ranged fire is allowed (that's the fantasy:
+    shooting from the nest), and the tile range bonus applies naturally.
+    Inside an enemy nest, or your own non-aura building, the block holds.
+    """
+
+    def _inside_player(self, room, x, y, oid=1, weapon_range=8):
+        """A player standing INSIDE the building on (x, y) of *room*."""
+        player = FakePlayer(name=f"P{oid}",
+                            weapon=FakeWeapon(damage=25,
+                                              weapon_range=weapon_range),
+                            oid=oid)
+        player.location = room
+        player.db.coord_x, player.db.coord_y = x, y
+        player.db.inside_building = True
+        return player
+
+    def test_owner_inside_own_nest_can_fire_ranged_out(self):
+        engine, _ = _make_engine(registry=_sn_registry())
+        room = _NestRoom()
+        shooter = self._inside_player(room, 5, 5)
+        room.place(5, 5, _nest(owner=shooter, level=1))  # closed by default
+        victim = FakePlayer(name="Exposed", hp=100,
+                            location=FakeTile(xyz=(8, 5, "earth")))
+        ok, msg = engine.queue_attack(shooter, victim)
+        self.assertTrue(ok, f"own-nest ranged fire must be allowed: {msg}")
+
+    def test_own_nest_shot_gets_the_range_bonus(self):
+        """From inside an own L5 nest, the shot reaches base + 3."""
+        engine, _ = _make_engine(registry=_sn_registry())
+        room = _NestRoom()
+        shooter = self._inside_player(room, 0, 0, weapon_range=5)
+        room.place(0, 0, _nest(owner=shooter, level=5))  # +3 → reach 8
+        far = FakePlayer(name="Far", hp=100,
+                         location=FakeTile(xyz=(8, 0, "earth")))
+        ok, msg = engine.queue_attack(shooter, far)
+        self.assertTrue(ok, f"nest-boosted range must reach 8 tiles: {msg}")
+
+    def test_inside_enemy_nest_still_blocked(self):
+        """Standing in someone ELSE's nest grants no exemption (owner-only)."""
+        engine, _ = _make_engine(registry=_sn_registry())
+        room = _NestRoom()
+        shooter = self._inside_player(room, 5, 5, oid=1)
+        builder = FakePlayer(name="Builder", oid=2)
+        room.place(5, 5, _nest(owner=builder, level=5))
+        victim = FakePlayer(name="Exposed", hp=100,
+                            location=FakeTile(xyz=(6, 5, "earth")))
+        ok, msg = engine.queue_attack(shooter, victim)
+        self.assertFalse(ok)
+        self.assertIn("inside", msg.lower())
+
+    def test_inside_own_non_aura_building_still_blocked(self):
+        """An own building WITHOUT range_aura (a Turret) is still the turtle
+        gate — the exemption is capability-scoped, not blanket owner-scoped."""
+        engine, _ = _make_engine(registry=_sn_registry())
+        room = _NestRoom()
+        shooter = self._inside_player(room, 5, 5)
+        turret = FakeBuilding(building_type="TU", owner=shooter)
+        room.place(5, 5, turret)
+        victim = FakePlayer(name="Exposed", hp=100,
+                            location=FakeTile(xyz=(6, 5, "earth")))
+        ok, msg = engine.queue_attack(shooter, victim)
+        self.assertFalse(ok)
+        self.assertIn("inside", msg.lower())
+
+    def test_inside_own_offline_nest_still_blocked(self):
+        """A non-operational nest grants no exemption (same gate as the bonus)."""
+        engine, _ = _make_engine(registry=_sn_registry())
+        room = _NestRoom()
+        shooter = self._inside_player(room, 5, 5)
+        room.place(5, 5, _nest(owner=shooter, level=3, offline=True))
+        victim = FakePlayer(name="Exposed", hp=100,
+                            location=FakeTile(xyz=(6, 5, "earth")))
+        ok, msg = engine.queue_attack(shooter, victim)
+        self.assertFalse(ok)
+        self.assertIn("inside", msg.lower())
+
+    def test_closed_own_nest_still_shelters_from_incoming_ranged(self):
+        """The owner-side perk is asymmetric BY DESIGN: the closed nest still
+        blocks INCOMING ranged fire at its sheltered owner (gate 2b holds)."""
+        engine, _ = _make_engine(registry=_sn_registry())
+        room = _NestRoom()
+        defender = self._inside_player(room, 5, 5, oid=1)
+        room.place(5, 5, _nest(owner=defender, level=1))
+        raider = FakePlayer(name="Raider",
+                            weapon=FakeWeapon(damage=25, weapon_range=8),
+                            location=FakeTile(xyz=(6, 5, "earth")), oid=2)
+        ok, msg = engine.queue_attack(raider, defender)
+        self.assertFalse(ok)
+        self.assertIn("sheltered", msg.lower())
 
 
 if __name__ == "__main__":

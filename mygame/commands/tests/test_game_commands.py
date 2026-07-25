@@ -105,9 +105,10 @@ def _ensure_evennia_stubs():
 _ensure_evennia_stubs()
 
 from mygame.commands.game_commands import (  # noqa: E402
-    CmdMove, CmdHarvest, CmdBuild, CmdUpgrade, CmdRepair,
+    CmdMove, CmdHarvest, CmdBuild, CmdUpgrade, CmdRepair, CmdDemolish,
     CmdAttack, CmdTarget, CmdShoot,
-    CmdEquip, CmdUnequip, CmdUse, CmdThrow, CmdReload, CmdCraft,
+    CmdEquip, CmdUnequip, CmdUse, CmdThrow, CmdReload, CmdCraft, CmdInsert,
+    CmdReroll, CmdSalvage, CmdRefine,
     CmdSetFuse, CmdArm,
     CmdDeposit, CmdWithdraw,
     CmdResearch, CmdPowerup,
@@ -277,6 +278,7 @@ class FakeCaller:
             "rank_level": self.db.rank_level,
             "combat_xp": self.db.combat_xp,
             "resources": dict(self.db.resources),
+            "salvage": int(getattr(self.db, "salvage", 0) or 0),
             "active_powerups": dict(self.db.active_powerups),
         }
 
@@ -1564,6 +1566,109 @@ class TestCmdShoot(unittest.TestCase):
         self.assertEqual(engine.breach_calls, [False])
 
 
+class _FakeTargetingWithEffective(_FakeTargeting):
+    """A targeting fake exposing the R8 ``effective_range`` resolver hook."""
+
+    def __init__(self, effective=10, raw=4, **kw):
+        super().__init__(**kw)
+        self._effective = effective
+        self._raw = raw
+        self.effective_calls = []
+
+    def weapon_range(self, weapon):
+        return self._raw
+
+    def effective_range(self, player, weapon):
+        self.effective_calls.append((player, weapon))
+        return self._effective
+
+
+class TestDirectionalShootEffectiveRange(unittest.TestCase):
+    """M2 review fix: `shoot <dir>` walks the ray to the EFFECTIVE range
+    (targeting.effective_range → the engine's R8 resolver: base + tech +
+    tile bonus, capped) instead of the raw weapon stat — so a Sniper Nest /
+    tech-boosted shot reaches its true range, and an over-cap raw stat never
+    walks a ray the engine would reject."""
+
+    def test_ray_reaches_bonus_extended_range(self):
+        """A foe beyond the raw stat (4) but within the effective range (10)
+        is found by the directional ray."""
+        tg = _FakeTargetingWithEffective(effective=10, raw=4)
+        engine = _RecordingEngine()
+        caller = FakeCaller(systems={"targeting_system": tg,
+                                     "combat_engine": engine})
+        # Caller at (5,5); foe 7 tiles north — beyond raw 4, within 10.
+        foe = _FakeAttackable("Guard", 5, 12)
+        caller.location._objects_by_coord[(5, 12)] = [foe]
+        _make_cmd(CmdShoot, caller, " north").func()
+        self.assertEqual(engine.calls, [(foe, 0.5)])
+        self.assertTrue(tg.effective_calls, "must resolve via effective_range")
+
+    def test_ray_capped_at_effective_range(self):
+        """A foe beyond the (capped) effective range is NOT found even when
+        the raw stat exceeds it — the walk never outruns the resolver."""
+        tg = _FakeTargetingWithEffective(effective=6, raw=18)
+        engine = _RecordingEngine()
+        caller = FakeCaller(systems={"targeting_system": tg,
+                                     "combat_engine": engine})
+        foe = _FakeAttackable("Guard", 5, 13)  # 8 north > effective 6
+        caller.location._objects_by_coord[(5, 13)] = [foe]
+        _make_cmd(CmdShoot, caller, " north").func()
+        self.assertEqual(engine.calls, [])
+        self.assertTrue(any("line of fire" in m for m in caller._messages))
+
+    def test_fallback_to_raw_stat_without_resolver(self):
+        """A minimal targeting system without effective_range keeps the
+        legacy raw weapon_range walk (unwired fallback shape)."""
+        tg = _FakeTargeting(ranged=True)  # no effective_range method
+        engine = _RecordingEngine()
+        caller = FakeCaller(systems={"targeting_system": tg,
+                                     "combat_engine": engine})
+        foe = _FakeAttackable("Guard", 5, 7)
+        caller.location._objects_by_coord[(5, 7)] = [foe]
+        _make_cmd(CmdShoot, caller, " north").func()
+        self.assertEqual(engine.calls, [(foe, 0.5)])
+
+
+class TestAttackReachEffectiveRange(unittest.TestCase):
+    """M2 review fix: _attack_reach's weapon term resolves through the
+    combat engine's public ``resolve_weapon_range`` (base + tech + tile,
+    capped) with a raw-stat fallback when the engine is unwired."""
+
+    def test_reach_includes_engine_resolved_bonuses(self):
+        from mygame.commands.game_commands import _attack_reach
+
+        class _Engine:
+            def resolve_weapon_range(self, attacker, weapon):
+                return 14  # base 10 + tech 1 + L5 nest 3
+
+        caller = FakeCaller(systems={"combat_engine": _Engine()})
+        caller.equipment.equip(_FakeRangedWeapon("sniper", weapon_range=10))
+        # Vision defaults to 7 (no balance wired) < 14 → engine range wins.
+        self.assertEqual(_attack_reach(caller), 14)
+
+    def test_reach_respects_engine_cap(self):
+        """An over-cap raw stat no longer inflates the reach: the engine's
+        resolver (which clamps to max_weapon_range) is authoritative."""
+        from mygame.commands.game_commands import _attack_reach
+
+        class _Engine:
+            def resolve_weapon_range(self, attacker, weapon):
+                return 16  # clamped by the engine
+
+        caller = FakeCaller(systems={"combat_engine": _Engine()})
+        caller.equipment.equip(_FakeRangedWeapon("silly", weapon_range=40))
+        self.assertEqual(_attack_reach(caller), 16)
+
+    def test_reach_falls_back_to_raw_stat_unwired(self):
+        """No combat engine installed → the raw weapon stat still counts
+        (mirrors the targeting-system fallback shape)."""
+        from mygame.commands.game_commands import _attack_reach
+        caller = FakeCaller()
+        caller.equipment.equip(_FakeRangedWeapon("sniper", weapon_range=12))
+        self.assertEqual(_attack_reach(caller), 12)
+
+
 class TestCmdEquip(unittest.TestCase):
     def test_no_args(self):
         caller = FakeCaller()
@@ -2129,6 +2234,388 @@ class TestCmdCraft(unittest.TestCase):
         self.assertIn("make", CmdCraft.aliases)
 
 
+class TestCmdInsert(unittest.TestCase):
+    """`insert <item> [weapon]` delegates to EquipmentSystem.apply_insert
+    (item-loot-economy task 4.3). Gate validation and player-facing
+    notifications live in the system; the command parses and delegates."""
+
+    def _caller_in_building(self, equipment_system, building_type="BS"):
+        caller = FakeCaller(systems={"equipment_system": equipment_system})
+        caller.db.coord_x = 5
+        caller.db.coord_y = 5
+        building = types.SimpleNamespace(
+            key=building_type,
+            db=types.SimpleNamespace(building_type=building_type),
+        )
+        caller.location._buildings_by_coord[(5, 5)] = [building]
+        return caller, building
+
+    def test_system_unavailable(self):
+        caller = FakeCaller()
+        _make_cmd(CmdInsert, caller, " venom_coating").func()
+        self.assertTrue(any("unavailable" in m for m in caller._messages))
+
+    def test_no_arg_shows_usage_without_calling_system(self):
+        class FakeEquipmentSystem:
+            def apply_insert(self, *a):
+                raise AssertionError("should not apply on bare command")
+
+        caller, _b = self._caller_in_building(FakeEquipmentSystem())
+        _make_cmd(CmdInsert, caller, "").func()
+        output = "\n".join(caller._messages).lower()
+        self.assertIn("usage", output)
+
+    def test_delegates_to_equipment_system_with_building(self):
+        calls = []
+
+        class FakeEquipmentSystem:
+            def apply_insert(self, player, token, building, weapon_token):
+                calls.append((player, token, building, weapon_token))
+                return True
+
+        eqsys = FakeEquipmentSystem()
+        caller, building = self._caller_in_building(eqsys)
+        _make_cmd(CmdInsert, caller, " venom_coating").func()
+        self.assertEqual(calls, [(caller, "venom_coating", building, None)])
+
+    def test_splits_weapon_token_when_item_does_not_resolve_whole(self):
+        """`insert hollowpoint assault_rifle` → item + weapon check token
+        (the registry can't resolve the two words as one item)."""
+        calls = []
+
+        class FakeRegistry:
+            def resolve_item(self, token):
+                return object() if token == "hollowpoint" else None
+
+        class FakeEquipmentSystem:
+            registry = FakeRegistry()
+
+            def apply_insert(self, player, token, building, weapon_token):
+                calls.append((token, weapon_token))
+                return True
+
+        caller, _b = self._caller_in_building(FakeEquipmentSystem())
+        _make_cmd(CmdInsert, caller, " hollowpoint assault_rifle").func()
+        self.assertEqual(calls, [("hollowpoint", "assault_rifle")])
+
+    def test_multiword_item_name_kept_whole_when_it_resolves(self):
+        """`insert venom coating` resolves the full string as the item —
+        'coating' is NOT misread as a weapon token."""
+        calls = []
+
+        class FakeRegistry:
+            def resolve_item(self, token):
+                return object() if token == "venom coating" else None
+
+        class FakeEquipmentSystem:
+            registry = FakeRegistry()
+
+            def apply_insert(self, player, token, building, weapon_token):
+                calls.append((token, weapon_token))
+                return True
+
+        caller, _b = self._caller_in_building(FakeEquipmentSystem())
+        _make_cmd(CmdInsert, caller, " venom coating").func()
+        self.assertEqual(calls, [("venom coating", None)])
+
+    def test_no_building_still_delegates_with_none(self):
+        """Standing on empty ground delegates building=None — the system
+        emits the wrong_building failure (not the command)."""
+        calls = []
+
+        class FakeEquipmentSystem:
+            def apply_insert(self, player, token, building, weapon_token):
+                calls.append(building)
+                return False
+
+        caller = FakeCaller(
+            systems={"equipment_system": FakeEquipmentSystem()})
+        caller.db.coord_x = 5
+        caller.db.coord_y = 5
+        _make_cmd(CmdInsert, caller, " venom_coating").func()
+        self.assertEqual(calls, [None])
+
+    def test_multiword_item_plus_weapon_token(self):
+        """F9 review fix: `insert extended barrel assault_rifle` greedily
+        matches the LONGEST resolving item-name prefix ("extended barrel")
+        and passes the remainder as the weapon token — previously mis-split
+        as item "extended" + weapon "barrel assault_rifle" → a confusing
+        weapon_not_equipped failure."""
+        calls = []
+
+        class FakeRegistry:
+            def resolve_item(self, token):
+                return object() if token == "extended barrel" else None
+
+        class FakeEquipmentSystem:
+            registry = FakeRegistry()
+
+            def apply_insert(self, player, token, building, weapon_token):
+                calls.append((token, weapon_token))
+                return True
+
+        caller, _b = self._caller_in_building(FakeEquipmentSystem())
+        _make_cmd(CmdInsert, caller, " extended barrel assault_rifle").func()
+        self.assertEqual(calls, [("extended barrel", "assault_rifle")])
+
+    def test_nothing_resolves_passes_full_input_as_item(self):
+        """When NO prefix resolves, the FULL input is the item token so the
+        system's unknown_item failure names exactly what the player typed
+        (not a misleading first-word fragment)."""
+        calls = []
+
+        class FakeRegistry:
+            def resolve_item(self, token):
+                return None  # nothing ever resolves
+
+        class FakeEquipmentSystem:
+            registry = FakeRegistry()
+
+            def apply_insert(self, player, token, building, weapon_token):
+                calls.append((token, weapon_token))
+                return False
+
+        caller, _b = self._caller_in_building(FakeEquipmentSystem())
+        _make_cmd(CmdInsert, caller, " chrome plated doohickey").func()
+        self.assertEqual(calls, [("chrome plated doohickey", None)])
+
+    def test_single_word_cases_unchanged(self):
+        """Single-word item (with and without a weapon token) still splits
+        exactly as before."""
+        calls = []
+
+        class FakeRegistry:
+            def resolve_item(self, token):
+                return object() if token == "hollowpoint" else None
+
+        class FakeEquipmentSystem:
+            registry = FakeRegistry()
+
+            def apply_insert(self, player, token, building, weapon_token):
+                calls.append((token, weapon_token))
+                return True
+
+        caller, _b = self._caller_in_building(FakeEquipmentSystem())
+        _make_cmd(CmdInsert, caller, " hollowpoint").func()
+        _make_cmd(CmdInsert, caller, " hollowpoint assault_rifle").func()
+        self.assertEqual(calls, [("hollowpoint", None),
+                                 ("hollowpoint", "assault_rifle")])
+
+
+class TestCmdReroll(unittest.TestCase):
+    """`reroll <item>` delegates to EquipmentSystem.reroll (item-loot-economy
+    task 4.4). Gate validation and player-facing notifications live in the
+    system; the command parses and delegates."""
+
+    def _caller_in_building(self, equipment_system, building_type="BS"):
+        caller = FakeCaller(systems={"equipment_system": equipment_system})
+        caller.db.coord_x = 5
+        caller.db.coord_y = 5
+        building = types.SimpleNamespace(
+            key=building_type,
+            db=types.SimpleNamespace(building_type=building_type),
+        )
+        caller.location._buildings_by_coord[(5, 5)] = [building]
+        return caller, building
+
+    def test_system_unavailable(self):
+        caller = FakeCaller()
+        _make_cmd(CmdReroll, caller, " assault_rifle").func()
+        self.assertTrue(any("unavailable" in m for m in caller._messages))
+
+    def test_no_arg_shows_usage_without_calling_system(self):
+        class FakeEquipmentSystem:
+            def reroll(self, *a):
+                raise AssertionError("should not reroll on bare command")
+
+        caller, _b = self._caller_in_building(FakeEquipmentSystem())
+        _make_cmd(CmdReroll, caller, "").func()
+        output = "\n".join(caller._messages).lower()
+        self.assertIn("usage", output)
+
+    def test_delegates_to_equipment_system_with_building(self):
+        calls = []
+
+        class FakeEquipmentSystem:
+            def reroll(self, player, token, building):
+                calls.append((player, token, building))
+                return True
+
+        eqsys = FakeEquipmentSystem()
+        caller, building = self._caller_in_building(eqsys)
+        _make_cmd(CmdReroll, caller, " assault_rifle").func()
+        self.assertEqual(calls, [(caller, "assault_rifle", building)])
+
+    def test_no_building_still_delegates_with_none(self):
+        """Standing on empty ground delegates building=None — the system
+        emits the wrong_building failure (not the command)."""
+        calls = []
+
+        class FakeEquipmentSystem:
+            def reroll(self, player, token, building):
+                calls.append(building)
+                return False
+
+        caller = FakeCaller(
+            systems={"equipment_system": FakeEquipmentSystem()})
+        caller.db.coord_x = 5
+        caller.db.coord_y = 5
+        _make_cmd(CmdReroll, caller, " assault_rifle").func()
+        self.assertEqual(calls, [None])
+
+
+class TestCmdSalvage(unittest.TestCase):
+    """`salvage <item>` delegates to EquipmentSystem.salvage
+    (item-loot-economy task 5.2). Gate validation and player-facing
+    notifications live in the system; the command parses and delegates."""
+
+    def _caller_in_building(self, equipment_system, building_type="BS"):
+        caller = FakeCaller(systems={"equipment_system": equipment_system})
+        caller.db.coord_x = 5
+        caller.db.coord_y = 5
+        building = types.SimpleNamespace(
+            key=building_type,
+            db=types.SimpleNamespace(building_type=building_type),
+        )
+        caller.location._buildings_by_coord[(5, 5)] = [building]
+        return caller, building
+
+    def test_system_unavailable(self):
+        caller = FakeCaller()
+        _make_cmd(CmdSalvage, caller, " assault_rifle").func()
+        self.assertTrue(any("unavailable" in m for m in caller._messages))
+
+    def test_no_arg_shows_usage_without_calling_system(self):
+        class FakeEquipmentSystem:
+            def salvage(self, *a):
+                raise AssertionError("should not salvage on bare command")
+
+        caller, _b = self._caller_in_building(FakeEquipmentSystem())
+        _make_cmd(CmdSalvage, caller, "").func()
+        output = "\n".join(caller._messages).lower()
+        self.assertIn("usage", output)
+
+    def test_delegates_to_equipment_system_with_building(self):
+        calls = []
+
+        class FakeEquipmentSystem:
+            def salvage(self, player, token, building):
+                calls.append((player, token, building))
+                return True
+
+        eqsys = FakeEquipmentSystem()
+        caller, building = self._caller_in_building(eqsys)
+        _make_cmd(CmdSalvage, caller, " assault_rifle").func()
+        self.assertEqual(calls, [(caller, "assault_rifle", building)])
+
+    def test_no_building_still_delegates_with_none(self):
+        """Standing on empty ground delegates building=None — the system
+        emits the wrong_building failure (not the command)."""
+        calls = []
+
+        class FakeEquipmentSystem:
+            def salvage(self, player, token, building):
+                calls.append(building)
+                return False
+
+        caller = FakeCaller(
+            systems={"equipment_system": FakeEquipmentSystem()})
+        caller.db.coord_x = 5
+        caller.db.coord_y = 5
+        _make_cmd(CmdSalvage, caller, " assault_rifle").func()
+        self.assertEqual(calls, [None])
+
+
+class TestCmdRefine(unittest.TestCase):
+    """`refine <resource> [<amount>|all]` delegates to
+    EquipmentSystem.refine (item-loot-economy task 5.3). Gate validation
+    and player-facing notifications live in the system; the command parses
+    the resource/amount pair and delegates with the building underfoot."""
+
+    def _caller_in_building(self, equipment_system, building_type="RF"):
+        caller = FakeCaller(systems={"equipment_system": equipment_system})
+        caller.db.coord_x = 5
+        caller.db.coord_y = 5
+        building = types.SimpleNamespace(
+            key=building_type,
+            db=types.SimpleNamespace(building_type=building_type),
+        )
+        caller.location._buildings_by_coord[(5, 5)] = [building]
+        return caller, building
+
+    def test_system_unavailable(self):
+        caller = FakeCaller()
+        _make_cmd(CmdRefine, caller, " nexium 50").func()
+        self.assertTrue(any("unavailable" in m for m in caller._messages))
+
+    def test_no_arg_shows_usage_without_calling_system(self):
+        class FakeEquipmentSystem:
+            def refine(self, *a):
+                raise AssertionError("should not refine on bare command")
+
+        caller, _b = self._caller_in_building(FakeEquipmentSystem())
+        _make_cmd(CmdRefine, caller, "").func()
+        output = "\n".join(caller._messages).lower()
+        self.assertIn("usage", output)
+
+    def test_bad_amount_shows_usage_without_calling_system(self):
+        class FakeEquipmentSystem:
+            def refine(self, *a):
+                raise AssertionError("should not refine a bad amount")
+
+        caller, _b = self._caller_in_building(FakeEquipmentSystem())
+        for args in (" nexium -5", " nexium 0", " nexium lots",
+                     " nexium 5 extra"):
+            _make_cmd(CmdRefine, caller, args).func()
+        output = "\n".join(caller._messages).lower()
+        self.assertIn("usage", output)
+
+    def test_delegates_with_amount_and_building(self):
+        calls = []
+
+        class FakeEquipmentSystem:
+            def refine(self, player, resource, amount, building):
+                calls.append((player, resource, amount, building))
+                return True
+
+        eqsys = FakeEquipmentSystem()
+        caller, building = self._caller_in_building(eqsys)
+        _make_cmd(CmdRefine, caller, " nexium 50").func()
+        self.assertEqual(calls, [(caller, "Nexium", 50, building)])
+
+    def test_all_and_bare_resource_delegate_amount_none(self):
+        # `refine nexium all` and `refine nexium` both mean "all carried";
+        # the system resolves None to the full stock.
+        calls = []
+
+        class FakeEquipmentSystem:
+            def refine(self, player, resource, amount, building):
+                calls.append((resource, amount))
+                return True
+
+        caller, _b = self._caller_in_building(FakeEquipmentSystem())
+        _make_cmd(CmdRefine, caller, " nexium all").func()
+        _make_cmd(CmdRefine, caller, " nexium").func()
+        self.assertEqual(calls, [("Nexium", None), ("Nexium", None)])
+
+    def test_no_building_still_delegates_with_none(self):
+        """Standing on empty ground delegates building=None — the system
+        emits the wrong_building failure (not the command)."""
+        calls = []
+
+        class FakeEquipmentSystem:
+            def refine(self, player, resource, amount, building):
+                calls.append(building)
+                return False
+
+        caller = FakeCaller(
+            systems={"equipment_system": FakeEquipmentSystem()})
+        caller.db.coord_x = 5
+        caller.db.coord_y = 5
+        _make_cmd(CmdRefine, caller, " nexium 50").func()
+        self.assertEqual(calls, [None])
+
+
 class TestCmdEnterLeave(unittest.TestCase):
     """enter / leave a building without moving off the tile."""
 
@@ -2666,6 +3153,23 @@ class TestCmdScore(unittest.TestCase):
         output = "\n".join(caller._messages)
         self.assertNotIn("Equipment totals:", output)
 
+    def test_shows_salvage_with_resources(self):
+        """Salvage (db.salvage currency) displays in the Resources section."""
+        caller = FakeCaller()
+        caller.db.salvage = 42
+        cmd = _make_cmd(CmdScore, caller)
+        cmd.func()
+        output = "\n".join(caller._messages)
+        self.assertIn("Salvage - 42", output)
+
+    def test_hides_salvage_when_zero(self):
+        """A zero balance (incl. legacy characters) shows no Salvage row."""
+        caller = FakeCaller()
+        cmd = _make_cmd(CmdScore, caller)
+        cmd.func()
+        output = "\n".join(caller._messages)
+        self.assertNotIn("Salvage", output)
+
     class _FakeResolver:
         """Terrain modifier resolver returning a fixed resolved triple."""
         def __init__(self, vision=0, movement=0.0, defense=0.0):
@@ -2846,6 +3350,164 @@ class TestCmdScan(unittest.TestCase):
         output = "\n".join(caller._messages)
         self.assertNotIn("[Enemy]", output)
         self.assertIn("HQ", output)
+
+
+class TestScanVisionAura(unittest.TestCase):
+    """L2 review fix: CmdScan._vision_radius includes the Watchtower
+    VISION_AURA tile bonus (via world.utils.tile_aura_level with the
+    installed registry as the definitions provider), so scan's listing
+    matches the aura-extended fog map. Off the tower tile: unchanged."""
+
+    @staticmethod
+    def _registry_with_wt():
+        from world.definitions import BuildingDef
+        registry = types.SimpleNamespace(
+            balance=types.SimpleNamespace(player_vision_radius=7),
+        )
+        wt = BuildingDef(
+            name="Watchtower", abbreviation="WT", cost={"Wood": 20},
+            max_health=200, requires_hq=True, required_terrain=None,
+            category="intelligence", produces=None,
+            capabilities=frozenset({"vision_aura", "upgradable"}),
+        )
+        registry.resolve_building = lambda btype: wt if btype == "WT" else None
+        return registry
+
+    @staticmethod
+    def _tower(owner, level):
+        return types.SimpleNamespace(
+            db=types.SimpleNamespace(
+                building_type="WT", owner=owner, offline=False,
+                under_construction=False,
+            ),
+            building_level=level,
+        )
+
+    def test_scan_radius_extended_on_own_tower_tile(self):
+        registry = self._registry_with_wt()
+        caller = FakeCaller(systems={"registry": registry})
+        caller.id = 1
+        # Caller at (5,5); their L5 tower on the same tile → base 7 + 3.
+        caller.location._buildings_by_coord[(5, 5)] = [
+            self._tower(owner=caller, level=5)
+        ]
+        self.assertEqual(CmdScan._vision_radius(caller), 10)
+
+    def test_scan_radius_unchanged_off_tile_and_for_stranger(self):
+        registry = self._registry_with_wt()
+        caller = FakeCaller(systems={"registry": registry})
+        caller.id = 1
+        # No building on the caller's tile → base only.
+        self.assertEqual(CmdScan._vision_radius(caller), 7)
+        # Someone ELSE's tower on the tile → still base only (owner-only).
+        builder = FakeCaller(name="Builder")
+        builder.id = 2
+        caller.location._buildings_by_coord[(5, 5)] = [
+            self._tower(owner=builder, level=5)
+        ]
+        self.assertEqual(CmdScan._vision_radius(caller), 7)
+
+    def test_base_radius_reads_balance_knob(self):
+        """The fallback literal 7 only applies with NO balance wired; a wired
+        balance's player_vision_radius is authoritative."""
+        # Unwired first (a fresh, empty facade): final default 7.
+        unwired = FakeCaller()
+        self.assertEqual(CmdScan._vision_radius(unwired), 7)
+        registry = self._registry_with_wt()
+        registry.balance.player_vision_radius = 9
+        caller = FakeCaller(systems={"registry": registry})
+        self.assertEqual(CmdScan._vision_radius(caller), 9)
+
+
+class TestCmdDemolishRefund(unittest.TestCase):
+    """F5 review fix: the demolish refund is priced on the same
+    owner-discounted cumulative investment the player actually paid
+    (BuildingSystem.get_building_investment with owner=), so refund and
+    repair basis are consistent and refund ≤ discounted spend always."""
+
+    @staticmethod
+    def _registry():
+        from world.definitions import BuildingDef
+        bdef = BuildingDef(
+            name="Headquarters", abbreviation="HQ", cost={"Wood": 100},
+            max_health=500, requires_hq=False, required_terrain=None,
+            category="headquarters", produces=None,
+            capabilities=frozenset({"headquarters"}),
+        )
+        registry = types.SimpleNamespace(
+            balance=types.SimpleNamespace(
+                demolish_refund_rates={1: 0.40, 2: 0.50, 3: 0.60,
+                                       4: 0.70, 5: 0.80},
+                demolish_refund_default=0.40,
+                upgrade_cost_base=2,
+                build_cost_mult_floor=0.6,
+            ),
+        )
+        registry.get_building = lambda btype: bdef
+        return registry
+
+    @staticmethod
+    def _building(owner, level):
+        return types.SimpleNamespace(
+            key="HQ",
+            db=types.SimpleNamespace(
+                building_type="HQ", owner=owner, building_level=level,
+                hp=500, hp_max=500,
+            ),
+            delete=lambda: None,
+        )
+
+    def _demolish(self, caller, level, mult=None):
+        from world.systems.building_system import BuildingSystem
+        from world.event_bus import EventBus
+        registry = self._registry()
+        building_system = BuildingSystem(
+            registry=registry, event_bus=EventBus(),
+            create_building_func=lambda *a, **k: None,
+        )
+        _install_systems({"registry": registry,
+                          "building_system": building_system})
+        if mult is not None:
+            caller.db.tech_bonuses = {"build_cost_mult": mult}
+        caller.location._buildings_by_coord[(5, 5)] = [
+            self._building(owner=caller, level=level)
+        ]
+        collected = {}
+        caller.add_resource = (
+            lambda res, amt: collected.__setitem__(
+                res, collected.get(res, 0) + amt)
+        )
+        _make_cmd(CmdDemolish, caller, "").func()
+        return collected
+
+    def test_refund_uses_discounted_investment_basis(self):
+        """A build_cost_mult 0.8 owner demolishing an L2 building: investment
+        = 80 + 160 = 240 discounted (vs 300 list); refund = 240 × 0.5."""
+        caller = FakeCaller()
+        caller.id = 1
+        collected = self._demolish(caller, level=2, mult=0.8)
+        self.assertEqual(collected, {"Wood": 120})
+
+    def test_refund_without_tech_uses_list_investment(self):
+        """No discount: L2 investment 100 + 200 = 300; refund = 300 × 0.5."""
+        caller = FakeCaller()
+        caller.id = 1
+        collected = self._demolish(caller, level=2)
+        self.assertEqual(collected, {"Wood": 150})
+
+    def test_refund_never_exceeds_discounted_spend(self):
+        """Refund ≤ what the discounted owner actually paid at every level."""
+        for level in range(1, 6):
+            caller = FakeCaller()
+            caller.id = 1
+            collected = self._demolish(caller, level=level, mult=0.8)
+            # Discounted spend: 80 × (1 + 2 + ... + 2^(level-1)).
+            spend = 80 * (2 ** level - 1)
+            self.assertLessEqual(
+                collected.get("Wood", 0), spend,
+                f"L{level}: refund exceeds the discounted spend",
+            )
+
 
 class TestCmdTechnology(unittest.TestCase):
     def test_shows_researched(self):
@@ -4024,6 +4686,82 @@ class TestBaseProximityNotice(unittest.TestCase):
         lines, payload = self._status(caller)
         self.assertTrue(any("Stronghold" in m and "vanished" in m
                             for m in caller._messages))
+
+
+class TestBenchHelpTextCoherence(unittest.TestCase):
+    """Help text for the loot-economy commands (item-loot-economy task 6.5).
+
+    The four bench commands (insert / reroll / salvage / refine) each ship
+    a help docstring (Evennia serves ``help <cmd>`` from the command class
+    docstring). This locks in: the entries exist, are registered in the
+    in-game cmdset, and cross-reference each other coherently — the chain
+    refine → salvage → reroll → insert → craft plus 'help equipment'
+    everywhere, so a player can walk the whole economy from any entry
+    point.
+    """
+
+    BENCH_COMMANDS = {
+        "insert": CmdInsert,
+        "reroll": CmdReroll,
+        "salvage": CmdSalvage,
+        "refine": CmdRefine,
+    }
+
+    @staticmethod
+    def _flat_doc(cls):
+        """The class docstring with wrapped lines re-joined (help entries
+        hard-wrap, so cross-references can span a line break)."""
+        return " ".join((cls.__doc__ or "").split())
+
+    def test_help_entries_exist_with_usage(self):
+        """Every bench command carries a real help docstring with Usage."""
+        for key, cls in self.BENCH_COMMANDS.items():
+            doc = cls.__doc__ or ""
+            self.assertTrue(doc.strip(), f"{cls.__name__} has no help text")
+            self.assertIn("Usage:", doc, f"{cls.__name__} help lacks Usage")
+            self.assertIn(key, doc, f"{cls.__name__} help never names its "
+                                    f"own command")
+            self.assertEqual(cls.key, key)
+
+    def test_commands_registered_in_cmdset(self):
+        """All four are added to the in-game cmdset (default_cmdsets.py)."""
+        import commands.game_commands as game_commands_mod
+        path = os.path.join(
+            os.path.dirname(os.path.abspath(game_commands_mod.__file__)),
+            "default_cmdsets.py")
+        with open(path, encoding="utf-8") as handle:
+            source = handle.read()
+        for cls in self.BENCH_COMMANDS.values():
+            self.assertIn(f"self.add({cls.__name__}())", source,
+                          f"{cls.__name__} not registered in the cmdset")
+
+    def test_cross_references_form_a_coherent_chain(self):
+        """refine → salvage → reroll → insert → craft, and every entry
+        points at 'help equipment' — the economy is walkable end-to-end."""
+        chain = {
+            CmdRefine: "help salvage",
+            CmdSalvage: "help reroll",
+            CmdReroll: "help insert",
+            CmdInsert: "help craft",
+        }
+        for cls, ref in chain.items():
+            doc = self._flat_doc(cls)
+            self.assertIn(ref, doc,
+                          f"{cls.__name__} help does not point at '{ref}'")
+            self.assertIn("help equipment", doc,
+                          f"{cls.__name__} help does not point at "
+                          f"'help equipment'")
+
+    def test_help_names_the_right_bench_and_currency(self):
+        """Blacksmith commands name the Blacksmith; refine names the
+        Refinery; the Salvage-currency commands name Salvage."""
+        for cls in (CmdInsert, CmdReroll, CmdSalvage):
+            self.assertIn("Blacksmith", cls.__doc__ or "",
+                          f"{cls.__name__} help never names the Blacksmith")
+        self.assertIn("Refinery", CmdRefine.__doc__ or "")
+        for cls in (CmdReroll, CmdSalvage, CmdRefine):
+            self.assertIn("Salvage", cls.__doc__ or "",
+                          f"{cls.__name__} help never names Salvage")
 
 
 if __name__ == "__main__":

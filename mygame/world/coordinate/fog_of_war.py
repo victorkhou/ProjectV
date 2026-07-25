@@ -49,6 +49,15 @@ class FogOfWarSystem:
         #: Floor for player and building vision circles (terrain-strategy Req
         #: 3.2). A balance config omitting the field defaults to 1 (Req 3.6).
         self.min_vision_radius: int = int(getattr(balance, "min_vision_radius", 1))
+        #: Radius of the rendered map viewport — read by both renderers for
+        #: their bounds, DECOUPLED from vision so balance changes to
+        #: ``player_vision_radius`` never resize the map. A balance object
+        #: without the field (legacy/test fakes) falls back to the player
+        #: vision radius, preserving the historical coupled behavior.
+        _viewport = getattr(balance, "map_viewport_radius", None)
+        self.map_viewport_radius: int = (
+            int(_viewport) if _viewport is not None else self.player_vision_radius
+        )
         self._map_border: int = getattr(balance, "map_border_tiles", 5)
         #: Injected ``(x, y, planet_key) -> bool`` map-bounds check (the
         #: PlanetRegistry's ``is_valid_coordinate``), wired at the composition
@@ -60,6 +69,11 @@ class FogOfWarSystem:
         #: the composition root via ``set_terrain_modifier_resolver``. When
         #: unset (tests / unwired), terrain vision is 0 (Req 3.5).
         self._terrain_modifier_resolver = None
+        #: Injected DefinitionsProvider (item-loot-economy R10.2), wired at
+        #: the composition root via ``set_definitions_provider``. Used by the
+        #: Watchtower vision-aura capability check; when unset,
+        #: ``building_has_capability`` falls back to the live registry.
+        self._definitions_provider = None
 
     # ------------------------------------------------------------------ #
     #  Public API
@@ -72,6 +86,12 @@ class FogOfWarSystem:
         after the FogOfWarSystem's collaborators become available.
         """
         self._terrain_modifier_resolver = resolver
+
+    def set_definitions_provider(self, provider) -> None:
+        """Inject the building-definitions provider (late-bound, like the
+        terrain resolver) for the Watchtower vision-aura capability check
+        (item-loot-economy R10.2)."""
+        self._definitions_provider = provider
 
     def set_in_bounds_func(self, fn) -> None:
         """Inject the map-bounds check (``planet_registry.is_valid_coordinate``).
@@ -115,6 +135,32 @@ class FogOfWarSystem:
         except Exception:  # noqa: BLE001 - terrain resolution must not break vision
             return 0
 
+    def _tile_vision_bonus(self, player: Any) -> int:
+        """Watchtower vision aura at *player*'s tile (item-loot-economy R10.2).
+
+        The Watchtower term of the player sight read, delegated to the ONE
+        shared aura read :func:`world.utils.tile_aura_level` (DRY H2 — also
+        used by the Sniper Nest range and Field Hospital heal auras) with
+        the ``VISION_AURA`` capability: grants ``1 + (level - 1) // 2`` →
+        L1 +1, L3 +2, L5 +3 extra ``sight_range`` while the viewer stands
+        on their OWN, OPERATIONAL vision-aura building's tile.
+
+        Owner attribution uses the helper's shared owning-player resolver
+        (UNIFIED behavior, decided with the DRY H2 extraction): an owner's
+        AGENT standing on the tower tile extends its owner's vision too —
+        consistent with the range/heal auras (this reader previously
+        credited only the raw player). Strictly ON-TILE and OWNER-ONLY —
+        the same positional-not-permanent shape as the other auras. Returns
+        0 in every other case and never raises, so fog rendering can never
+        break on a bad building read.
+        """
+        from world.constants import VISION_AURA
+        from world.utils import tile_aura_level
+
+        return tile_aura_level(
+            player, VISION_AURA, provider=self._definitions_provider
+        )
+
     def get_visible_tiles(
         self, player: Any, player_buildings: list[Any],
         player_scouts: list[Any] | None = None,
@@ -130,15 +176,17 @@ class FogOfWarSystem:
         visible: set[tuple[int, int]] = set()
 
         # Player vision circle: base radius + equipped sight_range bonus +
-        # resolved terrain Vision_Modifier at the OCCUPIED tile (Req 3.1),
-        # truncated toward zero (Req 3.7) then floored at the configured
-        # minimum (Req 3.2).
+        # Watchtower vision aura at the OCCUPIED tile (item-loot-economy
+        # R10.2) + resolved terrain Vision_Modifier at the OCCUPIED tile
+        # (Req 3.1), truncated toward zero (Req 3.7) then floored at the
+        # configured minimum (Req 3.2).
         px = _get_coord(player, "coord_x")
         py = _get_coord(player, "coord_y")
         planet = _get_planet(player)
         raw_radius = (
             self.player_vision_radius
             + _get_sight_bonus(player)
+            + self._tile_vision_bonus(player)
             + self._terrain_vision(planet, px, py, player=player)
         )
         vision_radius = max(self.min_vision_radius, int(raw_radius))

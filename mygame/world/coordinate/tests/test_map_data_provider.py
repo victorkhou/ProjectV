@@ -57,10 +57,14 @@ class _FakeDB:
 
 
 class _FakeBalance:
-    def __init__(self, pvr=2, bvr=1):
+    def __init__(self, pvr=2, bvr=1, mvr=None):
         self.player_vision_radius = pvr
         self.building_vision_radius = bvr
         self.map_border_tiles = 1
+        # map_viewport_radius is only set when given, so legacy tests keep
+        # the fall-back-to-vision behavior of a balance without the field.
+        if mvr is not None:
+            self.map_viewport_radius = mvr
 
 
 class _FakePlayer:
@@ -106,8 +110,8 @@ class _FakeTileResolver:
 
 
 class TestMapDataProvider:
-    def _make_provider(self, pvr=2):
-        balance = _FakeBalance(pvr=pvr)
+    def _make_provider(self, pvr=2, mvr=None):
+        balance = _FakeBalance(pvr=pvr, mvr=mvr)
         fog = FogOfWarSystem(balance)
         gen = _FakeTerrainGen()
         resolver = _FakeTileResolver()
@@ -303,6 +307,44 @@ class TestMapDataProvider:
         # A tile past the max edge (x == width) is also fogged.
         assert by_coord[(3, 0)]["state"] == "fog"
         assert by_coord[(3, 0)].get("out_of_bounds") is True
+
+    def test_viewport_bounds_from_viewport_radius_not_vision(self):
+        """Bounds derive from map_viewport_radius, NOT player_vision_radius —
+        the regression fix: rebalancing vision must never resize the map."""
+        provider, _ = self._make_provider(pvr=2, mvr=5)
+        player = _FakePlayer(x=10, y=10)
+        data = provider.get_map_data(player, [])
+        # viewport 5 + border 1 => 10 ± 6
+        assert data["bounds"] == {
+            "min_x": 4, "max_x": 16, "min_y": 4, "max_y": 16,
+        }
+        # vision_radius payload still reports the VISION radius (fog circle).
+        assert data["vision_radius"] == 2
+
+    def test_viewport_size_independent_of_vision_radius(self):
+        """Changing player_vision_radius must not change the rendered map
+        dimensions when a viewport radius is configured."""
+        dims = []
+        for pvr in (1, 2, 4):
+            provider, _ = self._make_provider(pvr=pvr, mvr=5)
+            data = provider.get_map_data(_FakePlayer(x=10, y=10), [])
+            b = data["bounds"]
+            dims.append((b["max_x"] - b["min_x"] + 1,
+                         b["max_y"] - b["min_y"] + 1))
+        assert dims[0] == dims[1] == dims[2] == (13, 13)
+
+    def test_tiles_beyond_vision_inside_viewport_are_not_visible(self):
+        """Fog membership still honors the (smaller) vision radius: a tile
+        inside the viewport but beyond vision renders fog/unexplored."""
+        provider, _ = self._make_provider(pvr=2, mvr=5)
+        player = _FakePlayer(x=10, y=10)
+        data = provider.get_map_data(player, [])
+        by_coord = {(t["x"], t["y"]): t for t in data["tiles"]}
+        # Chebyshev 2 from player: visible.
+        assert by_coord[(12, 10)]["state"] == "visible"
+        # Chebyshev 3-5: inside viewport, beyond vision -> never visible.
+        for coord in ((13, 10), (10, 14), (15, 15)):
+            assert by_coord[coord]["state"] in ("fog", "unexplored"), coord
 
     def test_in_bounds_unaffected_when_no_bounds_func(self):
         """Without an injected bounds func, no tile is flagged out_of_bounds

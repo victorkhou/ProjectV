@@ -62,6 +62,10 @@ _OPTIONAL_FILES = {
     # Onboarding directive chain (early-game rebalance R10). Optional — an
     # absent/empty file just means no directive checklist runs.
     "directives": "definitions/directives.yaml",
+    # Affix pools (item-loot-economy R3). Optional-if-absent (no affixes are
+    # ever drawn), but a PRESENT file is validated strictly — invalid affix
+    # data fails the load, not the runtime (design Error Handling).
+    "affixes": "definitions/affixes.yaml",
 }
 
 
@@ -130,6 +134,13 @@ class DataRegistry:
         #: list of directive dicts loaded from the optional
         #: data/definitions/directives.yaml. Empty when absent (no checklist).
         self.directives: list[dict] = []
+        #: Affix pools (item-loot-economy R3), keyed by pool name ("weapon",
+        #: "armor", ...) with each value the ORDERED list of affix-entry dicts
+        #: ({key, name, stat|proc, min, max, weight}) from the optional
+        #: data/definitions/affixes.yaml. Empty when absent (no affixes drawn).
+        #: Present-but-invalid data FAILS the load (design Error Handling).
+        #: Consumed by the affix draw (task 2.3).
+        self.affixes: dict[str, list[dict]] = {}
         self.balance: BalanceConfig = BalanceConfig()
         self._base_path: str = "data"
         self._validator = SchemaValidator()
@@ -221,6 +232,9 @@ class DataRegistry:
         # --- Load optional onboarding directives ---
         self._load_directives(base_path)
 
+        # --- Load optional affix pools (strict when present) ---
+        self._load_affixes(base_path)
+
         logger.info("Data Registry loaded successfully from '%s'", base_path)
 
     def reload_all(self) -> tuple[bool, list[str]]:
@@ -256,6 +270,7 @@ class DataRegistry:
         self.classes = temp.classes
         self.alliance_perks = temp.alliance_perks
         self.directives = temp.directives
+        self.affixes = temp.affixes
         self.balance = temp.balance
 
         # Rebuild the shared level<->XP threshold curve. The curve is the
@@ -331,6 +346,8 @@ class DataRegistry:
                 weight=entry.get("weight", 1.0),
                 classification=entry.get("classification", "modern"),
                 required_rank=entry.get("required_rank"),
+                roll_spec=entry.get("roll_spec"),
+                insert_effect=entry.get("insert_effect"),
             )
             self.items[idef.key] = idef
         self.item_production_map = data.get("production_map", {})
@@ -476,6 +493,7 @@ class DataRegistry:
         special = {
             "demolish_refund_rates", "base_training_cost",
             "resource_weights", "alliance_level_thresholds",
+            "craft_rarity_table",
         }
 
         kwargs: dict[str, Any] = {}
@@ -490,6 +508,16 @@ class DataRegistry:
             {int(k): v for k, v in dr_raw.items()}
             if dr_raw is not None
             else defaults.demolish_refund_rates
+        )
+
+        # craft_rarity_table: building-level keys may be strings → coerce to
+        # int so the roller's level lookup matches (same treatment as
+        # demolish_refund_rates).
+        crt_raw = raw.get("craft_rarity_table")
+        kwargs["craft_rarity_table"] = (
+            {int(k): dict(v) for k, v in crt_raw.items()}
+            if crt_raw is not None
+            else defaults.craft_rarity_table
         )
 
         # base_training_cost: resource-name keys stay as strings.
@@ -625,6 +653,8 @@ class DataRegistry:
                 rare_pool=rare_pool,
                 xp_reward=(int(xp_reward) if xp_reward is not None else None),
                 gear_rolls=int(spec.get("gear_rolls", 1) or 1),
+                rarity_weight=float(spec.get("rarity_weight", 0.0) or 0.0),
+                guard_gear_drop_chance=spec.get("guard_gear_drop_chance"),
             )
         logger.info("Loaded %d NPC-base template(s).", len(self.base_templates))
 
@@ -870,6 +900,58 @@ class DataRegistry:
                 continue
             self.directives.append(dict(entry))
         logger.info("Loaded %d directive step(s).", len(self.directives))
+
+    def _load_affixes(self, base_path: str) -> None:
+        """Load the affix pools from the optional affixes.yaml (R3, task 2.1).
+
+        Contract (design Error Handling):
+
+        - ABSENT or empty file → empty pools; no affixes are ever drawn, the
+          game runs fine without them. This keeps the optional-file precedent
+          (classes/outposts/...) so the fast test fixtures need no new file.
+        - PRESENT file → validated STRICTLY through
+          :meth:`SchemaValidator.validate_affixes`; any error (unknown pool,
+          unknown stat/proc axis, malformed band, duplicate key) raises
+          :class:`DataRegistryError` — invalid affix data fails the LOAD, not
+          the runtime. A read error is likewise fatal: a file that exists but
+          cannot be parsed must never silently disable the affix economy.
+
+        Pools land on ``self.affixes`` as ``{pool_name: [entry_dict, ...]}``
+        (entries copied, order preserved) for the affix draw (task 2.3).
+        """
+        self.affixes = {}
+        path = os.path.join(base_path, _OPTIONAL_FILES["affixes"])
+        if not os.path.isfile(path):
+            logger.info("No affix pools at '%s' — affixes disabled.", path)
+            return
+        try:
+            with open(path, "r") as f:
+                raw = yaml.safe_load(f)
+        except Exception as exc:
+            raise DataRegistryError(f"Failed to read affixes at '{path}': {exc}")
+        if raw is None:
+            logger.info("Affix file at '%s' is empty — affixes disabled.", path)
+            return
+
+        errors = self._validator.validate_affixes(raw)
+        if errors:
+            msg = "Affix validation failed:\n" + "\n".join(errors)
+            logger.error(msg)
+            raise DataRegistryError(msg)
+
+        self.affixes = {
+            pool: [dict(entry) for entry in entries]
+            for pool, entries in raw.items()
+        }
+        logger.info(
+            "Loaded %d affix pool(s): %s.",
+            len(self.affixes),
+            ", ".join(f"{p} ({len(e)})" for p, e in sorted(self.affixes.items())),
+        )
+
+    def get_affix_pool(self, pool_name: str) -> list[dict]:
+        """Return the affix entries for *pool_name*, or ``[]`` if undefined."""
+        return self.affixes.get(pool_name, [])
 
     def get_class(self, key: str) -> "ClassDef | None":
         """Return the player class for *key*, or ``None`` if undefined."""
