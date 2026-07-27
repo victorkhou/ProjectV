@@ -357,9 +357,13 @@ class PlanetRoom(DefaultRoom):
                 return
             buildings = looker.get_buildings() if hasattr(looker, "get_buildings") else []
             data = provider.get_map_data(looker, buildings)
-            fog = systems.get("fog_system")
-            if fog:
-                data["discovered_count"] = len(fog.get_discovered_tile_set(looker))
+            # discovered_count is an admin-only debugging readout (see
+            # game_commands._send_map_update) — only add it for Builder+ callers.
+            from world.utils import is_admin
+            if is_admin(looker):
+                fog = systems.get("fog_system")
+                if fog:
+                    data["discovered_count"] = len(fog.get_discovered_tile_set(looker))
             looker.msg(map_update=data)
         except Exception:
             pass

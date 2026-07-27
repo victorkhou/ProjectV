@@ -761,7 +761,25 @@ def initialize_game() -> dict:
     })
 
     # ---------------------------------------------------------- #
-    #  7b. Spawn initial NPC bases per planet (idempotent-ish)
+    #  7b. Admin adapter registry (unified-admin-crud)
+    # ---------------------------------------------------------- #
+    # Register every EntityAdapter and enforce the core-verb coverage
+    # contract at server start (Requirement 1.3): an adapter that neither
+    # supports nor opts out (with a non-empty reason) of every core verb
+    # raises HERE — before its @<entity> command becomes invocable.
+    # Deliberately NOT wrapped in try/except: a bad adapter must fail the
+    # boot loudly, not limp along with a half-wired admin surface.
+    from world.admin.adapter_registry import register_all
+
+    adapter_registry = register_all()
+    game_systems["adapter_registry"] = adapter_registry
+    logger.info(
+        "AdapterRegistry initialized (%d adapter(s)).",
+        len(adapter_registry.all()),
+    )
+
+    # ---------------------------------------------------------- #
+    #  7c. Spawn initial NPC bases per planet (idempotent-ish)
     # ---------------------------------------------------------- #
     # Rebuild the spawner's in-memory state from surviving sentinels + persisted
     # pending respawns (Req 7.6), THEN seed only the planets that have no base

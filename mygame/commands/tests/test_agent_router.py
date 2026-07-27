@@ -1135,5 +1135,325 @@ class TestAgentShorthands(unittest.TestCase):
         self.assertTrue(any("Usage" in m for m in caller._messages))
 
 
+# -------------------------------------------------------------- #
+#  CmdAdminAgent — the migrated @agent admin router
+#  (unified-admin-crud task 5.2: EntityAdminRouter subclass driven by
+#  the AgentAdapter; create→spawn alias; def scope opted out)
+# -------------------------------------------------------------- #
+
+from mygame.commands.agent_commands import CmdAdminAgent  # noqa: E402
+from world.admin.adapter_registry import AdapterRegistry  # noqa: E402
+from world.admin.adapters.agent_adapter import AgentAdapter  # noqa: E402
+
+
+class _AdminDb:
+    """Attribute-bag double for an agent's ``db`` (admin router tests)."""
+
+    def __init__(self, **kwargs):
+        self.__dict__.update(kwargs)
+
+    def __getattr__(self, name):
+        return None
+
+
+class _AdminFakeAgent:
+    def __init__(self, agent_id, owner=None, hp=80, hp_max=100):
+        self.key = f"Agent-{agent_id}"
+        self.db = _AdminDb(agent_id=agent_id, owner=owner, role="soldier",
+                           hp=hp, hp_max=hp_max, kills=0, deaths=0)
+
+
+class _AdminFakeAgentSystem:
+    """AgentSystem double exposing the admin single-writer paths."""
+
+    def __init__(self, rosters=None):
+        self._rosters = rosters or {}
+        self.training_cleared_for = []
+
+    def get_agents(self, player):
+        return list(self._rosters.get(player, []))
+
+    def admin_create_agent(self, player):
+        roster = self._rosters.setdefault(player, [])
+        next_id = max((a.db.agent_id for a in roster), default=0) + 1
+        agent = _AdminFakeAgent(next_id, owner=player)
+        roster.append(agent)
+        return agent
+
+    def admin_set_agent_field(self, agent, field, value):
+        setattr(agent.db, field, value)
+        return True
+
+    def admin_destroy_agent(self, agent):
+        for roster in self._rosters.values():
+            if agent in roster:
+                roster.remove(agent)
+        return True
+
+    def admin_clear_training(self, player):
+        self.training_cleared_for.append(player)
+        return 2
+
+
+class _AdminCaller:
+    """Admin caller: full perms, message capture, player search."""
+
+    _next_id = 9000
+
+    def __init__(self, known_players=()):
+        _AdminCaller._next_id += 1
+        self.id = _AdminCaller._next_id
+        self.key = "AdminUser"
+        self._messages = []
+        self._known = {p.key.lower(): p for p in known_players}
+
+    def check_permstring(self, perm):
+        return True
+
+    def msg(self, text=None, **kwargs):
+        if text is not None:
+            self._messages.append(text)
+
+    def search(self, name, **kwargs):
+        return self._known.get(str(name).lower())
+
+
+class _TargetPlayer(_AdminCaller):
+    def __init__(self, key):
+        super().__init__()
+        self.key = key
+
+
+class _AdminAgentRouter(CmdAdminAgent):
+    """Test subclass injecting a per-test AdapterRegistry."""
+
+    registry = None
+
+    def _adapter_registry(self):
+        return self.registry
+
+
+class AdminAgentRouterTestCase(unittest.TestCase):
+    """Fresh adapter/registry/caller per test; shared run helper."""
+
+    def setUp(self):
+        self.system = _AdminFakeAgentSystem()
+        self.registry = AdapterRegistry()
+        self.registry.register(AgentAdapter(agent_system=self.system))
+        # agent_system also served through the services facade for the
+        # router's require_system (destroy training).
+        _install_systems({"agent_system": self.system})
+
+    def run_cmd(self, args, caller):
+        cmd = _AdminAgentRouter()
+        cmd.registry = self.registry
+        cmd.caller = caller
+        cmd.args = args
+        cmd.cmdstring = cmd.key
+        cmd.func()
+        return cmd
+
+    @staticmethod
+    def output(caller):
+        return "\n".join(caller._messages)
+
+
+class TestAdminAgentIsEntityAdminRouter(AdminAgentRouterTestCase):
+    """The @agent router is an EntityAdminRouter subclass (task 5.2)."""
+
+    def test_subclass_and_wiring(self):
+        from commands.command_router import EntityAdminRouter
+        self.assertTrue(issubclass(CmdAdminAgent, EntityAdminRouter))
+        self.assertEqual(CmdAdminAgent.key, "@agent")
+        self.assertEqual(CmdAdminAgent.adapter_key, "agent")
+
+
+class TestAdminAgentSpawn(AdminAgentRouterTestCase):
+    """spawn <player> [count] creates through the AgentSystem path."""
+
+    def test_spawn_creates_for_target_player(self):
+        bob = _TargetPlayer("Bob")
+        caller = _AdminCaller(known_players=(bob,))
+        self.run_cmd(" spawn Bob 2", caller)
+        out = self.output(caller)
+        self.assertIn("2 agent(s) for Bob", out)
+        self.assertIn("#1", out)
+        self.assertIn("#2", out)
+        self.assertEqual(len(self.system.get_agents(bob)), 2)
+        # The target player is notified, like the legacy create.
+        self.assertTrue(
+            any("[Admin]" in m for m in bob._messages)
+        )
+
+    def test_spawn_no_args_shows_usage(self):
+        caller = _AdminCaller()
+        self.run_cmd(" spawn", caller)
+        self.assertIn("Usage", self.output(caller))
+
+    def test_spawn_unresolvable_player_errors_creating_nothing(self):
+        caller = _AdminCaller()
+        self.run_cmd(" spawn Nobody", caller)
+        self.assertIn("Nobody", self.output(caller))
+        self.assertEqual(self.system._rosters, {})
+
+
+class TestAdminAgentCreateAlias(AdminAgentRouterTestCase):
+    """create is a deprecated migration alias of spawn (R11.1, R11.2)."""
+
+    def test_create_alias_dispatches_spawn_with_deprecation_note(self):
+        bob = _TargetPlayer("Bob")
+        caller = _AdminCaller(known_players=(bob,))
+        self.run_cmd(" create Bob", caller)
+        note = caller._messages[0]
+        self.assertIn("create", note)
+        self.assertIn("spawn", note)
+        self.assertIn("deprecated", note)
+        # Canonical spawn behavior followed the note.
+        self.assertIn("1 agent(s) for Bob", self.output(caller))
+        self.assertEqual(len(self.system.get_agents(bob)), 1)
+
+
+class TestAdminAgentShowSetDestroy(AdminAgentRouterTestCase):
+    """The NEW show/set verbs and the shared destroy flow (R7.3)."""
+
+    def _with_agent(self, caller, agent_id=1, hp=50, hp_max=100):
+        agent = _AdminFakeAgent(agent_id, owner=caller, hp=hp,
+                                hp_max=hp_max)
+        self.system._rosters[caller] = [agent]
+        return agent
+
+    def test_show_renders_identity_state_and_fields(self):
+        caller = _AdminCaller()
+        self._with_agent(caller)
+        self.run_cmd(" show 1", caller)
+        out = self.output(caller)
+        self.assertIn("Agent #1", out)
+        self.assertIn("Modifiable fields", out)
+        self.assertIn("hp", out)
+
+    def test_set_writes_through_the_agent_system(self):
+        caller = _AdminCaller()
+        agent = self._with_agent(caller, hp=50, hp_max=100)
+        self.run_cmd(" set 1 hp 70", caller)
+        self.assertEqual(agent.db.hp, 70)
+        self.assertIn("hp set to 70", self.output(caller))
+
+    def test_set_clamps_hp_to_the_targets_hp_max_with_note(self):
+        caller = _AdminCaller()
+        agent = self._with_agent(caller, hp=50, hp_max=100)
+        self.run_cmd(" set 1 hp 500", caller)
+        self.assertEqual(agent.db.hp, 100)
+        self.assertIn("clamped", self.output(caller))
+
+    def test_destroy_deletes_through_the_agent_system(self):
+        caller = _AdminCaller()
+        self._with_agent(caller)
+        self.run_cmd(" destroy 1", caller)
+        self.assertIn("Destroyed", self.output(caller))
+        self.assertEqual(self.system.get_agents(caller), [])
+
+    def test_destroy_training_clears_via_agent_system(self):
+        bob = _TargetPlayer("Bob")
+        caller = _AdminCaller(known_players=(bob,))
+        self.run_cmd(" destroy training Bob", caller)
+        self.assertIn(bob, self.system.training_cleared_for)
+        self.assertIn("training state", self.output(caller))
+
+
+class TestAdminAgentDefOptOut(AdminAgentRouterTestCase):
+    """All def verbs surface the no-YAML-definition-domain reason (R7.3)."""
+
+    def test_def_list_surfaces_the_opt_out_reason(self):
+        caller = _AdminCaller()
+        self.run_cmd(" def list", caller)
+        out = self.output(caller)
+        self.assertIn("not available", out)
+        self.assertIn("no YAML definition domain", out)
+
+
+# -------------------------------------------------------------- #
+#  Phase 2 router unit tests (unified-admin-crud task 5.4)
+#
+#  Gap-fill audit of the task-5.2 coverage above:
+#  - the `create` alias test asserted note substrings only; task 5.4
+#    requires the FULL equivalence check — alias output identical to
+#    `spawn` plus exactly the one-line deprecation note (R11.1, 11.2)
+#  - the def opt-out test asserted reason fragments only; task 5.4
+#    requires the adapter's declared reason to surface VERBATIM
+#    through the router (R1.5, 7.3)
+#  `@building set level` clamp and `@tech grant`/`revoke` coverage
+#  already exists in commands/tests/test_admin_routers.py.
+# -------------------------------------------------------------- #
+
+
+class TestTask54CreateAliasFullEquivalence(AdminAgentRouterTestCase):
+    """`create` == `spawn` output + one deprecation note (task 5.4;
+    Requirements 7.3, 11.1, 11.2)."""
+
+    def _run_fresh(self, verb):
+        """One invocation against a fully fresh system/registry/players
+        so the two runs are independent and comparable."""
+        system = _AdminFakeAgentSystem()
+        registry = AdapterRegistry()
+        registry.register(AgentAdapter(agent_system=system))
+        _install_systems({"agent_system": system})
+        bob = _TargetPlayer("Bob")
+        caller = _AdminCaller(known_players=(bob,))
+        cmd = _AdminAgentRouter()
+        cmd.registry = registry
+        cmd.caller = caller
+        cmd.args = f" {verb} Bob 2"
+        cmd.cmdstring = cmd.key
+        cmd.func()
+        return system, bob, caller
+
+    def test_create_output_is_spawn_output_plus_one_line_note(self):
+        spawn_sys, spawn_bob, spawn_caller = self._run_fresh("spawn")
+        alias_sys, alias_bob, alias_caller = self._run_fresh("create")
+
+        # The deprecation note is the first message: exactly one line,
+        # naming both spellings (R11.2).
+        note = alias_caller._messages[0]
+        self.assertEqual(len(note.splitlines()), 1)
+        self.assertIn("'create'", note)
+        self.assertIn("spawn", note)
+
+        # Everything after the note is byte-identical to the canonical
+        # spawn output with the same arguments (R11.1).
+        self.assertEqual(alias_caller._messages[1:], spawn_caller._messages)
+
+        # Identical state change through the AgentSystem path.
+        self.assertEqual(
+            [a.key for a in alias_sys.get_agents(alias_bob)],
+            [a.key for a in spawn_sys.get_agents(spawn_bob)],
+        )
+        # Identical target-player notification.
+        self.assertEqual(alias_bob._messages, spawn_bob._messages)
+
+
+class TestTask54DefOptOutReasonVerbatim(AdminAgentRouterTestCase):
+    """The adapter's declared no-YAML-definition-domain reason surfaces
+    verbatim through the router (task 5.4; Requirements 1.5, 7.3)."""
+
+    def test_def_list_surfaces_the_declared_reason_verbatim(self):
+        from world.admin.adapters.agent_adapter import _NO_DEF_DOMAIN_REASON
+
+        caller = _AdminCaller()
+        self.run_cmd(" def list", caller)
+        out = self.output(caller)
+        self.assertIn(_NO_DEF_DOMAIN_REASON, out)
+        self.assertIn("not available", out)
+
+    def test_every_def_verb_shares_the_same_verbatim_reason(self):
+        from world.admin.adapters.agent_adapter import _NO_DEF_DOMAIN_REASON
+
+        for sub in ("list", "show", "diff", "set soldier hp 1",
+                    "reset soldier hp"):
+            caller = _AdminCaller()
+            self.run_cmd(f" def {sub}", caller)
+            self.assertIn(_NO_DEF_DOMAIN_REASON, self.output(caller),
+                          msg=f"def {sub.split()[0]} lost the reason")
+
+
 if __name__ == "__main__":
     unittest.main()

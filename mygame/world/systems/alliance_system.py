@@ -1819,3 +1819,146 @@ class AllianceSystem(BaseSystem):
             summary["pending_invites"] = list(record.get("pending_invites", []) or [])
             summary["pending_requests"] = list(record.get("pending_requests", []) or [])
         return summary
+
+    # ------------------------------------------------------------------ #
+    #  Admin single-writer paths (unified-admin-crud @alliance adapter)
+    # ------------------------------------------------------------------ #
+    #
+    # The AllianceAdapter (``world/admin/adapters/alliance_adapter.py``)
+    # and the ``@alliance`` admin router route every staff mutation through
+    # these methods so AllianceSystem stays the single writer for alliance
+    # state (Requirement 3.5). Each returns ``(ok, error)`` — the admin
+    # layer relays *error* verbatim on failure; ``ok`` writes exactly once.
+
+    def admin_rename_alliance(self, alliance_id, new_name=None,
+                              new_tag=None) -> tuple[bool, str]:
+        """Rename/retag an alliance (admin force path).
+
+        Either side may be ``None`` to keep its current value. Validates
+        the resulting (name, tag) pair through :meth:`_validate_name_tag`
+        (excluding this alliance from the uniqueness check), writes the
+        record once, and publishes ``ALLIANCE_RENAMED`` — bypassing the
+        leader/cooldown gate the player-facing ``rename``/``retag`` apply.
+        """
+        record = self._record(alliance_id)
+        if record is None:
+            return False, "That alliance no longer exists."
+        name = record.get("name") if new_name is None else str(new_name).strip()
+        tag = record.get("tag") if new_tag is None else str(new_tag).strip()
+        err = self._validate_name_tag(name, tag, exclude_id=record["id"])
+        if err:
+            return False, err
+        old = (record.get("name"), record.get("tag"))
+        record["name"] = name
+        record["tag"] = tag
+        self._alliances.put(record)
+        from world.event_bus import ALLIANCE_RENAMED
+        self._publish(ALLIANCE_RENAMED, alliance_id=record["id"], old=old,
+                      new=(name, tag))
+        return True, ""
+
+    def admin_set_alliance_field(self, alliance_id, field, value
+                                 ) -> tuple[bool, str]:
+        """Write one admin-settable alliance field (``@alliance set``).
+
+        The single-writer path for admin field writes. Settable fields:
+        ``name`` and ``tag`` (validated exactly like a rename) and
+        ``open_join`` (a bool). Anything else is rejected with the valid
+        field names; nothing is written on any failure.
+        """
+        if field == "name":
+            return self.admin_rename_alliance(alliance_id, new_name=value)
+        if field == "tag":
+            return self.admin_rename_alliance(alliance_id, new_tag=value)
+        if field == "open_join":
+            record = self._record(alliance_id)
+            if record is None:
+                return False, "That alliance no longer exists."
+            record["open_join"] = bool(value)
+            self._alliances.put(record)
+            return True, ""
+        return False, (
+            f"'{field}' is not an admin-settable alliance field; "
+            "settable: name, open_join, tag"
+        )
+
+    def admin_kick_member(self, alliance_id, member) -> tuple[bool, str]:
+        """Force-kick *member* from the alliance (admin path).
+
+        Strips the roster entry and clears the Member_Pointer through the
+        same single-writer choke points the player-facing ``kick`` uses,
+        but bypasses the rank gate. Refuses to kick the LEADER — that
+        would strand ``leader_id`` with no succession (transfer or
+        disband instead). Mirrors the legacy admin force-kick: no rejoin
+        cooldown is stamped.
+        """
+        record = self._record(alliance_id)
+        if record is None:
+            return False, "That alliance no longer exists."
+        member_id = getattr(member, "id", None)
+        if self._alliance_of(member) != record["id"]:
+            return False, (
+                f"{getattr(member, 'key', member)} is not in that alliance."
+            )
+        if member_id == record.get("leader_id"):
+            return False, (
+                "Cannot kick the leader — use '@alliance transfer' to hand "
+                "off leadership first, or '@alliance destroy'."
+            )
+        self._remove_from_roster(record, member_id)
+        self._alliances.put(record)
+        self._unsubscribe(member, record["id"])
+        self._clear_pointer(member)
+        return True, ""
+
+    def admin_transfer_leadership(self, alliance_id, member
+                                  ) -> tuple[bool, str]:
+        """Force-transfer alliance leadership to *member* (admin path).
+
+        Routes through :meth:`_install_leader` (the same seat-swap the
+        player-facing ``transfer`` uses: roster rebuild, pointer writes,
+        rank-changed event), bypassing the leader-only gate.
+        """
+        record = self._record(alliance_id)
+        if record is None:
+            return False, "That alliance no longer exists."
+        if self._alliance_of(member) != record["id"]:
+            return False, (
+                f"{getattr(member, 'key', member)} is not in that alliance."
+            )
+        if getattr(member, "id", None) == record.get("leader_id"):
+            return False, (
+                f"{getattr(member, 'key', member)} is already the leader."
+            )
+        old_leader = self._resolve_member(record.get("leader_id"))
+        self._install_leader(record, old_leader, member)
+        return True, ""
+
+    def admin_disband_alliance(self, alliance_id) -> tuple[bool, str]:
+        """Force-disband an alliance (``@alliance destroy``).
+
+        Routes through :meth:`_do_disband` — the single teardown path
+        (even-split, pointer clears, channel destroy, record delete) —
+        bypassing the leader-only gate.
+        """
+        record = self._record(alliance_id)
+        if record is None:
+            return False, "That alliance no longer exists."
+        self._do_disband(record)
+        return True, ""
+
+    def admin_find_member(self, alliance_id, name):
+        """Resolve a roster member of the alliance by case-insensitive name.
+
+        Read-only lookup for the admin router's ``kick``/``transfer``
+        argument parsing. Returns the live member object, or ``None``.
+        """
+        record = self._record(alliance_id)
+        if record is None:
+            return None
+        wanted = str(name or "").lower()
+        for cid in _roster_ids(record):
+            obj = self._resolve_member(cid)
+            if obj is not None and str(getattr(obj, "key", "")).lower() == wanted:
+                return obj
+        return None

@@ -81,10 +81,12 @@ hp_regen_interval_ticks: 2
 # construction (stay on the tile, or assign an Engineer). Each tick restores
 # repair_hp_percent_per_tick% of max HP and costs the SAME percent of the
 # building's cumulative investment (its base build cost PLUS every upgrade cost
-# up to its current level). At 5%/tick a building takes 20 ticks to go 0 -> full
+# up to its current level). A repair step lands once every repair_interval_ticks
+# ticks, so at 5%/step every 2 ticks a building takes 40 ticks to go 0 -> full
 # and a full repair costs 100% of what was invested in it. Pay-as-you-go: an
 # interrupted repair only charges for the HP actually restored.
 repair_hp_percent_per_tick: 5.0
+repair_interval_ticks: 2
 
 # Bomb disarm ('disarm' command). Disarming a ticking bomb takes
 # bomb_disarm_ticks_min..max ticks (rolled per attempt); the bomb's own fuse

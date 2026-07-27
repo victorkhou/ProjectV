@@ -5,8 +5,9 @@ Agent management commands — train, assign, unassign, list, patrol, stop agents
 
 from __future__ import annotations
 
-from commands.command_router import GameSubcommandRouter
+from commands.command_router import EntityAdminRouter, GameSubcommandRouter
 from commands.game_commands import GameCommand
+from world.admin.resolution import resolve_player_scope
 from world.systems.agent_system import BUILDING_ROLE_MAP
 
 
@@ -453,6 +454,152 @@ class CmdAgent(GameSubcommandRouter):
         "ability": (sub_ability, "Enable/disable or view a gated ability", ""),
         "score": (sub_score, "Show one agent's stat sheet", ""),
     }
+
+
+# ------------------------------------------------------------------ #
+#  CmdAdminAgent — the @agent admin router (unified admin grammar)
+# ------------------------------------------------------------------ #
+
+class CmdAdminAgent(EntityAdminRouter):
+    """Manage agent NPCs under the unified admin grammar.
+
+    Usage:
+      @agent list [filter] [player]
+      @agent spawn <player> [count]
+      @agent show <agent>
+      @agent set <agent> <field> <value>
+      @agent destroy <agent>[, <agent> ...]
+      @agent destroy training <player>
+
+    Core verbs (shared EntityAdminRouter handlers, driven by the agent
+    adapter registered under ``adapter_key = "agent"``):
+      list    — live agents in a player's roster (defaults to yours);
+                optional filter on role/status/name
+      spawn   — instantly create agent(s) for a player through the
+                AgentSystem admin path, bypassing cost and training
+                timer (Admin+)
+      show    — full agent readout: role, status, HP, kills/deaths,
+                activity, and the modifiable fields with bounds
+      set     — bounded field write (hp, hp_max, kills, deaths) through
+                the AgentSystem single-writer path (Admin+)
+      destroy — delete an agent (multi-target destroys need explicit
+                confirmation); 'destroy training <player>' clears stuck
+                Academy training state (Admin+)
+
+    Targets resolve uniformly: '#N' from the last '@agent list', the
+    agent id (e.g. '2'), the agent name ('Agent-2'), or an unambiguous
+    prefix; a trailing player name scopes to that player's roster
+    ('@agent destroy 2 Bob').
+
+    Definition scope ('def …') is not available: agents have no YAML
+    definition domain — they are spawned from player context.
+
+    Legacy spellings (deprecated migration aliases):
+      create <player> [count] — alias of 'spawn <player> [count]'
+    """
+
+    key = "@agent"
+    adapter_key = "agent"
+
+    def _sub_spawn(self, rest):
+        """``spawn <player> [count]`` — agent-shaped spawn parsing.
+
+        Agents have no definition domain, so the shared
+        ``spawn <def> ...`` grammar does not fit: an agent spawn's
+        "definition" is its player context. This override keeps the
+        legacy argument shape (player, optional count) while creating
+        through the adapter's AgentSystem path and auditing exactly like
+        the shared handler (Requirements 4.2, 4.8, 9.1).
+        """
+        parts = (rest or "").split()
+        if not parts or len(parts) > 2:
+            self.caller.msg(f"Usage: {self.key} spawn <player> [count]")
+            return
+        player_token = parts[0]
+        count = 1
+        if len(parts) == 2:
+            count = self.parse_int(parts[1], "Count")
+            if count is None:
+                return
+            if count < 1:
+                self.caller.msg("Count must be at least 1.")
+                return
+
+        scope = resolve_player_scope(self.caller, player_token)
+        if not scope.ok or scope.target is None:
+            self.caller.msg(scope.error
+                            or f"Could not resolve player '{player_token}'.")
+            return
+        target = scope.target
+
+        try:
+            result = self.adapter.create(
+                self.caller, player_token,
+                {"player": target, "count": count},
+            )
+        except Exception as exc:  # noqa: BLE001 - relay creation errors
+            self.caller.msg(f"Spawn failed: {exc}")
+            return
+        if result is None or getattr(result, "ok", True) is False:
+            error = getattr(result, "error", None) or "creation path failed"
+            self.caller.msg(f"Spawn failed: {error}")
+            return
+
+        ids = getattr(result, "created_ids", ()) or ()
+        ids_str = ", ".join(f"#{i}" for i in ids)
+        note = self._audit(
+            "spawn",
+            f"agent x{len(ids)} for {target.key}: {ids_str}",
+        )
+        self.caller.msg(
+            f"Spawned {len(ids)} agent(s) for {target.key}: "
+            f"{ids_str}.{note}"
+        )
+        if target is not self.caller and hasattr(target, "msg"):
+            target.msg(
+                f"|y[Admin] {len(ids)} agent(s) created for you: "
+                f"{ids_str}.|n"
+            )
+
+    def _sub_destroy(self, rest):
+        """``destroy``: shared handler + the legacy training-clear form.
+
+        ``destroy training <player>`` clears stuck Academy training
+        state through :meth:`AgentSystem.admin_clear_training` (the
+        legacy unstick tool, kept under its old spelling); everything
+        else goes through the shared destroy flow (resolution,
+        multi-target confirmation, audit).
+        """
+        parts = (rest or "").split()
+        if parts and parts[0].lower() == "training":
+            if len(parts) != 2:
+                self.caller.msg(
+                    f"Usage: {self.key} destroy training <player>"
+                )
+                return
+            scope = resolve_player_scope(self.caller, parts[1])
+            if not scope.ok or scope.target is None:
+                self.caller.msg(
+                    scope.error
+                    or f"Could not resolve player '{parts[1]}'."
+                )
+                return
+            target = scope.target
+            agent_system = self.require_system("agent_system")
+            if agent_system is None:
+                return
+            cleared = agent_system.admin_clear_training(target)
+            note = self._audit(
+                "destroy",
+                f"cleared training state on {cleared} building(s) "
+                f"for {target.key}",
+            )
+            self.caller.msg(
+                f"Cleared training state on {cleared} building(s) "
+                f"for {target.key}.{note}"
+            )
+            return
+        super()._sub_destroy(rest)
 
 
 # ------------------------------------------------------------------ #

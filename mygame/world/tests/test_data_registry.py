@@ -722,6 +722,78 @@ class TestReload:
         # Original data preserved
         assert reg.buildings == original_buildings
 
+    # ------------------------------------------------------------------ #
+    #  Overlay merge step (unified-admin-crud R6.1, R6.2, task 1.8)
+    # ------------------------------------------------------------------ #
+
+    def test_overlay_applied_before_validation(self, data_dir):
+        """A definitions_overrides.yaml override is merged into the raw data
+        before SchemaValidator runs, so load_all yields the overridden value
+        (R6.1) — and it passed the exact same validation as base data (R6.2).
+        """
+        _write_yaml(
+            os.path.join(data_dir, "definitions_overrides.yaml"),
+            {"buildings": {"HQ": {"max_health": 900}},
+             "items": {"combat_knife": {"max_stack": 42}}},
+        )
+        reg = DataRegistry()
+        reg.load_all(data_dir)
+
+        assert reg.get_building("HQ").max_health == 900
+        assert reg.get_item("combat_knife").max_stack == 42
+        # Untouched entries keep their base values.
+        assert reg.get_building("MM").max_health == 200
+
+    def test_reload_picks_up_overlay(self, data_dir):
+        """An overlay written after the initial load is applied by the next
+        reload_all through the same temp-registry + atomic-swap path."""
+        reg = DataRegistry()
+        reg.load_all(data_dir)
+        assert reg.get_building("HQ").max_health == 500
+
+        _write_yaml(
+            os.path.join(data_dir, "definitions_overrides.yaml"),
+            {"buildings": {"HQ": {"max_health": 900}}},
+        )
+        success, errors = reg.reload_all()
+        assert success is True, errors
+        assert reg.get_building("HQ").max_health == 900
+
+    def test_reload_with_invalid_overlay_preserves_data(self, data_dir):
+        """A merged result that fails schema validation fails the reload
+        atomically: the live registry is left untouched (R6.2 via reload's
+        temp-registry mechanism)."""
+        reg = DataRegistry()
+        reg.load_all(data_dir)
+        original_buildings = dict(reg.buildings)
+
+        # max_health <= 0 is rejected by validate_buildings — the overlay is
+        # validated by the SAME rule as base data, no relaxation.
+        _write_yaml(
+            os.path.join(data_dir, "definitions_overrides.yaml"),
+            {"buildings": {"HQ": {"max_health": -5}}},
+        )
+        success, errors = reg.reload_all()
+        assert success is False
+        assert any("max_health" in e for e in errors)
+        assert reg.buildings == original_buildings
+        assert reg.get_building("HQ").max_health == 500
+
+    def test_unparseable_overlay_fails_reload_and_preserves_data(self, data_dir):
+        """A present-but-unparseable overlay file fails the reload as a
+        DataRegistryError inside the temp load — live data stays intact."""
+        reg = DataRegistry()
+        reg.load_all(data_dir)
+        original_buildings = dict(reg.buildings)
+
+        with open(os.path.join(data_dir, "definitions_overrides.yaml"), "w") as f:
+            f.write("\t\tinvalid: [yaml")
+
+        success, errors = reg.reload_all()
+        assert success is False
+        assert any("overlay" in e.lower() for e in errors)
+        assert reg.buildings == original_buildings
+
     def test_reload_swaps_affix_pools(self, data_dir):
         """A hot-reload picks up newly-added affix pools (task 2.1)."""
         reg = DataRegistry()

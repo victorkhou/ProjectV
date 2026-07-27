@@ -4764,5 +4764,78 @@ class TestBenchHelpTextCoherence(unittest.TestCase):
                           f"{cls.__name__} help never names Salvage")
 
 
+class TestSendMapUpdateAdminGate(unittest.TestCase):
+    """_send_map_update: resource label + discovered count are admin-only.
+
+    Regular players see terrain (gameplay-relevant via terrain modifiers) in the
+    webclient footer, but not the resource the tile bears or the global
+    discovered-tile count — those are Builder+ debugging readouts.
+    """
+
+    class _CaptureCaller:
+        """Minimal caller that captures the map_update payload."""
+        def __init__(self):
+            self.db = FakeDB()
+            self.map_updates = []
+
+        def get_buildings(self):
+            return []
+
+        def msg(self, text=None, **kwargs):
+            if "map_update" in kwargs:
+                self.map_updates.append(kwargs["map_update"])
+
+    def _run(self, *, admin):
+        from commands import game_commands as gc
+
+        provider = types.SimpleNamespace(
+            get_map_data=lambda caller, buildings: {
+                "player": {"x": 5, "y": 6, "planet": "terra",
+                           "hp": 80, "hp_max": 100, "level": 3},
+                "tiles": [],
+            }
+        )
+        fog = types.SimpleNamespace(
+            get_discovered_tile_set=lambda caller: [1, 2, 3, 4, 5]
+        )
+        gen = types.SimpleNamespace(
+            get_terrain_and_resource=lambda x, y: ("River", "Wood")
+        )
+
+        def fake_get_system(caller, name):
+            if name == "map_data_provider":
+                return provider
+            if name == "fog_system":
+                return fog
+            return None  # terrain_modifier_system etc. → skipped
+
+        caller = self._CaptureCaller()
+        with patch.object(gc, "_get_system", fake_get_system), \
+             patch.object(gc, "is_admin", lambda c: admin), \
+             patch.object(gc, "coords_of", lambda c: (5, 6, "terra")), \
+             patch.object(gc, "_tile_visibility_state", lambda c, x, y: "visible"), \
+             patch.object(gc, "get_game_systems",
+                          lambda: {"_terrain_generators": {"terra": gen}}), \
+             patch.object(gc, "_base_proximity_status", lambda c, p, x, y: ([], [])):
+            gc._send_map_update(caller)
+
+        self.assertEqual(len(caller.map_updates), 1)
+        return caller.map_updates[0]
+
+    def test_non_admin_payload_omits_resource_and_discovered(self):
+        data = self._run(admin=False)
+        # Terrain is still shown to everyone…
+        self.assertEqual(data["player"].get("terrain"), "River")
+        # …but the resource label and discovered count are withheld.
+        self.assertNotIn("resource", data["player"])
+        self.assertNotIn("discovered_count", data)
+
+    def test_admin_payload_includes_resource_and_discovered(self):
+        data = self._run(admin=True)
+        self.assertEqual(data["player"].get("terrain"), "River")
+        self.assertEqual(data["player"].get("resource"), "Wood")
+        self.assertEqual(data["discovered_count"], 5)
+
+
 if __name__ == "__main__":
     unittest.main()

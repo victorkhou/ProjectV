@@ -135,10 +135,16 @@ def _send_map_update(caller):
     try:
         buildings = caller.get_buildings() if hasattr(caller, "get_buildings") else []
         data = provider.get_map_data(caller, buildings)
-        # Add discovered count
-        fog = _get_system(caller, "fog_system")
-        if fog:
-            data["discovered_count"] = len(fog.get_discovered_tile_set(caller))
+        # The resource label and discovered-tile count are admin-only debugging
+        # readouts, so they're only added to the payload for Builder+ callers.
+        # Regular players see terrain (gameplay-relevant via terrain modifiers)
+        # but not the resource it bears or the global discovered count.
+        caller_is_admin = is_admin(caller)
+        # Add discovered count (admin-only)
+        if caller_is_admin:
+            fog = _get_system(caller, "fog_system")
+            if fog:
+                data["discovered_count"] = len(fog.get_discovered_tile_set(caller))
         # Add current terrain info for the webclient header — discovery-gated
         # like every coordinate-inspection surface (Req 8.4): an unexplored
         # tile reveals neither its terrain type nor any modifier values.
@@ -152,7 +158,7 @@ def _send_map_update(caller):
                     if gen:
                         tt, res = gen.get_terrain_and_resource(int(x), int(y))
                         data["player"]["terrain"] = tt
-                        if res:
+                        if res and caller_is_admin:
                             data["player"]["resource"] = res
                     system = _get_system(caller, "terrain_modifier_system")
                     if system is not None:

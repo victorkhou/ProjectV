@@ -13,11 +13,15 @@ the terrain underfoot), shared by two callers so they never drift:
 Delivery is per-channel so each client shows it once and only once:
 
 * a printed text line tagged ``cls="prompt-line"`` — the visible classic MUD
-  prompt. Sent to TELNET/SSH sessions only: a bare ``prompt=`` OOB is unreliable
-  on raw telnet (with Evennia's default ``NOGOAHEAD`` no telnet GA is emitted,
-  so basic clients swallow the promptless line). The webclient must NOT get this
-  line — it already shows the same fields in its map footer, so a printed copy
-  would duplicate the map/footer info in the text panel.
+  prompt. Broadcast to EVERY session: a bare ``prompt=`` OOB is unreliable on raw
+  telnet (with Evennia's default ``NOGOAHEAD`` no telnet GA is emitted, so basic
+  clients swallow the promptless line). Telnet/SSH show it directly. The
+  webclient's ``custom_out`` decides how to present it *per view*: rendered
+  inline in the text output when in Text view (matching raw telnet), and dropped
+  in Map view — there the map footer already shows the same fields (fed by
+  ``prompt_status``), so an inline copy would just duplicate it. Only
+  :func:`send_status` emits this printed line (:func:`push_status` does not), so
+  a server-driven HP change never spams the scrollback.
 * ``prompt=`` — the same text as an input-line prompt, for capable clients
   (Mudlet/TinTin++) with a dedicated prompt area. Hidden in the webclient (CSS
   hides ``#prompt``; ``custom_out`` also drops it).
@@ -75,6 +79,8 @@ def status_fields(player: Any) -> dict | None:
     except Exception:  # noqa: BLE001 - terrain is optional in the prompt
         terrain = ""
 
+    in_combat, combat_secs = _combat_state(db)
+
     return {
         "hp": int(getattr(db, "hp", 0) or 0),
         "hp_max": int(getattr(db, "hp_max", 0) or 0),
@@ -83,14 +89,51 @@ def status_fields(player: Any) -> dict | None:
         "y": y,
         "planet": planet,
         "terrain": terrain,
+        "in_combat": in_combat,
+        "combat_secs": combat_secs,
     }
+
+
+def _combat_state(db: Any) -> tuple[bool, int]:
+    """Return ``(in_combat, seconds_remaining)`` from the combat timer.
+
+    "In combat" means ``db.combat_timer_expires`` (a tick number, set by
+    :mod:`world.combat_timer`) is strictly in the future. The remaining seconds
+    are ``(expiry - current_tick) * tick_interval``, rounded up so a partial
+    tick still reads as ``1s`` rather than ``0s``. Fully guarded: any read
+    failure returns ``(False, 0)`` so the prompt never breaks on a combat-timer
+    hiccup.
+    """
+    try:
+        expiry = int(getattr(db, "combat_timer_expires", 0) or 0)
+        if expiry <= 0:
+            return False, 0
+        from world.combat_timer import _get_current_tick
+        current = _get_current_tick()
+        remaining_ticks = expiry - current
+        if remaining_ticks <= 0:
+            return False, 0
+        interval = 1.0
+        try:
+            bal = get_game_systems().get("registry")
+            if bal is not None:
+                interval = float(getattr(bal.balance, "tick_interval", 1.0) or 1.0)
+        except Exception:  # noqa: BLE001 - tick_interval is optional
+            interval = 1.0
+        import math
+        secs = int(math.ceil(remaining_ticks * interval))
+        return True, max(1, secs)
+    except Exception:  # noqa: BLE001 - the prompt never breaks on a timer read
+        return False, 0
 
 
 def format_status_line(fields: dict) -> str:
     """Format the telnet status line from :func:`status_fields` output.
 
-    e.g. ``[HP 100/500] [Lv 5] [(25,25) terra] [Plains]`` — each field in white
-    brackets, HP colored by fraction (green >=60%, yellow >=30%, red below).
+    e.g. ``[HP 100/500] [Lv 5] [(25,25) terra] [Plains] [!Combat 42s]`` — each
+    field in white brackets, HP colored by fraction (green >=60%, yellow >=30%,
+    red below). The combat segment appears (in red) only while the player is in
+    combat, showing the seconds until the combat timer clears.
     """
     hp, hp_max = fields["hp"], fields["hp_max"]
     frac = (hp / hp_max) if hp_max > 0 else 0.0
@@ -103,66 +146,35 @@ def format_status_line(fields: dict) -> str:
     terrain = fields.get("terrain")
     if terrain:
         segs.append(terrain.replace("_", " "))
+    if fields.get("in_combat"):
+        secs = int(fields.get("combat_secs", 0) or 0)
+        segs.append(f"|r!Combat {secs}s|n")
     return " ".join(f"|w[|n{s}|w]|n" for s in segs)
-
-
-#: Substrings identifying a WEBCLIENT session's ``protocol_key`` (Evennia uses
-#: "webclient/websocket" and "webclient/ajax"). The webclient shows the status
-#: fields in its map footer, so it must NOT also get the printed line.
-_WEBCLIENT_PROTOCOL_MARKERS = ("webclient", "ajax", "websocket")
-
-
-def _printed_line_sessions(player: Any):
-    """Sessions that should receive the PRINTED status line.
-
-    Fails OPEN: everything EXCEPT sessions positively identified as a webclient.
-    The printed line's whole point is telnet visibility, so if a protocol can't
-    be classified we still send it (a stray duplicate on some exotic client is
-    far better than telnet showing no prompt at all). Only a session whose
-    ``protocol_key`` is unmistakably a webclient is excluded — its map footer
-    already shows the same fields, fed by ``prompt_status``.
-
-    Returns a list of sessions to target, or ``None`` when sessions can't be
-    enumerated (e.g. a test double) — the caller then falls back to a plain
-    ``msg`` (telnet-style broadcast), which is also what tests capture.
-    """
-    try:
-        sessions = list(player.sessions.all())
-    except Exception:  # noqa: BLE001 - test doubles have no session handler
-        return None
-    if not sessions:
-        return None
-    return [s for s in sessions if not _is_webclient_session(s)]
-
-
-def _is_webclient_session(session: Any) -> bool:
-    """True only when *session* is unmistakably a webclient (see markers)."""
-    key = str(getattr(session, "protocol_key", "")).lower()
-    return any(marker in key for marker in _WEBCLIENT_PROTOCOL_MARKERS)
 
 
 def send_status(player: Any) -> None:
     """Full status refresh after a player's own command (printed line + OOB).
 
-    Sends the printed status line (telnet/ssh only), the ``prompt=`` OOB, and the
-    ``prompt_status=`` OOB — see the module docstring for why each channel. A
-    no-op when there's nothing to show or the player can't be messaged. Never
-    raises: a prompt hiccup must not surface as a command error.
+    Broadcasts the printed status line to every session, plus the ``prompt=`` and
+    ``prompt_status=`` OOB channels — see the module docstring for why each
+    channel exists. Telnet/SSH show the printed line directly; the webclient's
+    ``custom_out`` renders it inline in Text view and drops it in Map view (where
+    the footer already shows the same fields). A no-op when there's nothing to
+    show or the player can't be messaged. Never raises: a prompt hiccup must not
+    surface as a command error.
     """
     try:
         fields = status_fields(player)
         if fields is None or not hasattr(player, "msg"):
             return
         text = format_status_line(fields)
-        sessions = _printed_line_sessions(player)
-        if sessions is None:
-            # Can't enumerate sessions (test double / no handler) → plain send,
-            # so telnet-style clients still get the visible prompt line.
-            player.msg(text=(text, {"cls": "prompt-line"}))
-        elif sessions:
-            # Every non-webclient session gets the printed line; webclient
-            # sessions are excluded (their footer already shows the same fields).
-            player.msg(text=(text, {"cls": "prompt-line"}), session=sessions)
+        # Broadcast to all sessions (no session= targeting). Per-client
+        # presentation of the printed line is decided client-side. A leading
+        # newline sets the prompt apart from the command's own output — a blank
+        # line on telnet/SSH, and (since the pipeline converts "\n" to <br>) in
+        # the webclient's inline Text view too. The bare `prompt=` keeps no
+        # leading newline: prompt-aware clients render it in a dedicated area.
+        player.msg(text=("\n" + text, {"cls": "prompt-line"}))
         player.msg(prompt=text)
         player.msg(prompt_status=fields)
     except Exception:  # noqa: BLE001 - prompt must never break a command

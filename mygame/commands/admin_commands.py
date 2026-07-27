@@ -11,7 +11,11 @@ from __future__ import annotations
 import logging
 
 from evennia.commands.command import Command as BaseCommand
-from commands.command_router import AdminSubcommandRouter
+from commands.command_router import (
+    AdminSubcommandRouter,
+    EntityAdminRouter,
+    ValueFirstSetAliasMixin,
+)
 # Aliased to private names: 'goto'/'transfer' below use them, and
 # they stay importable from here for backward compatibility.
 from world.adapters.relocation import (
@@ -120,19 +124,6 @@ def _parse_index_token(token):
     return None
 
 
-def _resolve_by_index(token, ordered):
-    """Return the def at 1-based *token* index within *ordered*, else ``None``.
-
-    *ordered* is the SAME stable, sorted sequence the matching ``list``
-    subcommand numbers, so an index typed by the operator maps to exactly the
-    row they saw. Out-of-range or non-index tokens return ``None``.
-    """
-    n = _parse_index_token(token)
-    if n is None or n > len(ordered):
-        return None
-    return ordered[n - 1]
-
-
 def _search_entities(caller, name):
     """Return every entity matching *name*, excluding *caller* itself.
 
@@ -179,306 +170,105 @@ def _owner_label(entity):
     return getattr(owner, "key", None) or "?"
 
 
-def _get_item_field(item, name):
-    """Best-effort read of one per-instance field off an item instance.
-
-    The same duck-typing (and precedence) as the loot roller's instance
-    reads: a live ``GameItem`` through its ``db`` proxy, an Evennia object
-    without a ``db`` shim through the ``attributes`` handler, a dict-shaped
-    test item by plain key. Returns ``None`` when unset. Never raises.
-    """
-    try:
-        db = getattr(item, "db", None)
-        if db is not None:
-            value = getattr(db, name, None)
-            if value is not None:
-                return value
-        attrs = getattr(item, "attributes", None)
-        if attrs is not None and hasattr(attrs, "get"):
-            value = attrs.get(name)
-            if value is not None:
-                return value
-        if isinstance(item, dict):
-            return item.get(name)
-    except Exception:
-        pass
-    return None
-
-
-def _item_instance_matches(item, token_norm):
-    """True if *token_norm* names *item* — the lenient gear match.
-
-    Case-, space- and underscore-insensitive against the instance's
-    ``item_key`` and object key; a token that is a prefix of either also
-    matches (the same leniency the Blacksmith bench commands use).
-    """
-    for cand in (_get_item_field(item, "item_key"),
-                 getattr(item, "key", None)):
-        if not cand:
-            continue
-        cand_norm = " ".join(str(cand).lower().replace("_", " ").split())
-        if cand_norm == token_norm or cand_norm.startswith(token_norm):
-            return True
-    return False
-
-
-def _find_item_instance(caller, token):
-    """The first item instance matching *token* around *caller*, or None.
-
-    Search order (mirrors the bench commands' "a held/equipped item", plus
-    the admin convenience of a location search): equipped gear first, then
-    loose carried objects (``caller.contents``), then ``caller.search`` —
-    which covers items on the ground at the caller's location. Never
-    raises.
-    """
-    token_norm = " ".join(str(token or "").lower().replace("_", " ").split())
-    if not token_norm:
-        return None
-
-    candidates = []
-    handler = getattr(caller, "equipment", None)
-    if handler is not None and hasattr(handler, "get_all_equipped"):
-        try:
-            candidates.extend(handler.get_all_equipped().values())
-        except Exception:  # noqa: BLE001 - handler stub without the view
-            pass
-    try:
-        candidates.extend(getattr(caller, "contents", None) or [])
-    except Exception:  # noqa: BLE001 - exotic contents proxy
-        pass
-    if hasattr(caller, "search"):
-        try:
-            res = caller.search(token, quiet=True)
-            if res:
-                candidates.extend(
-                    res if isinstance(res, (list, tuple)) else [res])
-        except Exception:  # noqa: BLE001
-            pass
-
-    for item in candidates:
-        if item is None or item is caller:
-            continue
-        if _item_instance_matches(item, token_norm):
-            return item
-    return None
-
-
-def _format_band_value(value):
-    """Compact numeric formatting for stat/band readouts (1 not 1.0)."""
-    try:
-        return f"{float(value):g}"
-    except (TypeError, ValueError):
-        return str(value)
-
-
-class CmdAdminBuilding(AdminSubcommandRouter):
-    """Manage buildings on the overworld.
+class CmdAdminBuilding(EntityAdminRouter):
+    """Manage buildings under the unified admin grammar.
 
     Usage:
-      @building spawn <type> [owner=<name>] [level=<N>]
-      @building destroy
+      @building list [filter]
+      @building spawn <type> [owner=<name>] [level=<N>] [player]
+      @building show <building>
+      @building set <building> <field> <value>
+      @building destroy [<building>[, <building> ...]]
+      @building open [close]
+      @building def list | def show <key> | def diff
+      @building def set <key> <field> <value> | def reset <key> [field]
 
-    Options:
-      <type>         building abbreviation (EX) or full name (extractor)
-      [owner=<name>] owner to assign; 'none' for an unowned building
-                     (defaults to you)
-      [level=<N>]    starting level 1-5 (defaults to 1)
+    Core verbs (shared EntityAdminRouter handlers, driven by the building
+    adapter registered under ``adapter_key = "building"``):
+      list    — live building instances on your current planet room;
+                definition (type) listing moved to 'def list'
+      spawn   — create a building at your current tile through the
+                existing creation path (kwargs: owner=<name|none>,
+                level=<1-5>); <type> accepts an abbreviation (EX), a full
+                name (extractor), or an unambiguous prefix
+      show    — full instance readout: level, HP, owner, position,
+                open/offline state, modifiable fields with [min–max]
+      set     — bounded field write (level 1-5, hp clamped into the
+                target's hp_max, hp_max) through the shared building
+                attribute writer, clamp-with-note
+      destroy — delete a building instance; with no target, destroys the
+                building at your current tile (legacy behavior)
+      def …   — definition scope: 'def list'/'def show'/'def diff' at
+                Builder; 'def set'/'def reset' (overlay-backed, validated
+                reload) at Admin
 
-    Subcommands:
-      spawn   — Spawn a building at your current tile (Builder+)
-      destroy — Destroy the building at your current tile (Builder+)
-      open    — Open/close the building at your tile to ranged fire (Builder+)
-      list    — List building types with index numbers (Builder+)
+    Targets resolve uniformly: '#N' from the last '@building list', the
+    building key/abbreviation (e.g. 'EX'), the building name, or an
+    unambiguous prefix.
 
+    Extra verbs:
+      open    — open/close the building at your tile to ranged fire
     """
 
     key = "@building"
+    adapter_key = "building"
 
-    @staticmethod
-    def _building_index(registry):
-        """Return the stable, sorted list of BuildingDefs '@building list' numbers.
+    def _sub_list(self, rest):
+        """``list``: shared instance-rows handler + the def-list pointer.
 
-        Shared by ``sub_list`` (prints the 1-based index) and ``sub_spawn``
-        (resolves an index the operator typed), so ``@building spawn N`` maps to
-        the row shown as ``[N]``. Sorted by abbreviation — deterministic across
-        reloads.
+        While the ``@building`` migration window remains open, every
+        ``@building list`` includes the pointer that definition listing
+        moved to ``def list`` — the old def-list meaning of ``list``
+        moved there in this rollout phase (Requirement 11.4). The shared
+        handler stays generic; only this subclass appends the pointer.
         """
-        buildings = getattr(registry, "buildings", None) if registry else None
-        if not buildings:
-            return []
-        return [buildings[abbr] for abbr in sorted(buildings.keys())]
+        super()._sub_list(rest)
+        self.caller.msg(
+            "Note: definition listing moved to '@building def list' — "
+            "'list' now shows live building instances."
+        )
 
-    def sub_spawn(self, args):
-        """Spawn a building at the caller's current tile.
+    def _sub_destroy(self, rest):
+        """``destroy``: shared handler, with the legacy no-target form.
 
-        Args:
-            args: "<type> [owner=<name>] [level=<N>]"
+        ``@building destroy`` with no target keeps its pre-migration
+        meaning — destroy the building at the caller's current tile —
+        so existing muscle memory is never punished (Requirement 11.6).
+        Targeted (and multi-target, confirmation-gated) destroys go
+        through the shared handler.
         """
-        caller = self.caller
-        if not args:
-            caller.msg("Usage: @building spawn <type> [owner=<name>] [level=<N>]")
+        if (rest or "").strip():
+            super()._sub_destroy(rest)
             return
-
-        parts = args.split()
-        btype = parts[0].upper()
-
-        # Parse optional kwargs
-        owner = caller
-        level = 1
-        for part in parts[1:]:
-            if part.lower().startswith("owner="):
-                owner_name = part.split("=", 1)[1]
-                if owner_name.lower() in ("none", "nobody", "null", ""):
-                    owner = None
-                else:
-                    found = caller.search(owner_name, quiet=True) if hasattr(caller, "search") else None
-                    if not found:
-                        caller.msg(f"Could not find player '{owner_name}'.")
-                        return
-                    owner = found[0] if isinstance(found, list) else found
-            elif part.lower().startswith("level="):
-                try:
-                    level = int(part.split("=", 1)[1])
-                    level = max(1, min(level, 5))
-                except ValueError:
-                    caller.msg("Level must be a number 1-5.")
-                    return
-
-        # Validate building type exists. Accept an index (``#3`` or ``3`` from
-        # '@building list'), an abbreviation (EX), a full name (extractor), or an
-        # unambiguous prefix — same typo-tolerant resolver the player 'build'
-        # command uses, plus the index shortcut.
-        registry = _get_system(caller, "registry")
-        if registry:
-            bdef = _resolve_by_index(parts[0], self._building_index(registry))
-            if bdef is None:
-                resolver = getattr(registry, "resolve_building", None)
-                if callable(resolver):
-                    bdef = resolver(parts[0])
-            if bdef is None:
-                try:
-                    bdef = registry.get_building(btype)
-                except KeyError:
-                    bdef = None
-            if bdef is None:
-                # List the real, current abbreviations from the registry rather
-                # than a hardcoded string that can drift from buildings.yaml.
-                valid = ", ".join(sorted(getattr(registry, "buildings", {}) or {}))
-                caller.msg(
-                    f"Unknown building type '{parts[0]}'. "
-                    f"Valid: {valid or 'none loaded'}. "
-                    f"Or use '@building list' for names + index numbers."
-                )
-                return
-            btype = bdef.abbreviation
-        else:
-            bdef = None
-
-        # Get current location — must be a PlanetRoom
-        planet_room = caller.location
-        if planet_room is None:
-            caller.msg("You have no location.")
+        building = self._building_at_tile()
+        if building is None:
             return
+        self._destroy_now([building])
 
-        coords = coords_of(caller)
-        if coords is None:
-            caller.msg("You have no coordinates set.")
-            return
-        cx, cy, _planet = coords
-
-        # Create the building in PlanetRoom at caller's coordinates
-        try:
-            from evennia.utils.create import create_object
-
-            hp = bdef.max_health if bdef else 500
-            name = bdef.name if bdef else btype
-
-            building = create_object(
-                typeclass="typeclasses.objects.Building",
-                key=name,
-                location=planet_room,
-            )
-            building.attributes.add("building_type", btype)
-            building.attributes.add("owner", owner)
-            building.attributes.add("building_level", level)
-            building.attributes.add("hp", hp)
-            building.attributes.add("hp_max", hp)
-            building.attributes.add("offline", False)
-            # Stamp coords + register in the coordinate index (at_object_receive
-            # runs during create_object before coords are set).
-            from world.utils import place_on_tile
-            place_on_tile(building, planet_room, cx, cy)
-
-            # Announce the spawn on the event bus exactly as the player build
-            # path does, so subscribers (e.g. the ShieldSystem recomputing
-            # shields from a new generator) react immediately rather than only
-            # on the next periodic sweep. Best-effort — a missing bus or a
-            # subscriber error must never fail the admin spawn.
-            event_bus = _get_system(caller, "event_bus")
-            if event_bus is not None:
-                try:
-                    from world.event_bus import BUILDING_CONSTRUCTED
-                    event_bus.publish(
-                        BUILDING_CONSTRUCTED,
-                        player=owner, building=building, tile=planet_room,
-                    )
-                except Exception:  # noqa: BLE001
-                    pass
-
-            owner_name = getattr(owner, "key", "nobody") if owner else "nobody"
-            self._log_admin(
-                "spawn",
-                f"{btype} level {level} owner={owner_name} at ({cx}, {cy}) in "
-                f"{planet_room.key if hasattr(planet_room, 'key') else planet_room}",
-            )
-            caller.msg(
-                f"Spawned {name} ({btype}) level {level}, "
-                f"owned by {owner_name} at ({cx}, {cy})."
-            )
-        except Exception as e:
-            caller.msg(f"Failed to create building: {e}")
-
-    def sub_destroy(self, args):
-        """Destroy the building at the caller's current tile.
-
-        Finds the first building at the caller's coordinates and deletes
-        it without refunding resources (admin override).
-        """
+    def _building_at_tile(self):
+        """The first building at the caller's tile, or ``None`` (messaged)."""
         caller = self.caller
 
         planet_room = caller.location
         if planet_room is None:
             caller.msg("You have no location.")
-            return
+            return None
 
         coords = coords_of(caller)
         if coords is None:
             caller.msg("You have no coordinates set.")
-            return
+            return None
         cx, cy, _planet = coords
 
         if not hasattr(planet_room, "get_objects_at"):
             caller.msg("Current location does not support coordinate queries.")
-            return
+            return None
 
         buildings = planet_room.get_objects_at(int(cx), int(cy), type_tag="building")
         if not buildings:
             caller.msg(f"No building found at ({cx}, {cy}).")
-            return
-
-        building = buildings[0]
-        btype = building.attributes.get("building_type", default="??") if hasattr(building, "attributes") else "??"
-        bname = getattr(building, "key", btype)
-
-        # NOTE: deliberately does NOT publish BUILDING_DESTROYED — that event
-        # triggers base-elimination (a full NPC-base wipe on a Sentinel HQ),
-        # which is not what a surgical admin delete intends. Shield capacity on
-        # the survivors self-corrects on the ShieldSystem's next periodic sweep
-        # (refresh_owners, each regen interval).
-        building.delete()
-
-        self._log_admin("destroy", f"{bname} ({btype}) at ({cx}, {cy})")
-        caller.msg(f"Destroyed {bname} ({btype}) at ({cx}, {cy}).")
+            return None
+        return buildings[0]
 
     def sub_open(self, args):
         """Toggle whether the building at your tile is open or closed to ranged fire.
@@ -523,353 +313,66 @@ class CmdAdminBuilding(AdminSubcommandRouter):
             f"({'ranged + melee' if want_open else 'melee only'})."
         )
 
-    def sub_list(self, args):
-        """List building types with a stable 1-based index.
 
-        ``@building spawn <N>`` (or ``#N``) spawns the type shown as ``[N]``, so
-        an operator can reference a building by index instead of its abbreviation
-        or full name.
-
-        Args:
-            args: unused (accepted for router-signature consistency).
-        """
-        caller = self.caller
-        registry = _get_system(caller, "registry")
-        ordered = self._building_index(registry)
-        if not ordered:
-            caller.msg("No building definitions loaded.")
-            return
-
-        lines = ["|w=== Building types (spawn by name or [index]) ===|n"]
-        for idx, b in enumerate(ordered, start=1):
-            cat = f" ({b.category})" if getattr(b, "category", "") else ""
-            lines.append(f"  |w[{idx}]|n {b.abbreviation:<4s} {b.name}{cat}")
-        self._log_admin("list", "building types")
-        caller.msg("\n".join(lines))
-
-    subcommands = {
-        "spawn": (sub_spawn, "Spawn a building at your tile", "Builder"),
-        "destroy": (sub_destroy, "Destroy building at your tile", "Builder"),
-        "open": (sub_open, "Open/close building to ranged fire", "Builder"),
-        "list": (sub_list, "List building types with index numbers", "Builder"),
-    }
-
-
-class CmdAdminAgent(AdminSubcommandRouter):
-    """Manage agent NPCs for players.
+class CmdAdminResource(EntityAdminRouter):
+    """Manage player resource balances under the unified admin grammar.
 
     Usage:
-        @agent create <player> [count]
-        @agent destroy <id> <player>
-        @agent destroy training <player>
-        @agent list <player>
+      @resource spawn <type|all> <amount> [player]   (grant; alias: give)
+      @resource show [player]
+      @resource set <player> <type> <amount>
+      @resource reset [player]
 
-    Subcommands:
-        create  — Instantly create agent(s) bypassing cost/timer (Admin+)
-        destroy — Destroy an agent by ID or clear training state (Admin+)
-        list    — List all agents for a player (Builder+)
+    Core verbs (shared EntityAdminRouter handlers, driven by the resource
+    adapter registered under ``adapter_key = "resource"``):
+      spawn   — grant (credit) <amount> of a resource, or 'all' for every
+                resource, to a player (defaults to you) via the existing
+                add_resource single-writer; admin grants bypass the
+                carry-weight cap (Req 16.7). The positional grant grammar
+                is kept by the ``_sub_spawn`` override below.
+      show    — one player's balances readout (defaults to you)
+      set     — set an absolute balance (bounded ≥ 0, clamp with a note)
+      reset   — reset one player, or every player, to STARTING_RESOURCES
+                (Admin+)
+      list    — not available: balances are per-player fields, not a roster
+      destroy — not available: zero a balance or use 'reset' instead
+      def …   — not available: resources have no YAML definition domain
 
-    """
+    Targets resolve uniformly: 'me'/'self' (or omitted) means you; any
+    other token resolves to a single player by name.
 
-    key = "@agent"
-
-    def sub_create(self, args):
-        """Create agent(s) for a player, bypassing cost and timer.
-
-        Args:
-            args: "<player> [count]"
-        """
-        caller = self.caller
-
-        if not args:
-            caller.msg("Usage: @agent create <player> [count]")
-            return
-
-        parts = args.strip().split()
-        player_name = parts[0]
-        count = 1
-        if len(parts) >= 2:
-            count = self.parse_int(parts[1], "Count")
-            if count is None:
-                return
-            if count < 1:
-                caller.msg("Count must be at least 1.")
-                return
-
-        target = resolve_player(self.caller, player_name)
-        if target is None:
-            return
-
-        agent_system = self.require_system("agent_system")
-        if agent_system is None:
-            return
-
-        created_ids = []
-        for _ in range(count):
-            agents = agent_system.get_agents(target)
-            if agents:
-                max_id = max(getattr(a.db, "agent_id", 0) for a in agents)
-                next_id = max_id + 1
-            else:
-                next_id = 1
-
-            npc = agent_system._create_npc_func(target, next_id)
-            if npc is not None:
-                created_ids.append(next_id)
-                target.db.next_agent_id = next_id + 1
-
-        if created_ids:
-            ids_str = ", ".join(f"#{i}" for i in created_ids)
-            self._log_admin("create", f"{len(created_ids)} agent(s) for {target.key}: {ids_str}")
-            caller.msg(f"Created {len(created_ids)} agent(s) for {target.key}: {ids_str}.")
-            if hasattr(target, "msg") and target is not caller:
-                target.msg(f"|y[Admin] {len(created_ids)} agent(s) created for you: {ids_str}.|n")
-        else:
-            caller.msg("Failed to create agents.")
-
-    def sub_destroy(self, args):
-        """Destroy an agent by ID or clear training state.
-
-        Args:
-            args: "<id> <player>" or "training <player>"
-        """
-        caller = self.caller
-
-        if not args:
-            caller.msg("Usage: @agent destroy <id> <player> | @agent destroy training <player>")
-            return
-
-        parts = args.strip().split()
-        if len(parts) < 2:
-            caller.msg("Usage: @agent destroy <id> <player> | @agent destroy training <player>")
-            return
-
-        first_arg = parts[0]
-        player_name = parts[1]
-
-        # Find the target player
-        target = resolve_player(self.caller, player_name)
-        if target is None:
-            return
-
-        if first_arg.lower() == "training":
-            self._clear_training(caller, target)
-            return
-
-        try:
-            agent_id = int(first_arg)
-        except ValueError:
-            caller.msg("Agent ID must be a number or 'training'.")
-            return
-
-        self._destroy_agent(caller, target, agent_id)
-
-    def _clear_training(self, caller, target):
-        """Clear all stuck training state for a player."""
-        cleared = 0
-        try:
-            from evennia.objects.models import ObjectDB
-
-            buildings = list(ObjectDB.objects.filter(
-                db_attributes__db_key="training_owner",
-            ))
-            for b in buildings:
-                owner = b.attributes.get("training_owner")
-                if owner is target:
-                    b.attributes.add("training_agent_id", None)
-                    b.attributes.add("training_ticks_remaining", None)
-                    b.attributes.add("training_owner", None)
-                    cleared += 1
-        except Exception:
-            pass
-
-        # Also try via player's buildings
-        try:
-            for b in target.get_buildings():
-                agent_id = None
-                if hasattr(b, "attributes"):
-                    agent_id = b.attributes.get("training_agent_id")
-                elif hasattr(b, "db"):
-                    agent_id = getattr(b.db, "training_agent_id", None)
-                if agent_id is not None:
-                    if hasattr(b, "attributes"):
-                        b.attributes.add("training_agent_id", None)
-                        b.attributes.add("training_ticks_remaining", None)
-                        b.attributes.add("training_owner", None)
-                    cleared += 1
-        except Exception:
-            pass
-
-        self._log_admin("destroy", f"cleared training state on {cleared} building(s) for {target.key}")
-        caller.msg(f"Cleared training state on {cleared} building(s) for {target.key}.")
-
-    def _destroy_agent(self, caller, target, agent_id):
-        """Destroy a specific agent NPC, or clear its stuck training state."""
-        agent_system = self.require_system("agent_system")
-        if agent_system is None:
-            return
-
-        agent = agent_system.get_agent_by_id(target, agent_id)
-        if agent is not None:
-            # Clear building assignment if any
-            building = getattr(agent.db, "role_target", None) if hasattr(agent, "db") else None
-            if building is not None and hasattr(building, "db"):
-                if getattr(building.db, "assigned_agent", None) is agent:
-                    building.db.assigned_agent = None
-
-            agent_name = getattr(agent, "key", f"Agent-{agent_id}")
-            if hasattr(agent, "delete"):
-                agent.delete()
-
-            self._log_admin("destroy", f"agent #{agent_id} ({agent_name}) belonging to {target.key}")
-            caller.msg(f"Destroyed agent #{agent_id} ({agent_name}) belonging to {target.key}.")
-            return
-
-        # Agent NPC doesn't exist — check if it's stuck in training
-        cleared = False
-        try:
-            for b in target.get_buildings():
-                tid = None
-                if hasattr(b, "attributes"):
-                    tid = b.attributes.get("training_agent_id")
-                elif hasattr(b, "db"):
-                    tid = getattr(b.db, "training_agent_id", None)
-                if tid == agent_id:
-                    if hasattr(b, "attributes"):
-                        b.attributes.add("training_agent_id", None)
-                        b.attributes.add("training_ticks_remaining", None)
-                        b.attributes.add("training_owner", None)
-                    elif hasattr(b, "db"):
-                        b.db.training_agent_id = None
-                        b.db.training_ticks_remaining = None
-                        b.db.training_owner = None
-                    cleared = True
-                    self._log_admin("destroy", f"cleared stuck training #{agent_id} for {target.key}")
-                    caller.msg(f"Cleared stuck training for agent #{agent_id} on {target.key}'s Academy.")
-                    break
-        except Exception:
-            pass
-
-        if not cleared:
-            caller.msg(f"Agent #{agent_id} not found for {target.key} (not spawned, not in training).")
-
-    def sub_list(self, args):
-        """List all agents belonging to a player.
-
-        Args:
-            args: "<player>"
-        """
-        caller = self.caller
-
-        player_name = args.strip() if args else ""
-        if not player_name:
-            caller.msg("Usage: @agent list <player>")
-            return
-
-        target = resolve_player(self.caller, player_name)
-        if target is None:
-            return
-
-        agent_system = self.require_system("agent_system")
-        if agent_system is None:
-            return
-
-        agents = agent_system.get_agents(target)
-        next_id = getattr(getattr(target, "db", None), "next_agent_id", None)
-        count = agent_system.get_agent_count(target)
-
-        lines = [f"|w=== Agents for {target.key} ({count} agents, next_id={next_id}) ===|n"]
-
-        if not agents:
-            lines.append("  No trained agents.")
-        else:
-            for agent in sorted(agents, key=lambda a: getattr(a.db, "agent_id", 0)):
-                aid = getattr(agent.db, "agent_id", "?")
-                role = getattr(agent.db, "role", "") or "unassigned"
-                incap = getattr(agent.db, "incapacitated", False)
-                reserve = getattr(agent.db, "reserve", False)
-                obj_id = getattr(agent, "id", "?")
-
-                status_parts = []
-                if incap:
-                    status_parts.append("|rIncapacitated|n")
-                if reserve:
-                    status_parts.append("|yReserved|n")
-                if not status_parts:
-                    status_parts.append("|gActive|n")
-                status = " ".join(status_parts)
-
-                target_bld = getattr(agent.db, "role_target", None)
-                loc_str = "HQ"
-                if target_bld is not None:
-                    btype = getattr(target_bld.db, "building_type", "?") if hasattr(target_bld, "db") else "?"
-                    loc_str = btype
-                elif role in ("soldier", "medic"):
-                    loc_str = "army"
-
-                lines.append(
-                    f"  |c#{aid}|n (db#{obj_id})  {role:<12s}  "
-                    f"{loc_str:<10s}  {status}"
-                )
-
-        # Show training state on buildings
-        try:
-            for b in target.get_buildings():
-                tid = None
-                if hasattr(b, "attributes"):
-                    tid = b.attributes.get("training_agent_id")
-                if tid is not None:
-                    remaining = b.attributes.get("training_ticks_remaining") or 0
-                    btype = b.attributes.get("building_type") or "??"
-                    lines.append(f"  |y[Training] #{tid} at {btype} — {remaining}s remaining|n")
-        except Exception:
-            pass
-
-        self._log_admin("list", f"agents for {target.key}")
-        caller.msg("\n".join(lines))
-
-    subcommands = {
-        "create": (sub_create, "Create agent(s) for a player", "Admin"),
-        "destroy": (sub_destroy, "Destroy agent or clear training", "Admin"),
-        "list": (sub_list, "List agents for a player", "Builder"),
-    }
-
-
-class CmdAdminResource(AdminSubcommandRouter):
-    """Manage player resources.
-
-    Usage:
-        @resource give <type|all> <amount> [player]
-        @resource reset [player]
-
-    Subcommands:
-        give  — Give resources to a player (Builder+). <type> is a resource
-                name (Wood, Stone, Iron, Energy, Circuits, Nexium) or 'all'
-                for every resource; an unknown name is rejected.
-        reset — Reset player(s) to starting resources (Admin+)
-
+    Legacy spelling (deprecated migration alias):
+      give <type|all> <amount> [player] — alias of 'spawn' (same grant)
     """
 
     key = "@resource"
+    adapter_key = "resource"
 
-    def sub_give(self, args):
-        """Give resources to a player.
+    #: ``show [player]`` keeps the legacy "defaults to you" behavior — an
+    #: omitted target becomes ``me`` (which the adapter resolves to the
+    #: caller), via the shared ``_sub_show``.
+    default_show_target = "me"
 
-        Args:
-            args: "<type> <amount> [player]"
+    def _sub_spawn(self, rest):
+        """``spawn <type|all> <amount> [player]``: the grant path.
+
+        The design maps the legacy ``give`` onto ``spawn`` (per-entity
+        matrix, "A"), but the positional grant grammar and its additive
+        credit semantics don't fit the base ``spawn <def> [k=v] [player]``
+        parser — so this subclass keeps the legacy parsing/messages and
+        delegates the credit to the adapter's single-writer (Requirement
+        11.6). Target resolution uses the shared ``resolve_player`` so the
+        not-found wording is unchanged from the legacy verb.
         """
         caller = self.caller
+        adapter = self.adapter
 
-        if not args:
-            caller.msg("Usage: @resource give <type> <amount> [player]")
-            return
-
-        parts = args.strip().split()
+        parts = (rest or "").split()
         if len(parts) < 2:
-            caller.msg("Usage: @resource give <type> <amount> [player]")
+            caller.msg(
+                f"Usage: {self.key} spawn <type|all> <amount> [player]"
+            )
             return
-
-        from world.constants import RESOURCE_TYPES
 
         resource_token = parts[0]
         amount_str = parts[1]
@@ -880,72 +383,72 @@ class CmdAdminResource(AdminSubcommandRouter):
         except ValueError:
             caller.msg(f"Invalid amount: {amount_str}")
             return
-
         if amount <= 0:
             caller.msg("Amount must be positive.")
             return
 
-        # Resolve which resource(s) to grant. 'all' grants every canonical
-        # resource; otherwise the token must match a known resource type
-        # (case-insensitively) — an unknown name is REJECTED rather than
-        # silently minting a junk resource (e.g. a literal "all"), which would
-        # then pollute the player's resource dict forever.
-        canonical = {r.lower(): r for r in RESOURCE_TYPES}
-        if resource_token.lower() == "all":
-            resources = list(RESOURCE_TYPES)
-        else:
-            resolved = canonical.get(resource_token.lower())
-            if resolved is None:
-                valid = ", ".join(RESOURCE_TYPES)
-                caller.msg(
-                    f"Unknown resource '{resource_token}'. "
-                    f"Valid: {valid} (or 'all')."
-                )
-                return
-            resources = [resolved]
+        # Resolve which resource(s) to grant; an unknown token is REJECTED
+        # (not minted as a junk resource — the reported "give all" bug that
+        # once created a resource literally named "all").
+        resources = adapter.resolve_resources(resource_token)
+        if resources is None:
+            valid = ", ".join(adapter.resource_names())
+            caller.msg(
+                f"Unknown resource '{resource_token}'. "
+                f"Valid: {valid} (or 'all')."
+            )
+            return
 
-        # Resolve target: specified player or self
+        # Resolve target: a named player (the shared resolver messages on a
+        # miss/ambiguity) or self.
         if player_name:
-            target = resolve_player(self.caller, player_name)
+            target = resolve_player(caller, player_name)
             if target is None:
                 return
         else:
             target = caller
 
-        if not hasattr(target, "add_resource"):
-            target_name = getattr(target, "key", "target")
-            caller.msg(f"{target_name} is not a valid player character.")
+        # Credit through the adapter's single-writer; a path failure reports
+        # the reason and changes nothing (Requirement 4.8).
+        try:
+            result = adapter.create(
+                caller, resource_token,
+                {"amount": amount, "target": target, "resources": resources},
+            )
+        except Exception as exc:  # noqa: BLE001 - relay grant-path errors
+            caller.msg(f"Grant failed: {exc}")
+            return
+        if result is None or not getattr(result, "ok", False):
+            caller.msg(getattr(result, "error", None) or "Grant failed.")
             return
 
-        # Admin override: give resources directly, bypassing the carry-weight
-        # cap (Req 16.7 — admins are exempt). We intentionally do NOT route this
-        # through EquipmentSystem.add_resource_capped, keeping it the simplest
-        # correct path for an admin grant.
-        for resource_type in resources:
-            target.add_resource(resource_type, amount)
-
         target_name = getattr(target, "key", "?")
-        granted = "all resources" if len(resources) > 1 else resources[0]
-        caller.msg(f"Gave {amount} {granted} to {target_name}.")
+        granted = result.instance["granted"]
+        note = self._audit("give", f"{amount} {granted} to {target_name}")
+        caller.msg(f"Gave {amount} {granted} to {target_name}.{note}")
 
-        self._log_admin("give", f"{amount} {granted} to {target_name}")
-
-        # Notify the target if they have msg and are not the caller
+        # Notify the target if they can receive messages and aren't the caller.
         if hasattr(target, "msg") and target is not caller:
             target.msg(
                 f"|y[Admin] You received {amount} {granted} "
                 f"from {caller.key}.|n"
             )
 
-    def sub_reset(self, args):
-        """Reset player(s) to starting resources.
+    def _sub_show(self, rest):
+        """``show [player]``: default the target to the caller (the legacy
+        "defaults to you" behavior) before the shared readout."""
+        token = (rest or "").strip() or "me"
+        super()._sub_show(token)
+
+    def sub_reset(self, rest):
+        """Reset player(s) to starting resources (the ``reset`` extra verb).
 
         Args:
-            args: "[player]" — if specified, reset just that player;
+            rest: "[player]" — if specified, reset just that player;
                   if empty, reset all players.
         """
         caller = self.caller
-        player_name = args.strip() if args else ""
+        player_name = rest.strip() if rest else ""
 
         if player_name:
             # Reset a single player
@@ -998,743 +501,179 @@ class CmdAdminResource(AdminSubcommandRouter):
             self._log_admin("reset", f"resources for {updated} character(s)")
             caller.msg(f"Reset {updated} player(s) to starting resources.")
 
-    subcommands = {
-        "give": (sub_give, "Give resources to a player", "Builder"),
-        "reset": (sub_reset, "Reset player(s) to starting resources", "Admin"),
-    }
 
-
-class CmdAdminItem(AdminSubcommandRouter):
-    """Spawn, inspect, and modify equipment, weapons, and supplies.
+class CmdAdminItem(EntityAdminRouter):
+    """Manage items under the unified admin grammar.
 
     Usage:
-      @item spawn <key> [count] [player] [iqs=<0-100>] [rarity=<tier>]
+      @item list [filter] [player]
+      @item spawn <def> [count=N] [iqs=<0-100>] [rarity=<tier>] [player]
+      @item show <item>
       @item set <item> <stat> <value>
-      @item set <item> rarity <tier>
-      @item stats <item>
-      @item list [filter]
+      @item destroy <item>[, <item> ...]
+      @item def list | def show <key> | def diff
+      @item def set <key> <field> <value> | def reset <key> [field]
 
-    Options:
-      <key>          item key or full name (assault_rifle | "Assault Rifle")
-      [count]        how many to grant (default 1)
-      [player]       recipient; defaults to you
-      [iqs=<0-100>]  spawn rolled Gear at this base quality score: every
-                     stat lands at that fraction of its roll band
-                     (deterministic — no randomness). Clamped to 0-100.
-      [rarity=<tier>] force the rarity tier (common, uncommon, rare, epic,
-                     legendary). Without iqs=, the roll still happens but
-                     is forced to that tier (its roll floor and affix
-                     budget apply).
-      <item>         a Gear item YOU carry or have equipped (name, key, or
-                     prefix; ground items at your location also match)
-      <stat>         a stat the item's roll bands declare — see '@item
-                     stats <item>' for what a given item accepts
-      <value>        the new value; clamped into the stat's [min, max] band
-      [filter]       restrict 'list' to a category (weapon, armor,
-                     accessory, ammo, consumable, throwable) or a slot
+    Core verbs (shared EntityAdminRouter handlers, driven by the item
+    adapter registered under ``adapter_key = "item"``):
+      list    — live item instances in a player's holdings (defaults to
+                yours); definition listing moved to 'def list'
+      spawn   — create item(s) from a definition through the existing
+                creation paths (kwargs: count=, iqs=, rarity=); rollable
+                Gear is rolled exactly like a loot drop
+      show    — full instance readout: state, modifiable fields with
+                [min–max] roll bands, staleness notes for stamped
+                attributes that drifted from the current merged def
+      set     — bounded stat write clamped into the def's roll band
+                (with a note), re-stamping IQS through the loot roller
+                before the response; 'rarity' accepts a tier name
+      destroy — delete an item instance (multi-target destroys need
+                explicit confirmation)
+      def …   — definition scope: 'def list'/'def show'/'def diff' at
+                Builder; 'def set'/'def reset' (overlay-backed, validated
+                reload) at Admin
 
-    Subcommands:
-      spawn — Grant item(s) to a player, bypassing cost (Builder+)
-      set   — Set a rolled stat (or rarity) on a carried item (Builder+)
-      stats — Show an item's modifiable stats with min/max bands (Builder+)
-      list  — List item definitions available to spawn (Builder+)
+    Targets resolve uniformly: '#N' from the last '@item list', the item
+    key (e.g. 'assault_rifle'), the item name, or an unambiguous prefix;
+    a trailing player name scopes to that player's holdings ('@item show
+    assault_rifle Bob').
 
-    Gear (armor/weapon/accessory) is created as equippable object(s) in the
-    recipient's inventory; Supplies (ammo/consumable/throwable) are added to
-    their Supply_Bag as counts. Admin grants bypass the carry-weight cap,
-    matching '@resource give'.
-
-    Rolled Gear defs are rolled on spawn (random roll, exactly like a loot
-    drop) unless iqs= pins the quality. Defs without roll bands stay fixed,
-    always — iqs=/rarity= are ignored on them (with a note), and Supplies
-    never carry per-instance rolls. '@item set' only accepts stats the
-    item's roll bands declare (that is where min/max come from); values
-    outside the band are clamped with a note, and the item's quality score
-    is re-stamped after every change.
+    Legacy spellings (deprecated migration aliases):
+      stats <item> — alias of 'show <item>'
     """
 
     key = "@item"
+    adapter_key = "item"
 
-    def sub_spawn(self, args):
-        """Grant item(s) to a player, bypassing production cost.
+    def _sub_list(self, rest):
+        """``list``: shared instance-rows handler + the def-list pointer.
 
-        Args:
-            args: "<key> [count] [player] [iqs=<0-100>] [rarity=<tier>]"
+        While the ``@item`` migration aliases remain installed (the
+        deprecation window), every ``@item list`` includes the pointer
+        that definition listing moved to ``def list`` — the old def-list
+        meaning of ``list`` moved there in this rollout phase
+        (Requirement 11.4). The shared handler stays generic; only this
+        subclass appends the pointer.
         """
-        caller = self.caller
-        usage = ("Usage: @item spawn <key> [count] [player] "
-                 "[iqs=<0-100>] [rarity=<tier>]")
-        if not args:
-            caller.msg(usage)
-            return
-
-        from world.systems.loot_roller import RARITY_ORDER
-
-        # Pull out the kwarg-style options first (mirrors '@building spawn
-        # owner=/level='); the leftovers keep the positional
-        # <key> [count] [player] shape. Kwargs rather than positionals so a
-        # bare number stays unambiguously the count.
-        iqs = None
-        rarity = None
-        positional = []
-        for part in args.split():
-            low = part.lower()
-            if low.startswith("iqs=") or low.startswith("value="):
-                raw = part.split("=", 1)[1]
-                try:
-                    iqs = float(raw)
-                except ValueError:
-                    caller.msg("iqs must be a number 0-100.")
-                    return
-                if iqs < 0 or iqs > 100:
-                    clamped = min(max(iqs, 0.0), 100.0)
-                    caller.msg(f"iqs {iqs:g} clamped to {clamped:g} "
-                               f"(valid range 0-100).")
-                    iqs = clamped
-            elif low.startswith("rarity="):
-                rarity = part.split("=", 1)[1].strip().lower()
-                if rarity not in RARITY_ORDER:
-                    caller.msg(
-                        f"Unknown rarity '{rarity}'. "
-                        f"Valid: {', '.join(RARITY_ORDER)}."
-                    )
-                    return
-            else:
-                positional.append(part)
-
-        if not positional:
-            caller.msg(usage)
-            return
-        token = positional[0]
-
-        # Optional [count] then optional [player]. The first extra token is a
-        # count only if it parses as an int; otherwise it's a player name.
-        count = 1
-        player_name = None
-        rest = positional[1:]
-        if rest:
-            try:
-                count = int(rest[0])
-                rest = rest[1:]
-            except ValueError:
-                pass  # first extra token is a player name, not a count
-            if count < 1:
-                caller.msg("Count must be at least 1.")
-                return
-        if rest:
-            player_name = rest[0]
-
-        # Resolve the item definition. Accept an index (``#3`` or ``3``, as shown
-        # by '@item list'), a key, a full name, or an unambiguous prefix — all
-        # typo-tolerant via the shared registry resolver.
-        registry = _get_system(caller, "registry")
-        if registry is None:
-            caller.msg("Data Registry unavailable.")
-            return
-        item_def = _resolve_by_index(token, self._item_index(registry))
-        if item_def is None:
-            resolver = getattr(registry, "resolve_item", None)
-            if callable(resolver):
-                item_def = resolver(token)
-        if item_def is None and hasattr(registry, "get_item"):
-            try:
-                item_def = registry.get_item(token)
-            except KeyError:
-                item_def = None
-        if item_def is None:
-            caller.msg(
-                f"Unknown item '{token}'. Use '@item list' to see valid keys "
-                f"and index numbers."
-            )
-            return
-
-        # Resolve recipient: named player or self.
-        if player_name:
-            target = resolve_player(self.caller, player_name)
-            if target is None:
-                return
-        else:
-            target = caller
-
-        from world.constants import GEAR_CATEGORIES
-        is_gear = item_def.category in GEAR_CATEGORIES
-
-        # Per-instance rolls exist only on Gear objects; Supplies are bag
-        # counts. A rollable def is one whose roll_spec declares stat bands.
-        spec = getattr(item_def, "roll_spec", None)
-        rollable = (isinstance(spec, dict)
-                    and isinstance(spec.get("stats"), dict)
-                    and bool(spec.get("stats")))
-        if (iqs is not None or rarity is not None) and not (is_gear and rollable):
-            reason = ("Supplies carry no per-instance rolls"
-                      if not is_gear
-                      else f"{item_def.name} has no roll bands (fixed def)")
-            caller.msg(f"Note: iqs/rarity ignored — {reason}.")
-            iqs = None
-            rarity = None
-
-        if is_gear:
-            granted = self._spawn_gear(target, item_def, count,
-                                       iqs=iqs, rarity=rarity,
-                                       registry=registry)
-        else:
-            granted = self._grant_supply(target, item_def, count)
-
-        target_name = getattr(target, "key", "?")
-        if granted <= 0:
-            caller.msg(f"Failed to grant {item_def.name} to {target_name}.")
-            return
-
-        kind = "gear" if is_gear else "supplies"
-        suffix = ""
-        if granted < count:
-            suffix = f" ({count - granted} exceeded the stack cap)"
-        quality = ""
-        if iqs is not None:
-            quality = f" [iqs {iqs:g}{', ' + rarity if rarity else ''}]"
-        elif rarity is not None:
-            quality = f" [{rarity}]"
-        self._log_admin(
-            "spawn", f"{granted}x {item_def.key} for {target_name}{quality}")
-        caller.msg(
-            f"Spawned {granted}x {item_def.name} ({kind}) for "
-            f"{target_name}{quality}{suffix}."
-        )
-        if hasattr(target, "msg") and target is not caller:
-            target.msg(
-                f"|y[Admin] You received {granted}x {item_def.name} "
-                f"from {caller.key}.|n"
-            )
-
-    def _spawn_gear(self, target, item_def, count, iqs=None, rarity=None,
-                    registry=None):
-        """Create *count* equippable GameItem objects in *target*'s inventory.
-
-        Rollable defs (a ``roll_spec`` with stat bands) are ROLLED on spawn
-        — an admin grant should produce the same rolled-gear a loot drop
-        does, not the pre-loot-economy unrolled instance:
-
-        - ``iqs=<0-100>``: deterministic stamp — every stat lands at that
-          fraction of its loot band (``stats_at_quality``), so the base
-          quality score reads back exactly the requested value. A
-          ``rarity=`` is stamped verbatim alongside (no affixes — this is
-          a surgical spawn, not a loot roll).
-        - ``rarity=<tier>`` alone: a normal random roll forced to that
-          tier (a single-entry rarity table), so the tier's roll floor and
-          affix budget genuinely apply.
-        - neither: a normal random roll through ``roll_and_stamp`` with the
-          live balance skew/rarity table and affix pools (the loot-drop
-          treatment at source weight 0).
-
-        Defs without a roll_spec stay fixed exactly as always (R1.3) — the
-        roll wiring never touches them. Returns the number successfully
-        created.
-        """
-        import random as _rng
-
-        from typeclasses.objects import create_game_item
-        from world.systems.loot_roller import (
-            DEFAULT_LOOT_ROLL_SKEW, recompute_iqs, roll_and_stamp,
-            stats_at_quality, write_instance_field,
+        super()._sub_list(rest)
+        self.caller.msg(
+            "Note: definition listing moved to '@item def list' — "
+            "'list' now shows live item instances."
         )
 
-        spec = getattr(item_def, "roll_spec", None)
-        rollable = (isinstance(spec, dict)
-                    and isinstance(spec.get("stats"), dict)
-                    and bool(spec.get("stats")))
-        balance = getattr(registry, "balance", None) if registry else None
 
-        created = 0
-        for _ in range(count):
-            try:
-                item = create_game_item(target, item_def)
-                created += 1
-            except Exception:
-                logger.exception("Failed to create item %s", item_def.key)
-                break
-            if not rollable or item is None:
-                continue  # fixed def stays fixed, exactly as always (R1.3)
-            try:
-                if iqs is not None:
-                    rolled = stats_at_quality(spec, float(iqs) / 100.0)
-                    if rolled:
-                        write_instance_field(item, "rolled_stats", rolled)
-                        if rarity:
-                            write_instance_field(item, "rarity", str(rarity))
-                        recompute_iqs(item, spec)
-                else:
-                    if rarity:
-                        # Forced tier: a one-entry table makes the weighted
-                        # choice deterministic while the tier's roll floor
-                        # and affix budget still apply.
-                        table = {"admin": {"min_weight": 0.0,
-                                           "weights": {str(rarity): 1}}}
-                    else:
-                        table = getattr(balance, "rarity_table", None)
-                    roll_and_stamp(
-                        item, item_def,
-                        source_rarity_weight=0.0,
-                        crafted=False,
-                        rng=_rng,
-                        default_skew=getattr(
-                            balance, "loot_roll_skew", DEFAULT_LOOT_ROLL_SKEW),
-                        rarity_table=table,
-                        affix_pools=getattr(registry, "affixes", None),
-                    )
-            except Exception:
-                # A failed roll degrades to a fixed item (R1.5 spirit) —
-                # never a lost grant.
-                logger.exception("Roll failed for spawned %s", item_def.key)
-        return created
-
-    def _grant_supply(self, target, item_def, count):
-        """Add up to *count* units of a Supply to *target*'s Supply_Bag.
-
-        Respects the per-entry ``max_stack`` cap (the data-structure limit);
-        returns the number actually added.
-        """
-        equipment = getattr(target, "equipment", None)
-        if equipment is None or not hasattr(equipment, "add_supply"):
-            return 0
-        return int(
-            equipment.add_supply(item_def.key, count, max_stack=item_def.max_stack)
-        )
-
-    # ------------------------------------------------------------------ #
-    #  set / stats — modify + inspect a live item instance
-    # ------------------------------------------------------------------ #
-
-    def _resolve_instance_def(self, item):
-        """The ItemDef governing a live *item* instance, or ``None``.
-
-        Looks the instance's ``item_key`` (object key as fallback) up in
-        the registry — the def is where the roll bands live.
-        """
-        registry = _get_system(self.caller, "registry")
-        if registry is None:
-            return None
-        token = _get_item_field(item, "item_key") or getattr(item, "key", "")
-        if not token:
-            return None
-        resolver = getattr(registry, "resolve_item", None)
-        item_def = resolver(str(token)) if callable(resolver) else None
-        if item_def is None and hasattr(registry, "get_item"):
-            try:
-                item_def = registry.get_item(str(token))
-            except KeyError:
-                item_def = None
-        return item_def
-
-    @staticmethod
-    def _roll_bands(item_def):
-        """The def's ``roll_spec.stats`` band dict, or ``{}`` when fixed."""
-        spec = getattr(item_def, "roll_spec", None) if item_def else None
-        stats = spec.get("stats") if isinstance(spec, dict) else None
-        return stats if isinstance(stats, dict) else {}
-
-    def sub_set(self, args):
-        """Set a rolled stat (or the rarity) on a carried item instance.
-
-        Args:
-            args: "<item> <stat> <value>" — the item token may span words
-                ("assault rifle damage 40"); the last two tokens are always
-                <stat> <value>.
-        """
-        caller = self.caller
-        usage = ("Usage: @item set <item> <stat> <value>  |  "
-                 "@item set <item> rarity <tier>")
-        parts = args.split()
-        if len(parts) < 3:
-            caller.msg(usage)
-            return
-        value_token = parts[-1]
-        stat = parts[-2].lower()
-        item_token = " ".join(parts[:-2])
-
-        item = _find_item_instance(caller, item_token)
-        if item is None:
-            caller.msg(
-                f"No carried, equipped, or nearby item matches "
-                f"'{item_token}'."
-            )
-            return
-        item_name = getattr(item, "key", None) or item_token
-
-        from world.systems.loot_roller import (
-            RARITY_ORDER, recompute_iqs, write_instance_field,
-        )
-
-        # Rarity is a named tier, not a banded stat — handled first.
-        if stat == "rarity":
-            tier = value_token.strip().lower()
-            if tier not in RARITY_ORDER:
-                caller.msg(
-                    f"Unknown rarity '{tier}'. "
-                    f"Valid: {', '.join(RARITY_ORDER)}."
-                )
-                return
-            write_instance_field(item, "rarity", tier)
-            self._log_admin("set", f"rarity={tier} on {item_name}")
-            caller.msg(f"Set {item_name} rarity to {tier}.")
-            return
-
-        # A numeric stat must be one the def's roll bands declare — that is
-        # the only place a [min, max] comes from. Anything else (arbitrary
-        # stats, unrolled defs) is rejected, pointing at the inspector.
-        item_def = self._resolve_instance_def(item)
-        bands = self._roll_bands(item_def)
-        band = bands.get(stat)
-        lo = band.get("min") if isinstance(band, dict) else None
-        hi = band.get("max") if isinstance(band, dict) else None
-        if (not isinstance(lo, (int, float)) or isinstance(lo, bool)
-                or not isinstance(hi, (int, float)) or isinstance(hi, bool)
-                or lo > hi):
-            settable = ", ".join(sorted(bands)) or "none — fixed item"
-            caller.msg(
-                f"'{stat}' is not a modifiable stat on {item_name}. "
-                f"Settable: {settable}. "
-                f"See '@item stats {item_token}'."
-            )
-            return
-
-        try:
-            value = float(value_token)
-        except ValueError:
-            caller.msg(f"Value must be a number (got '{value_token}').")
-            return
-
-        clamped = min(max(value, float(lo)), float(hi))
-        note = ""
-        if clamped != value:
-            note = (f" (clamped from {_format_band_value(value)} into band "
-                    f"{_format_band_value(lo)}–{_format_band_value(hi)})")
-
-        # Write the per-instance override get_stat prefers, then re-stamp
-        # the quality score through the single writer (R2.4).
-        rolled = dict(_get_item_field(item, "rolled_stats") or {})
-        rolled[stat] = clamped
-        write_instance_field(item, "rolled_stats", rolled)
-        new_iqs = recompute_iqs(item, getattr(item_def, "roll_spec", None))
-
-        iqs_str = f" IQS now {new_iqs}." if new_iqs is not None else ""
-        self._log_admin(
-            "set", f"{stat}={_format_band_value(clamped)} on {item_name}")
-        caller.msg(
-            f"Set {stat} to {_format_band_value(clamped)} on "
-            f"{item_name}{note}.{iqs_str}"
-        )
-
-    def sub_stats(self, args):
-        """Show an item instance's modifiable stats with their roll bands.
-
-        The admin-grade inspect: every stat '@item set' accepts, with its
-        current value and [min–max] band, plus IQS/rarity/affixes/inserts.
-
-        Args:
-            args: "<item>" — a carried/equipped/nearby item instance.
-        """
-        caller = self.caller
-        item_token = args.strip()
-        if not item_token:
-            caller.msg("Usage: @item stats <item>")
-            return
-
-        item = _find_item_instance(caller, item_token)
-        if item is None:
-            caller.msg(
-                f"No carried, equipped, or nearby item matches "
-                f"'{item_token}'."
-            )
-            return
-        item_name = getattr(item, "key", None) or item_token
-
-        item_def = self._resolve_instance_def(item)
-        bands = self._roll_bands(item_def)
-        rolled = _get_item_field(item, "rolled_stats") or {}
-        base = _get_item_field(item, "stat_modifiers") \
-            or (dict(getattr(item_def, "stat_modifiers", None) or {})
-                if item_def else {})
-
-        from world.systems.loot_roller import RARITY_ORDER
-
-        lines = [f"|w=== {item_name} ===|n"]
-        rarity = _get_item_field(item, "rarity")
-        iqs = _get_item_field(item, "iqs")
-        lines.append(f"  IQS: {iqs if iqs is not None else '—'}    "
-                     f"Rarity: {rarity or '—'} "
-                     f"(settable: {', '.join(RARITY_ORDER)})")
-
-        if bands:
-            lines.append("|cModifiable stats ('@item set <item> <stat> "
-                         "<value>', clamped to band):|n")
-            for stat in sorted(bands):
-                band = bands.get(stat)
-                if not isinstance(band, dict):
-                    continue
-                lo, hi = band.get("min"), band.get("max")
-                current = rolled.get(stat, base.get(stat) if hasattr(base, "get") else None)
-                cur_str = (_format_band_value(current)
-                           if current is not None else "—")
-                src = "rolled" if stat in rolled else "base"
-                lines.append(
-                    f"  {stat:<18s} {cur_str:>8s}  "
-                    f"[{_format_band_value(lo)}–{_format_band_value(hi)}]"
-                    f"  ({src})"
-                )
-            extras = [s for s in rolled if s not in bands]
-            for stat in sorted(extras):
-                lines.append(
-                    f"  {stat:<18s} {_format_band_value(rolled[stat]):>8s}  "
-                    f"[no band — not settable]"
-                )
-        else:
-            lines.append("  Fixed item — no roll bands; '@item set' accepts "
-                         "only rarity here.")
-
-        affixes = _get_item_field(item, "affixes") or []
-        if affixes:
-            lines.append("|cAffixes:|n")
-            for affix in affixes:
-                if not hasattr(affix, "get"):
-                    lines.append(f"  {affix}")
-                    continue
-                axis = (affix.get("stat") or affix.get("proc")
-                        or affix.get("key", "affix"))
-                magnitude = affix.get("magnitude", affix.get("value"))
-                mag_str = (f"+{_format_band_value(magnitude)} "
-                           if magnitude is not None else "")
-                lines.append(f"  {mag_str}{axis}")
-        inserts = _get_item_field(item, "inserts") or []
-        if inserts:
-            lines.append("|cInserts:|n")
-            for ins in inserts:
-                name = (ins.get("name") or ins.get("key")
-                        if hasattr(ins, "get") else None) or str(ins)
-                lines.append(f"  {name}")
-
-        self._log_admin("stats", f"inspect {item_name}")
-        caller.msg("\n".join(lines))
-
-    @staticmethod
-    def _item_index(registry):
-        """Return the stable, sorted list of ItemDefs '@item list' numbers.
-
-        The single ordering shared by ``sub_list`` (which prints the 1-based
-        index alongside each item) and ``sub_spawn`` (which resolves an index the
-        operator typed), so ``@item spawn N`` always maps to the row shown as
-        ``[N]``. Sorted by (category, key) — deterministic across reloads.
-        """
-        items = getattr(registry, "items", None) if registry else None
-        if not items:
-            return []
-        return sorted(items.values(), key=lambda d: (d.category, d.key))
-
-    def sub_list(self, args):
-        """List item definitions available to spawn, grouped by category.
-
-        Each item is numbered with a stable 1-based index; ``@item spawn <N>``
-        (or ``#N``) spawns that item, so an operator can reference an item by
-        index instead of typing its full key.
-
-        Args:
-            args: "[filter]" — optional category or slot to restrict the list.
-        """
-        caller = self.caller
-        registry = _get_system(caller, "registry")
-        ordered = self._item_index(registry)
-        if not ordered:
-            caller.msg("No item definitions loaded.")
-            return
-
-        filt = args.strip().lower() if args else ""
-
-        lines = ["|w=== Item definitions (spawn by name or [index]) ===|n"]
-        shown = 0
-        current_cat = None
-        for idx, d in enumerate(ordered, start=1):
-            if filt and filt not in (d.category.lower(), (d.slot or "").lower()):
-                continue
-            if d.category != current_cat:
-                current_cat = d.category
-                lines.append(f"|c{current_cat}|n")
-            slot = f" slot={d.slot}" if d.slot else ""
-            lines.append(f"  |w[{idx}]|n {d.key:<18s} {d.name}{slot} wt={d.weight:g}")
-            shown += 1
-
-        if shown == 0:
-            caller.msg(f"No items match '{filt}'.")
-            return
-        self._log_admin("list", f"items filter='{filt}'")
-        caller.msg("\n".join(lines))
-
-    subcommands = {
-        "spawn": (sub_spawn, "Spawn item(s) for a player", "Builder"),
-        "set": (sub_set, "Set a stat/rarity on a carried item", "Builder"),
-        "stats": (sub_stats, "Show an item's modifiable stats + bands",
-                  "Builder"),
-        "list": (sub_list, "List item definitions", "Builder"),
-    }
-
-
-class CmdAdminPlayer(AdminSubcommandRouter):
-    """Manage player level and rank.
+class CmdAdminTech(EntityAdminRouter):
+    """Manage player technologies under the unified admin grammar.
 
     Usage:
-        @player level <N> [player]
-        @player rank <N> [player]
+      @tech list [filter] [player]
+      @tech grant <tech> [player]
+      @tech revoke <tech> [player]
+      @tech show <tech> [player]
+      @tech def list | def show <key> | def diff
+      @tech def set <key> <field> <value> | def reset <key> [field]
 
-    Subcommands:
-        level — Set a player's level (Admin+)
-        rank  — Set a player's rank (Admin+)
+    Core verbs (shared EntityAdminRouter handlers, driven by the tech
+    adapter registered under ``adapter_key = "tech"``):
+      list    — technologies granted to a player (defaults to you);
+                optional filter on key/name/effect
+      grant   — grant a technology (maps to the spawn verb): adds
+                through the existing research path and recomputes the
+                player's derived tech bonuses before the response;
+                granting an already-held tech errors stating the
+                current grant state, nothing changes
+      revoke  — revoke a granted technology (maps to the destroy verb):
+                removes + recomputes derived bonuses before the
+                response; revoking a non-held tech errors stating the
+                current grant state, nothing changes
+      show    — one granted tech: holder, rank/cost/effect read live
+                from the merged definition
+      set     — not available: technologies have no modifiable
+                per-instance fields
+      def …   — definition scope: 'def list'/'def show'/'def diff' at
+                Builder; 'def set'/'def reset' (overlay-backed,
+                validated reload) at Admin
 
-    If [player] is omitted, targets the caller.
+    Targets resolve uniformly: '#N' from the last '@tech list', the
+    tech key (e.g. 'drone_swarm'), the tech name, or an unambiguous
+    prefix; a trailing player name scopes to that player's granted
+    techs ('@tech revoke drone_swarm Bob').
+    """
 
+    key = "@tech"
+    adapter_key = "tech"
+
+    def _dispatch_extra_to_core(self, canonical: str, rest: str):
+        """Dispatch an extra verb through its canonical core handler.
+
+        Like ``_dispatch_alias`` but WITHOUT the deprecation note —
+        ``grant``/``revoke`` are the intended spellings, not legacy
+        ones. The canonical verb's permission check and handler run so
+        state changes, perm outcomes, and audit entries are identical
+        to invoking the canonical verb directly (Requirement 9.1).
+        """
+        entry = self.subcommands.get(canonical)
+        if entry is None:
+            self.caller.msg(f"'{canonical}' is not available here.")
+            return
+        handler, _help_text, perm = entry
+        if perm and not self._check_sub_perm(perm, canonical):
+            return
+        handler(self, rest)
+
+    def sub_grant(self, rest):
+        """``grant <tech> [player]`` — maps to spawn (Requirement 7.1)."""
+        self._dispatch_extra_to_core("spawn", rest)
+
+    def sub_revoke(self, rest):
+        """``revoke <tech> [player]`` — maps to destroy (Requirement 7.1)."""
+        self._dispatch_extra_to_core("destroy", rest)
+
+
+class CmdAdminPlayer(ValueFirstSetAliasMixin, EntityAdminRouter):
+    """Manage players under the unified admin grammar.
+
+    Usage:
+      @player list [filter]
+      @player show <player>
+      @player set <player> level <1-100>
+      @player set <player> rank <1-12>
+
+    Core verbs (shared EntityAdminRouter handlers, driven by the player
+    adapter registered under ``adapter_key = "player"``):
+      list    — live player characters as indexed rows
+      show    — full progression readout: level, rank, XP, modifiable
+                fields with [min–max] bounds
+      set     — bounded field write (Admin+) through the existing
+                rank-system progression path: 'level' (1-100, out-of-
+                bounds values clamp with a note) re-stamps XP and
+                recomputes the rank; 'rank' (numeric rank id 1-12)
+                jumps to that rank's first level. Rank events (tech
+                unlocks, agent-cap adjustments) recompute before the
+                response, exactly like the legacy verbs.
+      spawn   — not available: players register through account creation
+      destroy — not available: use the '@obliterate' flow instead
+      def …   — not available: players have no YAML definition domain
+
+    Targets resolve uniformly: 'me'/'self' (yourself), '#N' from the
+    last '@player list', an exact name, or an unambiguous prefix.
+
+    Legacy spellings (deprecated migration aliases):
+      level <N> [player] — alias of 'set <player> level <N>'
+      rank <N> [player]  — alias of 'set <player> rank <N>'
+      ([player] omitted targets you, as before)
     """
 
     key = "@player"
+    adapter_key = "player"
 
-    def sub_level(self, args):
-        """Set a player's level by numeric value (1-MAX_LEVEL).
-
-        Args:
-            args: "<N> [player]"
-        """
-        caller = self.caller
-
-        if not args:
-            caller.msg("Usage: @player level <N> [player]")
-            return
-
-        parts = args.strip().split()
-        level = self.parse_int(parts[0], "Level")
-        if level is None:
-            return
-
-        player_name = parts[1] if len(parts) >= 2 else None
-
-        from world.constants import MAX_LEVEL
-        if level < 1 or level > MAX_LEVEL:
-            caller.msg(f"Level must be between 1 and {MAX_LEVEL}.")
-            return
-
-        # Resolve target: specified player or self
-        if player_name:
-            target = resolve_player(self.caller, player_name)
-            if target is None:
-                return
-        else:
-            target = caller
-
-        if not hasattr(target, "db"):
-            target_name = getattr(target, "key", "target")
-            caller.msg(f"{target_name} is not a valid player character.")
-            return
-
-        # Compute rank from level
-        from world.systems.rank_system import rank_from_level
-        rank_num = rank_from_level(level)
-
-        # Set XP to the threshold for this level
-        rank_system = _get_system(caller, "rank_system")
-        if rank_system:
-            xp = rank_system.xp_for_level(level)
-            target.db.combat_xp = xp
-        else:
-            xp = None
-
-        target.db.level = level
-        target.db.rank_level = rank_num
-
-        # Trigger rank events (unlock techs, adjust agent cap)
-        if rank_system:
-            rank_system.check_promotion(target)
-
-        # Look up rank name
-        rank_name = f"Rank {rank_num}"
-        registry = _get_system(caller, "registry")
-        if registry and hasattr(registry, "ranks"):
-            rank_def = next((r for r in registry.ranks if r.level == rank_num), None)
-            if rank_def:
-                rank_name = rank_def.name
-
-        target_name = getattr(target, "key", "?")
-        xp_str = f", XP={xp}" if xp is not None else ""
-        self._log_admin("level", f"set {target_name} to level {level} ({rank_name}{xp_str})")
-        caller.msg(f"Set {target_name} to level {level} ({rank_name}{xp_str}).")
-
-    def sub_rank(self, args):
-        """Set a player's rank by numeric rank ID (1-NUM_RANKS).
-
-        Args:
-            args: "<N> [player]"
-        """
-        caller = self.caller
-
-        if not args:
-            caller.msg("Usage: @player rank <N> [player]")
-            return
-
-        parts = args.strip().split()
-        rank_id = self.parse_int(parts[0], "Rank ID")
-        if rank_id is None:
-            return
-
-        player_name = parts[1] if len(parts) >= 2 else None
-
-        from world.constants import NUM_RANKS
-        if rank_id < 1 or rank_id > NUM_RANKS:
-            caller.msg(f"Rank ID must be between 1 and {NUM_RANKS}.")
-            return
-
-        # Resolve target: specified player or self
-        if player_name:
-            target = resolve_player(self.caller, player_name)
-            if target is None:
-                return
-        else:
-            target = caller
-
-        if not hasattr(target, "db"):
-            target_name = getattr(target, "key", "target")
-            caller.msg(f"{target_name} is not a valid player character.")
-            return
-
-        # Convert rank to level: first level of that rank
-        from world.systems.rank_system import level_range_for_rank
-        level, _ = level_range_for_rank(rank_id)
-
-        # Set XP to the threshold for this level
-        rank_system = _get_system(caller, "rank_system")
-        if rank_system:
-            xp = rank_system.xp_for_level(level)
-            target.db.combat_xp = xp
-        else:
-            xp = None
-
-        target.db.level = level
-        target.db.rank_level = rank_id
-
-        # Trigger rank events (unlock techs, adjust agent cap)
-        if rank_system:
-            rank_system.check_promotion(target)
-
-        # Look up rank name
-        rank_name = f"Rank {rank_id}"
-        registry = _get_system(caller, "registry")
-        if registry and hasattr(registry, "ranks"):
-            rank_def = next((r for r in registry.ranks if r.level == rank_id), None)
-            if rank_def:
-                rank_name = rank_def.name
-
-        target_name = getattr(target, "key", "?")
-        xp_str = f", XP={xp}" if xp is not None else ""
-        self._log_admin("rank", f"set {target_name} to {rank_name} (rank {rank_id}, level {level}{xp_str})")
-        caller.msg(f"Set {target_name} to {rank_name} (rank {rank_id}, level {level}{xp_str}).")
-
-    subcommands = {
-        "level": (sub_level, "Set a player's level", "Admin"),
-        "rank": (sub_rank, "Set a player's rank", "Admin"),
-    }
+    #: The legacy VALUE-first verb forms whose argument order differs from
+    #: the canonical ``set <target> <field> <value>`` grammar. The reshape
+    #: (and the shared alias dispatch) live in ``ValueFirstSetAliasMixin``;
+    #: ``@player`` has no ``ALIAS_FIELDS`` remap, so ``level``/``rank`` are
+    #: written to the field of the same name.
+    _LEGACY_SET_ALIASES = ("level", "rank")
+    _ALIAS_TARGET_NOUN = "player"
 
 
 class CmdTeleport(BaseCommand):
@@ -2676,300 +1615,127 @@ class CmdObliterate(BaseCommand):
         )
 
 
-class CmdAdminStat(AdminSubcommandRouter):
+class CmdAdminStat(ValueFirstSetAliasMixin, EntityAdminRouter):
     """Set health, XP, and other combat stats on a player or NPC.
 
     Usage:
+        @stat show [target]
+        @stat set <target> <field> <value>
         @stat hp <N> [target]
         @stat maxhp <N> [target]
         @stat xp <N> [target]
-        @stat set <field> <value> [target]
-        @stat show [target]
 
-    Options:
-        <target>   a player, agent, or NPC by name/prefix; defaults to you.
+    Core verbs (shared EntityAdminRouter handlers, driven by the stat
+    adapter registered under ``adapter_key = "stat"``):
+      show    — core combat stats readout (HP, XP, level, rank, kills,
+                deaths) plus the modifiable-fields block; the target
+                defaults to you (Builder+).
+      set     — bounded field write (Admin+) of one allowlisted combat/
+                progression field (hp, hp_max, combat_xp, level,
+                rank_level, kills, deaths); out-of-bounds values clamp
+                with a note. 'hp' clamps to the target's own hp_max and
+                revives a downed unit; 'hp_max' tops a full unit up (and
+                clamps an over-max unit down); 'combat_xp' recomputes
+                level/rank from the XP curve.
+      list    — not available: stats are per-unit fields, not a roster
+      spawn   — not available: create units via '@agent'/'@outpost'
+      destroy — not available: delete the unit ('@agent'/'@outpost'/
+                'obliterate'), not its stats
+      def …   — not available: combat stats have no YAML definition domain
 
-    Subcommands:
-        hp     — Set current health (clamped to the target's max) (Admin+)
-        maxhp  — Set maximum health; also tops current HP up to it (Admin+)
-        xp     — Set combat XP; recomputes level/rank from the curve (Admin+)
-        set    — Set an arbitrary numeric db attribute by name (Admin+)
-        show   — Print the target's core combat stats (Builder+)
+    Targets resolve uniformly: 'me'/'self' (or omitted — yourself), an
+    exact name, or an unambiguous prefix of a live player or NPC.
 
-    ``@stat set`` writes any allowlisted numeric attribute (hp, hp_max,
-    combat_xp, level, rank_level, kills, deaths) — a general escape hatch; the
-    named subcommands are the safe, recomputing paths for the common fields.
+    Legacy spellings (deprecated migration aliases):
+      hp <N> [target]    — alias of 'set <target> hp <N>'
+      maxhp <N> [target] — alias of 'set <target> hp_max <N>'
+      xp <N> [target]    — alias of 'set <target> combat_xp <N>'
+      ([target] omitted targets you, as before)
     """
 
     key = "@stat"
+    adapter_key = "stat"
 
-    # Numeric attributes @stat set may write. Restricted to combat/progression
-    # fields so a typo can't clobber structural attrs (coords, owner, alliance
-    # pointers, etc.); the named subcommands cover the common cases with
-    # recompute logic.
-    _SETTABLE = {
-        "hp", "hp_max", "combat_xp", "level", "rank_level", "kills", "deaths",
-    }
+    #: The legacy VALUE-first stat verbs, whose argument order differs
+    #: from the canonical ``set <target> <field> <value>`` grammar — and
+    #: whose spelling differs from the db field they write. The reshape
+    #: (and the field remap via the adapter's ``ALIAS_FIELDS`` —
+    #: ``maxhp``→``hp_max``, ``xp``→``combat_xp``) lives in
+    #: ``ValueFirstSetAliasMixin``.
+    _LEGACY_SET_ALIASES = ("hp", "maxhp", "xp")
+    _ALIAS_TARGET_NOUN = "target"
 
-    # ------------------------------------------------------------------ #
-    #  Target resolution
-    # ------------------------------------------------------------------ #
-
-    def _target_from_tail(self, tail_name):
-        """Resolve a trailing target name (player OR NPC), or msg + return None."""
-        if not tail_name:
-            return self.caller
-        return _resolve_combat_unit(self.caller, tail_name)
-
-    # ------------------------------------------------------------------ #
-    #  Subcommands
-    # ------------------------------------------------------------------ #
-
-    def sub_hp(self, args):
-        """Set current HP: ``@stat hp <N> [target]`` (clamped to hp_max)."""
-        self._set_health(args, which="hp")
-
-    def sub_maxhp(self, args):
-        """Set max HP: ``@stat maxhp <N> [target]`` (tops current HP up to it)."""
-        self._set_health(args, which="maxhp")
-
-    def _set_health(self, args, which):
-        caller = self.caller
-        parts = args.split()
-        if not parts:
-            caller.msg(f"Usage: @stat {which} <N> [target]")
-            return
-        value = self.parse_int(parts[0], "Value")
-        if value is None:
-            return
-        if value < 0:
-            caller.msg("Value must be 0 or greater.")
-            return
-        target = self._target_from_tail(parts[1] if len(parts) >= 2 else None)
-        if target is None:
-            return
-        db = getattr(target, "db", None)
-        if db is None:
-            caller.msg(f"{getattr(target, 'key', 'target')} has no health.")
-            return
-
-        name = getattr(target, "key", "?")
-        if which == "maxhp":
-            old_max = getattr(db, "hp_max", 0) or 0
-            cur_hp = getattr(db, "hp", 0) or 0
-            db.hp_max = value
-            # Top a full unit up to the new ceiling (so "maxhp 1000" on a
-            # full-HP target reads 1000/1000), and clamp an over-max unit down.
-            if cur_hp >= old_max or cur_hp > value:
-                db.hp = value
-            self._log_admin("maxhp", f"{name} hp_max={value}")
-            caller.msg(f"|gSet {name} max health to {value} ({db.hp}/{value}).|n")
-        else:
-            hp_max = getattr(db, "hp_max", None) or value
-            clamped = min(value, hp_max)
-            db.hp = clamped
-            # Setting positive HP on a downed unit revives it.
-            if clamped > 0 and getattr(db, "incapacitated", False):
-                db.incapacitated = False
-                db.respawn_timer = 0
-            self._log_admin("hp", f"{name} hp={clamped}")
-            caller.msg(f"|gSet {name} health to {clamped}/{hp_max}.|n")
-
-    def sub_xp(self, args):
-        """Set combat XP: ``@stat xp <N> [target]`` — recomputes level/rank."""
-        caller = self.caller
-        parts = args.split()
-        if not parts:
-            caller.msg("Usage: @stat xp <N> [target]")
-            return
-        value = self.parse_int(parts[0], "XP")
-        if value is None:
-            return
-        if value < 0:
-            caller.msg("XP must be 0 or greater.")
-            return
-        target = self._target_from_tail(parts[1] if len(parts) >= 2 else None)
-        if target is None:
-            return
-        db = getattr(target, "db", None)
-        if db is None:
-            caller.msg(f"{getattr(target, 'key', 'target')} has no XP.")
-            return
-
-        db.combat_xp = value
-        # Recompute level/rank from the curve so they stay consistent with XP.
-        # CombatEntity.recompute_progression is the owner-agnostic path (players
-        # AND NPCs); fall back to the rank system, then leave as-is.
-        level = None
-        if hasattr(target, "recompute_progression"):
-            try:
-                target.recompute_progression()
-                level = getattr(db, "level", None)
-            except Exception:  # noqa: BLE001
-                logger.debug("recompute_progression failed", exc_info=True)
-        if level is None:
-            rank_system = _get_system(caller, "rank_system")
-            if rank_system is not None and hasattr(rank_system, "check_promotion"):
-                try:
-                    rank_system.check_promotion(target)
-                    level = getattr(db, "level", None)
-                except Exception:  # noqa: BLE001
-                    logger.debug("check_promotion failed", exc_info=True)
-
-        name = getattr(target, "key", "?")
-        self._log_admin("xp", f"{name} combat_xp={value} (level {level})")
-        lvl_str = f", level {level}" if level is not None else ""
-        caller.msg(f"|gSet {name} XP to {value}{lvl_str}.|n")
-
-    def sub_set(self, args):
-        """Set an allowlisted numeric attr: ``@stat set <field> <value> [target]``."""
-        caller = self.caller
-        parts = args.split()
-        if len(parts) < 2:
-            caller.msg("Usage: @stat set <field> <value> [target]")
-            return
-        field = parts[0].lower()
-        if field not in self._SETTABLE:
-            allowed = ", ".join(sorted(self._SETTABLE))
-            caller.msg(f"Field '{field}' is not settable. Allowed: {allowed}.")
-            return
-        value = self.parse_int(parts[1], "Value")
-        if value is None:
-            return
-        target = self._target_from_tail(parts[2] if len(parts) >= 3 else None)
-        if target is None:
-            return
-        db = getattr(target, "db", None)
-        if db is None:
-            caller.msg(f"{getattr(target, 'key', 'target')} has no attributes.")
-            return
-
-        setattr(db, field, value)
-        # If XP or a progression field was set directly, re-derive level/rank so
-        # they don't drift from the curve.
-        if field in ("combat_xp", "level", "rank_level") and hasattr(
-            target, "recompute_progression"
-        ):
-            # Only recompute from XP — setting level/rank directly is an explicit
-            # override the operator asked for, so leave those as written.
-            if field == "combat_xp":
-                try:
-                    target.recompute_progression()
-                except Exception:  # noqa: BLE001
-                    logger.debug("recompute_progression failed", exc_info=True)
-
-        name = getattr(target, "key", "?")
-        self._log_admin("set", f"{name} {field}={value}")
-        caller.msg(f"|gSet {name} {field} to {value}.|n")
-
-    def sub_show(self, args):
-        """Print core combat stats: ``@stat show [target]``."""
-        caller = self.caller
-        target = self._target_from_tail(args.strip() or None)
-        if target is None:
-            return
-        db = getattr(target, "db", None)
-        if db is None:
-            caller.msg(f"{getattr(target, 'key', 'target')} has no stats.")
-            return
-        name = getattr(target, "key", "?")
-        lines = [
-            f"|w=== Stats: {name} ===|n",
-            f"  HP:      {getattr(db, 'hp', '?')}/{getattr(db, 'hp_max', '?')}",
-            f"  XP:      {getattr(db, 'combat_xp', 0) or 0}",
-            f"  Level:   {getattr(db, 'level', '?')}  (rank {getattr(db, 'rank_level', '?')})",
-            f"  Kills:   {getattr(db, 'kills', 0) or 0}   Deaths: {getattr(db, 'deaths', 0) or 0}",
-        ]
-        if getattr(db, "incapacitated", False):
-            lines.append(f"  |rIncapacitated|n (respawn in {getattr(db, 'respawn_timer', 0) or 0})")
-        caller.msg("\n".join(lines))
-
-    subcommands = {
-        "hp": (sub_hp, "Set current health", "Admin"),
-        "maxhp": (sub_maxhp, "Set maximum health", "Admin"),
-        "xp": (sub_xp, "Set combat XP (recomputes level/rank)", "Admin"),
-        "set": (sub_set, "Set an allowlisted numeric attribute", "Admin"),
-        "show": (sub_show, "Show a target's combat stats", "Builder"),
-    }
+    #: ``show [target]`` keeps the legacy "defaults to you" behavior — an
+    #: omitted target becomes ``me`` (which the adapter resolves to the
+    #: caller), via the shared ``_sub_show``.
+    default_show_target = "me"
 
 
-class CmdAdminOutpost(AdminSubcommandRouter):
-    """Spawn and inspect NPC bases (outposts/fortresses).
+class CmdAdminOutpost(EntityAdminRouter):
+    """Manage NPC bases (outposts/fortresses) under the unified admin grammar.
 
     Usage:
-        @outpost spawn <tier> [x y]
-        @outpost list
-        @outpost tiers
+      @outpost list [filter]
+      @outpost spawn <tier> [x y]
+      @outpost show <base>
+      @outpost set <base> <field> <value>
+      @outpost destroy [<base>[, <base> ...]]
+      @outpost def list | def show <tier> | def diff
 
-    Options:
-        <tier>   template tier (outpost / stronghold / fortress / citadel, in
-                 ascending difficulty), an unambiguous prefix ("fort"), or an
-                 index (#2) from '@outpost tiers'
-        [x y]    HQ tile coordinates; defaults to your current tile
+    Core verbs (shared EntityAdminRouter handlers, driven by the outpost
+    adapter registered under ``adapter_key = "outpost"``):
+      list    — active NPC bases the spawner is tracking (unchanged
+                instance meaning); rows are #N-addressable
+      spawn   — place a base through the existing spawner path; <tier>
+                accepts a name (fortress), an unambiguous prefix (fort),
+                or a [N] index from 'def list'; coords default to your
+                current tile
+      show    — one base's readout: planet, HQ tile, staleness state,
+                modifiable fields
+      set     — bounded field write through the spawner's own state
+                paths (disturbed_at — the staleness clock)
+      destroy — wipe a base AS A UNIT (Sentinel + owned buildings/guards,
+                no respawn) via the spawner's admin-clear path
+      def …   — the base-template tiers: 'def list'/'def show'/'def diff'
+                at Builder; 'def set'/'def reset' are opted out (templates
+                load outside the overlay merge — edit outposts.yaml and
+                @reboot)
 
-    Subcommands:
-        spawn — Spawn an NPC base at a tile (Builder+)
-        list  — List active NPC bases (Builder+)
-        tiers — List spawnable base tiers with index numbers (Builder+)
+    Targets resolve uniformly: '#N' from the last '@outpost list', the
+    base's key/name, or an unambiguous prefix.
 
+    Legacy spellings:
+      tiers   — deprecated alias of 'def list'
     """
 
     key = "@outpost"
+    adapter_key = "outpost"
 
-    @staticmethod
-    def _tier_index(registry):
-        """Return the stable, sorted list of base-template tier names.
+    def _sub_spawn(self, rest):
+        """``spawn <tier> [x y]``: the legacy spawn grammar, preserved.
 
-        Shared by ``sub_tiers`` (prints the 1-based index) and ``sub_spawn``
-        (resolves an index/prefix the operator typed), so ``@outpost spawn N``
-        maps to the tier shown as ``[N]``. Sorted alphabetically — deterministic.
+        The design leaves ``@outpost spawn`` unchanged (per-entity matrix),
+        and its positional ``[x y]`` form doesn't fit the shared
+        ``spawn <def> [k=v ...] [player]`` parser — so this subclass keeps
+        the legacy parsing/messages and delegates creation to the
+        adapter's spawner path (Requirement 11.6).
         """
-        templates = getattr(registry, "base_templates", None) if registry else None
-        if not templates:
-            return []
-        return sorted(templates.keys())
-
-    def _resolve_tier(self, registry, token):
-        """Resolve *token* to a base-template tier name, or ``None``.
-
-        Accepts an index (``#2`` / ``2`` from '@outpost tiers'), an exact tier
-        name, or an unambiguous prefix — mirroring the item/building resolvers so
-        the operator needn't type the full tier. Case-insensitive.
-        """
-        tiers = self._tier_index(registry)
-        if not tiers:
-            # No template metadata available (e.g. minimal test spawner): fall
-            # back to the raw lowercased token; the spawner validates it.
-            return token.lower()
-        by_index = _resolve_by_index(token, tiers)
-        if by_index is not None:
-            return by_index
-        norm = token.strip().lower()
-        if norm in tiers:
-            return norm
-        prefixed = [t for t in tiers if t.startswith(norm)]
-        if len(prefixed) == 1:
-            return prefixed[0]
-        return None
-
-    def sub_spawn(self, args):
-        """Spawn an NPC base of a tier at the caller's tile (or given x y)."""
         caller = self.caller
         spawner = self.require_system("outpost_spawner", "Outpost spawner")
         if spawner is None:
             return
 
-        parts = args.split()
+        parts = (rest or "").split()
         if not parts:
             caller.msg("Usage: @outpost spawn <tier> [x y]")
             return
-        registry = _get_system(caller, "registry")
-        tier = self._resolve_tier(registry, parts[0])
+        adapter = self.adapter
+        tier = adapter.resolve_tier(parts[0])
         if tier is None:
-            valid = ", ".join(self._tier_index(registry)) or "none loaded"
+            valid = ", ".join(adapter.tier_names()) or "none loaded"
             caller.msg(
                 f"Unknown or ambiguous tier '{parts[0]}'. Valid: {valid}. "
-                f"Use '@outpost tiers' for index numbers."
+                f"Use '@outpost def list' for index numbers."
             )
             return
 
@@ -2990,250 +1756,139 @@ class CmdAdminOutpost(AdminSubcommandRouter):
             if c_coords is not None:
                 coords = (int(c_coords[0]), int(c_coords[1]))
 
-        base = spawner.spawn_base(planet, tier, coords=coords)
-        if base is None:
+        result = adapter.create(caller, tier,
+                                {"planet": planet, "coords": coords})
+        if not result.ok:
             caller.msg(
                 f"Could not spawn {tier!r} base "
                 f"(unknown tier or no valid placement)."
             )
             return
-        self._log_admin("spawn", f"{tier} at {base['x']},{base['y']} on {planet}")
+        base = result.instance
+        note = self._audit(
+            "spawn", f"{tier} at {base['x']},{base['y']} on {planet}"
+        )
         caller.msg(
-            f"|gSpawned {tier} base|n at ({base['x']}, {base['y']}) on {planet}."
+            f"|gSpawned {tier} base|n at ({base['x']}, {base['y']}) "
+            f"on {planet}.{note}"
         )
 
-    def sub_list(self, args):
-        """List active NPC bases the spawner is tracking."""
-        caller = self.caller
-        spawner = self.require_system("outpost_spawner", "Outpost spawner")
-        if spawner is None:
-            return
-        bases = list(getattr(spawner, "_active_bases", {}).values())
-        if not bases:
-            caller.msg("No active NPC bases.")
-            return
-        lines = ["|wActive NPC bases:|n"]
-        for rec in bases:
-            lines.append(
-                f"  {rec['tier']} at ({rec['x']}, {rec['y']}) on {rec['planet']}"
-            )
-        caller.msg("\n".join(lines))
+    def _def_list(self, rest):
+        """``def list``: base tiers with a stable 1-based [N] index.
 
-    def sub_tiers(self, args):
-        """List spawnable base tiers with a stable 1-based index.
-
-        ``@outpost spawn <N>`` (or ``#N``) spawns the tier shown as ``[N]``.
+        Overrides the shared handler's plain listing to keep the legacy
+        tier rendering — ``@outpost spawn <N>`` (or ``#N``) spawns the
+        tier shown as ``[N]``, so the listing must number the rows.
         """
-        caller = self.caller
-        registry = _get_system(caller, "registry")
-        tiers = self._tier_index(registry)
-        if not tiers:
-            caller.msg("No base tiers loaded.")
+        templates = self.adapter.def_registry_dict()
+        if not templates:
+            self.caller.msg("No base tiers loaded.")
             return
         lines = ["|w=== Base tiers (spawn by name or [index]) ===|n"]
-        templates = getattr(registry, "base_templates", {}) or {}
-        for idx, tier in enumerate(tiers, start=1):
-            tmpl = templates.get(tier)
+        for idx, tier in enumerate(sorted(templates), start=1):
+            tmpl = templates[tier]
             display = getattr(tmpl, "display_name", "") if tmpl else ""
-            suffix = f" — {display}" if display and display.lower() != tier else ""
+            suffix = (f" — {display}"
+                      if display and display.lower() != tier else "")
             lines.append(f"  |w[{idx}]|n {tier}{suffix}")
-        self._log_admin("tiers", "base tiers")
-        caller.msg("\n".join(lines))
+        self.caller.msg("\n".join(lines))
 
-    subcommands = {
-        "spawn": (sub_spawn, "Spawn an NPC base at a tile", "Builder"),
-        "list": (sub_list, "List active NPC bases", "Builder"),
-        "tiers": (sub_tiers, "List spawnable base tiers with index numbers", "Builder"),
-    }
+    @staticmethod
+    def _definition_key(definition):
+        """A base template's identifying key is its ``tier`` (the
+        ``BaseTemplateDef`` field the registry dict is keyed by)."""
+        return str(getattr(definition, "tier", definition))
 
 
-class CmdAdminAlliance(AdminSubcommandRouter):
-    """Inspect and moderate alliances (staff).
+class CmdAdminPowerup(EntityAdminRouter):
+    """Inspect and tune powerup definitions under the unified admin grammar.
 
     Usage:
-        @alliance list
-        @alliance inspect <tag>
-        @alliance disband <tag>
-        @alliance kick <tag> <player>
-        @alliance transfer <tag> <player>
-        @alliance rename <tag> <new name> = <new tag>
+      @powerup def list
+      @powerup def show <key>
+      @powerup def set <key> <field> <value>
+      @powerup def reset <key> [field]
+      @powerup def diff
 
-    Every write verb routes its mutation THROUGH the AllianceSystem (the single
-    writer), so the single-writer invariant holds even for staff actions.
-    Inspect/list read full state (treasury, pending invites/requests) bypassing
-    the normal member/outsider scoping.
+    Powerups are definition-only: they are applied to players through the
+    powerup system, not spawned as standalone admin objects, so every
+    instance verb (list/spawn/show/set/destroy) is not available and
+    points here instead. The full definition scope is driven by the
+    powerup adapter registered under ``adapter_key = "powerup"``:
+      def list  — every loaded powerup definition (Builder)
+      def show  — one powerup's merged fields, overrides flagged (Builder)
+      def diff  — current overrides in the 'powerups' domain (Builder)
+      def set   — overlay-backed, validated-reload field override (Admin)
+      def reset — remove an override + validated reload (Admin)
+
+    Definition tokens resolve by key, name, or unambiguous prefix.
+    Overrides land in the shared definition overlay and go live on the
+    next reload; a rejected reload rolls the overlay back unchanged.
     """
 
-    key = "@alliance"
+    key = "@powerup"
+    adapter_key = "powerup"
 
-    def _system(self):
-        return self.require_system("alliance_system", "Alliance system")
 
-    def _find(self, system, tag):
-        """Resolve an alliance by tag, or msg + return None."""
-        rec = system._alliances.by_tag(tag) if system._alliances else None
-        if rec is None:
-            self.caller.msg(f"No alliance with tag '{tag}'.")
-        return rec
+class CmdAdminTerrain(EntityAdminRouter):
+    """Inspect and tune terrain definitions under the unified admin grammar.
 
-    def _resolve_member_by_name(self, system, record, name):
-        """Resolve a roster member of *record* by (case-insensitive) name."""
-        from world.systems.alliance_system import _roster_ids
-        for cid in _roster_ids(record):
-            obj = system._resolve_member(cid)
-            if obj is not None and getattr(obj, "key", "").lower() == name.lower():
-                return obj
-        self.caller.msg(f"No member '{name}' in that alliance.")
-        return None
+    Usage:
+      @terrain def list
+      @terrain def show <type>
+      @terrain def set <type> <field> <value>
+      @terrain def reset <type> [field]
+      @terrain def diff
 
-    def sub_list(self, args):
-        system = self._system()
-        if system is None:
-            return
-        alliances = system._alliances.all_alliances() if system._alliances else []
-        if not alliances:
-            self.caller.msg("No alliances exist.")
-            return
-        lines = ["|wAlliances:|n  (id / tag / name / members / level)"]
-        for rec in alliances:
-            lines.append(
-                f"  #{rec['id']} [{rec['tag']}] {rec['name']} — "
-                f"{len(system._live_members(rec['id']))} members, "
-                f"level {system.compute_alliance_level(rec['id'])}"
-            )
-        self.caller.msg("\n".join(lines))
-        self._log_admin("list", f"{len(alliances)} alliances")
+    Terrain is definition-only: tiles are generated by the procedural map,
+    not spawned, so every instance verb (list/spawn/show/set/destroy) is
+    not available and points here instead. The full definition scope is
+    driven by the terrain adapter registered under
+    ``adapter_key = "terrain"``:
+      def list  — every loaded terrain definition (Builder)
+      def show  — one terrain type's merged fields, overrides flagged
+                  (Builder)
+      def diff  — current overrides in the 'terrain' domain (Builder)
+      def set   — overlay-backed, validated-reload field override (Admin);
+                  settable fields are map_symbol, resource_type, and the
+                  vision/movement/defense/latitude modifiers
+                  (passable/buildable are booleans — edit terrain.yaml)
+      def reset — remove an override + validated reload (Admin)
 
-    def sub_inspect(self, args):
-        system = self._system()
-        if system is None:
-            return
-        rec = self._find(system, args.strip())
-        if rec is None:
-            return
-        summary = system.alliance_summary(rec["id"], for_member=True)
-        from world.utils import format_section
-        lines = [
-            f"|w#{rec['id']} {rec['name']}|n [{rec['tag']}]",
-            f"  Leader: {summary['leader']}  Members: {summary['member_count']}"
-            f"  Level: {summary['level']}  Open-join: {summary['open_join']}",
-            f"  Officers: {rec.get('officer_ids')}  Members: {rec.get('member_ids')}",
-        ]
-        # Treasury + active perks render as clean Key - Value rows (they are
-        # mappings — a raw dict repr is unreadable); the raw id/invite lists
-        # above stay as-is (admin diagnostics).
-        lines.extend(format_section("Treasury", summary.get("treasury") or {}, empty="empty"))
-        lines.extend(format_section(
-            "Active perks",
-            {k: f"L{v}" for k, v in (summary.get("active_perks") or {}).items()},
-            empty="none",
-        ))
-        lines.append(f"  Pending invites: {summary.get('pending_invites')}")
-        lines.append(f"  Pending requests: {summary.get('pending_requests')}")
-        self.caller.msg("\n".join(lines))
-        self._log_admin("inspect", f"#{rec['id']} {rec['tag']}")
+    Definition tokens resolve by terrain_type, or an unambiguous prefix.
+    Overrides land in the shared definition overlay and affect newly
+    generated/derived tiles on the next reload; a rejected reload rolls
+    the overlay back unchanged.
+    """
 
-    def sub_disband(self, args):
-        system = self._system()
-        if system is None:
-            return
-        rec = self._find(system, args.strip())
-        if rec is None:
-            return
-        # Route through the single-writer teardown (even-split + channel destroy).
-        system._do_disband(rec)
-        self.caller.msg(f"Force-disbanded [{rec['tag']}] {rec['name']}.")
-        self._log_admin("disband", f"#{rec['id']} {rec['tag']}")
+    key = "@terrain"
+    adapter_key = "terrain"
 
-    def sub_kick(self, args):
-        system = self._system()
-        if system is None:
-            return
-        parts = args.split(None, 1)
-        if len(parts) < 2:
-            self.caller.msg("Usage: @alliance kick <tag> <player>")
-            return
-        rec = self._find(system, parts[0])
-        if rec is None:
-            return
-        member = self._resolve_member_by_name(system, rec, parts[1].strip())
-        if member is None:
-            return
-        # Kicking the LEADER would strand the alliance: _remove_from_roster never
-        # touches leader_id, so leader_id would dangle at the kicked player with
-        # no succession (and `claim` can't recover while the ex-leader is online).
-        # Refuse — staff should transfer or disband instead.
-        if getattr(member, "id", None) == rec.get("leader_id"):
-            self.caller.msg(
-                "Cannot kick the leader — use '@alliance transfer' to hand off "
-                "leadership first, or '@alliance disband'."
-            )
-            return
-        # Force-kick through the single writer: strip from roster + clear pointer.
-        system._remove_from_roster(rec, getattr(member, "id", None))
-        system._alliances.put(rec)
-        system._unsubscribe(member, rec["id"])
-        system._clear_pointer(member)
-        self.caller.msg(f"Force-kicked {member.key} from [{rec['tag']}].")
-        self._log_admin("kick", f"{member.key} from #{rec['id']}")
 
-    def sub_transfer(self, args):
-        system = self._system()
-        if system is None:
-            return
-        parts = args.split(None, 1)
-        if len(parts) < 2:
-            self.caller.msg("Usage: @alliance transfer <tag> <player>")
-            return
-        rec = self._find(system, parts[0])
-        if rec is None:
-            return
-        member = self._resolve_member_by_name(system, rec, parts[1].strip())
-        if member is None:
-            return
-        old_leader = system._resolve_member(rec.get("leader_id"))
-        system._install_leader(rec, old_leader, member)
-        self.caller.msg(f"Transferred [{rec['tag']}] leadership to {member.key}.")
-        self._log_admin("transfer", f"#{rec['id']} -> {member.key}")
+class CmdAdminPlanet(EntityAdminRouter):
+    """Inspect planet definitions under the unified admin grammar.
 
-    def sub_rename(self, args):
-        system = self._system()
-        if system is None:
-            return
-        # "<tag> <new name> = <new tag>"
-        if "=" not in args:
-            self.caller.msg("Usage: @alliance rename <tag> <new name> = <new tag>")
-            return
-        left, new_tag = (p.strip() for p in args.split("=", 1))
-        parts = left.split(None, 1)
-        if len(parts) < 2:
-            self.caller.msg("Usage: @alliance rename <tag> <new name> = <new tag>")
-            return
-        rec = self._find(system, parts[0])
-        if rec is None:
-            return
-        new_name = parts[1].strip()
-        # Validate + apply through the system (bypassing the leader/cooldown gate
-        # by writing the record after a validation-only check).
-        err = system._validate_name_tag(new_name, new_tag, exclude_id=rec["id"])
-        if err:
-            self.caller.msg(err)
-            return
-        old = (rec["name"], rec["tag"])
-        rec["name"] = new_name
-        rec["tag"] = new_tag
-        system._alliances.put(rec)
-        from world.event_bus import ALLIANCE_RENAMED
-        system._publish(ALLIANCE_RENAMED, alliance_id=rec["id"], old=old,
-                        new=(new_name, new_tag))
-        self.caller.msg(f"Renamed to [{new_tag}] {new_name}.")
-        self._log_admin("rename", f"#{rec['id']} -> {new_tag}")
+    Usage:
+      @planet def list
+      @planet def show <key>
 
-    subcommands = {
-        "list": (sub_list, "List all alliances", "Builder"),
-        "inspect": (sub_inspect, "Inspect an alliance's full state", "Builder"),
-        "disband": (sub_disband, "Force-disband an alliance", "Builder"),
-        "kick": (sub_kick, "Force-kick a member", "Builder"),
-        "transfer": (sub_transfer, "Force-transfer leadership", "Builder"),
-        "rename": (sub_rename, "Rename/retag an alliance", "Builder"),
-    }
+    Planets are definition-READ-only. ``planets.yaml`` loads into a
+    separate PlanetRegistry that is NOT part of the hot-reload pipeline,
+    so planets are not hot-reloadable: every write verb — 'def set',
+    'def reset' — and 'def diff' (planets have no overlay) are not
+    available, with the reason "planets are not hot-reloadable; edit
+    planets.yaml and restart". Every instance verb is not available too
+    (a planet is a coordinate-space definition, not an admin object).
+
+    The read-only definition scope is driven by the planet adapter
+    registered under ``adapter_key = "planet"``, served straight from the
+    PlanetRegistry:
+      def list — every loaded planet (Builder)
+      def show — one planet's coordinate-space definition (Builder)
+
+    Definition tokens resolve by planet key, z-level, or unambiguous
+    prefix. To change a planet, edit planets.yaml and restart the server.
+    """
+
+    key = "@planet"
+    adapter_key = "planet"

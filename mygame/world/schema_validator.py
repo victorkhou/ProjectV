@@ -986,7 +986,7 @@ class SchemaValidator:
         # False), so a malformed float can't slip through the type check.
         non_negative_fields = [
             "hp_regen_percent", "hp_regen_interval_ticks",
-            "repair_hp_percent_per_tick",
+            "repair_hp_percent_per_tick", "repair_interval_ticks",
             "attack_cooldown_seconds", "linkdead_grace_seconds",
             "chip_damage_min_fraction",
             "rank_gap_penalty_threshold", "rank_gap_full_penalty_span",

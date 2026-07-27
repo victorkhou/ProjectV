@@ -1254,18 +1254,23 @@ class BuildingSystem(BaseSystem):
         if err:
             return False, err
 
-        # Enter the active-presence repair state (mirrors construction).
+        # Enter the active-presence repair state (mirrors construction). Reset
+        # the tick counter so the repair-cadence gate (repair_interval_ticks)
+        # starts fresh and can't inherit a prior activity's progress.
         if hasattr(player, "db"):
             player.db.activity_state = "repairing"
             player.db.activity_target = building
+            player.db.activity_progress = 0
 
         from world.utils import format_cost_summary
         name = self._building_name(building_type)
         percent = float(getattr(self.registry.balance, "repair_hp_percent_per_tick", 5.0))
+        interval = int(getattr(self.registry.balance, "repair_interval_ticks", 1) or 1)
         cost_str = format_cost_summary(per_tick) or "nothing"
+        cadence = "per tick" if interval <= 1 else f"every {interval} ticks"
         return True, (
             f"Repairing {name} ({hp}/{hp_max} HP). Restores {percent:.0f}% HP "
-            f"per tick at {cost_str}/tick — stay on the tile or assign an "
+            f"{cadence} at {cost_str}/step — stay on the tile or assign an "
             f"Engineer to continue."
         )
 
@@ -1292,6 +1297,18 @@ class BuildingSystem(BaseSystem):
             return False
         if not self._player_on_building_tile(player, building):
             return False
+
+        # Cadence gate — a repair step lands only every repair_interval_ticks
+        # ticks (mirrors the passive-regen and harvest cooldowns). The counter
+        # advances every on-tile tick; off-boundary ticks are a no-op that keeps
+        # the repair state alive without applying HP/cost.
+        interval = int(getattr(self.registry.balance,
+                               "repair_interval_ticks", 1) or 1)
+        if interval > 1:
+            progress = int(getattr(player.db, "activity_progress", 0) or 0) + 1
+            player.db.activity_progress = progress
+            if progress % interval != 0:
+                return False
 
         done, reason = self.apply_repair_step(building, player)
         if done or reason == "insufficient":

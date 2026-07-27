@@ -1478,16 +1478,47 @@ class TestProcessRepairTick(unittest.TestCase):
         building = FakeBuilding(building_type="HQ", hp=250, hp_max=500)
         player = self._player(building)
         building.attributes.add("owner", player)
+        interval = int(system.registry.balance.repair_interval_ticks)
+        # Off-boundary ticks keep the state alive but apply nothing (cadence
+        # gate); the step lands only on the repair_interval_ticks boundary.
+        for _ in range(interval - 1):
+            self.assertFalse(system.process_repair_tick(player))
+            self.assertEqual(building.attributes.get("hp"), 250)  # not yet
         finished = system.process_repair_tick(player)
         self.assertFalse(finished)
         self.assertEqual(building.attributes.get("hp"), 275)
         self.assertEqual(player.db.activity_state, "repairing")  # still going
+
+    def test_off_boundary_tick_applies_nothing(self):
+        """With interval > 1, the first tick charges/heals nothing (cadence)."""
+        system, _, _ = _make_building_system()
+        building = FakeBuilding(building_type="HQ", hp=250, hp_max=500)
+        player = self._player(building)
+        building.attributes.add("owner", player)
+        if int(system.registry.balance.repair_interval_ticks) <= 1:
+            self.skipTest("repair cadence disabled (interval <= 1)")
+        finished = system.process_repair_tick(player)  # tick 1 of interval
+        self.assertFalse(finished)
+        self.assertEqual(building.attributes.get("hp"), 250)  # no HP applied
+        self.assertEqual(player.get_resource("Straw"), 999)   # not charged
+        self.assertEqual(player.db.activity_state, "repairing")  # still going
+
+    def _drive_to_boundary(self, system, player):
+        """Advance the cadence gate to the tick that applies a repair step.
+
+        Runs the interval-1 off-boundary no-op ticks so the NEXT
+        ``process_repair_tick`` call lands on the boundary and applies.
+        """
+        interval = int(system.registry.balance.repair_interval_ticks)
+        for _ in range(max(0, interval - 1)):
+            system.process_repair_tick(player)
 
     def test_tick_finishes_and_clears_state(self):
         system, _, _ = _make_building_system()
         building = FakeBuilding(building_type="HQ", hp=490, hp_max=500)
         player = self._player(building)
         building.attributes.add("owner", player)
+        self._drive_to_boundary(system, player)
         finished = system.process_repair_tick(player)
         self.assertTrue(finished)
         self.assertEqual(building.attributes.get("hp"), 500)
@@ -1499,6 +1530,7 @@ class TestProcessRepairTick(unittest.TestCase):
         building = FakeBuilding(building_type="HQ", hp=100, hp_max=500)
         player = self._player(building, Straw=0, Wood=0, Stone=0)
         building.attributes.add("owner", player)
+        self._drive_to_boundary(system, player)
         finished = system.process_repair_tick(player)
         self.assertFalse(finished)
         self.assertEqual(building.attributes.get("hp"), 100)  # unchanged
@@ -1524,6 +1556,7 @@ class TestProcessRepairTick(unittest.TestCase):
         building.attributes.add("owner", player)
         messages = []
         player.msg = lambda m, **kw: messages.append(m)
+        self._drive_to_boundary(system, player)
         system.process_repair_tick(player)  # 490 -> 500, completes
         self.assertTrue(any("fully repaired" in m for m in messages))
 
@@ -1539,6 +1572,7 @@ class TestProcessRepairTick(unittest.TestCase):
         building.attributes.add("owner", player)
         messages = []
         player.msg = lambda m, **kw: messages.append(m)
+        self._drive_to_boundary(system, player)
         system.process_repair_tick(player)
         self.assertTrue(any("[Repair]" in m and "%" in m for m in messages))
 

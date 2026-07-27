@@ -101,6 +101,16 @@ from mygame.commands.admin_commands import (  # noqa: E402
     CmdReboot,
 )
 from mygame.commands.admin_commands import CmdAdminResource  # noqa: E402
+from world.admin.adapter_registry import get_registry  # noqa: E402
+from world.admin.adapters.resource_adapter import ResourceAdapter  # noqa: E402
+
+# CmdAdminResource migrated onto EntityAdminRouter (unified-admin-crud task
+# 7.5): it resolves the resource adapter through the process-wide
+# AdapterRegistry, which only ``register_all()`` (server startup) populates.
+# Register it here so these preserved legacy give/reset tests keep exercising
+# the real command; idempotent per entity_key.
+if get_registry().get("resource") is None:
+    get_registry().register(ResourceAdapter())
 
 # -------------------------------------------------------------- #
 #  Helpers / Fakes

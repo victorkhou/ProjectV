@@ -249,5 +249,374 @@ class TestGates(_AllianceCmdBase):
             ct.player_in_combat = orig_combat
 
 
+# -------------------------------------------------------------- #
+#  CmdAdminAlliance — the @alliance admin router
+#  (unified-admin-crud task 7.2: EntityAdminRouter subclass driven by
+#  the AllianceAdapter; inspect→show / disband→destroy aliases; spawn
+#  opted out; set/destroy through the AllianceSystem single writer;
+#  kick/transfer/rename extra verbs; read-only perks def scope)
+# -------------------------------------------------------------- #
+
+from commands.alliance_commands import CmdAdminAlliance  # noqa: E402
+from world.admin.adapter_registry import AdapterRegistry  # noqa: E402
+from world.admin.adapters.alliance_adapter import (  # noqa: E402
+    AllianceAdapter,
+    _DEF_WRITE_OPT_OUT,
+    _SPAWN_OPT_OUT,
+)
+
+
+def _admin_record(aid, name, tag, **extra):
+    rec = {
+        "id": aid, "name": name, "tag": tag, "leader_id": None,
+        "officer_ids": [], "member_ids": [], "treasury": {},
+        "active_perks": {}, "pending_invites": [], "pending_requests": [],
+        "open_join": False,
+    }
+    rec.update(extra)
+    return rec
+
+
+class _FakeMember:
+    def __init__(self, mid, key):
+        self.id = mid
+        self.key = key
+
+
+class _AdminFakeAllianceRegistry:
+    def __init__(self, records=()):
+        self._alliances = {rec["id"]: rec for rec in records}
+
+    def get(self, aid):
+        return self._alliances.get(aid)
+
+    def all_alliances(self):
+        return list(self._alliances.values())
+
+    def put(self, record):
+        self._alliances[record["id"]] = record
+
+    def delete(self, aid):
+        self._alliances.pop(aid, None)
+
+
+class _AdminFakeAllianceSystem:
+    """AllianceSystem double exposing the admin single-writer paths."""
+
+    def __init__(self, records=(), members=()):
+        self._alliances = _AdminFakeAllianceRegistry(records)
+        self._members = {m.id: m for m in members}
+        self.calls = []
+
+    def alliance_exists(self, aid):
+        return self._alliances.get(aid) is not None
+
+    def _live_members(self, aid):
+        rec = self._alliances.get(aid) or {}
+        ids = list(rec.get("member_ids", []) or [])
+        ids += list(rec.get("officer_ids", []) or [])
+        if rec.get("leader_id") is not None:
+            ids.append(rec["leader_id"])
+        return [self._members[i] for i in ids if i in self._members]
+
+    def compute_alliance_level(self, aid):
+        return 2
+
+    def _resolve_member(self, cid):
+        return self._members.get(cid)
+
+    def admin_find_member(self, aid, name):
+        wanted = str(name or "").lower()
+        for member in self._live_members(aid):
+            if member.key.lower() == wanted:
+                return member
+        return None
+
+    def admin_set_alliance_field(self, aid, field, value):
+        self.calls.append(("set", aid, field, value))
+        rec = self._alliances.get(aid)
+        if rec is None:
+            return False, "That alliance no longer exists."
+        rec[field] = value
+        return True, ""
+
+    def admin_disband_alliance(self, aid):
+        self.calls.append(("disband", aid))
+        if self._alliances.get(aid) is None:
+            return False, "That alliance no longer exists."
+        self._alliances.delete(aid)
+        return True, ""
+
+    def admin_kick_member(self, aid, member):
+        self.calls.append(("kick", aid, member.key))
+        rec = self._alliances.get(aid)
+        if rec is not None and member.id == rec.get("leader_id"):
+            return False, (
+                "Cannot kick the leader — use '@alliance transfer' to "
+                "hand off leadership first, or '@alliance destroy'."
+            )
+        return True, ""
+
+    def admin_transfer_leadership(self, aid, member):
+        self.calls.append(("transfer", aid, member.key))
+        return True, ""
+
+    def admin_rename_alliance(self, aid, new_name=None, new_tag=None):
+        self.calls.append(("rename", aid, new_name, new_tag))
+        return True, ""
+
+
+_ADMIN_PERKS = {
+    "shared_vision": {"category": "vision", "effect_type": "vision",
+                      "levels": {1: {"tier": 1}}},
+    "shared_bank": {"category": "economy", "effect_type": "treasury",
+                    "levels": {1: {"tier": 2}}},
+}
+
+
+class _AdminFakeDataRegistry:
+    alliance_perks = _ADMIN_PERKS
+
+
+class _AdminCaller:
+    _next_id = 5000
+
+    def __init__(self):
+        _AdminCaller._next_id += 1
+        self.id = _AdminCaller._next_id
+        self.key = "AdminUser"
+        self.messages = []
+
+    def check_permstring(self, perm):
+        return True
+
+    def msg(self, text=None, **kwargs):
+        if text is not None:
+            self.messages.append(text)
+
+
+class _AdminAllianceRouter(CmdAdminAlliance):
+    """Test subclass injecting a per-test AdapterRegistry."""
+
+    registry = None
+
+    def _adapter_registry(self):
+        return self.registry
+
+
+class AdminAllianceRouterTestCase(unittest.TestCase):
+    """Fresh system/adapter/registry/caller per test; shared run helper."""
+
+    def _fresh(self, records=None, members=()):
+        if records is None:
+            records = [_admin_record(1, "Iron Wolves", "IW"),
+                       _admin_record(2, "Coalition", "COAL")]
+        system = _AdminFakeAllianceSystem(records, members)
+        registry = AdapterRegistry()
+        registry.register(AllianceAdapter(
+            alliance_system=system, registry=_AdminFakeDataRegistry()))
+        return system, registry
+
+    def setUp(self):
+        from world import services
+
+        self.system, self.registry = self._fresh()
+        # alliance_system also served through the services facade for
+        # the router's require_system (kick/transfer/rename).
+        ctx = services.override({"alliance_system": self.system})
+        ctx.__enter__()
+        self.addCleanup(ctx.__exit__, None, None, None)
+
+    def run_cmd(self, args, caller=None, registry=None):
+        caller = caller or _AdminCaller()
+        cmd = _AdminAllianceRouter()
+        cmd.registry = registry or self.registry
+        cmd.caller = caller
+        cmd.args = args
+        cmd.cmdstring = cmd.key
+        cmd.func()
+        return caller
+
+    @staticmethod
+    def output(caller):
+        return "\n".join(caller.messages)
+
+
+class TestAdminAllianceIsEntityAdminRouter(AdminAllianceRouterTestCase):
+    """The @alliance router is an EntityAdminRouter subclass (task 7.2)."""
+
+    def test_subclass_and_wiring(self):
+        from commands.command_router import EntityAdminRouter
+        self.assertTrue(issubclass(CmdAdminAlliance, EntityAdminRouter))
+        self.assertEqual(CmdAdminAlliance.key, "@alliance")
+        self.assertEqual(CmdAdminAlliance.adapter_key, "alliance")
+        # The Builder floor is unchanged (locks inherited).
+        self.assertIn("perm(Builder)", CmdAdminAlliance.locks)
+
+
+class TestAdminAllianceList(AdminAllianceRouterTestCase):
+    """list renders indexed rows over the live alliances."""
+
+    def test_list_shows_indexed_tag_rows(self):
+        caller = self.run_cmd(" list")
+        out = self.output(caller)
+        self.assertIn("#1", out)
+        self.assertIn("[IW] Iron Wolves", out)
+        self.assertIn("[COAL] Coalition", out)
+
+    def test_list_filter(self):
+        caller = self.run_cmd(" list coal")
+        out = self.output(caller)
+        self.assertIn("COAL", out)
+        self.assertNotIn("[IW]", out)
+
+
+class TestAdminAllianceInspectAlias(AdminAllianceRouterTestCase):
+    """inspect == show output + one deprecation note (R11.1, R11.2)."""
+
+    def _run_isolated(self, verb):
+        system, registry = self._fresh()
+        caller = self.run_cmd(f" {verb} IW", registry=registry)
+        return caller
+
+    def test_inspect_output_is_show_output_plus_one_line_note(self):
+        show_caller = self._run_isolated("show")
+        alias_caller = self._run_isolated("inspect")
+        note = alias_caller.messages[0]
+        self.assertEqual(len(note.splitlines()), 1)
+        self.assertIn("'inspect'", note)
+        self.assertIn("show", note)
+        self.assertIn("deprecated", note)
+        # Everything after the note is identical to the canonical verb.
+        self.assertEqual(alias_caller.messages[1:], show_caller.messages)
+
+    def test_show_renders_identity_state_and_fields(self):
+        caller = self.run_cmd(" show IW")
+        out = self.output(caller)
+        self.assertIn("Iron Wolves", out)
+        self.assertIn("[IW]", out)
+        self.assertIn("Treasury", out)
+        self.assertIn("Modifiable fields", out)
+        self.assertIn("open_join", out)
+
+
+class TestAdminAllianceDisbandAlias(AdminAllianceRouterTestCase):
+    """disband dispatches destroy through the single writer + note."""
+
+    def test_disband_alias_destroys_with_deprecation_note(self):
+        caller = self.run_cmd(" disband IW")
+        note = caller.messages[0]
+        self.assertIn("'disband'", note)
+        self.assertIn("destroy", note)
+        self.assertIn(("disband", 1), self.system.calls)
+        self.assertIn("Destroyed", self.output(caller))
+
+    def test_destroy_goes_through_admin_disband_alliance(self):
+        caller = self.run_cmd(" destroy COAL")
+        self.assertIn(("disband", 2), self.system.calls)
+        self.assertIn("Destroyed Coalition (COAL)", self.output(caller))
+
+
+class TestAdminAllianceSpawnOptOut(AdminAllianceRouterTestCase):
+    """spawn surfaces the founded-by-players reason verbatim (R1.5)."""
+
+    def test_spawn_opt_out_reason_verbatim_no_state_change(self):
+        caller = self.run_cmd(" spawn Wolves")
+        out = self.output(caller)
+        self.assertIn("not available", out)
+        self.assertIn(_SPAWN_OPT_OUT, out)
+        self.assertEqual(self.system.calls, [])
+
+
+class TestAdminAllianceSet(AdminAllianceRouterTestCase):
+    """set writes through AllianceSystem.admin_set_alliance_field (R3.5)."""
+
+    def test_set_name_writes_through_the_system(self):
+        caller = self.run_cmd(" set IW name Steel")
+        self.assertIn(("set", 1, "name", "Steel"), self.system.calls)
+        self.assertIn("name set to Steel", self.output(caller))
+
+    def test_set_open_join_enum_coerced_to_bool(self):
+        self.run_cmd(" set IW open_join on")
+        self.assertIn(("set", 1, "open_join", True), self.system.calls)
+
+    def test_set_invalid_enum_value_rejected_no_write(self):
+        caller = self.run_cmd(" set IW open_join maybe")
+        self.assertEqual(self.system.calls, [])
+        self.assertIn("valid values", self.output(caller))
+
+    def test_set_unknown_field_rejected_naming_valid_fields(self):
+        caller = self.run_cmd(" set IW treasury 999")
+        self.assertEqual(self.system.calls, [])
+        out = self.output(caller)
+        self.assertIn("Unknown field", out)
+        self.assertIn("open_join", out)
+
+
+class TestAdminAllianceExtraVerbs(AdminAllianceRouterTestCase):
+    """kick/transfer/rename mutate via the AllianceSystem admin paths."""
+
+    def setUp(self):
+        super().setUp()
+        self.boss = _FakeMember(100, "Boss")
+        self.grunt = _FakeMember(200, "Grunt")
+        rec = self.system._alliances.get(1)
+        rec["leader_id"] = self.boss.id
+        rec["member_ids"] = [self.grunt.id]
+        self.system._members = {m.id: m for m in (self.boss, self.grunt)}
+
+    def test_kick_routes_through_admin_kick_member(self):
+        caller = self.run_cmd(" kick IW Grunt")
+        self.assertIn(("kick", 1, "Grunt"), self.system.calls)
+        self.assertIn("Force-kicked Grunt from [IW]", self.output(caller))
+
+    def test_kick_leader_refusal_relayed(self):
+        caller = self.run_cmd(" kick IW Boss")
+        self.assertIn("Cannot kick the leader", self.output(caller))
+
+    def test_kick_unknown_member_errors(self):
+        caller = self.run_cmd(" kick IW Nobody")
+        self.assertIn("No member 'Nobody'", self.output(caller))
+
+    def test_transfer_routes_through_admin_transfer_leadership(self):
+        caller = self.run_cmd(" transfer IW Grunt")
+        self.assertIn(("transfer", 1, "Grunt"), self.system.calls)
+        self.assertIn("Transferred [IW] leadership to Grunt",
+                      self.output(caller))
+
+    def test_rename_routes_through_admin_rename_alliance(self):
+        caller = self.run_cmd(" rename IW Steel Wolves = SW")
+        self.assertIn(("rename", 1, "Steel Wolves", "SW"),
+                      self.system.calls)
+        self.assertIn("Renamed to [SW] Steel Wolves", self.output(caller))
+
+    def test_rename_usage_without_equals(self):
+        caller = self.run_cmd(" rename IW Steel Wolves")
+        self.assertIn("Usage", self.output(caller))
+
+
+class TestAdminAllianceDefScope(AdminAllianceRouterTestCase):
+    """def list/show serve the perks catalog; def writes are opted out."""
+
+    def test_def_list_serves_the_perks_catalog(self):
+        caller = self.run_cmd(" def list")
+        out = self.output(caller)
+        self.assertIn("shared_vision", out)
+        self.assertIn("shared_bank", out)
+
+    def test_def_show_renders_one_perk(self):
+        caller = self.run_cmd(" def show shared_vision")
+        out = self.output(caller)
+        self.assertIn("shared_vision", out)
+        self.assertIn("vision", out)
+
+    def test_def_set_and_reset_surface_the_opt_out_reason_verbatim(self):
+        for sub in ("set shared_vision category x", "reset shared_vision"):
+            caller = self.run_cmd(f" def {sub}")
+            out = self.output(caller)
+            self.assertIn("not available", out)
+            self.assertIn(_DEF_WRITE_OPT_OUT, out)
+
+
 if __name__ == "__main__":
     unittest.main()

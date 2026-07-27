@@ -757,5 +757,146 @@ class TestReviewFixes(_AllianceTestBase):
         self.assertTrue(self.sys._leader_absent(None))
 
 
+# -------------------------------------------------------------- #
+#  Admin single-writer paths (unified-admin-crud task 7.2)
+# -------------------------------------------------------------- #
+
+class TestAdminPaths(_AllianceTestBase):
+    """The ``admin_*`` methods the @alliance adapter/router route every
+    staff mutation through (Requirement 3.5)."""
+
+    def _team(self, n_members=1):
+        leader = self._mk("Leader", level=20)
+        aid = self.sys.found(leader, "Alliance", "ALN")
+        members = []
+        for i in range(n_members):
+            m = self._mk(f"M{i}", level=10)
+            self.sys.invite(leader, m)
+            self.sys.accept(m, "ALN")
+            members.append(m)
+        return leader, aid, members
+
+    # --- admin_set_alliance_field / admin_rename_alliance ---
+
+    def test_admin_set_name_validated_and_written(self):
+        leader, aid, _ = self._team(0)
+        ok, err = self.sys.admin_set_alliance_field(aid, "name", "Renamed")
+        self.assertTrue(ok, err)
+        self.assertEqual(self.alliances.get(aid)["name"], "Renamed")
+        self.assertEqual(self.alliances.get(aid)["tag"], "ALN")
+
+    def test_admin_set_tag_rejects_duplicates(self):
+        leader, aid, _ = self._team(0)
+        other = self._mk("Other", level=20)
+        self.sys.found(other, "Second", "SEC")
+        ok, err = self.sys.admin_set_alliance_field(aid, "tag", "SEC")
+        self.assertFalse(ok)
+        self.assertIn("already exists", err)
+        self.assertEqual(self.alliances.get(aid)["tag"], "ALN")
+
+    def test_admin_set_same_name_is_idempotent(self):
+        leader, aid, _ = self._team(0)
+        ok1, _ = self.sys.admin_set_alliance_field(aid, "name", "Alliance")
+        ok2, _ = self.sys.admin_set_alliance_field(aid, "name", "Alliance")
+        self.assertTrue(ok1 and ok2)
+        self.assertEqual(self.alliances.get(aid)["name"], "Alliance")
+
+    def test_admin_set_open_join(self):
+        leader, aid, _ = self._team(0)
+        ok, _ = self.sys.admin_set_alliance_field(aid, "open_join", True)
+        self.assertTrue(ok)
+        self.assertTrue(self.alliances.get(aid)["open_join"])
+
+    def test_admin_set_unknown_field_rejected(self):
+        leader, aid, _ = self._team(0)
+        ok, err = self.sys.admin_set_alliance_field(aid, "treasury", {})
+        self.assertFalse(ok)
+        self.assertIn("settable", err)
+
+    def test_admin_set_missing_alliance_rejected(self):
+        ok, err = self.sys.admin_set_alliance_field(999, "name", "X")
+        self.assertFalse(ok)
+        self.assertIn("no longer exists", err)
+
+    def test_admin_rename_both_sides_at_once(self):
+        leader, aid, _ = self._team(0)
+        ok, err = self.sys.admin_rename_alliance(
+            aid, new_name="Steel Wolves", new_tag="SW")
+        self.assertTrue(ok, err)
+        rec = self.alliances.get(aid)
+        self.assertEqual((rec["name"], rec["tag"]), ("Steel Wolves", "SW"))
+
+    def test_admin_rename_validates_like_a_rename(self):
+        leader, aid, _ = self._team(0)
+        ok, err = self.sys.admin_rename_alliance(aid, new_name="Bad|rName")
+        self.assertFalse(ok)
+        self.assertIn("markup", err)
+        self.assertEqual(self.alliances.get(aid)["name"], "Alliance")
+
+    # --- admin_kick_member ---
+
+    def test_admin_kick_strips_roster_and_pointer(self):
+        leader, aid, members = self._team(1)
+        m = members[0]
+        ok, err = self.sys.admin_kick_member(aid, m)
+        self.assertTrue(ok, err)
+        self.assertIsNone(m.db.player_alliance)
+        self.assertNotIn(m.id, self.alliances.get(aid)["member_ids"])
+
+    def test_admin_kick_leader_refused(self):
+        leader, aid, _ = self._team(1)
+        ok, err = self.sys.admin_kick_member(aid, leader)
+        self.assertFalse(ok)
+        self.assertIn("Cannot kick the leader", err)
+        self.assertEqual(self.alliances.get(aid)["leader_id"], leader.id)
+
+    def test_admin_kick_outsider_refused(self):
+        leader, aid, _ = self._team(0)
+        outsider = self._mk("Out", level=10)
+        ok, err = self.sys.admin_kick_member(aid, outsider)
+        self.assertFalse(ok)
+        self.assertIn("not in that alliance", err)
+
+    # --- admin_transfer_leadership ---
+
+    def test_admin_transfer_installs_new_leader(self):
+        leader, aid, members = self._team(1)
+        m = members[0]
+        ok, err = self.sys.admin_transfer_leadership(aid, m)
+        self.assertTrue(ok, err)
+        self.assertEqual(self.alliances.get(aid)["leader_id"], m.id)
+        self.assertEqual(m.db.alliance_rank, "leader")
+        self.assertEqual(leader.db.alliance_rank, "officer")
+
+    def test_admin_transfer_to_current_leader_refused(self):
+        leader, aid, _ = self._team(0)
+        ok, err = self.sys.admin_transfer_leadership(aid, leader)
+        self.assertFalse(ok)
+        self.assertIn("already the leader", err)
+
+    # --- admin_disband_alliance ---
+
+    def test_admin_disband_routes_through_the_single_teardown(self):
+        leader, aid, members = self._team(1)
+        ok, err = self.sys.admin_disband_alliance(aid)
+        self.assertTrue(ok, err)
+        self.assertIsNone(self.alliances.get(aid))
+        self.assertIsNone(leader.db.player_alliance)
+        self.assertIsNone(members[0].db.player_alliance)
+
+    def test_admin_disband_missing_alliance_rejected(self):
+        ok, err = self.sys.admin_disband_alliance(999)
+        self.assertFalse(ok)
+        self.assertIn("no longer exists", err)
+
+    # --- admin_find_member (read-only lookup) ---
+
+    def test_admin_find_member_case_insensitive(self):
+        leader, aid, members = self._team(1)
+        self.assertIs(self.sys.admin_find_member(aid, "m0"), members[0])
+        self.assertIs(self.sys.admin_find_member(aid, "LEADER"), leader)
+        self.assertIsNone(self.sys.admin_find_member(aid, "Nobody"))
+
+
 if __name__ == "__main__":
     unittest.main()

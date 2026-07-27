@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import logging
 import os
+import threading
 from typing import Any
 
 import yaml
@@ -30,9 +31,20 @@ from world.definitions import (
     TerrainDef,
     TechnologyDef,
 )
+from world.admin.overlay_store import OverlayStore, OverlayStoreError
 from world.schema_validator import SchemaValidator, _AFFINITY_KINDS
 
 logger = logging.getLogger("mygame.data_registry")
+
+#: Single process-wide lock serializing overlay-write + reload sequences
+#: (unified-admin-crud R6.6). ``reload_all`` acquires it, so plain reloads
+#: (e.g. ``@reboot``) already serialize against each other; the admin
+#: ``def set``/``def reset`` flow additionally wraps its whole
+#: overlay-write-then-reload sequence in ``with OVERLAY_RELOAD_LOCK:`` so
+#: concurrent commands queue in arrival order, each executing against the
+#: state left by its predecessor. An RLock so the def-set flow's outer hold
+#: re-enters cleanly when it calls ``reload_all``.
+OVERLAY_RELOAD_LOCK = threading.RLock()
 
 # Required definition files (relative to base_path)
 _REQUIRED_FILES = {
@@ -187,6 +199,21 @@ class DataRegistry:
             logger.error(msg)
             raise DataRegistryError(msg)
 
+        # --- Apply admin definition overrides (unified-admin-crud R6.1) ---
+        # Merge the overlay (data/definitions_overrides.yaml) into each raw
+        # document BEFORE SchemaValidator runs, so merged data goes through
+        # exactly the same schemas and cross_validate as base data — no rule
+        # relaxed (R6.2). Domain names are the _REQUIRED_FILES keys, which
+        # match the overlay's domains (items, buildings, technologies, ...).
+        overlay = OverlayStore(base_path)
+        try:
+            for key in _REQUIRED_FILES:
+                raw[key] = overlay.merge_into(raw[key], key)
+        except OverlayStoreError as exc:
+            msg = f"Definition overlay merge failed: {exc}"
+            logger.error(msg)
+            raise DataRegistryError(msg)
+
         # --- Validate schemas ---
         errors.extend(self._validator.validate_buildings(raw["buildings"]))
         errors.extend(self._validator.validate_items(raw["items"]))
@@ -247,6 +274,11 @@ class DataRegistry:
         Returns:
             Tuple of (success: bool, errors: list[str]).
         """
+        with OVERLAY_RELOAD_LOCK:
+            return self._reload_all_locked()
+
+    def _reload_all_locked(self) -> tuple[bool, list[str]]:
+        """The reload body; caller holds :data:`OVERLAY_RELOAD_LOCK`."""
         temp = DataRegistry()
         try:
             temp.load_all(self._base_path)

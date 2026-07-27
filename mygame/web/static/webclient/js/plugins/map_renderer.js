@@ -573,6 +573,11 @@ let map_renderer_plugin = (function () {
         if (typeof s.discovered_count === "number") {
             parts.push(s.discovered_count + " discovered");
         }
+        if (s.in_combat) {
+            var secs = (typeof s.combat_secs === "number") ? s.combat_secs : 0;
+            parts.push("<span class='mi-combat' style='color:#ff3b30'>"
+                + "⚔ Combat " + secs + "s</span>");
+        }
         // innerHTML (not textContent) so the HP color span renders.
         info.innerHTML = parts.join(" | ");
     }

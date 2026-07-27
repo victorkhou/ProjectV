@@ -35,6 +35,7 @@ from commands.agent_commands import (
     CmdTrain,
     CmdAssign,
     CmdUnassign,
+    CmdAdminAgent,
 )
 from commands.lifecycle_commands import (
     CmdClass,
@@ -42,12 +43,13 @@ from commands.lifecycle_commands import (
     CmdDeploy,
     CmdSelect,
 )
-from commands.alliance_commands import CmdAlliance
+from commands.alliance_commands import CmdAlliance, CmdAdminAlliance
 from commands.admin_commands import (
     CmdReboot, CmdPurgeRooms, CmdTeleport, CmdTransfer, CmdClearFog, CmdMigrate,
     CmdPeace, CmdRestore, CmdAdminStat, CmdObliterate,
-    CmdAdminBuilding, CmdAdminAgent, CmdAdminResource, CmdAdminItem,
-    CmdAdminPlayer, CmdAdminOutpost, CmdAdminAlliance,
+    CmdAdminBuilding, CmdAdminResource, CmdAdminItem, CmdAdminTech,
+    CmdAdminPlayer, CmdAdminOutpost,
+    CmdAdminPowerup, CmdAdminTerrain, CmdAdminPlanet,
 )
 
 
@@ -204,10 +206,14 @@ class CharacterCmdSet(default_cmds.CharacterCmdSet):
         self.add(CmdAdminAgent())
         self.add(CmdAdminResource())
         self.add(CmdAdminItem())
+        self.add(CmdAdminTech())
         self.add(CmdAdminPlayer())
         self.add(CmdAdminStat())
         self.add(CmdAdminOutpost())
         self.add(CmdAdminAlliance())
+        self.add(CmdAdminPowerup())
+        self.add(CmdAdminTerrain())
+        self.add(CmdAdminPlanet())
         # Override Evennia's default who with rank/level display
         self.add(CmdWho())
         # Player lifecycle (spawning/lobby) commands. Harmless when the lobby

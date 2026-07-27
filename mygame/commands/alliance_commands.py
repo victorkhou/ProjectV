@@ -1,5 +1,7 @@
 """
-Alliance commands — the player-facing ``alliance`` verb router.
+Alliance commands — the player-facing ``alliance`` verb router and the
+``@alliance`` staff admin router (:class:`CmdAdminAlliance`, migrated onto
+the unified admin grammar).
 
 One command, many verbs, all routing through the single-writer
 ``AllianceSystem`` (never touching records directly). Two gate layers beyond the
@@ -18,7 +20,7 @@ router's own dispatch:
 
 from __future__ import annotations
 
-from commands.command_router import GameSubcommandRouter
+from commands.command_router import EntityAdminRouter, GameSubcommandRouter
 from world.utils import get_system, format_section, resolve_player
 
 
@@ -516,3 +518,170 @@ class CmdAlliance(GameSubcommandRouter):
         "leaderboard": (sub_leaderboard, "The cross-alliance leaderboard", None),
         "chat": (sub_chat, "Send a message to your alliance channel", None),
     }
+
+
+# ------------------------------------------------------------------ #
+#  CmdAdminAlliance — the @alliance admin router (unified admin grammar)
+# ------------------------------------------------------------------ #
+
+class CmdAdminAlliance(EntityAdminRouter):
+    """Inspect and moderate alliances (staff).
+
+    Usage:
+      @alliance list [filter]
+      @alliance show <alliance>
+      @alliance set <alliance> <field> <value>
+      @alliance destroy <alliance>[, <alliance> ...]
+      @alliance kick <alliance> <player>
+      @alliance transfer <alliance> <player>
+      @alliance rename <alliance> <new name> = <new tag>
+      @alliance def list | def show <perk> | def diff
+
+    Core verbs (shared EntityAdminRouter handlers, driven by the
+    alliance adapter registered under ``adapter_key = "alliance"``):
+      list    — live alliances (tag, name, members, level); optional
+                tag/name filter
+      show    — full staff readout: leader, roster, treasury, perks,
+                pending invites/requests, and the modifiable fields
+      set     — field write (name, tag, open_join) through the
+                AllianceSystem single-writer path
+      destroy — force-disband through the single teardown path
+                (multi-target destroys need explicit confirmation)
+
+    Targets resolve uniformly: '#N' from the last '@alliance list', the
+    alliance tag (e.g. 'IW'), the alliance name, or an unambiguous
+    prefix.
+
+    'spawn' is not available: alliances are founded by players — use
+    the player-facing 'alliance found'. Definition scope is read-only:
+    'def list'/'def show' serve the perks catalog (alliance_perks.yaml);
+    'def set'/'def reset' are not available (the catalog loads outside
+    the overlay merge pipeline).
+
+    Extra staff verbs (mutations via the AllianceSystem single writer):
+      kick     — force-kick a member (the leader must be transferred or
+                 the alliance destroyed instead)
+      transfer — force-transfer leadership
+      rename   — rename/retag in one step (validated like a rename)
+
+    Legacy spellings (deprecated migration aliases):
+      inspect <alliance> — alias of 'show <alliance>'
+      disband <alliance> — alias of 'destroy <alliance>'
+    """
+
+    key = "@alliance"
+    adapter_key = "alliance"
+
+    # -------------------------------------------------------------- #
+    #  Helpers
+    # -------------------------------------------------------------- #
+
+    def _system(self):
+        return self.require_system("alliance_system", "Alliance system")
+
+    def _resolve_alliance(self, token):
+        """Resolve an alliance target token, or msg + return None."""
+        resolution = self.adapter.resolve_instance(self.caller, token)
+        if not resolution.ok:
+            self.caller.msg(resolution.error)
+            return None
+        return resolution.target
+
+    def _resolve_member(self, system, ref, name):
+        """Resolve a roster member of *ref*'s alliance by name, or msg."""
+        member = system.admin_find_member(ref.alliance_id, name)
+        if member is None:
+            self.caller.msg(f"No member '{name}' in that alliance.")
+        return member
+
+    # -------------------------------------------------------------- #
+    #  Extra verbs — mutations via the AllianceSystem admin_* paths
+    # -------------------------------------------------------------- #
+
+    def sub_kick(self, args):
+        """``kick <alliance> <player>``: force-kick through the single
+        writer (the leader is refused — transfer or destroy instead)."""
+        system = self._system()
+        if system is None:
+            return
+        parts = (args or "").split(None, 1)
+        if len(parts) < 2:
+            self.caller.msg(f"Usage: {self.key} kick <alliance> <player>")
+            return
+        ref = self._resolve_alliance(parts[0])
+        if ref is None:
+            return
+        member = self._resolve_member(system, ref, parts[1].strip())
+        if member is None:
+            return
+        ok, error = system.admin_kick_member(ref.alliance_id, member)
+        if not ok:
+            self.caller.msg(error)
+            return
+        note = self._audit(
+            "kick", f"alliance {member.key} from #{ref.alliance_id} "
+                    f"[{ref.key}]"
+        )
+        self.caller.msg(
+            f"Force-kicked {member.key} from [{ref.key}].{note}"
+        )
+
+    def sub_transfer(self, args):
+        """``transfer <alliance> <player>``: force-transfer leadership
+        through the single writer's seat-swap path."""
+        system = self._system()
+        if system is None:
+            return
+        parts = (args or "").split(None, 1)
+        if len(parts) < 2:
+            self.caller.msg(
+                f"Usage: {self.key} transfer <alliance> <player>"
+            )
+            return
+        ref = self._resolve_alliance(parts[0])
+        if ref is None:
+            return
+        member = self._resolve_member(system, ref, parts[1].strip())
+        if member is None:
+            return
+        ok, error = system.admin_transfer_leadership(ref.alliance_id, member)
+        if not ok:
+            self.caller.msg(error)
+            return
+        note = self._audit(
+            "transfer", f"alliance #{ref.alliance_id} -> {member.key}"
+        )
+        self.caller.msg(
+            f"Transferred [{ref.key}] leadership to {member.key}.{note}"
+        )
+
+    def sub_rename(self, args):
+        """``rename <alliance> <new name> = <new tag>``: one validated
+        rename+retag write through the single writer."""
+        system = self._system()
+        if system is None:
+            return
+        usage = f"Usage: {self.key} rename <alliance> <new name> = <new tag>"
+        if "=" not in (args or ""):
+            self.caller.msg(usage)
+            return
+        left, new_tag = (p.strip() for p in args.split("=", 1))
+        parts = left.split(None, 1)
+        if len(parts) < 2:
+            self.caller.msg(usage)
+            return
+        ref = self._resolve_alliance(parts[0])
+        if ref is None:
+            return
+        new_name = parts[1].strip()
+        ok, error = system.admin_rename_alliance(
+            ref.alliance_id, new_name=new_name, new_tag=new_tag
+        )
+        if not ok:
+            self.caller.msg(error)
+            return
+        note = self._audit(
+            "rename", f"alliance #{ref.alliance_id} -> [{new_tag}] "
+                      f"{new_name}"
+        )
+        self.caller.msg(f"Renamed to [{new_tag}] {new_name}.{note}")

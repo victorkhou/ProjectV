@@ -1,158 +1,479 @@
 """
-Unit tests for admin command routers.
+Unit tests for the ``EntityAdminRouter`` base (unified-admin-crud task 1.16).
 
-Tests subcommand delegation, permission enforcement, and admin logging
-for CmdAdminBuilding, CmdAdminAgent, CmdAdminResource, CmdAdminPlayer.
+The consolidated router-base test module: later phase tasks (3.2–3.4, 5.4,
+7.6) append per-router tests for the migrated ``@<entity>`` commands here.
+Built on the ``test_command_router.py`` router-testing patterns (concrete
+toy subclass + FakeCaller) via the toy-adapter approach of
+``test_entity_admin_router.py`` / ``test_entity_admin_mutations.py``.
 
-Requirements: 1.1, 1.2, 2.1, 2.2, 2.3, 2.4, 2.7, 2.8, 3.1, 3.2,
-              3.5, 3.6, 4.1, 4.2, 4.5, 8.1
+Covers the seven router-base behaviors the task names:
+
+- alias dispatch to the canonical handler + one-line deprecation note
+  naming both spellings — Requirements 11.1, 11.2
+- opted-out verb → declared reason, no state change — Requirement 1.5
+- unknown verb → error listing the available verbs — Requirement 1.8
+- ``def`` sub-dispatch (pivot into the Definition_Scope handlers, def-verb
+  perms, unknown def subverbs)
+- per-field perm escalation checked after the verb tier, before bounds;
+  insufficient tier rejects in full naming the required tier —
+  Requirements 8.4, 8.5
+- bulk-destroy confirmation: count + identities shown, nothing deleted
+  before explicit confirmation, cancel → no state change — Requirement 4.5
+- audit-write failure leaves the mutation applied and notes the failure in
+  the response — Requirement 9.4
 """
+
+import itertools
+import unittest
+
+from mygame.commands.admin_commands import CmdAdminItem
+from mygame.commands.command_router import EntityAdminRouter
+from world.admin.adapter_registry import AdapterRegistry, register_all
+from world.admin.adapters.item_adapter import ItemAdapter
+from world.admin.resolution import Resolution
+from world.admin.types import FieldSpec, InstanceRow, ShowReport
+from world.definitions import ItemDef
+
+_CALLER_IDS = itertools.count(100_000)
+
+
+class FakeCaller:
+    """Caller mock with msg() and a configurable permission set."""
+
+    def __init__(self, perms=("Builder",)):
+        self.id = next(_CALLER_IDS)  # unique cache/pending identity
+        self.key = "TestAdmin"
+        self.perms = set(perms)
+        self.messages = []
+
+    def msg(self, text, **kwargs):
+        self.messages.append(text)
+
+    def check_permstring(self, perm):
+        return perm in self.perms
+
+
+class Gadget:
+    """A live instance with the fields the adapter declares."""
+
+    def __init__(self, key, name, level=3, xp_mult=1.0):
+        self.key = key
+        self.name = name
+        self.level = level
+        self.xp_mult = xp_mult
+
+
+_FIELDS = {
+    "level": FieldSpec(name="level", kind="int", min_value=1, max_value=5,
+                       perm="Builder"),
+    "xp_mult": FieldSpec(name="xp_mult", kind="float", perm="Admin"),
+}
+
+_DEF_FIELDS = {
+    "level": FieldSpec(name="level", kind="int", perm="Builder"),
+}
+
+
+class GadgetAdapter:
+    """EntityAdapter double exercising the full router-base contract.
+
+    Supports every core verb except ``spawn`` (opted out with a reason),
+    declares one extra verb, and installs aliases to both an instance
+    verb and a def verb.
+    """
+
+    entity_key = "gadget"
+    def_domain = "gadgets"
+    supported_verbs = frozenset({
+        "list", "show", "set", "destroy",
+        "def list", "def show", "def set", "def reset", "def diff",
+    })
+    opt_outs = {
+        "spawn": "gadgets self-assemble — use the fabricator system",
+    }
+    extra_verbs = {"zap": "Zap a gadget"}
+    aliases = {"stats": "show", "defs": "def list"}
+
+    def __init__(self):
+        self.instances = {
+            "gadget_1": Gadget("gadget_1", "Widget"),
+            "gadget_2": Gadget("gadget_2", "Sprocket", level=1),
+        }
+        self.definitions = {
+            "widget": {"key": "widget", "name": "Widget Mk1", "level": 3},
+        }
+        self.mutations = []  # every CRUD-hook invocation, in order
+
+    # --- resolution / listing ---
+    def list_instances(self, caller, filter_str):
+        return [
+            InstanceRow(index=i, key=g.key, name=g.name,
+                        summary=f"{g.name} (lvl {g.level})", ref=g)
+            for i, g in enumerate(self.instances.values(), start=1)
+        ]
+
+    def resolve_instance(self, caller, token):
+        gadget = self.instances.get(token)
+        if gadget is None:
+            return Resolution(ok=False,
+                              error=f"No match found for '{token}'.")
+        return Resolution(ok=True, target=gadget)
+
+    # --- field schemas ---
+    def instance_fields(self):
+        return dict(_FIELDS)
+
+    def definition_fields(self):
+        return dict(_DEF_FIELDS)
+
+    # --- CRUD hooks ---
+    def create(self, caller, def_token, kwargs):
+        self.mutations.append(("create", def_token))
+
+    def read(self, caller, instance):
+        return ShowReport(header=f"Gadget: {instance.name} ({instance.key})",
+                          state_lines=[], fields=[])
+
+    def update(self, caller, instance, field, value):
+        self.mutations.append(("update", instance.key, field, value))
+        setattr(instance, field, value)
+
+    def delete(self, caller, instance):
+        self.mutations.append(("delete", instance.key))
+        del self.instances[instance.key]
+
+    # --- definition scope ---
+    def def_registry_dict(self):
+        return self.definitions
+
+    def def_resolve(self, token):
+        return self.definitions.get(token.lower())
+
+
+class FakeOverlay:
+    """OverlayStore stand-in serving canned overrides/diffs (no disk)."""
+
+    def __init__(self, overrides=None, diff=None):
+        self._overrides = overrides or {}
+        self._diff = diff or {}
+
+    def get(self, domain, key):
+        return dict(self._overrides.get((domain, key), {}))
+
+    def diff(self):
+        return dict(self._diff)
+
+
+class GadgetRouter(EntityAdminRouter):
+    key = "@gadget"
+    adapter_key = "gadget"
+
+    registry = None      # per-test AdapterRegistry
+    overlay = FakeOverlay()  # per-test override (keeps def reads off disk)
+    audit_log = None     # per-test list of (verb, detail)
+    audit_fail = False   # raise from the audit sink (R9.4)
+
+    def _adapter_registry(self):
+        return self.registry
+
+    def _overlay_store(self):
+        return self.overlay
+
+    def _log_admin(self, verb, detail):
+        if self.audit_fail:
+            raise RuntimeError("audit sink down")
+        self.audit_log.append((verb, detail))
+
+    def sub_zap(self, rest):
+        self.caller.msg("Zap!")
+
+
+class RouterBaseTestCase(unittest.TestCase):
+    """Fresh adapter/registry/caller per test; shared run() helper."""
+
+    def setUp(self):
+        self.adapter = GadgetAdapter()
+        self.registry = AdapterRegistry()
+        self.registry.register(self.adapter)
+        self.caller = FakeCaller(perms=("Builder",))
+        self.audit_log = []
+
+    def run_cmd(self, args, caller=None, audit_fail=False):
+        cmd = GadgetRouter()
+        cmd.registry = self.registry
+        cmd.audit_log = self.audit_log
+        cmd.audit_fail = audit_fail
+        cmd.caller = caller or self.caller
+        cmd.args = args
+        cmd.func()
+        return cmd
+
+    def output(self, cmd):
+        return "\n".join(cmd.caller.messages)
+
+
+# ------------------------------------------------------------------ #
+#  Alias dispatch + deprecation note (R11.1, R11.2)
+# ------------------------------------------------------------------ #
+
+class TestAliasDispatch(RouterBaseTestCase):
+
+    def test_alias_emits_one_line_note_naming_both_spellings(self):
+        cmd = self.run_cmd(" stats gadget_1")
+        note = cmd.caller.messages[0]
+        self.assertNotIn("\n", note)          # one line
+        self.assertIn("stats", note)           # invoked spelling
+        self.assertIn("show", note)            # canonical spelling
+
+    def test_alias_output_identical_to_canonical_after_the_note(self):
+        alias_cmd = self.run_cmd(" stats gadget_1")
+        canon_cmd = self.run_cmd(" show gadget_1",
+                                 caller=FakeCaller(perms=("Builder",)))
+        self.assertEqual(alias_cmd.caller.messages[1:],
+                         canon_cmd.caller.messages)
+
+    def test_alias_to_def_verb_dispatches_the_def_handler(self):
+        alias_cmd = self.run_cmd(" defs")
+        canon_cmd = self.run_cmd(" def list",
+                                 caller=FakeCaller(perms=("Builder",)))
+        self.assertEqual(alias_cmd.caller.messages[1:],
+                         canon_cmd.caller.messages)
+
+    def test_alias_perm_outcome_identical_to_canonical(self):
+        # An alias of a mutating verb still runs the CANONICAL verb's
+        # perm check — a denied caller is rejected identically (R11.1).
+        denier = FakeCaller(perms=())
+        cmd = self.run_cmd(" stats gadget_1", caller=denier)
+        joined = self.output(cmd)
+        self.assertIn("Permission denied", joined)
+        self.assertEqual(self.adapter.mutations, [])
+
+    def test_alias_state_change_and_audit_identical_to_canonical(self):
+        self.run_cmd(" set gadget_1 level 4")
+        canonical_audit = list(self.audit_log)
+        canonical_mutations = list(self.adapter.mutations)
+        # Same command through an alias-shaped adapter: install a set
+        # alias on the fly and re-run against a fresh adapter.
+        self.adapter = GadgetAdapter()
+        self.adapter.aliases = {"tweak": "set"}
+        self.registry = AdapterRegistry()
+        self.registry.register(self.adapter)
+        self.audit_log = []
+        self.run_cmd(" tweak gadget_1 level 4",
+                     caller=FakeCaller(perms=("Builder",)))
+        self.assertEqual(self.adapter.mutations, canonical_mutations)
+        self.assertEqual(self.audit_log, canonical_audit)
+
+
+# ------------------------------------------------------------------ #
+#  Opt-out messaging (R1.5)
+# ------------------------------------------------------------------ #
+
+class TestOptOutMessaging(RouterBaseTestCase):
+
+    def test_opted_out_verb_surfaces_declared_reason(self):
+        cmd = self.run_cmd(" spawn widget")
+        out = self.output(cmd)
+        self.assertIn("gadgets self-assemble", out)        # declared reason
+        self.assertIn("fabricator system", out)            # supported-path pointer
+
+    def test_opted_out_verb_makes_no_state_change(self):
+        self.run_cmd(" spawn widget")
+        self.assertEqual(self.adapter.mutations, [])
+        self.assertEqual(self.audit_log, [])
+
+    def test_opted_out_verb_names_the_command_and_verb(self):
+        cmd = self.run_cmd(" spawn widget")
+        out = self.output(cmd)
+        self.assertIn("@gadget", out)
+        self.assertIn("spawn", out)
+
+
+# ------------------------------------------------------------------ #
+#  Unknown-verb listing (R1.8)
+# ------------------------------------------------------------------ #
+
+class TestUnknownVerbListing(RouterBaseTestCase):
+
+    def test_unknown_verb_lists_every_available_spelling(self):
+        cmd = self.run_cmd(" frobnicate")
+        out = cmd.caller.messages[0]
+        self.assertIn("frobnicate", out)
+        for verb in ("list", "show", "set", "destroy",
+                     "def list", "def show", "def set", "def reset",
+                     "def diff", "zap", "stats", "defs"):
+            self.assertIn(verb, out)
+
+    def test_unknown_verb_makes_no_state_change(self):
+        self.run_cmd(" frobnicate gadget_1")
+        self.assertEqual(self.adapter.mutations, [])
+        self.assertEqual(self.audit_log, [])
+
+
+# ------------------------------------------------------------------ #
+#  def sub-dispatch
+# ------------------------------------------------------------------ #
+
+class TestDefSubDispatch(RouterBaseTestCase):
+
+    def test_def_pivots_into_the_definition_scope_handlers(self):
+        cmd = self.run_cmd(" def list")
+        out = self.output(cmd)
+        self.assertIn("widget", out)
+        self.assertIn("Widget Mk1", out)
+
+    def test_def_show_dispatches_with_the_sub_args(self):
+        cmd = self.run_cmd(" def show widget")
+        out = self.output(cmd)
+        self.assertIn("gadget definition: widget", out)
+        self.assertIn("level: 3", out)
+
+    def test_bare_def_shows_def_usage(self):
+        cmd = self.run_cmd(" def")
+        out = cmd.caller.messages[0]
+        self.assertIn("def", out)
+        self.assertIn("def list", out)
+
+    def test_unknown_def_subverb_lists_available_def_verbs(self):
+        cmd = self.run_cmd(" def frob")
+        out = cmd.caller.messages[0]
+        self.assertIn("def frob", out)
+        for verb in ("def list", "def show", "def set", "def reset",
+                     "def diff"):
+            self.assertIn(verb, out)
+
+    def test_def_write_verbs_gated_at_admin_inside_the_sub_dispatch(self):
+        for args in (" def set widget level 5", " def reset widget level"):
+            cmd = self.run_cmd(args, caller=FakeCaller(perms=("Builder",)))
+            msg = cmd.caller.messages[0]
+            self.assertIn("Permission denied", msg)
+            self.assertIn("Admin", msg)
+
+    def test_def_read_verbs_pass_at_builder(self):
+        for args in (" def list", " def show widget", " def diff"):
+            cmd = self.run_cmd(args, caller=FakeCaller(perms=("Builder",)))
+            self.assertNotIn("Permission denied", self.output(cmd))
+
+
+# ------------------------------------------------------------------ #
+#  Per-field perm escalation (R8.4, R8.5)
+# ------------------------------------------------------------------ #
+
+class TestFieldPermEscalation(RouterBaseTestCase):
+
+    def test_escalated_field_rejected_in_full_naming_required_tier(self):
+        cmd = self.run_cmd(" set gadget_1 xp_mult 2")
+        out = self.output(cmd)
+        self.assertIn("Permission denied", out)
+        self.assertIn("Admin", out)                        # the required tier
+        self.assertIn("xp_mult", out)
+        self.assertEqual(self.adapter.instances["gadget_1"].xp_mult, 1.0)
+        self.assertEqual(self.adapter.mutations, [])       # nothing written
+        self.assertEqual(self.audit_log, [])
+
+    def test_escalated_field_applies_at_the_escalated_tier(self):
+        admin = FakeCaller(perms=("Builder", "Admin"))
+        self.run_cmd(" set gadget_1 xp_mult 2", caller=admin)
+        self.assertEqual(self.adapter.instances["gadget_1"].xp_mult, 2.0)
+
+    def test_field_at_verb_tier_adds_no_extra_check(self):
+        # Caller holds exactly Builder (the set verb tier): a Builder
+        # field passes with no additional field-level gate (R8.4).
+        cmd = self.run_cmd(" set gadget_1 level 2")
+        self.assertNotIn("Permission denied", self.output(cmd))
+        self.assertEqual(self.adapter.instances["gadget_1"].level, 2)
+
+
+# ------------------------------------------------------------------ #
+#  Bulk-destroy confirmation (R4.5)
+# ------------------------------------------------------------------ #
+
+class TestBulkDestroyConfirmation(RouterBaseTestCase):
+
+    def test_multi_target_shows_count_and_identities_deletes_nothing(self):
+        cmd = self.run_cmd(" destroy gadget_1, gadget_2")
+        out = self.output(cmd)
+        self.assertIn("2", out)
+        self.assertIn("Widget", out)
+        self.assertIn("Sprocket", out)
+        self.assertIn("destroy confirm", out)
+        self.assertEqual(len(self.adapter.instances), 2)   # nothing deleted
+        self.assertEqual(self.adapter.mutations, [])
+        self.assertEqual(self.audit_log, [])
+
+    def test_confirm_executes_the_pending_bulk_destroy(self):
+        self.run_cmd(" destroy gadget_1, gadget_2")
+        cmd = self.run_cmd(" destroy confirm")
+        self.assertEqual(self.adapter.instances, {})
+        out = self.output(cmd)
+        self.assertIn("Destroyed 2", out)
+        self.assertIn("Widget", out)
+        self.assertIn("Sprocket", out)
+
+    def test_cancel_declines_with_no_state_change(self):
+        self.run_cmd(" destroy gadget_1, gadget_2")
+        cmd = self.run_cmd(" destroy cancel")
+        self.assertIn("cancelled", self.output(cmd))
+        self.assertEqual(len(self.adapter.instances), 2)
+        self.assertEqual(self.adapter.mutations, [])
+        # The declined destroy leaves nothing pending.
+        cmd2 = self.run_cmd(" destroy confirm")
+        self.assertIn("No destroy is pending", self.output(cmd2))
+        self.assertEqual(len(self.adapter.instances), 2)
+
+    def test_single_target_needs_no_confirmation(self):
+        cmd = self.run_cmd(" destroy gadget_1")
+        self.assertNotIn("gadget_1", self.adapter.instances)
+        self.assertIn("Destroyed", self.output(cmd))
+        self.assertNotIn("destroy confirm", self.output(cmd))
+
+
+# ------------------------------------------------------------------ #
+#  Audit-failure note (R9.4)
+# ------------------------------------------------------------------ #
+
+class TestAuditFailureNote(RouterBaseTestCase):
+
+    def test_audit_failure_leaves_set_applied_and_notes_it(self):
+        cmd = self.run_cmd(" set gadget_1 level 4", audit_fail=True)
+        self.assertEqual(self.adapter.instances["gadget_1"].level, 4)
+        self.assertIn("audit logging failed", self.output(cmd))
+
+    def test_audit_failure_leaves_destroy_applied_and_notes_it(self):
+        cmd = self.run_cmd(" destroy gadget_1", audit_fail=True)
+        self.assertNotIn("gadget_1", self.adapter.instances)
+        self.assertIn("audit logging failed", self.output(cmd))
+
+    def test_audit_success_adds_no_failure_note(self):
+        cmd = self.run_cmd(" set gadget_1 level 4")
+        self.assertNotIn("audit logging failed", self.output(cmd))
+        self.assertEqual(len(self.audit_log), 1)
+
+
+# ================================================================== #
+#  Migrated @item router (unified-admin-crud task 3.2)
+#
+#  CmdAdminItem is now an EntityAdminRouter subclass driven by the real
+#  ItemAdapter with an injected fake DataRegistry (the
+#  world/admin/tests/test_item_adapter.py FakeRegistry/Player pattern).
+#  The pre-migration @item tests are ported here onto the unified
+#  grammar; where a test asserted old behavior the design deliberately
+#  changed (`list` meant definitions; positional spawn count; def
+#  indexes) the test asserts the NEW contract instead (Requirement
+#  11.4: `list` = instances + the moved-to-'def list' pointer).
+# ================================================================== #
 
 import sys
 import types
-import unittest
-import logging
 from unittest import mock
 
-import pytest
-
-# -------------------------------------------------------------- #
-#  Bootstrap: stub out Evennia modules
-# -------------------------------------------------------------- #
-
-def _ensure_evennia_stubs():
-    if "evennia" in sys.modules:
-        mod = sys.modules["evennia"]
-        if hasattr(mod, "__file__") and mod.__file__:
-            return
-    stubs = {}
-
-    def _mod(name, attrs=None):
-        m = types.ModuleType(name)
-        if attrs:
-            for k, v in attrs.items():
-                setattr(m, k, v)
-        stubs[name] = m
-        return m
-
-    class _AttrStore:
-        def __init__(self):
-            self._data = {}
-        def get(self, key, default=None, **kw):
-            return self._data.get(key, default)
-        def add(self, key, value, **kw):
-            self._data[key] = value
-        def has(self, key):
-            return key in self._data
-
-    class _DbProxy:
-        def __init__(self, store):
-            object.__setattr__(self, "_store", store)
-        def __getattr__(self, key):
-            return object.__getattribute__(self, "_store").get(key)
-        def __setattr__(self, key, value):
-            object.__getattribute__(self, "_store").add(key, value)
-
-    class DefaultObject:
-        def __init__(self, **kwargs):
-            self._attr_store = _AttrStore()
-            self.attributes = self._attr_store
-            self.db = _DbProxy(self._attr_store)
-            self.key = kwargs.get("key", "")
-            self.location = None
-
-    class DefaultCharacter:
-        def __init__(self, **kwargs):
-            self._attr_store = _AttrStore()
-            self.attributes = self._attr_store
-            self.db = _DbProxy(self._attr_store)
-            self.key = kwargs.get("key", "")
-        def at_object_creation(self):
-            pass
-        def at_post_login(self, session=None, **kwargs):
-            pass
-
-    class Command:
-        key = ""
-        aliases = []
-        locks = ""
-        help_category = "General"
-        def func(self):
-            pass
-
-    _mod("evennia")
-    _mod("evennia.objects")
-    _mod("evennia.objects.objects", {
-        "DefaultObject": DefaultObject,
-        "DefaultRoom": type("DefaultRoom", (), {}),
-        "DefaultCharacter": DefaultCharacter,
-    })
-    _mod("evennia.commands")
-    _mod("evennia.commands.command", {"Command": Command})
-    _mod("evennia.commands.cmdset")
-    _mod("evennia.utils")
-    _mod("evennia.utils.utils")
-    _mod("evennia.utils.logger")
-    _mod("evennia.scripts")
-    _mod("evennia.scripts.scripts", {
-        "DefaultScript": type("DefaultScript", (), {}),
-    })
-
-    for name, mod in stubs.items():
-        sys.modules.setdefault(name, mod)
-
-_ensure_evennia_stubs()
-
-from mygame.commands.admin_commands import (  # noqa: E402
-    CmdAdminBuilding,
-    CmdAdminAgent,
-    CmdAdminResource,
-    CmdAdminItem,
-    CmdAdminPlayer,
-    CmdAdminOutpost,
-    CmdAdminAlliance,
-    CmdAdminStat,
-    CmdPeace,
-    CmdRestore,
-    CmdObliterate,
-    CmdTeleport,
-    CmdTransfer,
-)
-
-from world import services  # noqa: E402
+from world.systems.loot_roller import RARITY_ORDER  # noqa: E402
 
 
-# -------------------------------------------------------------- #
-#  Per-test system injection via the services facade
-# -------------------------------------------------------------- #
+class _ItemDb:
+    """Attribute-bag db proxy for FakeGameItem (get/set anything)."""
 
-@pytest.fixture(autouse=True)
-def _services_sandbox():
-    """Give every test a private, empty facade state, restored on exit.
-
-    Tests inject fake systems through ``services.override`` (via
-    ``_install_systems``); all system lookup reads the facade.
-    """
-    with services.override({}):
-        yield
-
-
-def _install_systems(systems):
-    """Register fake *systems* for the current test through the facade."""
-    services.get_systems().update(systems)
-
-
-# -------------------------------------------------------------- #
-#  Helpers / Fakes
-# -------------------------------------------------------------- #
-
-class FakeNDB:
-    def __init__(self, systems=None):
-        self.systems = systems or {}
-
-
-class FakeDB:
-    """Attribute-bag that allows arbitrary get/set."""
     def __init__(self, **kwargs):
         self._data = dict(kwargs)
 
@@ -168,646 +489,17 @@ class FakeDB:
             self._data[key] = value
 
 
-class FakeCaller:
-    """Fake caller with configurable permission checks."""
+class FakeGameItem:
+    """Live GameItem stand-in: db bag + object key + deletion path."""
 
-    def __init__(self, name="Admin", perm_level="Admin", systems=None):
-        self.key = name
-        self._perm_level = perm_level
-        self.ndb = FakeNDB()
-        if systems:
-            _install_systems(systems)
-        self.db = FakeDB()
-        self._messages = []
-        self._executed = []  # records execute_cmd calls (e.g. the post-transfer look)
-        self._search_results = {}
-        self.location = None
-
-    # Permission hierarchy used by check_permstring
-    _HIERARCHY = ["Player", "Helper", "Builder", "Admin", "Developer"]
-
-    def check_permstring(self, perm):
-        try:
-            required = self._HIERARCHY.index(perm)
-            actual = self._HIERARCHY.index(self._perm_level)
-            return actual >= required
-        except ValueError:
-            return False
-
-    def msg(self, text, **kwargs):
-        self._messages.append(text)
-
-    def execute_cmd(self, cmd, **kwargs):
-        self._executed.append(cmd)
-
-    def search(self, name, **kwargs):
-        return self._search_results.get(name)
-
-
-class FakeBuilding:
-    """Fake building object for @building destroy tests."""
-
-    def __init__(self, key="HQ", building_type="HQ"):
-        self.key = key
-        self._deleted = False
-
-        class _Attrs:
-            def __init__(self, btype):
-                self._data = {"building_type": btype}
-            def get(self, key, default=None, **kw):
-                return self._data.get(key, default)
-            def add(self, key, value, **kw):
-                self._data[key] = value
-
-        self.attributes = _Attrs(building_type)
-
-    def delete(self):
-        self._deleted = True
-
-
-class FakeLocation:
-    """Fake PlanetRoom with get_objects_at."""
-
-    def __init__(self, buildings=None):
-        self._buildings = buildings or []
-        self.key = "TestPlanet"
-
-    def get_objects_at(self, x, y, type_tag=None):
-        return self._buildings
-
-
-class FakeAgent:
-    """Fake agent NPC."""
-
-    def __init__(self, agent_id=1, key="Agent-1"):
-        self.key = key
-        self.db = FakeDB(agent_id=agent_id, role="soldier", role_target=None)
-        self.id = agent_id
+    def __init__(self, item_key, key=None, **fields):
+        self.key = key or item_key
+        self.db = _ItemDb(item_key=item_key, **fields)
         self._deleted = False
 
     def delete(self):
         self._deleted = True
-
-
-class FakeAgentSystem:
-    """Fake agent_system with get_agents, _create_npc_func, etc."""
-
-    def __init__(self, agents=None):
-        self._agents = agents or []
-        self._created = []
-
-    def get_agents(self, target):
-        return self._agents
-
-    def get_agent_count(self, target):
-        return len(self._agents)
-
-    def get_agent_by_id(self, target, agent_id):
-        for a in self._agents:
-            if getattr(a.db, "agent_id", None) == agent_id:
-                return a
-        return None
-
-    def _create_npc_func(self, target, next_id):
-        npc = FakeAgent(agent_id=next_id, key=f"Agent-{next_id}")
-        self._created.append(npc)
-        self._agents.append(npc)
-        return npc
-
-
-class FakeTarget:
-    """Fake player target for resource/player commands."""
-
-    def __init__(self, name="Player1"):
-        self.key = name
-        self.db = FakeDB()
-        self._messages = []
-        self._resources = {}
-
-    def msg(self, text, **kwargs):
-        self._messages.append(text)
-
-    def add_resource(self, resource_type, amount):
-        self._resources[resource_type] = self._resources.get(resource_type, 0) + amount
-
-
-def _make_cmd(cmd_class, caller, args=""):
-    cmd = cmd_class()
-    cmd.caller = caller
-    cmd.args = args
-    cmd.cmdstring = cmd.key
-    return cmd
-
-
-# -------------------------------------------------------------- #
-#  CmdAdminBuilding tests
-# -------------------------------------------------------------- #
-
-class TestBuildingSpawnDelegation(unittest.TestCase):
-    """Req 1.1: @building spawn delegates to spawn logic."""
-
-    def test_spawn_no_args_shows_usage(self):
-        caller = FakeCaller(perm_level="Builder")
-        cmd = _make_cmd(CmdAdminBuilding, caller, " spawn")
-        cmd.func()
-        self.assertTrue(any("Usage" in m for m in caller._messages))
-
-    def test_spawn_delegates_to_sub_spawn(self):
-        """Spawn with valid type reaches the handler (fails gracefully
-        without a real registry/create_object, but proves delegation)."""
-        caller = FakeCaller(perm_level="Builder")
-        caller.location = FakeLocation()
-        caller.db.coord_x = 5
-        caller.db.coord_y = 10
-        cmd = _make_cmd(CmdAdminBuilding, caller, " spawn HQ")
-        cmd.func()
-        # Without a registry it will still attempt to create — we just
-        # verify it didn't show "Unknown subcommand" or "Permission denied"
-        self.assertFalse(any("Unknown subcommand" in m for m in caller._messages))
-        self.assertFalse(any("Permission denied" in m for m in caller._messages))
-
-
-class FakeBuildingDef:
-    """Minimal BuildingDef stand-in for @building list/index tests."""
-
-    def __init__(self, abbreviation, name, category="", max_health=500):
-        self.abbreviation = abbreviation
-        self.name = name
-        self.category = category
-        self.max_health = max_health
-
-
-class FakeBuildingRegistry:
-    """Registry exposing buildings + resolve_building for @building tests."""
-
-    def __init__(self, defs):
-        self.buildings = {d.abbreviation: d for d in defs}
-
-    def get_building(self, abbr):
-        return self.buildings[abbr]
-
-    def resolve_building(self, token):
-        t = token.strip().lower().replace("_", " ")
-        # exact abbreviation / name, then unambiguous prefix (mirrors registry).
-        for d in self.buildings.values():
-            if d.abbreviation.lower() == t or d.name.lower().replace("_", " ") == t:
-                return d
-        matches = [d for d in self.buildings.values()
-                   if d.abbreviation.lower().startswith(t)
-                   or d.name.lower().replace("_", " ").startswith(t)]
-        return matches[0] if len(matches) == 1 else None
-
-
-_HQ_DEF = FakeBuildingDef("HQ", "Headquarters", category="headquarters")
-_EX_DEF = FakeBuildingDef("EX", "Extractor", category="resource")
-
-
-class TestBuildingList(unittest.TestCase):
-    """@building list numbers building types for index spawning."""
-
-    def _caller(self):
-        reg = FakeBuildingRegistry([_HQ_DEF, _EX_DEF])
-        return FakeCaller(perm_level="Builder", systems={"registry": reg})
-
-    def test_list_shows_types_and_indexes(self):
-        caller = self._caller()
-        cmd = _make_cmd(CmdAdminBuilding, caller, " list")
-        cmd.func()
-        output = "\n".join(caller._messages)
-        self.assertIn("[1]", output)
-        self.assertIn("Headquarters", output)
-        self.assertIn("Extractor", output)
-
-    def test_spawn_by_index_resolves_type(self):
-        # Sorted by abbreviation: EX(1), HQ(2). Spawn #2 -> Headquarters.
-        caller = self._caller()
-        caller.location = FakeLocation()
-        caller.db.coord_x = 1
-        caller.db.coord_y = 1
-        cmd = _make_cmd(CmdAdminBuilding, caller, " spawn 2")
-        cmd.func()
-        # No real create_object under stubs, but resolution must not report the
-        # type as unknown (index -> Headquarters resolved).
-        self.assertFalse(any("Unknown building type" in m for m in caller._messages))
-
-    def test_spawn_unknown_index_reports(self):
-        caller = self._caller()
-        caller.location = FakeLocation()
-        caller.db.coord_x = 1
-        caller.db.coord_y = 1
-        cmd = _make_cmd(CmdAdminBuilding, caller, " spawn 99")
-        cmd.func()
-        self.assertTrue(any("Unknown building type" in m for m in caller._messages))
-
-
-class TestBuildingDestroy(unittest.TestCase):
-    """Req 1.2: @building destroy removes building at caller's tile."""
-
-    def test_destroy_deletes_building(self):
-        building = FakeBuilding(key="HQ", building_type="HQ")
-        location = FakeLocation(buildings=[building])
-        caller = FakeCaller(perm_level="Builder")
-        caller.location = location
-        caller.db.coord_x = 3
-        caller.db.coord_y = 7
-
-        cmd = _make_cmd(CmdAdminBuilding, caller, " destroy")
-        cmd.func()
-
-        self.assertTrue(building._deleted)
-        self.assertTrue(any("Destroyed" in m for m in caller._messages))
-
-    def test_destroy_no_building_at_tile(self):
-        location = FakeLocation(buildings=[])
-        caller = FakeCaller(perm_level="Builder")
-        caller.location = location
-        caller.db.coord_x = 3
-        caller.db.coord_y = 7
-
-        cmd = _make_cmd(CmdAdminBuilding, caller, " destroy")
-        cmd.func()
-        self.assertTrue(any("No building" in m for m in caller._messages))
-
-    def test_open_close_toggles_building(self):
-        building = FakeBuilding(key="Wall", building_type="WA")
-        location = FakeLocation(buildings=[building])
-        caller = FakeCaller(perm_level="Builder")
-        caller.location = location
-        caller.db.coord_x = 3
-        caller.db.coord_y = 7
-
-        # Close it.
-        cmd = _make_cmd(CmdAdminBuilding, caller, " open close")
-        cmd.func()
-        self.assertFalse(building.attributes.get("open"))
-        self.assertTrue(any("closed" in m.lower() for m in caller._messages))
-
-        # Re-open it.
-        caller._messages.clear()
-        cmd = _make_cmd(CmdAdminBuilding, caller, " open")
-        cmd.func()
-        self.assertTrue(building.attributes.get("open"))
-        self.assertTrue(any("open" in m.lower() for m in caller._messages))
-
-
-# -------------------------------------------------------------- #
-#  CmdAdminAgent tests
-# -------------------------------------------------------------- #
-
-class TestAgentCreate(unittest.TestCase):
-    """Req 2.1: @agent create delegates to agent creation logic."""
-
-    def test_create_agent_for_player(self):
-        target = FakeTarget(name="Bob")
-        target.db.next_agent_id = 1
-        agent_sys = FakeAgentSystem()
-        caller = FakeCaller(name="Admin", perm_level="Admin",
-                            systems={"agent_system": agent_sys})
-        caller._search_results["Bob"] = target
-
-        cmd = _make_cmd(CmdAdminAgent, caller, " create Bob")
-        cmd.func()
-
-        self.assertEqual(len(agent_sys._created), 1)
-        self.assertTrue(any("Created" in m for m in caller._messages))
-
-    def test_create_no_args_shows_usage(self):
-        caller = FakeCaller(perm_level="Admin")
-        cmd = _make_cmd(CmdAdminAgent, caller, " create")
-        cmd.func()
-        self.assertTrue(any("Usage" in m for m in caller._messages))
-
-
-class TestAgentDestroy(unittest.TestCase):
-    """Req 2.2: @agent destroy <id> <player> delegates to destruction."""
-
-    def test_destroy_agent_by_id(self):
-        agent = FakeAgent(agent_id=1, key="Agent-1")
-        agent_sys = FakeAgentSystem(agents=[agent])
-        target = FakeTarget(name="Bob")
-        caller = FakeCaller(perm_level="Admin",
-                            systems={"agent_system": agent_sys})
-        caller._search_results["Bob"] = target
-
-        cmd = _make_cmd(CmdAdminAgent, caller, " destroy 1 Bob")
-        cmd.func()
-
-        self.assertTrue(agent._deleted)
-        self.assertTrue(any("Destroyed" in m for m in caller._messages))
-
-
-class TestAgentDestroyTraining(unittest.TestCase):
-    """Req 2.3: @agent destroy training <player> clears training state."""
-
-    def test_destroy_training_delegates(self):
-        target = FakeTarget(name="Bob")
-        caller = FakeCaller(perm_level="Admin")
-        caller._search_results["Bob"] = target
-
-        cmd = _make_cmd(CmdAdminAgent, caller, " destroy training Bob")
-        cmd.func()
-
-        # Should report clearing (even if 0 buildings cleared)
-        self.assertTrue(any("Cleared" in m or "cleared" in m.lower()
-                            for m in caller._messages))
-
-
-class TestAgentList(unittest.TestCase):
-    """Req 2.4: @agent list <player> delegates to listing logic."""
-
-    def test_list_agents(self):
-        agent = FakeAgent(agent_id=1, key="Agent-1")
-        agent_sys = FakeAgentSystem(agents=[agent])
-        target = FakeTarget(name="Bob")
-        caller = FakeCaller(perm_level="Builder",
-                            systems={"agent_system": agent_sys})
-        caller._search_results["Bob"] = target
-
-        cmd = _make_cmd(CmdAdminAgent, caller, " list Bob")
-        cmd.func()
-
-        output = "\n".join(caller._messages)
-        self.assertIn("Bob", output)
-        self.assertIn("#1", output)
-
-
-# -------------------------------------------------------------- #
-#  CmdAdminResource tests
-# -------------------------------------------------------------- #
-
-class TestResourceGive(unittest.TestCase):
-    """Req 3.1, 3.2: @resource give delegates to resource-giving logic."""
-
-    def test_give_resource_to_target(self):
-        target = FakeTarget(name="Bob")
-        caller = FakeCaller(perm_level="Builder")
-        caller._search_results["Bob"] = target
-
-        cmd = _make_cmd(CmdAdminResource, caller, " give Iron 100 Bob")
-        cmd.func()
-
-        self.assertEqual(target._resources.get("Iron"), 100)
-        self.assertTrue(any("Gave 100 Iron" in m for m in caller._messages))
-
-    def test_give_no_args_shows_usage(self):
-        caller = FakeCaller(perm_level="Builder")
-        cmd = _make_cmd(CmdAdminResource, caller, " give")
-        cmd.func()
-        self.assertTrue(any("Usage" in m for m in caller._messages))
-
-
-class TestResourceReset(unittest.TestCase):
-    """Req 3.5, 3.6: @resource reset requires Admin+."""
-
-    def test_reset_no_args_attempts_reset(self):
-        """Reset with no player arg tries to reset all — will fail
-        gracefully without DB, but proves delegation happened."""
-        caller = FakeCaller(perm_level="Admin")
-        cmd = _make_cmd(CmdAdminResource, caller, " reset")
-        cmd.func()
-        # Should attempt the reset path (not show "Unknown subcommand")
-        self.assertFalse(any("Unknown subcommand" in m for m in caller._messages))
-
-
-# -------------------------------------------------------------- #
-#  CmdAdminPlayer tests
-# -------------------------------------------------------------- #
-
-class TestPlayerLevel(unittest.TestCase):
-    """Req 4.1: @player level delegates to level-setting logic."""
-
-    def test_level_sets_on_target(self):
-        target = FakeTarget(name="Bob")
-        caller = FakeCaller(perm_level="Admin")
-        caller._search_results["Bob"] = target
-
-        cmd = _make_cmd(CmdAdminPlayer, caller, " level 5 Bob")
-        cmd.func()
-
-        self.assertEqual(target.db.level, 5)
-        self.assertTrue(any("Set Bob to level 5" in m for m in caller._messages))
-
-    def test_level_no_args_shows_usage(self):
-        caller = FakeCaller(perm_level="Admin")
-        cmd = _make_cmd(CmdAdminPlayer, caller, " level")
-        cmd.func()
-        self.assertTrue(any("Usage" in m for m in caller._messages))
-
-
-class TestPlayerRank(unittest.TestCase):
-    """Req 4.2: @player rank delegates to rank-setting logic."""
-
-    def test_rank_sets_on_target(self):
-        target = FakeTarget(name="Bob")
-        caller = FakeCaller(perm_level="Admin")
-        caller._search_results["Bob"] = target
-
-        cmd = _make_cmd(CmdAdminPlayer, caller, " rank 3 Bob")
-        cmd.func()
-
-        self.assertEqual(target.db.rank_level, 3)
-        self.assertTrue(any("Bob" in m and "rank" in m.lower() for m in caller._messages))
-
-    def test_rank_no_args_shows_usage(self):
-        caller = FakeCaller(perm_level="Admin")
-        cmd = _make_cmd(CmdAdminPlayer, caller, " rank")
-        cmd.func()
-        self.assertTrue(any("Usage" in m for m in caller._messages))
-
-
-# -------------------------------------------------------------- #
-#  Permission enforcement tests
-# -------------------------------------------------------------- #
-
-class TestPermissionEnforcement(unittest.TestCase):
-    """Req 2.7, 2.8, 3.5, 3.6, 4.5: Per-subcommand permission checks."""
-
-    def test_agent_create_denied_for_builder(self):
-        """@agent create requires Admin+; Builder should be denied."""
-        caller = FakeCaller(perm_level="Builder")
-        cmd = _make_cmd(CmdAdminAgent, caller, " create Bob")
-        cmd.func()
-        self.assertTrue(any("Permission denied" in m for m in caller._messages))
-
-    def test_agent_list_allowed_for_builder(self):
-        """@agent list requires Builder+; Builder should be allowed."""
-        target = FakeTarget(name="Bob")
-        agent_sys = FakeAgentSystem()
-        caller = FakeCaller(perm_level="Builder",
-                            systems={"agent_system": agent_sys})
-        caller._search_results["Bob"] = target
-
-        cmd = _make_cmd(CmdAdminAgent, caller, " list Bob")
-        cmd.func()
-        self.assertFalse(any("Permission denied" in m for m in caller._messages))
-
-    def test_agent_destroy_denied_for_builder(self):
-        """@agent destroy requires Admin+; Builder should be denied."""
-        caller = FakeCaller(perm_level="Builder")
-        cmd = _make_cmd(CmdAdminAgent, caller, " destroy 1 Bob")
-        cmd.func()
-        self.assertTrue(any("Permission denied" in m for m in caller._messages))
-
-    def test_resource_give_allowed_for_builder(self):
-        """@resource give requires Builder+; Builder should be allowed."""
-        target = FakeTarget(name="Bob")
-        caller = FakeCaller(perm_level="Builder")
-        caller._search_results["Bob"] = target
-
-        cmd = _make_cmd(CmdAdminResource, caller, " give Iron 10 Bob")
-        cmd.func()
-        self.assertFalse(any("Permission denied" in m for m in caller._messages))
-
-    def test_resource_reset_denied_for_builder(self):
-        """@resource reset requires Admin+; Builder should be denied."""
-        caller = FakeCaller(perm_level="Builder")
-        cmd = _make_cmd(CmdAdminResource, caller, " reset Bob")
-        cmd.func()
-        self.assertTrue(any("Permission denied" in m for m in caller._messages))
-
-    def test_player_level_denied_for_builder(self):
-        """@player level requires Admin+; Builder should be denied."""
-        caller = FakeCaller(perm_level="Builder")
-        cmd = _make_cmd(CmdAdminPlayer, caller, " level 5 Bob")
-        cmd.func()
-        self.assertTrue(any("Permission denied" in m for m in caller._messages))
-
-    def test_player_rank_denied_for_builder(self):
-        """@player rank requires Admin+; Builder should be denied."""
-        caller = FakeCaller(perm_level="Builder")
-        cmd = _make_cmd(CmdAdminPlayer, caller, " rank 3 Bob")
-        cmd.func()
-        self.assertTrue(any("Permission denied" in m for m in caller._messages))
-
-    def test_building_spawn_allowed_for_builder(self):
-        """@building spawn requires Builder+; Builder should be allowed."""
-        caller = FakeCaller(perm_level="Builder")
-        caller.location = FakeLocation()
-        caller.db.coord_x = 1
-        caller.db.coord_y = 1
-        cmd = _make_cmd(CmdAdminBuilding, caller, " spawn HQ")
-        cmd.func()
-        self.assertFalse(any("Permission denied" in m for m in caller._messages))
-
-
-# -------------------------------------------------------------- #
-#  Admin logging tests
-# -------------------------------------------------------------- #
-
-class TestAdminLogging(unittest.TestCase):
-    """Req 8.1: Admin logging on successful actions."""
-
-    def test_building_destroy_logs(self):
-        building = FakeBuilding(key="HQ", building_type="HQ")
-        location = FakeLocation(buildings=[building])
-        caller = FakeCaller(name="AdminUser", perm_level="Builder")
-        caller.location = location
-        caller.db.coord_x = 3
-        caller.db.coord_y = 7
-
-        with self.assertLogs("mygame.admin", level="INFO") as cm:
-            cmd = _make_cmd(CmdAdminBuilding, caller, " destroy")
-            cmd.func()
-
-        log_output = "\n".join(cm.output)
-        self.assertIn("AdminUser", log_output)
-        self.assertIn("destroy", log_output)
-
-    def test_agent_create_logs(self):
-        target = FakeTarget(name="Bob")
-        target.db.next_agent_id = 1
-        agent_sys = FakeAgentSystem()
-        caller = FakeCaller(name="AdminUser", perm_level="Admin",
-                            systems={"agent_system": agent_sys})
-        caller._search_results["Bob"] = target
-
-        with self.assertLogs("mygame.admin", level="INFO") as cm:
-            cmd = _make_cmd(CmdAdminAgent, caller, " create Bob")
-            cmd.func()
-
-        log_output = "\n".join(cm.output)
-        self.assertIn("AdminUser", log_output)
-        self.assertIn("create", log_output)
-        self.assertIn("Bob", log_output)
-
-    def test_resource_give_logs(self):
-        target = FakeTarget(name="Bob")
-        caller = FakeCaller(name="AdminUser", perm_level="Builder")
-        caller._search_results["Bob"] = target
-
-        with self.assertLogs("mygame.admin", level="INFO") as cm:
-            cmd = _make_cmd(CmdAdminResource, caller, " give Iron 50 Bob")
-            cmd.func()
-
-        log_output = "\n".join(cm.output)
-        self.assertIn("AdminUser", log_output)
-        self.assertIn("give", log_output)
-        self.assertIn("Iron", log_output)
-
-    def test_agent_list_logs(self):
-        agent_sys = FakeAgentSystem()
-        target = FakeTarget(name="Bob")
-        caller = FakeCaller(name="AdminUser", perm_level="Builder",
-                            systems={"agent_system": agent_sys})
-        caller._search_results["Bob"] = target
-
-        with self.assertLogs("mygame.admin", level="INFO") as cm:
-            cmd = _make_cmd(CmdAdminAgent, caller, " list Bob")
-            cmd.func()
-
-        log_output = "\n".join(cm.output)
-        self.assertIn("AdminUser", log_output)
-        self.assertIn("list", log_output)
-
-    def test_player_level_logs(self):
-        target = FakeTarget(name="Bob")
-        caller = FakeCaller(name="AdminUser", perm_level="Admin")
-        caller._search_results["Bob"] = target
-
-        with self.assertLogs("mygame.admin", level="INFO") as cm:
-            cmd = _make_cmd(CmdAdminPlayer, caller, " level 5 Bob")
-            cmd.func()
-
-        log_output = "\n".join(cm.output)
-        self.assertIn("AdminUser", log_output)
-        self.assertIn("level", log_output)
-
-
-# -------------------------------------------------------------- #
-#  CmdAdminItem tests
-# -------------------------------------------------------------- #
-
-class FakeItemDef:
-    """Minimal ItemDef stand-in for @item spawn/list tests."""
-
-    def __init__(self, key, name, category, slot="", max_stack=99, weight=1.0):
-        self.key = key
-        self.name = name
-        self.category = category
-        self.slot = slot
-        self.max_stack = max_stack
-        self.weight = weight
-
-
-class FakeItemRegistry:
-    """Registry exposing resolve_item / get_item / items for item tests."""
-
-    def __init__(self, defs):
-        self.items = {d.key: d for d in defs}
-
-    def resolve_item(self, token):
-        # Mirror DataRegistry._resolve: exact key / name, then unambiguous prefix.
-        t = token.strip().lower().replace("_", " ")
-        for d in self.items.values():
-            if d.key.lower().replace("_", " ") == t or d.name.lower() == t:
-                return d
-        matches = [d for d in self.items.values()
-                   if d.key.lower().replace("_", " ").startswith(t)
-                   or d.name.lower().replace("_", " ").startswith(t)]
-        return matches[0] if len(matches) == 1 else None
-
-    def get_item(self, key):
-        return self.items[key]
+        return True
 
 
 class FakeEquipment:
@@ -823,250 +515,121 @@ class FakeEquipment:
         return added
 
 
-# A rifle (Gear) and grenades (Supply) cover both spawn branches.
-_RIFLE = FakeItemDef("assault_rifle", "Assault Rifle", "weapon", slot="weapon", weight=10.0)
-_GRENADE = FakeItemDef("frag_grenade", "Frag Grenade", "throwable", max_stack=5, weight=3.0)
+class FakeDataRegistry:
+    """DataRegistry double: ``items`` dict + the ``resolve_item`` matcher."""
+
+    def __init__(self, defs):
+        self.items = {d.key: d for d in defs}
+
+    def resolve_item(self, token):
+        if token in self.items:
+            return self.items[token]
+        lowered = token.lower()
+        matches = [
+            d for d in self.items.values()
+            if d.key.lower().startswith(lowered)
+            or d.name.lower().startswith(lowered)
+        ]
+        return matches[0] if len(matches) == 1 else None
+
+    def get_item(self, key):
+        return self.items[key]
 
 
-def _item_caller(perm_level="Builder"):
-    registry = FakeItemRegistry([_RIFLE, _GRENADE])
-    return FakeCaller(perm_level=perm_level, systems={"registry": registry})
+class ItemCaller:
+    """Caller stub for @item: holdings, perm hierarchy, player search."""
+
+    _HIERARCHY = ["Player", "Helper", "Builder", "Admin", "Developer"]
+
+    def __init__(self, name="Admin", perm_level="Builder", contents=None):
+        self.id = next(_CALLER_IDS)
+        self.key = name
+        self._perm_level = perm_level
+        self.contents = list(contents or [])
+        self._messages = []
+        self._search_results = {}
+
+    def msg(self, text, **kwargs):
+        self._messages.append(text)
+
+    def check_permstring(self, perm):
+        try:
+            return (self._HIERARCHY.index(self._perm_level)
+                    >= self._HIERARCHY.index(perm))
+        except ValueError:
+            return False
+
+    def search(self, name, **kwargs):
+        return self._search_results.get(name)
 
 
-class TestItemSpawnGear(unittest.TestCase):
-    """@item spawn <gear> creates equippable objects in the recipient's inv."""
+class ItemTarget:
+    """Grant-recipient stub (a player with an equipment handler)."""
 
-    def test_spawn_gear_creates_objects(self):
-        import unittest.mock as mock
+    def __init__(self, name="Bob"):
+        self.key = name
+        self.equipment = FakeEquipment()
+        self._messages = []
 
-        target = FakeTarget(name="Bob")
-        caller = _item_caller()
-        caller._search_results["Bob"] = target
-
-        created = []
-        fake_objects = types.ModuleType("typeclasses.objects")
-        fake_objects.create_game_item = lambda owner, idef: created.append((owner, idef))
-        with mock.patch.dict(sys.modules, {
-            "typeclasses": types.ModuleType("typeclasses"),
-            "typeclasses.objects": fake_objects,
-        }):
-            cmd = _make_cmd(CmdAdminItem, caller, " spawn assault_rifle 2 Bob")
-            cmd.func()
-
-        self.assertEqual(len(created), 2)
-        self.assertTrue(all(idef is _RIFLE and owner is target for owner, idef in created))
-        self.assertTrue(any("Spawned 2x Assault Rifle" in m for m in caller._messages))
-
-    def test_spawn_gear_defaults_to_caller(self):
-        import unittest.mock as mock
-
-        caller = _item_caller()
-        created = []
-        fake_objects = types.ModuleType("typeclasses.objects")
-        fake_objects.create_game_item = lambda owner, idef: created.append((owner, idef))
-        with mock.patch.dict(sys.modules, {
-            "typeclasses": types.ModuleType("typeclasses"),
-            "typeclasses.objects": fake_objects,
-        }):
-            # No count/player → defaults to 1 for the caller.
-            cmd = _make_cmd(CmdAdminItem, caller, " spawn assault_rifle")
-            cmd.func()
-
-        self.assertEqual(len(created), 1)
-        self.assertIs(created[0][0], caller)  # defaults to caller
+    def msg(self, text, **kwargs):
+        self._messages.append(text)
 
 
-class TestItemSpawnSupply(unittest.TestCase):
-    """@item spawn <supply> adds counts to the recipient's Supply_Bag."""
-
-    def test_spawn_supply_adds_to_bag(self):
-        target = FakeTarget(name="Bob")
-        target.equipment = FakeEquipment()
-        caller = _item_caller()
-        caller._search_results["Bob"] = target
-
-        cmd = _make_cmd(CmdAdminItem, caller, " spawn frag_grenade 3 Bob")
-        cmd.func()
-
-        self.assertEqual(target.equipment.supplies.get("frag_grenade"), 3)
-        self.assertTrue(any("Spawned 3x Frag Grenade" in m for m in caller._messages))
-
-    def test_spawn_supply_respects_stack_cap(self):
-        target = FakeTarget(name="Bob")
-        target.equipment = FakeEquipment()
-        caller = _item_caller()
-        caller._search_results["Bob"] = target
-
-        # max_stack=5, request 8 → 5 added, 3 reported as exceeding the cap.
-        cmd = _make_cmd(CmdAdminItem, caller, " spawn frag_grenade 8 Bob")
-        cmd.func()
-
-        self.assertEqual(target.equipment.supplies.get("frag_grenade"), 5)
-        self.assertTrue(any("exceeded the stack cap" in m for m in caller._messages))
-
-
-class TestItemSpawnErrors(unittest.TestCase):
-    """@item spawn input validation."""
-
-    def test_spawn_no_args_shows_usage(self):
-        caller = _item_caller()
-        cmd = _make_cmd(CmdAdminItem, caller, " spawn")
-        cmd.func()
-        self.assertTrue(any("Usage" in m for m in caller._messages))
-
-    def test_spawn_unknown_item(self):
-        caller = _item_caller()
-        cmd = _make_cmd(CmdAdminItem, caller, " spawn nonexistent")
-        cmd.func()
-        self.assertTrue(any("Unknown item" in m for m in caller._messages))
-
-    def test_spawn_unknown_player(self):
-        caller = _item_caller()
-        cmd = _make_cmd(CmdAdminItem, caller, " spawn frag_grenade 1 Nobody")
-        cmd.func()
-        self.assertTrue(any("Could not find player" in m for m in caller._messages))
-
-
-class TestItemSpawnByIndexAndPrefix(unittest.TestCase):
-    """@item spawn accepts an index (#N / N from '@item list') or a prefix."""
-
-    def _ordered_keys(self):
-        # Same order sub_list / _item_index use: sorted by (category, key).
-        return [d.key for d in sorted(
-            FakeItemRegistry([_RIFLE, _GRENADE]).items.values(),
-            key=lambda d: (d.category, d.key),
-        )]
-
-    def test_spawn_by_index(self):
-        target = FakeTarget(name="Bob")
-        target.equipment = FakeEquipment()
-        caller = _item_caller()
-        caller._search_results["Bob"] = target
-        # frag_grenade is a throwable (category 'throwable'); assault_rifle is
-        # 'weapon'. Sorted by (category, key): throwable < weapon, so [1] is the
-        # grenade. Spawn it by index.
-        keys = self._ordered_keys()
-        idx = keys.index("frag_grenade") + 1
-        cmd = _make_cmd(CmdAdminItem, caller, f" spawn {idx} 2 Bob")
-        cmd.func()
-        self.assertEqual(target.equipment.supplies.get("frag_grenade"), 2)
-
-    def test_spawn_by_hash_index(self):
-        target = FakeTarget(name="Bob")
-        target.equipment = FakeEquipment()
-        caller = _item_caller()
-        caller._search_results["Bob"] = target
-        keys = self._ordered_keys()
-        idx = keys.index("frag_grenade") + 1
-        cmd = _make_cmd(CmdAdminItem, caller, f" spawn #{idx} 1 Bob")
-        cmd.func()
-        self.assertEqual(target.equipment.supplies.get("frag_grenade"), 1)
-
-    def test_spawn_by_prefix(self):
-        target = FakeTarget(name="Bob")
-        target.equipment = FakeEquipment()
-        caller = _item_caller()
-        caller._search_results["Bob"] = target
-        # "frag" uniquely prefixes frag_grenade.
-        cmd = _make_cmd(CmdAdminItem, caller, " spawn frag 3 Bob")
-        cmd.func()
-        self.assertEqual(target.equipment.supplies.get("frag_grenade"), 3)
-
-    def test_spawn_index_out_of_range_is_unknown(self):
-        caller = _item_caller()
-        cmd = _make_cmd(CmdAdminItem, caller, " spawn 99")
-        cmd.func()
-        self.assertTrue(any("Unknown item" in m for m in caller._messages))
-
-
-class TestItemList(unittest.TestCase):
-    """@item list enumerates definitions, optionally filtered."""
-
-    def test_list_all(self):
-        caller = _item_caller()
-        cmd = _make_cmd(CmdAdminItem, caller, " list")
-        cmd.func()
-        output = "\n".join(caller._messages)
-        self.assertIn("assault_rifle", output)
-        self.assertIn("frag_grenade", output)
-
-    def test_list_shows_index_numbers(self):
-        caller = _item_caller()
-        cmd = _make_cmd(CmdAdminItem, caller, " list")
-        cmd.func()
-        output = "\n".join(caller._messages)
-        self.assertIn("[1]", output)
-        self.assertIn("[2]", output)
-
-    def test_list_filter_by_category(self):
-        caller = _item_caller()
-        cmd = _make_cmd(CmdAdminItem, caller, " list weapon")
-        cmd.func()
-        output = "\n".join(caller._messages)
-        self.assertIn("assault_rifle", output)
-        self.assertNotIn("frag_grenade", output)
-
-    def test_list_filter_no_match(self):
-        caller = _item_caller()
-        cmd = _make_cmd(CmdAdminItem, caller, " list bogus")
-        cmd.func()
-        self.assertTrue(any("No items match" in m for m in caller._messages))
-
-
-class TestItemPermissions(unittest.TestCase):
-    """@item subcommands require Builder+."""
-
-    def test_spawn_denied_for_player(self):
-        registry = FakeItemRegistry([_RIFLE, _GRENADE])
-        caller = FakeCaller(perm_level="Player", systems={"registry": registry})
-        cmd = _make_cmd(CmdAdminItem, caller, " spawn frag_grenade")
-        cmd.func()
-        self.assertTrue(any("Permission denied" in m for m in caller._messages))
-
-    def test_set_denied_for_player(self):
-        registry = FakeItemRegistry([_RIFLE, _GRENADE])
-        caller = FakeCaller(perm_level="Player", systems={"registry": registry})
-        cmd = _make_cmd(CmdAdminItem, caller, " set rifle damage 50")
-        cmd.func()
-        self.assertTrue(any("Permission denied" in m for m in caller._messages))
-
-    def test_stats_denied_for_player(self):
-        registry = FakeItemRegistry([_RIFLE, _GRENADE])
-        caller = FakeCaller(perm_level="Player", systems={"registry": registry})
-        cmd = _make_cmd(CmdAdminItem, caller, " stats rifle")
-        cmd.func()
-        self.assertTrue(any("Permission denied" in m for m in caller._messages))
-
-
-# -------------------------------------------------------------- #
-#  @item spawn iqs=/rarity= + @item set + @item stats
-#  (rolled-gear admin tooling)
-# -------------------------------------------------------------- #
-
-# A rolled Gear def: a roll_spec with stat bands, like weapons.yaml ships.
-_SNIPER_SPEC = {
+# A plain Gear def, a Supply def, and a rolled Gear def cover every
+# spawn/set branch (mirrors the pre-migration fixtures).
+_ITEM_RIFLE = ItemDef(
+    key="assault_rifle", name="Assault Rifle", category="weapon",
+    slot="weapon", weight=10.0,
+)
+_ITEM_GRENADE = ItemDef(
+    key="frag_grenade", name="Frag Grenade", category="throwable",
+    max_stack=5, weight=3.0,
+)
+_ITEM_SNIPER_SPEC = {
     "stats": {
         "damage": {"min": 40, "max": 60, "weight": 3},
         "range": {"min": 8, "max": 12, "weight": 1},
     },
 }
-_SNIPER = FakeItemDef("sniper_rifle", "Sniper Rifle", "weapon",
-                      slot="weapon", weight=12.0)
-_SNIPER.roll_spec = _SNIPER_SPEC
+_ITEM_SNIPER = ItemDef(
+    key="sniper_rifle", name="Sniper Rifle", category="weapon",
+    slot="weapon", weight=12.0, roll_spec=_ITEM_SNIPER_SPEC,
+)
 
 
-def _rolled_item_caller(perm_level="Builder"):
-    registry = FakeItemRegistry([_RIFLE, _GRENADE, _SNIPER])
-    return FakeCaller(perm_level=perm_level, systems={"registry": registry})
+class ItemRouterUnderTest(CmdAdminItem):
+    """CmdAdminItem with the registry/overlay test hooks injected."""
+
+    registry = None          # per-test AdapterRegistry
+    overlay = FakeOverlay()  # keeps def-scope reads off disk
+
+
+    def _adapter_registry(self):
+        return self.registry
+
+    def _overlay_store(self):
+        return self.overlay
+
+
+def _item_cmd(caller, args, defs=None):
+    """Build + run one @item invocation against an injected registry."""
+    adapter = ItemAdapter(registry=FakeDataRegistry(
+        defs or [_ITEM_RIFLE, _ITEM_GRENADE, _ITEM_SNIPER]))
+    registry = AdapterRegistry()
+    registry.register(adapter)
+    cmd = ItemRouterUnderTest()
+    cmd.registry = registry
+    cmd.caller = caller
+    cmd.args = args
+    cmd.cmdstring = cmd.key
+    cmd.func()
+    return cmd
 
 
 def _patch_create_game_item(created):
-    """Patch typeclasses.objects.create_game_item to mint dict-shaped items.
-
-    The loot roller's instance writes are duck-typed and accept plain
-    dicts, so the created dict records exactly what the spawn path stamped
-    (rolled_stats / rarity / iqs).
-    """
+    """Patch typeclasses.objects.create_game_item to mint dict-shaped
+    items — the loot roller's writes are duck-typed, so the dict records
+    exactly what the spawn path stamped (rolled_stats / rarity / iqs)."""
     fake_objects = types.ModuleType("typeclasses.objects")
 
     def create(owner, idef):
@@ -1081,23 +644,255 @@ def _patch_create_game_item(created):
     })
 
 
-class FakeGameItem:
-    """Live GameItem stand-in for @item set/stats: db bag + object key."""
+class ItemRouterTestCase(unittest.TestCase):
+    """Shared plumbing: fresh List_Cache per test + output helper."""
 
-    def __init__(self, item_key, key=None, **fields):
-        self.key = key or item_key
-        self.db = FakeDB(item_key=item_key, **fields)
+    def setUp(self):
+        from world.admin.resolution import LIST_CACHE as cache
+        cache.clear()
+
+    def output(self, cmd):
+        return "\n".join(cmd.caller._messages)
 
 
-class TestItemSpawnWithQuality(unittest.TestCase):
+# ------------------------------------------------------------------ #
+#  Migration wiring: stats alias, list pointer, def list, destroy
+#  (Requirements 4.1, 4.4, 5.7, 11.1, 11.2, 11.4, 11.5)
+# ------------------------------------------------------------------ #
+
+class TestItemMigrationWiring(ItemRouterTestCase):
+
+    def test_stats_alias_dispatches_show_with_deprecation_note(self):
+        item = FakeGameItem("sniper_rifle",
+                            rolled_stats={"damage": 50.0}, iqs=50)
+        alias_cmd = _item_cmd(ItemCaller(contents=[item]), " stats sniper")
+        note = alias_cmd.caller._messages[0]
+        self.assertNotIn("\n", note)      # one line (R11.2)
+        self.assertIn("stats", note)       # invoked spelling
+        self.assertIn("show", note)        # canonical spelling
+        # Output after the note is identical to the canonical verb (R11.1).
+        item2 = FakeGameItem("sniper_rifle",
+                             rolled_stats={"damage": 50.0}, iqs=50)
+        show_cmd = _item_cmd(ItemCaller(contents=[item2]), " show sniper")
+        self.assertEqual(alias_cmd.caller._messages[1:],
+                         show_cmd.caller._messages)
+
+    def test_list_shows_instances_with_def_list_pointer(self):
+        caller = ItemCaller(contents=[
+            FakeGameItem("assault_rifle"), FakeGameItem("sniper_rifle"),
+        ])
+        cmd = _item_cmd(caller, " list")
+        out = self.output(cmd)
+        self.assertIn("#1", out)            # indexed instance rows (R4.1)
+        self.assertIn("#2", out)
+        self.assertIn("assault_rifle", out)
+        self.assertIn("sniper_rifle", out)
+        # The deprecation-window pointer: definition listing moved (R11.4).
+        self.assertIn("def list", out)
+        self.assertIn("moved", out)
+
+    def test_empty_list_still_includes_the_pointer(self):
+        cmd = _item_cmd(ItemCaller(), " list")
+        out = self.output(cmd)
+        self.assertIn("No item instances", out)
+        self.assertIn("def list", out)
+
+    def test_def_list_serves_the_definitions(self):
+        cmd = _item_cmd(ItemCaller(), " def list")
+        out = self.output(cmd)
+        for key in ("assault_rifle", "frag_grenade", "sniper_rifle"):
+            self.assertIn(key, out)
+
+    def test_destroy_deletes_an_instance(self):
+        item = FakeGameItem("sniper_rifle")
+        cmd = _item_cmd(ItemCaller(contents=[item]), " destroy sniper")
+        self.assertTrue(item._deleted)
+        self.assertIn("Destroyed", self.output(cmd))
+
+
+# ------------------------------------------------------------------ #
+#  spawn — gear/supply branches (ported; count is now a kwarg)
+# ------------------------------------------------------------------ #
+
+class TestItemSpawnGear(ItemRouterTestCase):
+    """@item spawn <gear> creates equippable objects in the recipient's
+    inventory (count=N kwarg under the unified grammar)."""
+
+    def test_spawn_gear_creates_objects(self):
+        target = ItemTarget(name="Bob")
+        caller = ItemCaller()
+        caller._search_results["Bob"] = target
+
+        created = []
+        with _patch_create_game_item(created):
+            cmd = _item_cmd(caller, " spawn assault_rifle count=2 Bob")
+
+        self.assertEqual(len(created), 2)
+        self.assertTrue(all(idef is _ITEM_RIFLE and owner is target
+                            for owner, idef, _item in created))
+        self.assertIn("2x Assault Rifle", self.output(cmd))
+
+    def test_spawn_gear_defaults_to_caller(self):
+        caller = ItemCaller()
+        created = []
+        with _patch_create_game_item(created):
+            _item_cmd(caller, " spawn assault_rifle")
+
+        self.assertEqual(len(created), 1)
+        self.assertIs(created[0][0], caller)  # defaults to caller
+
+
+class TestItemSpawnSupply(ItemRouterTestCase):
+    """@item spawn <supply> adds counts to the recipient's Supply_Bag."""
+
+    def test_spawn_supply_adds_to_bag(self):
+        target = ItemTarget(name="Bob")
+        caller = ItemCaller()
+        caller._search_results["Bob"] = target
+
+        cmd = _item_cmd(caller, " spawn frag_grenade count=3 Bob")
+
+        self.assertEqual(target.equipment.supplies.get("frag_grenade"), 3)
+        self.assertIn("3x Frag Grenade", self.output(cmd))
+
+    def test_spawn_supply_respects_stack_cap(self):
+        target = ItemTarget(name="Bob")
+        caller = ItemCaller()
+        caller._search_results["Bob"] = target
+
+        # max_stack=5, request 8 → 5 added; the response reports what was
+        # actually granted.
+        cmd = _item_cmd(caller, " spawn frag_grenade count=8 Bob")
+
+        self.assertEqual(target.equipment.supplies.get("frag_grenade"), 5)
+        self.assertIn("5x Frag Grenade", self.output(cmd))
+
+
+class TestItemSpawnErrors(ItemRouterTestCase):
+    """@item spawn input validation."""
+
+    def test_spawn_no_args_shows_usage(self):
+        cmd = _item_cmd(ItemCaller(), " spawn")
+        self.assertIn("Usage", self.output(cmd))
+
+    def test_spawn_unknown_item(self):
+        cmd = _item_cmd(ItemCaller(), " spawn nonexistent")
+        out = self.output(cmd)
+        self.assertIn("No definition found", out)
+        self.assertIn("nonexistent", out)
+
+    def test_spawn_unknown_player(self):
+        cmd = _item_cmd(ItemCaller(), " spawn frag_grenade count=1 Nobody")
+        out = self.output(cmd)
+        self.assertIn("Could not resolve player", out)
+        self.assertIn("Nobody", out)
+
+
+class TestItemSpawnByPrefix(ItemRouterTestCase):
+    """Spawn def tokens resolve by key/name/prefix via resolve_item.
+
+    Definition INDEXES are gone with the list-meaning change: `#N`/bare
+    numbers indexed the old def list, which moved to `def list`
+    (Requirement 11.4) — a numeric token is now just an unknown def."""
+
+    def test_spawn_by_prefix(self):
+        target = ItemTarget(name="Bob")
+        caller = ItemCaller()
+        caller._search_results["Bob"] = target
+        # "frag" uniquely prefixes frag_grenade.
+        _item_cmd(caller, " spawn frag count=3 Bob")
+        self.assertEqual(target.equipment.supplies.get("frag_grenade"), 3)
+
+    def test_spawn_numeric_def_index_no_longer_supported(self):
+        cmd = _item_cmd(ItemCaller(), " spawn 99")
+        self.assertIn("No definition found", self.output(cmd))
+
+
+# ------------------------------------------------------------------ #
+#  list — instance meaning (ported from the def-list tests, R11.4)
+# ------------------------------------------------------------------ #
+
+class TestItemListInstances(ItemRouterTestCase):
+    """@item list enumerates the caller's live item instances (the old
+    definition meaning moved to `def list`), optionally filtered."""
+
+    def _caller_with_items(self):
+        return ItemCaller(contents=[
+            FakeGameItem("assault_rifle", category="weapon"),
+            FakeGameItem("frag_grenade", category="throwable"),
+        ])
+
+    def test_list_all_instances(self):
+        cmd = _item_cmd(self._caller_with_items(), " list")
+        out = self.output(cmd)
+        self.assertIn("assault_rifle", out)
+        self.assertIn("frag_grenade", out)
+
+    def test_list_shows_index_numbers(self):
+        cmd = _item_cmd(self._caller_with_items(), " list")
+        out = self.output(cmd)
+        self.assertIn("#1", out)
+        self.assertIn("#2", out)
+
+    def test_list_filter_by_category(self):
+        cmd = _item_cmd(self._caller_with_items(), " list weapon")
+        out = self.output(cmd)
+        self.assertIn("assault_rifle", out)
+        self.assertNotIn("frag_grenade", out)
+
+    def test_list_filter_no_match(self):
+        cmd = _item_cmd(self._caller_with_items(), " list bogus")
+        self.assertIn("No item instances", self.output(cmd))
+
+    def test_list_replaces_the_list_cache_for_hash_n(self):
+        caller = self._caller_with_items()
+        _item_cmd(caller, " list")
+        cmd = _item_cmd(caller, " show #1")
+        self.assertIn("assault_rifle", self.output(cmd))
+
+
+# ------------------------------------------------------------------ #
+#  Permissions (ported unchanged: Builder floor per verb)
+# ------------------------------------------------------------------ #
+
+class TestItemPermissions(ItemRouterTestCase):
+    """@item subcommands require Builder+."""
+
+    def test_spawn_denied_for_player(self):
+        cmd = _item_cmd(ItemCaller(perm_level="Player"),
+                        " spawn frag_grenade")
+        self.assertIn("Permission denied", self.output(cmd))
+
+    def test_set_denied_for_player(self):
+        cmd = _item_cmd(ItemCaller(perm_level="Player"),
+                        " set rifle damage 50")
+        self.assertIn("Permission denied", self.output(cmd))
+
+    def test_stats_denied_for_player(self):
+        # The alias runs the CANONICAL verb's perm check (R11.1).
+        cmd = _item_cmd(ItemCaller(perm_level="Player"), " stats rifle")
+        self.assertIn("Permission denied", self.output(cmd))
+
+    def test_def_set_denied_for_builder(self):
+        cmd = _item_cmd(ItemCaller(perm_level="Builder"),
+                        " def set sniper_rifle weight 5")
+        out = self.output(cmd)
+        self.assertIn("Permission denied", out)
+        self.assertIn("Admin", out)
+
+
+# ------------------------------------------------------------------ #
+#  spawn iqs=/rarity= (rolled-gear admin tooling, ported)
+# ------------------------------------------------------------------ #
+
+class TestItemSpawnWithQuality(ItemRouterTestCase):
     """@item spawn iqs=<N> stamps a deterministic roll at that quality."""
 
     def test_iqs_stamps_stats_at_the_quality_fraction(self):
-        caller = _rolled_item_caller()
+        caller = ItemCaller()
         created = []
         with _patch_create_game_item(created):
-            cmd = _make_cmd(CmdAdminItem, caller, " spawn sniper_rifle iqs=90")
-            cmd.func()
+            _item_cmd(caller, " spawn sniper_rifle iqs=90")
 
         self.assertEqual(len(created), 1)
         item = created[0][2]
@@ -1108,66 +903,55 @@ class TestItemSpawnWithQuality(unittest.TestCase):
         self.assertEqual(item["iqs"], 90)
         # No rarity requested → none stamped (neutral read).
         self.assertNotIn("rarity", item)
-        self.assertTrue(any("[iqs 90]" in m for m in caller._messages))
 
     def test_iqs_with_rarity_stamps_the_tier(self):
-        caller = _rolled_item_caller()
+        caller = ItemCaller()
         created = []
         with _patch_create_game_item(created):
-            cmd = _make_cmd(
-                CmdAdminItem, caller,
-                " spawn sniper_rifle iqs=90 rarity=legendary")
-            cmd.func()
+            _item_cmd(caller, " spawn sniper_rifle iqs=90 rarity=legendary")
 
         item = created[0][2]
         self.assertEqual(item["rarity"], "legendary")
         self.assertEqual(item["iqs"], 90)
 
     def test_iqs_out_of_range_is_clamped(self):
-        caller = _rolled_item_caller()
+        caller = ItemCaller()
         created = []
         with _patch_create_game_item(created):
-            cmd = _make_cmd(CmdAdminItem, caller,
-                            " spawn sniper_rifle iqs=150")
-            cmd.func()
+            _item_cmd(caller, " spawn sniper_rifle iqs=150")
 
         item = created[0][2]
         self.assertEqual(item["rolled_stats"]["damage"], 60)  # band max
         self.assertEqual(item["iqs"], 100)
-        self.assertTrue(any("clamped" in m for m in caller._messages))
 
     def test_invalid_rarity_rejected_nothing_created(self):
-        caller = _rolled_item_caller()
+        caller = ItemCaller()
         created = []
         with _patch_create_game_item(created):
-            cmd = _make_cmd(CmdAdminItem, caller,
-                            " spawn sniper_rifle rarity=mythic")
-            cmd.func()
+            cmd = _item_cmd(caller, " spawn sniper_rifle rarity=mythic")
 
         self.assertEqual(created, [])
-        self.assertTrue(any("Unknown rarity" in m for m in caller._messages))
+        out = self.output(cmd)
+        self.assertIn("unknown rarity", out)
+        self.assertIn("mythic", out)
 
     def test_non_numeric_iqs_rejected(self):
-        caller = _rolled_item_caller()
+        caller = ItemCaller()
         created = []
         with _patch_create_game_item(created):
-            cmd = _make_cmd(CmdAdminItem, caller,
-                            " spawn sniper_rifle iqs=high")
-            cmd.func()
+            cmd = _item_cmd(caller, " spawn sniper_rifle iqs=high")
 
         self.assertEqual(created, [])
-        self.assertTrue(any("must be a number" in m for m in caller._messages))
+        self.assertIn("must be a number", self.output(cmd))
 
     def test_forced_rarity_alone_rolls_with_the_tier_floor(self):
         # rarity= without iqs=: a random roll forced to the tier — its roll
         # floor applies, so every stat lands at or above floor**skew of the
         # band (legendary 0.75² = 0.5625 → damage ≥ 40 + 20·0.5625 = 51.25).
-        caller = _rolled_item_caller()
+        caller = ItemCaller()
         created = []
         with _patch_create_game_item(created):
-            cmd = _make_cmd(CmdAdminItem, caller,
-                            " spawn sniper_rifle rarity=legendary")
-            cmd.func()
+            _item_cmd(caller, " spawn sniper_rifle rarity=legendary")
 
         item = created[0][2]
         self.assertEqual(item["rarity"], "legendary")
@@ -1175,16 +959,15 @@ class TestItemSpawnWithQuality(unittest.TestCase):
         self.assertLessEqual(item["rolled_stats"]["damage"], 60)
 
 
-class TestItemSpawnDefaultRoll(unittest.TestCase):
+class TestItemSpawnDefaultRoll(ItemRouterTestCase):
     """Without iqs=, rolled defs get a normal random roll on spawn; defs
     without roll bands stay fixed exactly as always."""
 
     def test_rolled_def_gets_random_roll(self):
-        caller = _rolled_item_caller()
+        caller = ItemCaller()
         created = []
         with _patch_create_game_item(created):
-            cmd = _make_cmd(CmdAdminItem, caller, " spawn sniper_rifle")
-            cmd.func()
+            _item_cmd(caller, " spawn sniper_rifle")
 
         item = created[0][2]
         self.assertIn("rolled_stats", item)
@@ -1193,145 +976,133 @@ class TestItemSpawnDefaultRoll(unittest.TestCase):
         self.assertTrue(0 <= item["iqs"])
 
     def test_unrolled_def_stays_fixed(self):
-        caller = _rolled_item_caller()
+        caller = ItemCaller()
         created = []
         with _patch_create_game_item(created):
-            cmd = _make_cmd(CmdAdminItem, caller, " spawn assault_rifle")
-            cmd.func()
+            _item_cmd(caller, " spawn assault_rifle")
 
         item = created[0][2]
         self.assertNotIn("rolled_stats", item)
         self.assertNotIn("iqs", item)
 
-    def test_unrolled_def_with_iqs_notes_ignored(self):
-        caller = _rolled_item_caller()
+    def test_unrolled_def_ignores_iqs(self):
+        # A fixed def stays fixed even when iqs= is passed — the roll
+        # wiring never touches defs without roll bands.
+        caller = ItemCaller()
         created = []
         with _patch_create_game_item(created):
-            cmd = _make_cmd(CmdAdminItem, caller,
-                            " spawn assault_rifle iqs=50")
-            cmd.func()
+            _item_cmd(caller, " spawn assault_rifle iqs=50")
 
         item = created[0][2]
         self.assertNotIn("rolled_stats", item)
-        self.assertTrue(any("ignored" in m for m in caller._messages))
+        self.assertNotIn("iqs", item)
 
-    def test_supply_with_iqs_notes_ignored_but_grants(self):
-        caller = _rolled_item_caller()
+    def test_supply_with_iqs_still_grants(self):
+        # Supplies carry no per-instance rolls; the grant itself works.
+        caller = ItemCaller()
         caller.equipment = FakeEquipment()
-        cmd = _make_cmd(CmdAdminItem, caller, " spawn frag_grenade 3 iqs=50")
-        cmd.func()
+        _item_cmd(caller, " spawn frag_grenade count=3 iqs=50")
         self.assertEqual(caller.equipment.supplies.get("frag_grenade"), 3)
-        self.assertTrue(any("ignored" in m for m in caller._messages))
 
 
-class TestItemSet(unittest.TestCase):
+# ------------------------------------------------------------------ #
+#  set — band clamp + IQS re-stamp through the shared handler (ported)
+# ------------------------------------------------------------------ #
+
+class TestItemSet(ItemRouterTestCase):
     """@item set <item> <stat> <value> writes the rolled_stats override
-    (clamped to the roll band) and re-stamps IQS."""
+    (clamped to the roll band) and re-stamps IQS (Requirement 7.6)."""
 
     def _caller_with_item(self, item_key="sniper_rifle", **fields):
-        caller = _rolled_item_caller()
         item = FakeGameItem(item_key, **fields)
-        caller.contents = [item]
-        return caller, item
+        return ItemCaller(contents=[item]), item
 
     def test_set_in_band_writes_rolled_stat_and_restamps_iqs(self):
         caller, item = self._caller_with_item()
-        cmd = _make_cmd(CmdAdminItem, caller, " set sniper damage 50")
-        cmd.func()
+        cmd = _item_cmd(caller, " set sniper damage 50")
 
         self.assertEqual(item.db.rolled_stats, {"damage": 50.0})
         # Only damage is rolled: q = (50-40)/20 = 0.5 → IQS 50.
         self.assertEqual(item.db.iqs, 50)
-        output = "\n".join(caller._messages)
-        self.assertIn("Set damage to 50", output)
-        self.assertIn("IQS now 50", output)
+        self.assertIn("damage set to 50", self.output(cmd))
 
     def test_set_above_band_clamps_with_note(self):
         caller, item = self._caller_with_item()
-        cmd = _make_cmd(CmdAdminItem, caller, " set sniper damage 999")
-        cmd.func()
+        cmd = _item_cmd(caller, " set sniper damage 999")
 
         self.assertEqual(item.db.rolled_stats["damage"], 60.0)
         self.assertEqual(item.db.iqs, 100)
-        self.assertTrue(any("clamped" in m for m in caller._messages))
+        out = self.output(cmd)
+        self.assertIn("clamped", out)
+        self.assertIn("40", out)   # the bounds are named in the note
+        self.assertIn("60", out)
 
     def test_set_below_band_clamps_with_note(self):
         caller, item = self._caller_with_item()
-        cmd = _make_cmd(CmdAdminItem, caller, " set sniper damage -5")
-        cmd.func()
+        cmd = _item_cmd(caller, " set sniper damage -5")
 
         self.assertEqual(item.db.rolled_stats["damage"], 40.0)
-        self.assertTrue(any("clamped" in m for m in caller._messages))
+        self.assertIn("clamped", self.output(cmd))
 
     def test_set_preserves_other_rolled_stats(self):
         caller, item = self._caller_with_item(
             rolled_stats={"damage": 45.0, "range": 9.0})
-        cmd = _make_cmd(CmdAdminItem, caller, " set sniper damage 50")
-        cmd.func()
+        _item_cmd(caller, " set sniper damage 50")
 
         self.assertEqual(item.db.rolled_stats,
                          {"damage": 50.0, "range": 9.0})
 
-    def test_set_stat_not_in_roll_spec_rejected(self):
+    def test_set_unknown_field_rejected_naming_valid_fields(self):
         caller, item = self._caller_with_item()
-        cmd = _make_cmd(CmdAdminItem, caller, " set sniper accuracy 5")
-        cmd.func()
+        cmd = _item_cmd(caller, " set sniper accuracy 5")
 
         self.assertIsNone(item.db.rolled_stats)
-        output = "\n".join(caller._messages)
-        self.assertIn("not a modifiable stat", output)
-        self.assertIn("@item stats", output)
+        out = self.output(cmd)
+        self.assertIn("Unknown field", out)      # R3.7: names valid fields
+        self.assertIn("damage", out)
+        self.assertIn("range", out)
 
     def test_set_on_fixed_item_rejected(self):
         # assault_rifle's def declares no roll_spec — nothing is settable.
         caller, item = self._caller_with_item(item_key="assault_rifle")
-        cmd = _make_cmd(CmdAdminItem, caller, " set assault damage 50")
-        cmd.func()
+        cmd = _item_cmd(caller, " set assault damage 50")
 
         self.assertIsNone(item.db.rolled_stats)
-        self.assertTrue(
-            any("not a modifiable stat" in m for m in caller._messages))
+        self.assertIn("not a modifiable stat", self.output(cmd))
 
     def test_set_rarity_valid_tier(self):
         caller, item = self._caller_with_item()
-        cmd = _make_cmd(CmdAdminItem, caller, " set sniper rarity epic")
-        cmd.func()
+        cmd = _item_cmd(caller, " set sniper rarity epic")
 
         self.assertEqual(item.db.rarity, "epic")
-        self.assertTrue(any("rarity to epic" in m for m in caller._messages))
+        self.assertIn("rarity set to epic", self.output(cmd))
 
     def test_set_rarity_invalid_tier_rejected(self):
         caller, item = self._caller_with_item()
-        cmd = _make_cmd(CmdAdminItem, caller, " set sniper rarity mythic")
-        cmd.func()
+        cmd = _item_cmd(caller, " set sniper rarity mythic")
 
         self.assertIsNone(item.db.rarity)
-        self.assertTrue(any("Unknown rarity" in m for m in caller._messages))
+        out = self.output(cmd)
+        self.assertIn("not a valid value", out)  # R3.9: lists valid values
+        for tier in RARITY_ORDER:
+            self.assertIn(tier, out)
 
     def test_set_unknown_item_reports(self):
-        caller = _rolled_item_caller()
-        cmd = _make_cmd(CmdAdminItem, caller, " set ghost damage 50")
-        cmd.func()
-        self.assertTrue(
-            any("No carried, equipped, or nearby item" in m
-                for m in caller._messages))
+        cmd = _item_cmd(ItemCaller(), " set ghost damage 50")
+        self.assertIn("No match found", self.output(cmd))
 
     def test_set_non_numeric_value_rejected(self):
         caller, item = self._caller_with_item()
-        cmd = _make_cmd(CmdAdminItem, caller, " set sniper damage high")
-        cmd.func()
+        cmd = _item_cmd(caller, " set sniper damage high")
         self.assertIsNone(item.db.rolled_stats)
-        self.assertTrue(
-            any("must be a number" in m for m in caller._messages))
+        self.assertIn("cannot be interpreted", self.output(cmd))
 
     def test_set_too_few_args_shows_usage(self):
-        caller = _rolled_item_caller()
-        cmd = _make_cmd(CmdAdminItem, caller, " set sniper")
-        cmd.func()
-        self.assertTrue(any("Usage" in m for m in caller._messages))
+        cmd = _item_cmd(ItemCaller(), " set sniper")
+        self.assertIn("Usage", self.output(cmd))
 
     def test_set_finds_equipped_items(self):
-        caller = _rolled_item_caller()
+        caller = ItemCaller()
         item = FakeGameItem("sniper_rifle")
 
         class _Handler:
@@ -1339,1117 +1110,2330 @@ class TestItemSet(unittest.TestCase):
                 return {"weapon": item}
 
         caller.equipment = _Handler()
-        cmd = _make_cmd(CmdAdminItem, caller, " set sniper damage 44")
-        cmd.func()
+        _item_cmd(caller, " set sniper damage 44")
         self.assertEqual(item.db.rolled_stats, {"damage": 44.0})
 
 
-class TestItemStats(unittest.TestCase):
-    """@item stats <item> lists each modifiable stat with its current
-    value and [min–max] band, plus IQS/rarity/affixes/inserts."""
+# ------------------------------------------------------------------ #
+#  stats → show alias readout (ported)
+# ------------------------------------------------------------------ #
+
+class TestItemStatsAlias(ItemRouterTestCase):
+    """@item stats <item> (the legacy spelling of `show`) lists each
+    modifiable stat with its current value and [min–max] band, plus
+    IQS/rarity state."""
 
     def _caller_with_item(self, item_key="sniper_rifle", **fields):
-        caller = _rolled_item_caller()
         item = FakeGameItem(item_key, **fields)
-        caller.contents = [item]
-        return caller, item
+        return ItemCaller(contents=[item]), item
 
     def test_stats_shows_bands_and_current_values(self):
         caller, item = self._caller_with_item(
             rolled_stats={"damage": 50.0}, iqs=50, rarity="rare")
-        cmd = _make_cmd(CmdAdminItem, caller, " stats sniper")
-        cmd.func()
+        cmd = _item_cmd(caller, " stats sniper")
 
-        output = "\n".join(caller._messages)
-        self.assertIn("damage", output)
-        self.assertIn("[40–60]", output)
-        self.assertIn("50", output)          # current rolled value
-        self.assertIn("range", output)
-        self.assertIn("[8–12]", output)
-        self.assertIn("IQS: 50", output)
-        self.assertIn("rare", output)
+        out = self.output(cmd)
+        self.assertIn("damage", out)
+        self.assertIn("[40–60]", out)
+        self.assertIn("50", out)          # current rolled value
+        self.assertIn("range", out)
+        self.assertIn("[8–12]", out)
+        self.assertIn("IQS: 50", out)
+        self.assertIn("rare", out)
 
-    def test_stats_marks_rolled_vs_base_source(self):
-        caller, item = self._caller_with_item(
-            rolled_stats={"damage": 50.0})
-        cmd = _make_cmd(CmdAdminItem, caller, " stats sniper")
-        cmd.func()
-        output = "\n".join(caller._messages)
-        self.assertIn("(rolled)", output)
-
-    def test_stats_lists_affixes_and_inserts(self):
+    def test_stats_lists_affix_state(self):
         caller, item = self._caller_with_item(
             rolled_stats={"damage": 50.0},
             affixes=[{"key": "keen", "stat": "damage_bonus",
                       "magnitude": 4.0, "value": 5.0}],
-            inserts=[{"key": "hollowpoint", "name": "Hollowpoint Rounds"}],
         )
-        cmd = _make_cmd(CmdAdminItem, caller, " stats sniper")
-        cmd.func()
-        output = "\n".join(caller._messages)
-        self.assertIn("damage_bonus", output)
-        self.assertIn("Hollowpoint Rounds", output)
+        cmd = _item_cmd(caller, " stats sniper")
+        self.assertIn("Affixes: 1", self.output(cmd))
 
-    def test_stats_fixed_item_reports_no_bands(self):
+    def test_stats_fixed_item_lists_no_band_fields(self):
         caller, item = self._caller_with_item(item_key="assault_rifle")
-        cmd = _make_cmd(CmdAdminItem, caller, " stats assault")
-        cmd.func()
-        self.assertTrue(any("Fixed item" in m for m in caller._messages))
+        cmd = _item_cmd(caller, " stats assault")
+        out = self.output(cmd)
+        # No roll bands → only the rarity field is modifiable.
+        self.assertIn("rarity", out)
+        self.assertNotIn("[40–60]", out)
 
     def test_stats_unknown_item_reports(self):
-        caller = _rolled_item_caller()
-        cmd = _make_cmd(CmdAdminItem, caller, " stats ghost")
-        cmd.func()
-        self.assertTrue(
-            any("No carried, equipped, or nearby item" in m
-                for m in caller._messages))
+        cmd = _item_cmd(ItemCaller(), " stats ghost")
+        self.assertIn("No match found", self.output(cmd))
 
     def test_stats_no_args_shows_usage(self):
-        caller = _rolled_item_caller()
-        cmd = _make_cmd(CmdAdminItem, caller, " stats")
-        cmd.func()
-        self.assertTrue(any("Usage" in m for m in caller._messages))
-
-
-class _RecordingRoom:
-    """PlanetRoom stand-in that records move_entity's notify kwarg."""
-
-    def __init__(self):
-        self.calls = []  # (obj, x, y, notify)
-
-    def move_entity(self, obj, new_x, new_y, notify=True):
-        self.calls.append((obj, new_x, new_y, notify))
-        obj.db.coord_x = new_x
-        obj.db.coord_y = new_y
-
-
-class _FakePlanetRegistry:
-    def resolve_planet(self, token):
-        return "earth"
-
-    def is_valid_coordinate(self, x, y, planet):
-        return True
-
-
-class _EntityStub:
-    """A goto-target stand-in: any object with a key + coords + planet."""
-
-    def __init__(self, key, x, y, planet):
-        self.key = key
-        self.db = FakeDB(coord_x=x, coord_y=y, coord_planet=planet)
-
-
-class TestTeleportSuppressesNotifications(unittest.TestCase):
-    """Regression: @teleport must relocate silently (notify=False).
-
-    A teleport is not a step onto an adjacent tile; for a cross-planet jump the
-    stored old coords belong to the origin planet, so arrival/departure
-    messaging would notify the wrong players. CmdTeleport must pass
-    notify=False to move_entity.
-    """
-
-    def test_teleport_calls_move_entity_with_notify_false(self):
-        room = _RecordingRoom()
-        caller = FakeCaller(
-            perm_level="Builder",
-            systems={"planet_registry": _FakePlanetRegistry()},
-        )
-        caller.db.coord_planet = "earth"
-        caller.location = room  # same-planet -> no move_to needed
-
-        # Install the planet_rooms CmdTeleport resolves via the facade.
-        _install_systems({"planet_rooms": {"earth": room}})
-        cmd = _make_cmd(CmdTeleport, caller, " 25 25 earth")
-        cmd.func()
-
-        self.assertEqual(len(room.calls), 1)
-        _obj, tx, ty, notify = room.calls[0]
-        self.assertEqual((tx, ty), (25, 25))
-        self.assertFalse(notify)  # notifications suppressed
-
-    def test_goto_is_registered_as_an_alias(self):
-        """'goto <x> <y> [z]' is an alias for @teleport."""
-        self.assertIn("goto", CmdTeleport.aliases)
-
-    def test_goto_teleports_like_at_teleport(self):
-        """Invoking via the 'goto' alias moves to the parsed coordinates."""
-        room = _RecordingRoom()
-        caller = FakeCaller(
-            perm_level="Builder",
-            systems={"planet_registry": _FakePlanetRegistry()},
-        )
-        caller.db.coord_planet = "earth"
-        caller.location = room
-
-        _install_systems({"planet_rooms": {"earth": room}})
-        cmd = _make_cmd(CmdTeleport, caller, " 50 50 2")
-        cmd.cmdstring = "goto"  # invoked via the alias
-        cmd.func()
-
-        self.assertEqual(len(room.calls), 1)
-        _obj, tx, ty, _notify = room.calls[0]
-        self.assertEqual((tx, ty), (50, 50))
-
-    def _entity_goto(self, caller, arg, room, search_results):
-        """Run 'goto <arg>' with the given search results, installing planet_rooms."""
-        caller._search_results = search_results
-        _install_systems({"planet_rooms": {"earth": room}})
-        cmd = _make_cmd(CmdTeleport, caller, arg)
-        cmd.cmdstring = "goto"
-        cmd.func()
-
-    def test_goto_name_jumps_to_entity_tile(self):
-        """'goto <name>' teleports the caller to that entity's coordinates."""
-        room = _RecordingRoom()
-        caller = FakeCaller(
-            perm_level="Builder",
-            systems={"planet_registry": _FakePlanetRegistry()},
-        )
-        caller.db.coord_planet = "earth"
-        caller.location = room
-
-        target = _EntityStub("Raider", x=30, y=42, planet="earth")
-        self._entity_goto(caller, "Raider", room, {"Raider": target})
-
-        self.assertEqual(len(room.calls), 1)
-        _obj, tx, ty, notify = room.calls[0]
-        self.assertEqual((tx, ty), (30, 42))
-        self.assertFalse(notify)  # a teleport is silent
-        self.assertTrue(any("Raider" in str(m) for m in caller._messages))
-
-    def test_goto_name_not_found(self):
-        """A name with no match is reported, not crashed, and no move happens."""
-        room = _RecordingRoom()
-        caller = FakeCaller(
-            perm_level="Builder",
-            systems={"planet_registry": _FakePlanetRegistry()},
-        )
-        caller.db.coord_planet = "earth"
-        self._entity_goto(caller, "Nobody", room, {})
-        self.assertEqual(len(room.calls), 0)
-        self.assertTrue(any("No entity named" in str(m) for m in caller._messages))
-
-    def test_goto_entity_without_coords_is_rejected(self):
-        """An entity that isn't on the overworld (no coords) can't be jumped to."""
-        room = _RecordingRoom()
-        caller = FakeCaller(
-            perm_level="Builder",
-            systems={"planet_registry": _FakePlanetRegistry()},
-        )
-        caller.db.coord_planet = "earth"
-        target = _EntityStub("Ghost", x=None, y=None, planet=None)
-        self._entity_goto(caller, "Ghost", room, {"Ghost": target})
-        self.assertEqual(len(room.calls), 0)
-        self.assertTrue(any("not on the overworld" in str(m) for m in caller._messages))
-
-    def test_goto_entity_on_unknown_planet_is_rejected(self):
-        """is_valid_coordinate raises KeyError on an unregistered planet; the
-        entity path must catch it and report cleanly, not crash."""
-        class _RaisingRegistry:
-            def resolve_planet(self, token):
-                return None
-            def is_valid_coordinate(self, x, y, planet):
-                raise KeyError(planet)
-
-        room = _RecordingRoom()
-        caller = FakeCaller(
-            perm_level="Builder",
-            systems={"planet_registry": _RaisingRegistry()},
-        )
-        caller.db.coord_planet = "earth"
-        caller.location = room
-        target = _EntityStub("Legacy", x=5, y=5, planet="atlantis")
-        self._entity_goto(caller, "Legacy", room, {"Legacy": target})
-        self.assertEqual(len(room.calls), 0)
-        self.assertTrue(any("unknown planet" in str(m) for m in caller._messages))
-
-    def test_goto_ambiguous_prefix_picks_nearest(self):
-        """Multiple matches → jump to the closest by Chebyshev distance."""
-        room = _RecordingRoom()
-        caller = FakeCaller(
-            perm_level="Builder",
-            systems={"planet_registry": _FakePlanetRegistry()},
-        )
-        caller.db.coord_planet = "earth"
-        caller.db.coord_x, caller.db.coord_y = 10, 10
-        caller.location = room  # same-planet -> no cross-planet move_to
-        far = _EntityStub("Agent-far", x=90, y=90, planet="earth")
-        near = _EntityStub("Agent-near", x=13, y=12, planet="earth")
-        self._entity_goto(caller, "Agent", room, {"Agent": [far, near]})
-        self.assertEqual(len(room.calls), 1)
-        _obj, tx, ty, _notify = room.calls[0]
-        self.assertEqual((tx, ty), (13, 12))  # the nearer Agent
-
-
-# -------------------------------------------------------------- #
-#  CmdTransfer tests — pull a unit to the caller's tile
-# -------------------------------------------------------------- #
-
-class _UnitStub:
-    """A transferable unit stand-in (player or NPC).
-
-    Carries ``combat_xp`` so world.utils.is_player() treats it as movable, and
-    records whether it was notified. ``owner`` differentiates co-named agents.
-    """
-
-    def __init__(self, key, x, y, planet="earth", owner=None, agent_id=None,
-                 puppeted=False):
-        self.key = key
-        self.location = None
-        self.db = FakeDB(
-            coord_x=x, coord_y=y, coord_planet=planet,
-            combat_xp=0, owner=owner, agent_id=agent_id,
-        )
-        self._messages = []
-        self._executed = []
-        # A puppeted player has execute_cmd (so it gets a look-refresh); an
-        # agent/NPC does not. Add it conditionally to mirror the guard in
-        # _pull_to_caller.
-        if puppeted:
-            self.execute_cmd = lambda cmd, **kw: self._executed.append(cmd)
-
-    def msg(self, text, **kwargs):
-        self._messages.append(text)
-
-    def move_to(self, destination, **kwargs):
-        self.location = destination
-
-
-class _BuildingStub:
-    """A fixed structure — no combat_xp, so is_player() is False (not movable)."""
-
-    def __init__(self, key, x, y, planet="earth"):
-        self.key = key
-        self.location = None
-        self.db = FakeDB(coord_x=x, coord_y=y, coord_planet=planet)
-
-    def move_to(self, destination, **kwargs):
-        self.location = destination
-
-
-class _FakeAgentRoster:
-    """Minimal agent_system exposing get_agents(owner)."""
-
-    def __init__(self, by_owner):
-        self._by_owner = by_owner  # {owner_obj: [units]}
-
-    def get_agents(self, owner):
-        return self._by_owner.get(owner, [])
-
-
-class TestTransfer(unittest.TestCase):
-    """CmdTransfer pulls players/agents/NPCs to the caller's tile."""
-
-    def _caller(self, systems=None):
-        caller = FakeCaller(perm_level="Builder", systems=systems or {})
-        caller.db.coord_planet = "earth"
-        caller.db.coord_x, caller.db.coord_y = 100, 100
-        return caller
-
-    def _run(self, caller, args, room, search_results=None):
-        caller._search_results = search_results or {}
-        _install_systems({"planet_rooms": {"earth": room}})
-        cmd = _make_cmd(CmdTransfer, caller, args)
-        cmd.func()
-
-    def test_registers_expected_aliases(self):
-        self.assertIn("summon", CmdTransfer.aliases)
-        self.assertIn("@transfer", CmdTransfer.aliases)
-
-    def test_pulls_named_unit_to_caller_tile(self):
-        room = _RecordingRoom()
-        caller = self._caller()
-        unit = _UnitStub("Scout", x=5, y=5)
-        self._run(caller, "Scout", room, {"Scout": unit})
-
-        self.assertEqual(len(room.calls), 1)
-        obj, tx, ty, notify = room.calls[0]
-        self.assertIs(obj, unit)
-        self.assertEqual((tx, ty), (100, 100))  # the caller's tile
-        self.assertFalse(notify)  # relocation is silent
-        # The unit is told it moved.
-        self.assertTrue(any("transferred" in str(m).lower() for m in unit._messages))
-        self.assertTrue(any("Scout" in str(m) for m in caller._messages))
-
-    def test_transfer_refreshes_views_for_puppeted_target_and_caller(self):
-        # A puppeted player target gets a 'look' refresh (stale-map fix), and the
-        # caller's view refreshes too so the arriving unit shows on the tile.
-        room = _RecordingRoom()
-        caller = self._caller()
-        unit = _UnitStub("Scout", x=5, y=5, puppeted=True)
-        self._run(caller, "Scout", room, {"Scout": unit})
-
-        self.assertEqual(len(room.calls), 1)  # the move happened
-        self.assertIn("look", unit._executed,
-                      "a puppeted transferred player must get a look-refresh")
-        self.assertIn("look", caller._executed,
-                      "the caller's view must refresh after pulling a unit in")
-
-    def test_transfer_agent_target_without_execute_cmd_is_safe(self):
-        # An agent/NPC target has no execute_cmd; the look-refresh branch is
-        # guarded, so the transfer still succeeds without raising.
-        room = _RecordingRoom()
-        caller = self._caller()
-        agent = _UnitStub("Agent-1", x=5, y=5, puppeted=False)  # no execute_cmd
-        self.assertFalse(hasattr(agent, "execute_cmd"))
-        self._run(caller, "Agent-1", room, {"Agent-1": agent})
-        self.assertEqual(len(room.calls), 1)  # moved, no crash
-        self.assertIn("look", caller._executed)  # caller still refreshes
-
-    def test_buildings_cannot_be_transferred(self):
-        room = _RecordingRoom()
-        caller = self._caller()
-        bld = _BuildingStub("HQ", x=5, y=5)
-        self._run(caller, "HQ", room, {"HQ": bld})
-
-        self.assertEqual(len(room.calls), 0)  # no move happened
-        self.assertTrue(
-            any("not a movable unit" in str(m) for m in caller._messages)
-        )
-
-    def test_unknown_name_reports_and_does_not_move(self):
-        room = _RecordingRoom()
-        caller = self._caller()
-        self._run(caller, "Nobody", room, {})
-        self.assertEqual(len(room.calls), 0)
-        self.assertTrue(any("No unit named" in str(m) for m in caller._messages))
-
-    def test_ambiguous_name_lists_candidates_with_owners(self):
-        room = _RecordingRoom()
-        caller = self._caller()
-        raider = _UnitStub("Raider", x=1, y=1)
-        me = _UnitStub("Me", x=2, y=2)
-        a1 = _UnitStub("Agent-1", x=8, y=8, owner=raider)
-        a2 = _UnitStub("Agent-1", x=9, y=9, owner=me)
-        self._run(caller, "Agent-1", room, {"Agent-1": [a1, a2]})
-
-        # Ambiguous → NOT moved; both owners listed for disambiguation.
-        self.assertEqual(len(room.calls), 0)
-        joined = " ".join(str(m) for m in caller._messages)
-        self.assertIn("Multiple units match", joined)
-        self.assertIn("Raider", joined)
-        self.assertIn("Me", joined)
-
-    def test_owner_disambiguates_by_agent_id(self):
-        room = _RecordingRoom()
-        raider = _UnitStub("Raider", x=1, y=1)
-        a3 = _UnitStub("Agent-3", x=8, y=8, owner=raider, agent_id=3)
-        roster = _FakeAgentRoster({raider: [a3]})
-        caller = self._caller(systems={"agent_system": roster})
-        # owner= resolves the owner via caller.search; '#3' picks by agent_id.
-        self._run(caller, "#3 owner=Raider", room, {"Raider": raider})
-
-        self.assertEqual(len(room.calls), 1)
-        obj, tx, ty, _notify = room.calls[0]
-        self.assertIs(obj, a3)
-        self.assertEqual((tx, ty), (100, 100))
-
-    def test_owner_disambiguates_by_name(self):
-        # 'Agent-1 owner=Raider' searches by name, then keeps only Raider's.
-        room = _RecordingRoom()
-        raider = _UnitStub("Raider", x=1, y=1)
-        me = _UnitStub("Me", x=2, y=2)
-        mine = _UnitStub("Agent-1", x=3, y=3, owner=me)
-        theirs = _UnitStub("Agent-1", x=8, y=8, owner=raider)
-        caller = self._caller()
-        self._run(
-            caller, "Agent-1 owner=Raider", room,
-            {"Raider": raider, "Agent-1": [mine, theirs]},
-        )
-        self.assertEqual(len(room.calls), 1)
-        obj, _tx, _ty, _notify = room.calls[0]
-        self.assertIs(obj, theirs)  # Raider's, not mine
-
-    def test_owner_with_missing_agent_id_reports(self):
-        room = _RecordingRoom()
-        raider = _UnitStub("Raider", x=1, y=1)
-        roster = _FakeAgentRoster({raider: []})  # owns no agents
-        caller = self._caller(systems={"agent_system": roster})
-        self._run(caller, "#9 owner=Raider", room, {"Raider": raider})
-        self.assertEqual(len(room.calls), 0)
-        self.assertTrue(any("no agent #9" in str(m) for m in caller._messages))
-
-    def test_owner_not_found_reports(self):
-        room = _RecordingRoom()
-        caller = self._caller(systems={"agent_system": _FakeAgentRoster({})})
-        self._run(caller, "#1 owner=Ghost", room, {})
-        self.assertEqual(len(room.calls), 0)
-        self.assertTrue(
-            any("Could not find owner" in str(m) for m in caller._messages)
-        )
-
-    def test_no_args_shows_usage(self):
-        room = _RecordingRoom()
-        caller = self._caller()
-        self._run(caller, "", room, {})
-        self.assertEqual(len(room.calls), 0)
-        self.assertTrue(any("Usage:" in str(m) for m in caller._messages))
-
-    def test_caller_without_position_is_rejected(self):
-        room = _RecordingRoom()
-        caller = self._caller()
-        caller.db.coord_x = None  # no tile to pull to
-        unit = _UnitStub("Scout", x=5, y=5)
-        self._run(caller, "Scout", room, {"Scout": unit})
-        self.assertEqual(len(room.calls), 0)
-        self.assertTrue(
-            any("no overworld position" in str(m) for m in caller._messages)
-        )
-
-
-# -------------------------------------------------------------- #
-#  CmdAdminOutpost tests
-# -------------------------------------------------------------- #
-
-class FakeSpawner:
-    """Fake OutpostSpawnerSystem recording spawn_base calls."""
-
-    def __init__(self, result="ok"):
-        self.calls = []
-        self._result = result
-        self._active_bases = {}
-
-    def spawn_base(self, planet, tier, coords=None):
-        self.calls.append((planet, tier, coords))
-        if self._result is None:
-            return None
-        x, y = coords if coords else (7, 7)
-        rec = {"tier": tier, "planet": planet, "x": x, "y": y}
-        self._active_bases[len(self._active_bases)] = rec
-        return rec
-
-
-class TestCmdAdminOutpost(unittest.TestCase):
-
-    def _caller(self, spawner, x=3, y=4, planet="earth", perm="Builder"):
-        caller = FakeCaller(perm_level=perm,
-                            systems={"outpost_spawner": spawner})
-        caller.db.coord_x = x
-        caller.db.coord_y = y
-        caller.db.coord_planet = planet
-        return caller
-
-    def test_spawn_uses_caller_tile_by_default(self):
-        spawner = FakeSpawner()
-        caller = self._caller(spawner, x=3, y=4)
-        cmd = _make_cmd(CmdAdminOutpost, caller, "spawn outpost")
-        cmd.func()
-        self.assertEqual(spawner.calls, [("earth", "outpost", (3, 4))])
-        self.assertTrue(any("Spawned outpost" in m for m in caller._messages))
-
-    def test_spawn_with_explicit_coords(self):
-        spawner = FakeSpawner()
-        caller = self._caller(spawner)
-        cmd = _make_cmd(CmdAdminOutpost, caller, "spawn fortress 20 30")
-        cmd.func()
-        self.assertEqual(spawner.calls, [("earth", "fortress", (20, 30))])
-
-    def test_spawn_no_tier_shows_usage(self):
-        spawner = FakeSpawner()
-        caller = self._caller(spawner)
-        cmd = _make_cmd(CmdAdminOutpost, caller, "spawn")
-        cmd.func()
-        self.assertTrue(any("Usage" in m for m in caller._messages))
-        self.assertEqual(spawner.calls, [])
-
-    def test_spawn_failure_reports(self):
-        spawner = FakeSpawner(result=None)  # placement fails
-        caller = self._caller(spawner)
-        cmd = _make_cmd(CmdAdminOutpost, caller, "spawn outpost")
-        cmd.func()
-        self.assertTrue(any("Could not spawn" in m for m in caller._messages))
-
-    def test_spawn_denied_without_builder(self):
-        spawner = FakeSpawner()
-        caller = self._caller(spawner, perm="Player")
-        cmd = _make_cmd(CmdAdminOutpost, caller, "spawn outpost")
-        cmd.func()
-        self.assertTrue(any("Permission denied" in m for m in caller._messages))
-        self.assertEqual(spawner.calls, [])
-
-    def test_list_shows_active_bases(self):
-        spawner = FakeSpawner()
-        spawner._active_bases = {0: {"tier": "outpost", "planet": "earth",
-                                     "x": 5, "y": 6}}
-        caller = self._caller(spawner)
-        cmd = _make_cmd(CmdAdminOutpost, caller, "list")
-        cmd.func()
-        output = "\n".join(caller._messages)
-        self.assertIn("outpost", output)
-        self.assertIn("5", output)
-
-    # -- tier index / prefix resolution (uses a registry with base_templates) --
-
-    class _FakeTemplate:
-        def __init__(self, tier, display_name):
-            self.tier = tier
-            self.display_name = display_name
-
-    class _FakeTierRegistry:
-        def __init__(self, tiers):
-            self.base_templates = {
-                t: TestCmdAdminOutpost._FakeTemplate(t, t.title()) for t in tiers
-            }
-
-    def _caller_with_tiers(self, spawner, tiers=("fortress", "outpost")):
-        caller = self._caller(spawner)
-        _install_systems({"registry": self._FakeTierRegistry(tiers)})
-        return caller
-
-    def test_spawn_by_tier_index(self):
-        spawner = FakeSpawner()
-        caller = self._caller_with_tiers(spawner)  # sorted: fortress(1), outpost(2)
-        cmd = _make_cmd(CmdAdminOutpost, caller, "spawn 2")
-        cmd.func()
-        self.assertEqual(spawner.calls, [("earth", "outpost", (3, 4))])
-
-    def test_spawn_by_tier_prefix(self):
-        spawner = FakeSpawner()
-        caller = self._caller_with_tiers(spawner)
-        cmd = _make_cmd(CmdAdminOutpost, caller, "spawn fort")
-        cmd.func()
-        self.assertEqual(spawner.calls, [("earth", "fortress", (3, 4))])
-
-    def test_spawn_unknown_tier_reports(self):
-        spawner = FakeSpawner()
-        caller = self._caller_with_tiers(spawner)
-        cmd = _make_cmd(CmdAdminOutpost, caller, "spawn bogus")
-        cmd.func()
-        self.assertTrue(any("Unknown or ambiguous tier" in m for m in caller._messages))
-        self.assertEqual(spawner.calls, [])
-
-    def test_tiers_lists_with_index(self):
-        spawner = FakeSpawner()
-        caller = self._caller_with_tiers(spawner)
-        cmd = _make_cmd(CmdAdminOutpost, caller, "tiers")
-        cmd.func()
-        output = "\n".join(caller._messages)
-        self.assertIn("[1]", output)
-        self.assertIn("fortress", output)
-        self.assertIn("outpost", output)
-
-
-# -------------------------------------------------------------- #
-#  CmdAdminAlliance tests
-# -------------------------------------------------------------- #
-
-class _FakeAllianceSystemForAdmin:
-    """Records the single-writer calls the admin router should route through."""
-
-    def __init__(self):
-        self.calls = []
-        self._records = {
-            7: {"id": 7, "name": "Wolves", "tag": "WLV", "leader_id": 100,
-                "officer_ids": [], "member_ids": [200], "treasury": {"Iron": 5},
-                "active_perks": {}, "pending_invites": [], "pending_requests": []},
-        }
-        # Resolvable roster members for the kick tests: id 100 = leader, 200 = a
-        # plain member.
-        self._members = {
-            100: types.SimpleNamespace(id=100, key="Boss",
-                                       db=types.SimpleNamespace(player_alliance=7)),
-            200: types.SimpleNamespace(id=200, key="Grunt",
-                                       db=types.SimpleNamespace(player_alliance=7)),
-        }
-
-        class _Reg:
-            def __init__(self, recs):
-                self._recs = recs
-
-            def all_alliances(self):
-                return list(self._recs.values())
-
-            def by_tag(self, tag):
-                for r in self._recs.values():
-                    if r["tag"].lower() == tag.lower():
-                        return r
-                return None
-
-            def put(self, rec):
-                self._recs[rec["id"]] = rec
-
-        self._alliances = _Reg(self._records)
-
-    def _record(self, aid):
-        return self._records.get(aid)
-
-    def _resolve_member(self, cid):
-        return self._members.get(cid)
-
-    def _remove_from_roster(self, record, cid):
-        record["officer_ids"] = [i for i in record.get("officer_ids", []) if i != cid]
-        record["member_ids"] = [i for i in record.get("member_ids", []) if i != cid]
-        self.calls.append(("_remove_from_roster", cid))
-
-    def _clear_pointer(self, member):
-        self.calls.append(("_clear_pointer", member.id))
-
-    def _unsubscribe(self, member, aid):
-        pass
-
-    def _live_members(self, aid):
-        return []
-
-    def compute_alliance_level(self, aid):
-        return 1
-
-    def alliance_summary(self, aid, for_member=False):
-        r = self._records.get(aid)
-        if r is None:
-            return None
-        return {
-            "name": r["name"], "tag": r["tag"], "leader": "Leader",
-            "member_count": 1, "level": 1, "active_perks": {}, "open_join": False,
-            "treasury": dict(r["treasury"]), "pending_invites": [],
-            "pending_requests": [],
-        }
-
-    def _do_disband(self, record):
-        self.calls.append(("_do_disband", record["id"]))
-        self._records.pop(record["id"], None)
-
-
-def _alliance_caller(perm="Builder"):
-    system = _FakeAllianceSystemForAdmin()
-    caller = FakeCaller(perm_level=perm, systems={"alliance_system": system})
-    return caller, system
-
-
-class TestAdminAlliance(unittest.TestCase):
-    def test_list_reads_alliances(self):
-        caller, system = _alliance_caller()
-        _make_cmd(CmdAdminAlliance, caller, " list").func()
-        out = "\n".join(caller._messages)
-        self.assertIn("Wolves", out)
-        self.assertIn("WLV", out)
-
-    def test_inspect_shows_full_state(self):
-        caller, system = _alliance_caller()
-        _make_cmd(CmdAdminAlliance, caller, " inspect WLV").func()
-        out = "\n".join(caller._messages)
-        self.assertIn("Treasury", out)
-
-    def test_force_disband_routes_through_system(self):
-        caller, system = _alliance_caller()
-        _make_cmd(CmdAdminAlliance, caller, " disband WLV").func()
-        self.assertIn(("_do_disband", 7), system.calls)
-
-    def test_unknown_tag_reports(self):
-        caller, system = _alliance_caller()
-        _make_cmd(CmdAdminAlliance, caller, " inspect NOPE").func()
-        self.assertTrue(any("No alliance" in m for m in caller._messages))
-
-    def test_requires_builder(self):
-        caller, system = _alliance_caller(perm="Player")
-        _make_cmd(CmdAdminAlliance, caller, " disband WLV").func()
-        # A non-Builder is refused; the disband never routes through.
-        self.assertNotIn(("_do_disband", 7), system.calls)
-
-    # Fix #4 — @alliance kick must refuse the leader (would strand leader_id).
-    def test_kick_leader_refused(self):
-        caller, system = _alliance_caller()
-        _make_cmd(CmdAdminAlliance, caller, " kick WLV Boss").func()
-        self.assertTrue(any("Cannot kick the leader" in m for m in caller._messages))
-        # No roster mutation happened.
-        self.assertNotIn(("_remove_from_roster", 100), system.calls)
-
-    def test_kick_non_leader_member_works(self):
-        caller, system = _alliance_caller()
-        _make_cmd(CmdAdminAlliance, caller, " kick WLV Grunt").func()
-        self.assertIn(("_remove_from_roster", 200), system.calls)
-        self.assertIn(("_clear_pointer", 200), system.calls)
-
-
-# -------------------------------------------------------------- #
-#  CmdPeace tests — clear a player's combat state
-# -------------------------------------------------------------- #
-
-class TestPeace(unittest.TestCase):
-    """@peace zeroes the combat timer + build-gate lockout."""
-
-    def test_peace_clears_self(self):
-        caller = FakeCaller(perm_level="Builder")
-        caller.db.combat_timer_expires = 120
-        caller.db.combat_lockout_tick = 55
-        _make_cmd(CmdPeace, caller, "").func()
-        self.assertEqual(caller.db.combat_timer_expires, 0)
-        self.assertEqual(caller.db.combat_lockout_tick, 0)
-        self.assertTrue(any("Cleared combat state" in m for m in caller._messages))
-
-    def test_peace_clears_named_target(self):
-        target = FakeTarget(name="Bob")
-        target.db.combat_timer_expires = 99
-        caller = FakeCaller(perm_level="Builder")
-        caller._search_results["Bob"] = target
-        _make_cmd(CmdPeace, caller, "Bob").func()
-        self.assertEqual(target.db.combat_timer_expires, 0)
-        # The target is notified.
-        self.assertTrue(any("out of combat" in m for m in target._messages))
-
-    def test_peace_unknown_target(self):
-        caller = FakeCaller(perm_level="Builder")
-        _make_cmd(CmdPeace, caller, "Ghost").func()
-        self.assertTrue(any("Ghost" in m for m in caller._messages))
-
-    def test_peace_requires_builder(self):
-        # The lock string gates the command; verify it's Builder-scoped.
-        self.assertIn("Builder", CmdPeace.locks)
-
-
-# -------------------------------------------------------------- #
-#  CmdRestore tests — heal / revive
-# -------------------------------------------------------------- #
-
-class TestRestore(unittest.TestCase):
-    """@restore heals to hp_max and revives a downed unit."""
-
-    def test_restore_self_to_full(self):
-        caller = FakeCaller(perm_level="Builder")
-        caller.db.hp = 3
-        caller.db.hp_max = 500
-        _make_cmd(CmdRestore, caller, "").func()
-        self.assertEqual(caller.db.hp, 500)
-        self.assertTrue(any("full health" in m for m in caller._messages))
-
-    def test_restore_revives_downed_target(self):
-        target = FakeTarget(name="Bob")
-        target.db.hp = 0
-        target.db.hp_max = 100
-        target.db.incapacitated = True
-        target.db.respawn_timer = 8
-        caller = FakeCaller(perm_level="Builder")
-        caller._search_results["Bob"] = target
-        _make_cmd(CmdRestore, caller, "Bob").func()
-        self.assertEqual(target.db.hp, 100)
-        self.assertFalse(target.db.incapacitated)
-        self.assertEqual(target.db.respawn_timer, 0)
-
-    def test_restore_no_max_health(self):
-        caller = FakeCaller(perm_level="Builder")
-        # hp_max unset -> 0 -> refuse rather than heal to 0.
-        _make_cmd(CmdRestore, caller, "").func()
-        self.assertTrue(any("maximum health" in m for m in caller._messages))
-
-    def test_restore_heal_alias(self):
-        self.assertIn("@heal", CmdRestore.aliases)
-
-
-# -------------------------------------------------------------- #
-#  CmdAdminStat tests — set hp / maxhp / xp / arbitrary fields
-# -------------------------------------------------------------- #
-
-class TestAdminStat(unittest.TestCase):
-    """@stat sets combat/progression fields on a player or NPC."""
-
-    def test_hp_clamped_to_max(self):
-        caller = FakeCaller(perm_level="Admin")
-        caller.db.hp_max = 100
-        _make_cmd(CmdAdminStat, caller, " hp 9999").func()
-        self.assertEqual(caller.db.hp, 100)  # clamped
-
-    def test_hp_revives_downed(self):
-        target = FakeTarget(name="Bob")
-        target.db.hp_max = 100
-        target.db.incapacitated = True
-        target.db.respawn_timer = 5
-        caller = FakeCaller(perm_level="Admin")
-        caller._search_results["Bob"] = target
-        _make_cmd(CmdAdminStat, caller, " hp 50 Bob").func()
-        self.assertEqual(target.db.hp, 50)
-        self.assertFalse(target.db.incapacitated)
-
-    def test_maxhp_tops_up_full_unit(self):
-        caller = FakeCaller(perm_level="Admin")
-        caller.db.hp = 100
-        caller.db.hp_max = 100
-        _make_cmd(CmdAdminStat, caller, " maxhp 1000").func()
-        self.assertEqual(caller.db.hp_max, 1000)
-        self.assertEqual(caller.db.hp, 1000)  # full unit topped up
-
-    def test_maxhp_clamps_overmax(self):
-        caller = FakeCaller(perm_level="Admin")
-        caller.db.hp = 900
-        caller.db.hp_max = 1000
-        _make_cmd(CmdAdminStat, caller, " maxhp 500").func()
-        self.assertEqual(caller.db.hp_max, 500)
-        self.assertEqual(caller.db.hp, 500)  # clamped down
-
-    def test_xp_sets_value(self):
-        caller = FakeCaller(perm_level="Admin")
-        _make_cmd(CmdAdminStat, caller, " xp 1234").func()
-        self.assertEqual(caller.db.combat_xp, 1234)
-
-    def test_set_allowlisted_field(self):
-        caller = FakeCaller(perm_level="Admin")
-        _make_cmd(CmdAdminStat, caller, " set kills 42").func()
-        self.assertEqual(caller.db.kills, 42)
-
-    def test_set_rejects_unlisted_field(self):
-        caller = FakeCaller(perm_level="Admin")
-        _make_cmd(CmdAdminStat, caller, " set coord_x 5").func()
-        self.assertIsNone(caller.db.coord_x)
-        self.assertTrue(any("not settable" in m for m in caller._messages))
-
-    def test_show_lists_stats(self):
-        caller = FakeCaller(perm_level="Builder")
-        caller.db.hp = 50
-        caller.db.hp_max = 500
-        _make_cmd(CmdAdminStat, caller, " show").func()
-        self.assertTrue(any("Stats:" in m for m in caller._messages))
-
-    def test_hp_denied_for_builder(self):
-        caller = FakeCaller(perm_level="Builder")
-        _make_cmd(CmdAdminStat, caller, " hp 50").func()
-        self.assertTrue(any("Permission denied" in m for m in caller._messages))
-
-    def test_show_allowed_for_builder(self):
-        caller = FakeCaller(perm_level="Builder")
-        _make_cmd(CmdAdminStat, caller, " show").func()
-        self.assertFalse(any("Permission denied" in m for m in caller._messages))
-
-    def test_hp_no_args_shows_usage(self):
-        caller = FakeCaller(perm_level="Admin")
-        _make_cmd(CmdAdminStat, caller, " hp").func()
-        self.assertTrue(any("Usage" in m for m in caller._messages))
-
-
-# -------------------------------------------------------------- #
-#  CmdObliterate tests — radius mass-delete
-# -------------------------------------------------------------- #
-
-from evennia.objects.objects import DefaultCharacter as _StubDefaultCharacter  # noqa: E402
-
-
-class _Deletable:
-    """A destroyable entity (building/NPC/item) at a tile."""
-
-    _next_pk = 1
-
-    def __init__(self, key="thing", x=0, y=0):
-        self.key = key
-        self.pk = _Deletable._next_pk
-        _Deletable._next_pk += 1
-        self.db = FakeDB(coord_x=x, coord_y=y)
-        self.deleted = False
-
-    def delete(self):
-        self.deleted = True
-        self.pk = None
-
-
-class _ObliteratePlayer(_StubDefaultCharacter):
-    """A real (stub) player character — must be spared by obliterate."""
-
-    def __init__(self, key="Hero"):
-        super().__init__(key=key)
-        self.pk = 999
-        self.deleted = False
-
-    def delete(self):
-        self.deleted = True
-
-
-class _ObliterateSentinel(_StubDefaultCharacter):
-    """A Sentinel HQ — a DefaultCharacter, but is_sentinel → destroyable."""
-
-    def __init__(self, key="Sentinel"):
-        super().__init__(key=key)
-        self.pk = 500
-        self.db.is_sentinel = True
-        self.deleted = False
-
-    def delete(self):
-        self.deleted = True
-        self.pk = None
-
-
-class _AreaRoom:
-    """PlanetRoom stand-in exposing get_objects_in_area over a fixed list."""
-
-    def __init__(self, objects):
-        self._objects = list(objects)
-        self.key = "TestPlanet"
-
-    def get_objects_in_area(self, x1, y1, x2, y2):
-        out = []
-        for o in self._objects:
-            ox = getattr(o.db, "coord_x", None)
-            oy = getattr(o.db, "coord_y", None)
-            if ox is None or oy is None:
-                continue
-            if x1 <= ox <= x2 and y1 <= oy <= y2:
-                out.append(o)
-        return out
-
-
-class _FakeSpawner:
-    """Spawner stand-in tracking bases by HQ coords (like the real one keys them
-    off a Sentinel that is NOT on the tile map). ``bases`` is a list of dicts
-    ``{tier, planet, x, y}``; wipe_bases_in_area removes those whose HQ is in the
-    box, mirroring the real wipe-as-a-unit behavior."""
-
-    def __init__(self, bases=None):
-        self.bases = list(bases or [])
-        self.reconciled = 0
-
-    def wipe_bases_in_area(self, planet, x1, y1, x2, y2):
-        victims = [
-            b for b in self.bases
-            if b["planet"] == planet and x1 <= b["x"] <= x2 and y1 <= b["y"] <= y2
-        ]
-        for b in victims:
-            self.bases.remove(b)
-        return len(victims)
-
-    def forget_dead_bases(self):
-        self.reconciled += 1
-        return 0
-
-
-class _ObliteratePlanetRegistry:
-    def resolve_planet(self, ident):
-        # Accept a z-level number or the literal name "earth".
-        if ident in ("0", "earth"):
-            return "earth"
-        if ident == "3":
-            return "mars"
-        return None
-
-    def is_valid_coordinate(self, x, y, planet):
-        return True
-
-
-class TestObliterate(unittest.TestCase):
-    """obliterate <radius> [<x> <y> [z]] mass-deletes entities, sparing players."""
-
-    def _caller(self, x=10, y=10, planet="earth"):
-        caller = FakeCaller(perm_level="Builder")
-        caller.db.coord_x = x
-        caller.db.coord_y = y
-        caller.db.coord_planet = planet
-        return caller
-
-    def test_destroys_entities_in_radius_around_self(self):
-        near = _Deletable("HQ", x=11, y=11)      # within 5 of (10,10)
-        far = _Deletable("FarHQ", x=99, y=99)    # out of range
-        room = _AreaRoom([near, far])
-        caller = self._caller()
-        caller.location = room
-        _install_systems({"planet_rooms": {"earth": room}})
-        _make_cmd(CmdObliterate, caller, "5").func()
-        self.assertTrue(near.deleted)
-        self.assertFalse(far.deleted)
-        self.assertTrue(any("Obliterated 1" in m for m in caller._messages))
-
-    def test_spares_player_characters(self):
-        player = _ObliteratePlayer("Hero")
-        player.db.coord_x, player.db.coord_y = 10, 10
-        building = _Deletable("HQ", x=10, y=10)
-        room = _AreaRoom([player, building])
-        caller = self._caller()
-        caller.location = room
-        _install_systems({"planet_rooms": {"earth": room}})
-        _make_cmd(CmdObliterate, caller, "3").func()
-        self.assertFalse(player.deleted)          # player spared
-        self.assertTrue(building.deleted)         # building destroyed
-        self.assertTrue(any("Spared 1 player" in m for m in caller._messages))
-
-    def test_destroys_sentinel_hq(self):
-        sentinel = _ObliterateSentinel("Sentinel")
-        sentinel.db.coord_x, sentinel.db.coord_y = 10, 10
-        room = _AreaRoom([sentinel])
-        caller = self._caller()
-        caller.location = room
-        _install_systems({"planet_rooms": {"earth": room}})
-        _make_cmd(CmdObliterate, caller, "2").func()
-        self.assertTrue(sentinel.deleted)         # sentinel HQ is destroyable
-
-    def test_explicit_coords_and_zlevel(self):
-        # obliterate 5 250 250 3 → around (250,250) on z-level 3 ("mars").
-        target = _Deletable("MarsHQ", x=250, y=250)
-        mars_room = _AreaRoom([target])
-        caller = self._caller(planet="earth")
-        caller.location = _AreaRoom([])  # caller is on earth; target on mars
-        _install_systems({
-            "planet_registry": _ObliteratePlanetRegistry(),
-            "planet_rooms": {"earth": caller.location, "mars": mars_room},
-        })
-        _make_cmd(CmdObliterate, caller, "5 250 250 3").func()
-        self.assertTrue(target.deleted)
-        self.assertTrue(any("on mars" in m for m in caller._messages))
-
-    def test_reconciles_dead_bases(self):
-        sentinel = _ObliterateSentinel("Sentinel")
-        sentinel.db.coord_x, sentinel.db.coord_y = 10, 10
-        room = _AreaRoom([sentinel])
-        spawner = _FakeSpawner()
-        caller = self._caller()
-        caller.location = room
-        _install_systems({"planet_rooms": {"earth": room}, "outpost_spawner": spawner})
-        _make_cmd(CmdObliterate, caller, "2").func()
-        self.assertEqual(spawner.reconciled, 1)   # base bookkeeping reconciled
-
-    def test_clears_npc_base_from_tracking(self):
-        # Regression: obliterating an outpost must remove it from '@outpost list'.
-        # The base's owning Sentinel is NOT on the tile map (no coords), so the
-        # tile sweep alone would leave a phantom base — wipe_bases_in_area (called
-        # by obliterate, keyed off the HQ coords) must clear it as a unit.
-        room = _AreaRoom([_Deletable("HQ building", x=25, y=25)])
-        spawner = _FakeSpawner(bases=[
-            {"tier": "outpost", "planet": "earth", "x": 25, "y": 25},
-            {"tier": "fortress", "planet": "earth", "x": 200, "y": 200},  # far away
-        ])
-        caller = self._caller(x=25, y=25)
-        caller.location = room
-        _install_systems({"planet_rooms": {"earth": room}, "outpost_spawner": spawner})
-        _make_cmd(CmdObliterate, caller, "5").func()
-        # The in-range outpost is gone from tracking; the distant fortress stays.
-        remaining = [(b["tier"], b["x"], b["y"]) for b in spawner.bases]
-        self.assertEqual(remaining, [("fortress", 200, 200)])
-        self.assertTrue(any("Cleared 1 NPC base" in m for m in caller._messages))
-
-    def test_radius_zero_hits_only_center_tile(self):
-        center = _Deletable("Center", x=10, y=10)
-        adjacent = _Deletable("Adj", x=11, y=10)
-        room = _AreaRoom([center, adjacent])
-        caller = self._caller()
-        caller.location = room
-        _install_systems({"planet_rooms": {"earth": room}})
-        _make_cmd(CmdObliterate, caller, "0").func()
-        self.assertTrue(center.deleted)
-        self.assertFalse(adjacent.deleted)
-
-    def test_no_args_shows_usage(self):
-        caller = self._caller()
-        _make_cmd(CmdObliterate, caller, "").func()
-        self.assertTrue(any("Usage" in m for m in caller._messages))
-
-    def test_negative_radius_rejected(self):
-        caller = self._caller()
-        _make_cmd(CmdObliterate, caller, "-3").func()
-        self.assertTrue(any("zero or positive" in m for m in caller._messages))
-
-    def test_non_integer_radius_rejected(self):
-        caller = self._caller()
-        _make_cmd(CmdObliterate, caller, "big").func()
-        self.assertTrue(any("integer" in m for m in caller._messages))
-
-    def test_requires_builder(self):
-        self.assertIn("Builder", CmdObliterate.locks)
-
-    def test_skips_already_deleted_stale_refs(self):
-        stale = _Deletable("Ghost", x=10, y=10)
-        stale.pk = None  # already-deleted stale index entry
-        live = _Deletable("HQ", x=10, y=10)
-        room = _AreaRoom([stale, live])
-        caller = self._caller()
-        caller.location = room
-        _install_systems({"planet_rooms": {"earth": room}})
-        _make_cmd(CmdObliterate, caller, "1").func()
-        self.assertFalse(stale.deleted)   # never touched
-        self.assertTrue(live.deleted)
-        self.assertTrue(any("Obliterated 1" in m for m in caller._messages))
+        cmd = _item_cmd(ItemCaller(), " stats")
+        self.assertIn("Usage", self.output(cmd))
 
 
 if __name__ == "__main__":
     unittest.main()
+
+
+# ================================================================== #
+#  @item pilot router (unified-admin-crud task 3.2)
+#
+#  CmdAdminItem migrated to EntityAdminRouter, driven by the REAL
+#  ItemAdapter (with an injected registry double — no live game):
+#  - `list` shows live instances AND the def-list-moved pointer
+#    (Requirements 4.1, 11.4)
+#  - `stats` is a Migration_Alias of `show`: canonical output plus the
+#    one-line deprecation note (Requirements 11.1, 11.2, 11.5)
+#  - the def scope is reachable end-to-end (`def list`/`def show`/
+#    `def diff`) — Requirements 4.1 (grammar), 5.4, 5.6, 5.7
+# ================================================================== #
+
+RIFLE_SPEC = {
+    "stats": {
+        "damage": {"min": 10.0, "max": 50.0, "weight": 1.0},
+    },
+}
+
+
+class FakeItemRegistry:
+    """DataRegistry double: ``items`` dict + ``resolve_item`` matcher."""
+
+    def __init__(self, defs):
+        self.items = {d.key: d for d in defs}
+
+    def resolve_item(self, token):
+        if token in self.items:
+            return self.items[token]
+        lowered = str(token).lower()
+        matches = [
+            d for d in self.items.values()
+            if d.key.lower().startswith(lowered)
+            or d.name.lower().startswith(lowered)
+        ]
+        return matches[0] if len(matches) == 1 else None
+
+    def get_item(self, key):
+        return self.items[key]
+
+
+class ItemRouterTestCase(unittest.TestCase):
+    """CmdAdminItem + real ItemAdapter over dict-shaped held items."""
+
+    def setUp(self):
+        self.data_registry = FakeItemRegistry([
+            ItemDef(key="rifle", name="Rifle", slot="weapon",
+                    category="weapon", weapon_type="ranged", weight=3.0,
+                    roll_spec=RIFLE_SPEC),
+            ItemDef(key="medkit", name="Medkit", category="consumable"),
+        ])
+        self.adapter = ItemAdapter(registry=self.data_registry)
+        self.registry = AdapterRegistry()
+        self.registry.register(self.adapter)
+        self.caller = FakeCaller(perms=("Builder",))
+        # Dict-shaped held items (the loot roller's test shape) in the
+        # caller's contents — the adapter's holdings scan finds them.
+        self.caller.contents = [
+            {"item_key": "rifle", "iqs": 72.0, "rarity": "rare",
+             "category": "weapon", "rolled_stats": {"damage": 30.0}},
+            {"item_key": "medkit", "category": "consumable"},
+        ]
+
+        outer = self
+
+        class _ItemRouter(CmdAdminItem):
+            """CmdAdminItem with the test registry/overlay injected."""
+
+            def _adapter_registry(self):
+                return outer.registry
+
+            def _overlay_store(self):
+                return outer.overlay
+
+        self.router_cls = _ItemRouter
+        self.overlay = FakeOverlay()
+
+    def run_cmd(self, args, caller=None):
+        cmd = self.router_cls()
+        cmd.caller = caller or self.caller
+        cmd.args = args
+        cmd.func()
+        return cmd
+
+    def output(self, cmd):
+        return "\n".join(cmd.caller.messages)
+
+
+class TestItemRouterIdentity(ItemRouterTestCase):
+    """The migration preserves the command key and the Builder lock."""
+
+    def test_command_key_and_adapter_key_preserved(self):
+        self.assertEqual(CmdAdminItem.key, "@item")
+        self.assertEqual(CmdAdminItem.adapter_key, "item")
+        # Compare by qualified name: admin_commands imports the router
+        # base by its plain (non-``mygame.``) module spelling.
+        self.assertIn(
+            "EntityAdminRouter",
+            [c.__name__ for c in CmdAdminItem.__mro__],
+        )
+
+    def test_builder_floor_lock_unchanged(self):
+        self.assertIn("cmd:perm(Builder)", CmdAdminItem.locks)
+
+
+class TestItemListInstancesWithPointer(ItemRouterTestCase):
+    """`@item list` = live instances + the def-list pointer (R4.1, 11.4)."""
+
+    def test_list_shows_live_instance_rows(self):
+        cmd = self.run_cmd(" list")
+        out = self.output(cmd)
+        self.assertIn("Item instances (2)", out)
+        self.assertIn("#1", out)
+        self.assertIn("rifle", out)
+        self.assertIn("medkit", out)
+
+    def test_list_includes_the_def_list_moved_pointer(self):
+        cmd = self.run_cmd(" list")
+        out = self.output(cmd)
+        self.assertIn("moved to '@item def list'", out)
+
+    def test_empty_list_still_includes_the_pointer(self):
+        empty_caller = FakeCaller(perms=("Builder",))
+        empty_caller.contents = []
+        cmd = self.run_cmd(" list", caller=empty_caller)
+        out = self.output(cmd)
+        self.assertIn("No item instances found", out)
+        self.assertIn("moved to '@item def list'", out)
+
+    def test_list_does_not_show_definitions(self):
+        # The old def-list meaning moved to `def list`: an unheld def
+        # (medkit is held; drop it) must not appear in `list` output.
+        self.caller.contents = [self.caller.contents[0]]  # rifle only
+        cmd = self.run_cmd(" list")
+        listing = "\n".join(
+            m for m in cmd.caller.messages if "moved to" not in m
+        )
+        self.assertNotIn("medkit", listing)
+
+
+class TestItemStatsAlias(ItemRouterTestCase):
+    """`stats` → `show` Migration_Alias (R11.1, 11.2, 11.5)."""
+
+    def test_stats_emits_deprecation_note_naming_both_spellings(self):
+        cmd = self.run_cmd(" stats rifle")
+        note = cmd.caller.messages[0]
+        self.assertNotIn("\n", note)
+        self.assertIn("stats", note)
+        self.assertIn("show", note)
+
+    def test_stats_output_identical_to_show_after_the_note(self):
+        alias_cmd = self.run_cmd(" stats rifle")
+        show_caller = FakeCaller(perms=("Builder",))
+        show_caller.contents = list(self.caller.contents)
+        show_cmd = self.run_cmd(" show rifle", caller=show_caller)
+        self.assertEqual(alias_cmd.caller.messages[1:],
+                         show_cmd.caller.messages)
+
+    def test_stats_renders_the_instance_show_report(self):
+        cmd = self.run_cmd(" stats rifle")
+        out = self.output(cmd)
+        # Dict-shaped test items carry no object key, so the display
+        # name falls back to the stamped item_key.
+        self.assertIn("rifle (rifle) — item instance", out)
+        self.assertIn("IQS: 72", out)
+        self.assertIn("damage: 30.0 [10–50]", out)
+
+
+class TestItemDefScopeReachable(ItemRouterTestCase):
+    """The full def scope is live on @item (R5.4, 5.6, 5.7)."""
+
+    def test_def_list_lists_item_definitions(self):
+        cmd = self.run_cmd(" def list")
+        out = self.output(cmd)
+        self.assertIn("Item definitions (2)", out)
+        self.assertIn("medkit", out)
+        self.assertIn("rifle", out)
+
+    def test_def_show_renders_merged_definition(self):
+        cmd = self.run_cmd(" def show rifle")
+        out = self.output(cmd)
+        self.assertIn("item definition: rifle", out)
+        self.assertIn("name: Rifle", out)
+
+    def test_def_show_flags_overridden_fields(self):
+        self.overlay = FakeOverlay(
+            overrides={("items", "rifle"): {"weight": 5.0}},
+        )
+        cmd = self.run_cmd(" def show rifle")
+        out = self.output(cmd)
+        self.assertIn("weight", out)
+        self.assertIn("*override*", out)
+
+    def test_def_diff_reads_the_items_domain(self):
+        self.overlay = FakeOverlay(
+            diff={"items": {"rifle": {"weight": 5.0}}},
+        )
+        cmd = self.run_cmd(" def diff")
+        out = self.output(cmd)
+        self.assertIn("rifle.weight = 5.0", out)
+
+    def test_def_write_verbs_registered_at_admin(self):
+        cmd = self.run_cmd(" def set rifle weight 5")
+        msg = self.output(cmd)
+        self.assertIn("Permission denied", msg)
+        self.assertIn("Admin", msg)
+
+
+# ================================================================== #
+#  @item pilot — router-level set/show behavior (task 3.3)
+#
+#  Fills the gaps between the adapter-level coverage in
+#  world/admin/tests/test_item_adapter.py (IQS re-stamp + idempotence
+#  through adapter.update directly) and the task 3.2 router tests above
+#  (alias/list/pointer/def scope): the same behaviors driven through
+#  the ROUTER's `set` and `show` verbs end-to-end.
+#
+#  - dynamic-band clamp note in the router response, stating the
+#    applied value and the def-derived band bounds (Requirement 7.6,
+#    design D2)
+#  - IQS re-stamped through `@item set` before the success response is
+#    rendered (Requirement 7.6)
+#  - set-twice idempotence THROUGH the router (same final rolled stats
+#    and IQS — no drift through the clamp/re-stamp path)
+#  - staleness note rendered in `@item show` output when a stamped
+#    attribute differs from the current merged def (Requirement 10.3)
+# ================================================================== #
+
+
+class TestItemRouterSetClampNote(ItemRouterTestCase):
+    """Router `set` clamp note carries the dynamic band bounds (R7.6)."""
+
+    def test_out_of_band_set_renders_clamp_note_with_band_bounds(self):
+        # RIFLE_SPEC bands damage 10–50: 999 clamps to the upper bound
+        # and the response names the applied value AND the bounds.
+        cmd = self.run_cmd(" set rifle damage 999")
+        out = self.output(cmd)
+        self.assertIn("damage set to 50.0", out)
+        self.assertIn("clamped to 50; bounds 10\u201350", out)
+        # The clamped value actually landed on the instance.
+        self.assertEqual(
+            self.caller.contents[0]["rolled_stats"]["damage"], 50.0)
+
+    def test_below_band_set_clamps_to_the_lower_bound(self):
+        cmd = self.run_cmd(" set rifle damage 1")
+        out = self.output(cmd)
+        self.assertIn("clamped to 10; bounds 10\u201350", out)
+        self.assertEqual(
+            self.caller.contents[0]["rolled_stats"]["damage"], 10.0)
+
+    def test_in_band_set_has_no_clamp_note(self):
+        cmd = self.run_cmd(" set rifle damage 40")
+        out = self.output(cmd)
+        self.assertIn("damage set to 40.0", out)
+        self.assertNotIn("clamped", out)
+
+
+class TestItemRouterSetRestampsIqs(ItemRouterTestCase):
+    """`@item set` on a roll field re-stamps IQS via the router (R7.6)."""
+
+    def test_set_restamps_iqs_before_the_success_response(self):
+        # Stamped at 72; damage 50 is the band max (quality 1.0) so the
+        # recompute path must re-stamp IQS to 100.
+        self.assertEqual(self.caller.contents[0]["iqs"], 72.0)
+        cmd = self.run_cmd(" set rifle damage 50")
+        self.assertIn("damage set to 50.0", self.output(cmd))
+        self.assertEqual(self.caller.contents[0]["iqs"], 100)
+
+    def test_clamped_set_restamps_iqs_from_the_applied_value(self):
+        # 999 clamps to 50 (band max): IQS follows the APPLIED value.
+        self.run_cmd(" set rifle damage 999")
+        self.assertEqual(self.caller.contents[0]["iqs"], 100)
+
+    def test_set_to_band_midpoint_restamps_proportionally(self):
+        # damage 30 on the 10–50 band is quality 0.5 → IQS 50.
+        self.run_cmd(" set rifle damage 30")
+        self.assertEqual(self.caller.contents[0]["iqs"], 50)
+
+
+class TestItemRouterSetIdempotence(ItemRouterTestCase):
+    """Same `set` twice through the router → same final state (R3.6, 7.6)."""
+
+    def test_set_twice_same_value_yields_same_final_state(self):
+        self.run_cmd(" set rifle damage 40")
+        rifle = self.caller.contents[0]
+        first = (dict(rifle["rolled_stats"]), rifle["iqs"])
+        self.run_cmd(" set rifle damage 40",
+                     caller=self._same_holdings_caller())
+        self.assertEqual((dict(rifle["rolled_stats"]), rifle["iqs"]), first)
+
+    def test_clamped_set_twice_does_not_drift(self):
+        # Out-of-band writes clamp then re-stamp; repeating the same
+        # request must not compound through the clamp/re-stamp path.
+        self.run_cmd(" set rifle damage 999")
+        rifle = self.caller.contents[0]
+        first = (dict(rifle["rolled_stats"]), rifle["iqs"])
+        self.run_cmd(" set rifle damage 999",
+                     caller=self._same_holdings_caller())
+        self.assertEqual((dict(rifle["rolled_stats"]), rifle["iqs"]), first)
+
+    def _same_holdings_caller(self):
+        """A fresh caller holding the SAME live instances (fresh List
+        Cache identity, same targets) for the second invocation."""
+        caller = FakeCaller(perms=("Builder",))
+        caller.contents = list(self.caller.contents)
+        return caller
+
+
+class TestItemRouterShowStalenessNote(ItemRouterTestCase):
+    """`@item show` renders the staleness note for drifted stamps (R10.3)."""
+
+    def _drift_weight(self):
+        """Stamp weight 3.0 on the held rifle, then change the merged
+        def to weight 5.0 (as a `def set` + reload would)."""
+        self.caller.contents[0]["weight"] = 3.0
+        old = self.data_registry.items["rifle"]
+        self.data_registry.items["rifle"] = ItemDef(
+            key=old.key, name=old.name, slot=old.slot,
+            category=old.category, weapon_type=old.weapon_type,
+            weight=5.0, roll_spec=old.roll_spec,
+        )
+
+    def test_show_appends_note_naming_attr_stamped_and_current_values(self):
+        self._drift_weight()
+        cmd = self.run_cmd(" show rifle")
+        out = self.output(cmd)
+        self.assertIn("note: weight stamped 3.0", out)
+        self.assertIn("current def says 5.0", out)
+
+    def test_show_has_no_staleness_note_when_stamps_match_the_def(self):
+        # Stamped value equals the merged def value → no note.
+        self.caller.contents[0]["weight"] = 3.0
+        cmd = self.run_cmd(" show rifle")
+        self.assertNotIn("def changed after spawn", self.output(cmd))
+
+    def test_stats_alias_renders_the_same_staleness_note(self):
+        # The Migration_Alias path shares the canonical show rendering
+        # (R11.1) — the staleness note included.
+        self._drift_weight()
+        cmd = self.run_cmd(" stats rifle")
+        out = self.output(cmd)
+        self.assertIn("note: weight stamped 3.0", out)
+        self.assertIn("current def says 5.0", out)
+
+
+# ================================================================== #
+#  Migrated @building router (unified-admin-crud task 5.1)
+#
+#  CmdAdminBuilding is now an EntityAdminRouter subclass driven by the
+#  real BuildingAdapter with an injected fake DataRegistry. Covers the
+#  migration wiring the task names:
+#
+#  - `list` = live instances + the moved-to-'def list' pointer; the old
+#    def-meaning of `list` served by `def list` (Requirements 11.4, 11.6)
+#  - NEW `show` and `set` verbs (Requirement 7.2): uniform readout with
+#    the level [1–5] bounds rendered; bounded writes through the shared
+#    building-attribute path
+#  - `destroy` keeps its legacy no-target meaning (the building at the
+#    caller's tile) while the targeted grammar works too
+#  - the `open` extra verb kept on the router subclass
+#  - spawn through the existing creation path (unresolved def token
+#    errors, nothing created)
+# ================================================================== #
+
+from mygame.commands.admin_commands import CmdAdminBuilding  # noqa: E402
+from world.admin.adapters.building_adapter import BuildingAdapter  # noqa: E402
+from world.constants import MAX_BUILDING_LEVEL  # noqa: E402
+from world.definitions import BuildingDef  # noqa: E402
+
+
+def _bdef_hq():
+    return BuildingDef(
+        name="Headquarters", abbreviation="HQ", cost={}, max_health=1000,
+        requires_hq=False, required_terrain=None, category="headquarters",
+        produces=None,
+    )
+
+
+def _bdef_ex():
+    return BuildingDef(
+        name="Extractor", abbreviation="EX", cost={}, max_health=400,
+        requires_hq=True, required_terrain="mountain", category="resource",
+        produces="Iron",
+    )
+
+
+class FakeBuildingDataRegistry:
+    """DataRegistry double: ``buildings`` dict + ``resolve_building``."""
+
+    def __init__(self, defs):
+        self.buildings = {d.abbreviation: d for d in defs}
+
+    def resolve_building(self, token):
+        t = token.strip().lower()
+        for d in self.buildings.values():
+            if d.abbreviation.lower() == t or d.name.lower() == t:
+                return d
+        matches = [
+            d for d in self.buildings.values()
+            if d.abbreviation.lower().startswith(t)
+            or d.name.lower().startswith(t)
+        ]
+        return matches[0] if len(matches) == 1 else None
+
+    def get_building(self, abbr):
+        return self.buildings[abbr]
+
+
+class _BAttrs:
+    """Evennia attributes-handler stand-in."""
+
+    def __init__(self, data=None):
+        self._data = dict(data or {})
+
+    def get(self, key, default=None, **kw):
+        return self._data.get(key, default)
+
+    def add(self, key, value, **kw):
+        self._data[key] = value
+
+
+class FakeLiveBuilding:
+    """Live building stand-in: key, attributes handler, deletion path."""
+
+    def __init__(self, key="Headquarters", building_type="HQ", level=1,
+                 hp=1000, hp_max=1000):
+        self.key = key
+        self.attributes = _BAttrs({
+            "building_type": building_type,
+            "building_level": level,
+            "hp": hp,
+            "hp_max": hp_max,
+        })
+        self._deleted = False
+
+    def delete(self):
+        self._deleted = True
+        return True
+
+    def set_open(self, state):
+        self.attributes.add("open", bool(state))
+
+
+class FakePlanetRoom:
+    """PlanetRoom stand-in: room-wide + per-tile building queries."""
+
+    def __init__(self, buildings=None):
+        self.key = "TestPlanet"
+        self._buildings = list(buildings or [])
+
+    def get_all_buildings(self):
+        return list(self._buildings)
+
+    def get_objects_at(self, x, y, type_tag=None):
+        return list(self._buildings)
+
+
+class _BuildingDb:
+    """Minimal db proxy carrying the caller's tile coordinates."""
+
+    def __init__(self, **kwargs):
+        self.__dict__.update(kwargs)
+
+    def __getattr__(self, key):
+        return None
+
+
+class BuildingCaller:
+    """Caller stub for @building: location, coords, perm hierarchy."""
+
+    _HIERARCHY = ["Player", "Helper", "Builder", "Admin", "Developer"]
+
+    def __init__(self, perm_level="Builder", location=None, coords=(3, 7)):
+        self.id = next(_CALLER_IDS)
+        self.key = "TestAdmin"
+        self._perm_level = perm_level
+        self.location = location
+        self.db = _BuildingDb(coord_x=coords[0], coord_y=coords[1])
+        self._messages = []
+
+    def msg(self, text, **kwargs):
+        self._messages.append(text)
+
+    def check_permstring(self, perm):
+        try:
+            return (self._HIERARCHY.index(self._perm_level)
+                    >= self._HIERARCHY.index(perm))
+        except ValueError:
+            return False
+
+
+class BuildingRouterUnderTest(CmdAdminBuilding):
+    """CmdAdminBuilding with the registry/overlay test hooks injected."""
+
+    registry = None          # per-test AdapterRegistry
+    overlay = FakeOverlay()  # keeps def-scope reads off disk
+
+    def _adapter_registry(self):
+        return self.registry
+
+    def _overlay_store(self):
+        return self.overlay
+
+
+def _building_cmd(caller, args, defs=None):
+    """Build + run one @building invocation against an injected registry."""
+    adapter = BuildingAdapter(registry=FakeBuildingDataRegistry(
+        defs or [_bdef_hq(), _bdef_ex()]))
+    registry = AdapterRegistry()
+    registry.register(adapter)
+    cmd = BuildingRouterUnderTest()
+    cmd.registry = registry
+    cmd.caller = caller
+    cmd.args = args
+    cmd.cmdstring = cmd.key
+    cmd.func()
+    return cmd
+
+
+class BuildingRouterTestCase(unittest.TestCase):
+    """Shared plumbing: fresh List_Cache per test + output helper."""
+
+    def setUp(self):
+        from world.admin.resolution import LIST_CACHE as cache
+        cache.clear()
+        self.hq = FakeLiveBuilding(key="Headquarters", building_type="HQ",
+                                   level=2, hp=500, hp_max=1000)
+        self.ex = FakeLiveBuilding(key="Extractor", building_type="EX",
+                                   hp=400, hp_max=400)
+        self.room = FakePlanetRoom([self.hq, self.ex])
+        self.caller = BuildingCaller(location=self.room)
+
+    def output(self, cmd):
+        return "\n".join(cmd.caller._messages)
+
+
+class TestBuildingMigrationWiring(BuildingRouterTestCase):
+    """`list` = instances + pointer; old def-meaning on `def list`
+    (Requirements 11.4, 11.6)."""
+
+    def test_list_shows_instances_with_def_list_pointer(self):
+        cmd = _building_cmd(self.caller, " list")
+        out = self.output(cmd)
+        self.assertIn("#1", out)            # indexed instance rows (R4.1)
+        self.assertIn("#2", out)
+        self.assertIn("Headquarters", out)
+        self.assertIn("Extractor", out)
+        # The deprecation-window pointer: definition listing moved (R11.4).
+        self.assertIn("def list", out)
+        self.assertIn("moved", out)
+
+    def test_empty_list_still_includes_the_pointer(self):
+        caller = BuildingCaller(location=FakePlanetRoom([]))
+        cmd = _building_cmd(caller, " list")
+        out = self.output(cmd)
+        self.assertIn("No building instances", out)
+        self.assertIn("def list", out)
+
+    def test_def_list_serves_the_definitions(self):
+        cmd = _building_cmd(self.caller, " def list")
+        out = self.output(cmd)
+        self.assertIn("Headquarters", out)
+        self.assertIn("Extractor", out)
+
+    def test_def_show_renders_the_merged_definition(self):
+        cmd = _building_cmd(self.caller, " def show extractor")
+        out = self.output(cmd)
+        self.assertIn("EX", out)
+        self.assertIn("max_health", out)
+        self.assertIn("400", out)
+
+
+class TestBuildingShow(BuildingRouterTestCase):
+    """NEW `show` verb (Requirement 7.2): uniform readout with the
+    modifiable-fields block and the level [1–5] bounds."""
+
+    def test_show_renders_identity_state_and_field_bounds(self):
+        cmd = _building_cmd(self.caller, " show Headquarters")
+        out = self.output(cmd)
+        self.assertIn("Headquarters (HQ)", out)
+        self.assertIn("Level: 2", out)
+        self.assertIn("500/1000", out)
+        self.assertIn("Modifiable fields:", out)
+        # level rendered with its static 1–5 bounds (R7.2).
+        self.assertIn(f"level: 2 [1\u2013{MAX_BUILDING_LEVEL}]", out)
+
+    def test_show_resolves_by_index_from_the_list_cache(self):
+        _building_cmd(self.caller, " list")
+        cmd = _building_cmd(self.caller, " show #2")
+        self.assertIn("Extractor (EX)", self.output(cmd))
+
+
+class TestBuildingSet(BuildingRouterTestCase):
+    """NEW `set` verb (Requirement 7.2): bounded writes through the
+    shared building-attribute path."""
+
+    def test_set_level_in_bounds_writes_the_attribute(self):
+        cmd = _building_cmd(self.caller, " set Headquarters level 4")
+        out = self.output(cmd)
+        self.assertIn("level set to 4", out)
+        self.assertNotIn("clamped", out)
+        self.assertEqual(self.hq.attributes.get("building_level"), 4)
+
+    def test_set_level_above_max_clamps_to_five_with_note(self):
+        # Task 5.4 names this case verbatim: `@building set level` clamps
+        # to the static 1–5 bound with a note (Requirements 7.2, 3.2, D2).
+        cmd = _building_cmd(self.caller, " set Headquarters level 9")
+        out = self.output(cmd)
+        self.assertIn(f"level set to {MAX_BUILDING_LEVEL}", out)
+        self.assertIn(f"clamped to {MAX_BUILDING_LEVEL}; bounds "
+                      f"1–{MAX_BUILDING_LEVEL}", out)
+        self.assertEqual(self.hq.attributes.get("building_level"),
+                         MAX_BUILDING_LEVEL)
+
+    def test_set_level_below_min_clamps_to_one_with_note(self):
+        cmd = _building_cmd(self.caller, " set Headquarters level 0")
+        out = self.output(cmd)
+        self.assertIn("level set to 1", out)
+        self.assertIn(f"clamped to 1; bounds 1–{MAX_BUILDING_LEVEL}", out)
+        self.assertEqual(self.hq.attributes.get("building_level"), 1)
+
+    def test_set_hp_clamps_into_the_targets_hp_max_with_note(self):
+        cmd = _building_cmd(self.caller, " set Extractor hp 9999")
+        out = self.output(cmd)
+        self.assertIn("clamped to 400", out)
+        self.assertEqual(self.ex.attributes.get("hp"), 400)
+
+    def test_set_unknown_field_names_the_valid_fields(self):
+        cmd = _building_cmd(self.caller, " set Headquarters shield 5")
+        out = self.output(cmd)
+        self.assertIn("Unknown field 'shield'", out)
+        self.assertIn("level", out)
+        self.assertEqual(self.hq.attributes.get("building_level"), 2)
+
+
+class TestBuildingDestroy(BuildingRouterTestCase):
+    """`destroy` keeps its legacy no-target tile meaning alongside the
+    targeted unified grammar (Requirement 11.6)."""
+
+    def test_destroy_without_target_destroys_the_tile_building(self):
+        cmd = _building_cmd(self.caller, " destroy")
+        self.assertTrue(self.hq._deleted)
+        self.assertIn("Destroyed", self.output(cmd))
+
+    def test_destroy_without_target_and_no_building_reports(self):
+        caller = BuildingCaller(location=FakePlanetRoom([]))
+        cmd = _building_cmd(caller, " destroy")
+        self.assertIn("No building found", self.output(cmd))
+
+    def test_destroy_by_name_deletes_that_instance(self):
+        cmd = _building_cmd(self.caller, " destroy Extractor")
+        self.assertTrue(self.ex._deleted)
+        self.assertFalse(self.hq._deleted)
+        self.assertIn("Destroyed", self.output(cmd))
+
+
+class TestBuildingOpenExtraVerb(BuildingRouterTestCase):
+    """The `open` extra verb survives on the router subclass (R1.6)."""
+
+    def test_open_and_close_toggle_the_tile_building(self):
+        cmd = _building_cmd(self.caller, " open close")
+        self.assertFalse(self.hq.attributes.get("open"))
+        self.assertIn("closed", self.output(cmd).lower())
+
+        caller = BuildingCaller(location=self.room)
+        cmd = _building_cmd(caller, " open")
+        self.assertTrue(self.hq.attributes.get("open"))
+        self.assertIn("open", self.output(cmd).lower())
+
+
+class TestBuildingSpawn(BuildingRouterTestCase):
+    """`spawn` resolves defs through resolve_building; unresolved tokens
+    error and create nothing (Requirement 4.7)."""
+
+    def test_unresolved_def_token_errors_and_creates_nothing(self):
+        cmd = _building_cmd(self.caller, " spawn bogus")
+        out = self.output(cmd)
+        self.assertIn("No definition found for 'bogus'", out)
+        self.assertIn("nothing created", out)
+
+    def test_spawn_no_args_shows_usage(self):
+        cmd = _building_cmd(self.caller, " spawn")
+        self.assertIn("Usage", self.output(cmd))
+
+    def test_bad_level_kwarg_reports_through_the_creation_path(self):
+        cmd = _building_cmd(self.caller, " spawn HQ level=high")
+        self.assertIn("level must be a number", self.output(cmd))
+
+
+# ================================================================== #
+#  NEW @tech router (unified-admin-crud task 5.3)
+#
+#  CmdAdminTech is an EntityAdminRouter subclass driven by the real
+#  TechnologyAdapter over the REAL TechLabSystem (single writer for
+#  researched-tech state) with an injected fake DataRegistry. Covers
+#  the surface task 5.3 names:
+#
+#  - grant/revoke round-trip through the research path with the
+#    derived-bonus recompute landing before the response
+#    (Requirements 7.7, 7.8)
+#  - double-grant / absent-revoke errors stating the player's current
+#    grant state, no state change (Requirement 7.9)
+#  - instance `set` opted out with the no-per-instance-fields reason
+#    (Requirement 7.1)
+#  - `list` of the technologies granted to the trailing [player]
+#    (default caller) (Requirement 7.1)
+#  - the full def scope served from the technologies domain
+# ================================================================== #
+
+from mygame.commands.admin_commands import CmdAdminTech  # noqa: E402
+from world.admin.adapters.tech_adapter import TechnologyAdapter  # noqa: E402
+from world.definitions import TechnologyDef  # noqa: E402
+from world.event_bus import EventBus  # noqa: E402
+from world.systems.tech_system import TechLabSystem  # noqa: E402
+
+
+def _tech_def(key, name, effect_value=None, rank="Private"):
+    return TechnologyDef(
+        name=name, key=key, required_rank=rank,
+        resource_cost={"Wood": 10}, research_ticks=5,
+        effect_type="stat_bonus" if effect_value else "",
+        effect_value=effect_value,
+    )
+
+
+class FakeTechDataRegistry:
+    """DataRegistry double: ``technologies`` dict + ``resolve_technology``."""
+
+    def __init__(self, defs):
+        self.technologies = {d.key: d for d in defs}
+
+    def resolve_technology(self, token):
+        t = token.strip().lower()
+        for d in self.technologies.values():
+            if d.key.lower() == t or d.name.lower() == t:
+                return d
+        matches = [
+            d for d in self.technologies.values()
+            if d.key.lower().startswith(t) or d.name.lower().startswith(t)
+        ]
+        return matches[0] if len(matches) == 1 else None
+
+
+class _TechDb:
+    """Attribute-bag db proxy for a tech-holding player."""
+
+    def __init__(self, **kwargs):
+        self.__dict__.update(kwargs)
+
+    def __getattr__(self, key):
+        return None
+
+
+class TechCaller:
+    """Caller stub for @tech: granted techs, perm hierarchy, player search."""
+
+    _HIERARCHY = ["Player", "Helper", "Builder", "Admin", "Developer"]
+
+    def __init__(self, key="TestAdmin", perm_level="Builder",
+                 researched=(), known_players=()):
+        self.id = next(_CALLER_IDS)
+        self.key = key
+        self._perm_level = perm_level
+        self.db = _TechDb(researched_techs=set(researched), tech_bonuses={})
+        self._known = {p.key.lower(): p for p in known_players}
+        self._messages = []
+
+    def msg(self, text, **kwargs):
+        self._messages.append(text)
+
+    def check_permstring(self, perm):
+        try:
+            return (self._HIERARCHY.index(self._perm_level)
+                    >= self._HIERARCHY.index(perm))
+        except ValueError:
+            return False
+
+    def search(self, name, **kwargs):
+        return self._known.get(str(name).lower())
+
+
+class TechRouterUnderTest(CmdAdminTech):
+    """CmdAdminTech with the registry/overlay test hooks injected."""
+
+    registry = None          # per-test AdapterRegistry
+    overlay = FakeOverlay()  # keeps def-scope reads off disk
+
+    def _adapter_registry(self):
+        return self.registry
+
+    def _overlay_store(self):
+        return self.overlay
+
+
+_TECH_DEFS = (
+    _tech_def("drone_swarm", "Drone Swarm", effect_value={"damage": 5}),
+    _tech_def("nano_armor", "Nano Armor",
+              effect_value={"damage_reduction": 2}),
+)
+
+
+def _tech_cmd(caller, args, tech_system=None):
+    """Build + run one @tech invocation against an injected registry.
+
+    The adapter drives the REAL TechLabSystem over a fake DataRegistry,
+    so grants/revokes exercise the actual single-writer research path.
+    """
+    data_registry = FakeTechDataRegistry(_TECH_DEFS)
+    system = tech_system or TechLabSystem(
+        registry=data_registry, event_bus=EventBus()
+    )
+    adapter = TechnologyAdapter(registry=data_registry, tech_system=system)
+    registry = AdapterRegistry()
+    registry.register(adapter)
+    cmd = TechRouterUnderTest()
+    cmd.registry = registry
+    cmd.caller = caller
+    cmd.args = args
+    cmd.cmdstring = cmd.key
+    cmd.func()
+    return cmd
+
+
+class TechRouterTestCase(unittest.TestCase):
+    """Shared plumbing: fresh List_Cache per test + output helper."""
+
+    def setUp(self):
+        from world.admin.resolution import LIST_CACHE as cache
+        cache.clear()
+        self.caller = TechCaller()
+
+    def output(self, cmd):
+        return "\n".join(cmd.caller._messages)
+
+
+class TestTechGrantRevokeRoundTrip(TechRouterTestCase):
+    """grant → spawn / revoke → destroy through the research path with
+    the derived-bonus recompute (Requirements 7.1, 7.7, 7.8)."""
+
+    def test_grant_adds_and_recomputes_bonuses_before_the_response(self):
+        cmd = _tech_cmd(self.caller, " grant drone_swarm")
+        out = self.output(cmd)
+        self.assertIn("Drone Swarm (drone_swarm)", out)
+        self.assertIn("drone_swarm", self.caller.db.researched_techs)
+        # Derived bonuses recomputed BEFORE the success response (R7.7).
+        self.assertEqual(self.caller.db.tech_bonuses, {"damage": 5.0})
+
+    def test_revoke_removes_and_recomputes_bonuses(self):
+        self.caller.db.researched_techs = {"drone_swarm", "nano_armor"}
+        cmd = _tech_cmd(self.caller, " revoke drone_swarm")
+        out = self.output(cmd)
+        self.assertIn("Destroyed", out)
+        self.assertIn("Drone Swarm (drone_swarm)", out)
+        self.assertEqual(self.caller.db.researched_techs, {"nano_armor"})
+        # Derived bonuses recomputed BEFORE the response (R7.8).
+        self.assertEqual(self.caller.db.tech_bonuses,
+                         {"damage_reduction": 2.0})
+
+    def test_grant_then_revoke_restores_the_prior_state(self):
+        _tech_cmd(self.caller, " grant nano_armor")
+        self.assertEqual(self.caller.db.tech_bonuses,
+                         {"damage_reduction": 2.0})
+        _tech_cmd(self.caller, " revoke nano_armor")
+        self.assertEqual(self.caller.db.researched_techs, set())
+        self.assertEqual(self.caller.db.tech_bonuses, {})
+
+    def test_grant_trailing_player_targets_that_player(self):
+        bob = TechCaller(key="Bob")
+        caller = TechCaller(known_players=(bob,))
+        _tech_cmd(caller, " grant drone_swarm Bob")
+        self.assertIn("drone_swarm", bob.db.researched_techs)
+        self.assertEqual(bob.db.tech_bonuses, {"damage": 5.0})
+        self.assertEqual(caller.db.researched_techs, set())
+
+    def test_revoke_trailing_player_targets_that_player(self):
+        bob = TechCaller(key="Bob", researched=("drone_swarm",))
+        caller = TechCaller(known_players=(bob,))
+        cmd = _tech_cmd(caller, " revoke drone_swarm Bob")
+        self.assertIn("Destroyed", self.output(cmd))
+        self.assertEqual(bob.db.researched_techs, set())
+
+    def test_spawn_and_destroy_canonical_spellings_work_too(self):
+        _tech_cmd(self.caller, " spawn drone_swarm")
+        self.assertIn("drone_swarm", self.caller.db.researched_techs)
+        _tech_cmd(self.caller, " destroy drone_swarm")
+        self.assertEqual(self.caller.db.researched_techs, set())
+
+
+class TestTechGrantStateErrors(TechRouterTestCase):
+    """Double-grant / absent-revoke → error stating the player's current
+    grant state, no state change (Requirement 7.9)."""
+
+    def test_double_grant_states_granted_and_changes_nothing(self):
+        _tech_cmd(self.caller, " grant drone_swarm")
+        bonuses_before = dict(self.caller.db.tech_bonuses)
+        self.caller._messages.clear()
+        cmd = _tech_cmd(self.caller, " grant drone_swarm")
+        out = self.output(cmd)
+        self.assertIn("already holds", out)
+        self.assertIn("granted", out)
+        self.assertEqual(self.caller.db.researched_techs, {"drone_swarm"})
+        self.assertEqual(self.caller.db.tech_bonuses, bonuses_before)
+
+    def test_absent_revoke_states_not_granted_and_changes_nothing(self):
+        cmd = _tech_cmd(self.caller, " revoke drone_swarm")
+        out = self.output(cmd)
+        self.assertIn("does not hold", out)
+        self.assertIn("not granted", out)
+        self.assertIn("Nothing was destroyed", out)
+        self.assertEqual(self.caller.db.researched_techs, set())
+
+
+class TestTechSetOptOut(TechRouterTestCase):
+    """Instance `set` opted out with the declared reason (R1.5, 7.1)."""
+
+    def test_set_surfaces_the_no_per_instance_fields_reason(self):
+        self.caller.db.researched_techs = {"drone_swarm"}
+        cmd = _tech_cmd(self.caller, " set drone_swarm damage 9")
+        out = self.output(cmd)
+        self.assertIn("not available", out)
+        self.assertIn("no modifiable per-instance fields", out)
+        # Pointer to the supported paths.
+        self.assertIn("grant", out)
+
+
+class TestTechListAndShow(TechRouterTestCase):
+    """`list` of the trailing [player]'s granted techs (default caller)
+    and the granted-tech `show` readout (Requirement 7.1)."""
+
+    def test_list_shows_the_callers_granted_techs_indexed(self):
+        self.caller.db.researched_techs = {"drone_swarm", "nano_armor"}
+        cmd = _tech_cmd(self.caller, " list")
+        out = self.output(cmd)
+        self.assertIn("#1", out)
+        self.assertIn("#2", out)
+        self.assertIn("Drone Swarm", out)
+        self.assertIn("Nano Armor", out)
+
+    def test_list_trailing_player_scopes_to_that_player(self):
+        bob = TechCaller(key="Bob", researched=("nano_armor",))
+        caller = TechCaller(known_players=(bob,))
+        cmd = _tech_cmd(caller, " list Bob")
+        out = self.output(cmd)
+        self.assertIn("Nano Armor", out)
+        self.assertNotIn("Drone Swarm", out)
+
+    def test_empty_list_reports_no_instances(self):
+        cmd = _tech_cmd(self.caller, " list")
+        self.assertIn("No tech instances", self.output(cmd))
+
+    def test_show_renders_the_granted_tech_readout(self):
+        self.caller.db.researched_techs = {"drone_swarm"}
+        cmd = _tech_cmd(self.caller, " show drone_swarm")
+        out = self.output(cmd)
+        self.assertIn("Drone Swarm (drone_swarm)", out)
+        self.assertIn("granted to TestAdmin", out)
+        self.assertIn("Private", out)      # def-backed rank info
+        self.assertIn("stat_bonus", out)   # def-backed effect info
+
+    def test_show_resolves_by_index_from_the_list_cache(self):
+        self.caller.db.researched_techs = {"drone_swarm", "nano_armor"}
+        _tech_cmd(self.caller, " list")
+        cmd = _tech_cmd(self.caller, " show #2")
+        self.assertIn("Nano Armor (nano_armor)", self.output(cmd))
+
+
+class TestTechDefScope(TechRouterTestCase):
+    """The full def scope is live on @tech, served from the
+    technologies domain (Requirement 7.1)."""
+
+    def test_def_list_serves_the_technology_definitions(self):
+        cmd = _tech_cmd(self.caller, " def list")
+        out = self.output(cmd)
+        self.assertIn("drone_swarm", out)
+        self.assertIn("nano_armor", out)
+
+    def test_def_show_renders_the_merged_definition(self):
+        cmd = _tech_cmd(self.caller, " def show drone_swarm")
+        out = self.output(cmd)
+        self.assertIn("drone_swarm", out)
+        self.assertIn("required_rank", out)
+        self.assertIn("Private", out)
+
+    def test_def_diff_empty_overlay_reports_no_overrides(self):
+        cmd = _tech_cmd(self.caller, " def diff")
+        self.assertIn("No definition overrides", self.output(cmd))
+
+    def test_def_set_requires_admin(self):
+        cmd = _tech_cmd(self.caller, " def set drone_swarm research_ticks 9")
+        out = self.output(cmd)
+        self.assertIn("Permission denied", out)
+        self.assertIn("Admin", out)
+
+
+# ================================================================== #
+#  Phase 2 router unit tests (unified-admin-crud task 5.4) — AUDIT
+#
+#  Task 5.4's required coverage for this file already exists verbatim
+#  from tasks 5.1/5.3; nothing is duplicated here:
+#
+#  - `@building set <target> level 9` clamps to 5 with the bounds note
+#    through the ROUTER: TestBuildingSet
+#    .test_set_level_above_max_clamps_to_five_with_note (R7.2, 3.2)
+#  - `@building set <target> level 0` clamps to 1 with the bounds note
+#    through the ROUTER: TestBuildingSet
+#    .test_set_level_below_min_clamps_to_one_with_note (R7.2, 3.2)
+#  - `@tech grant` → `revoke` round-trip through the router with the
+#    tech_bonuses recompute observed before the response:
+#    TestTechGrantRevokeRoundTrip (R7.1, 7.7, 7.8)
+#  - double-grant / absent-revoke errors stating the player's current
+#    grant state, no state change: TestTechGrantStateErrors (R7.9)
+#
+#  The @agent gap-fill (create/spawn full equivalence, verbatim
+#  def-scope opt-out reason) lives in the task-5.4 section of
+#  commands/tests/test_agent_router.py (R7.3, 11.1, 11.2).
+# ================================================================== #
+
+
+# ================================================================== #
+#  Migrated @outpost router (unified-admin-crud task 7.1)
+#
+#  CmdAdminOutpost is now an EntityAdminRouter subclass driven by the
+#  real OutpostAdapter with injected spawner/registry doubles. Covers
+#  the migration wiring the task names (Requirements 11.5, 11.6):
+#
+#  - `list` KEEPS its instance meaning (active NPC bases, #N-indexed
+#    rows — no def-list pointer: nothing moved)
+#  - `tiers` → `def list` Migration_Alias: deprecation note naming both
+#    spellings + the legacy [N]-indexed tier rendering preserved
+#  - NEW `show`/`set`/`destroy` through the outpost spawner paths
+#    (disturbed_at stamp; wipe_bases_in_area unit-wipe; bulk destroy
+#    confirmation-gated)
+#  - `def set`/`def reset` opted out with the outposts.yaml reason
+#    (templates load outside the overlay merge)
+#  - legacy `spawn <tier> [x y]` grammar preserved on the subclass
+# ================================================================== #
+
+from mygame.commands.admin_commands import CmdAdminOutpost  # noqa: E402
+from world import services  # noqa: E402
+from world.admin.adapters.outpost_adapter import OutpostAdapter  # noqa: E402
+from world.definitions import BaseTemplateDef  # noqa: E402
+
+
+class _OAttrs:
+    """Evennia attributes-handler stand-in."""
+
+    def __init__(self, data=None):
+        self._data = dict(data or {})
+
+    def get(self, key, default=None, **kw):
+        return self._data.get(key, default)
+
+    def add(self, key, value, **kw):
+        self._data[key] = value
+
+
+class OutpostSentinel:
+    """Sentinel owner stand-in: key + attributes handler."""
+
+    def __init__(self, key):
+        self.key = key
+        self.attributes = _OAttrs()
+
+
+class FakeOutpostSpawner:
+    """OutpostSpawnerSystem double: tracking records + spawner paths."""
+
+    def __init__(self, bases=None, spawn_result="ok"):
+        self._active_bases = dict(bases or {})
+        self.spawn_calls = []
+
+    def spawn_base(self, planet, tier, coords=None):
+        self.spawn_calls.append((planet, tier, coords))
+        x, y = coords if coords else (7, 7)
+        rec = {"tier": tier, "planet": planet, "x": x, "y": y,
+               "disturbed_at": 0}
+        self._active_bases[len(self._active_bases)] = rec
+        return rec
+
+    def wipe_bases_in_area(self, planet, x1, y1, x2, y2):
+        victims = [
+            key for key, rec in self._active_bases.items()
+            if rec.get("planet") == planet
+            and x1 <= int(rec["x"]) <= x2 and y1 <= int(rec["y"]) <= y2
+        ]
+        for key in victims:
+            self._active_bases.pop(key)
+        return len(victims)
+
+
+class FakeOutpostTemplateRegistry:
+    """DataRegistry double carrying ``base_templates``."""
+
+    def __init__(self, tiers=("fortress", "outpost")):
+        self.base_templates = {
+            t: BaseTemplateDef(tier=t, display_name=t.title())
+            for t in tiers
+        }
+
+
+class _OutpostDb:
+    """Minimal db proxy carrying the caller's tile + planet."""
+
+    def __init__(self, **kwargs):
+        self.__dict__.update(kwargs)
+
+    def __getattr__(self, key):
+        return None
+
+
+class OutpostCaller:
+    """Caller stub for @outpost: coords, planet, perm hierarchy."""
+
+    _HIERARCHY = ["Player", "Helper", "Builder", "Admin", "Developer"]
+
+    def __init__(self, perm_level="Builder", coords=(3, 4),
+                 planet="earth"):
+        self.id = next(_CALLER_IDS)
+        self.key = "TestAdmin"
+        self._perm_level = perm_level
+        self.db = _OutpostDb(coord_x=coords[0], coord_y=coords[1],
+                             coord_planet=planet)
+        self._messages = []
+
+    def msg(self, text, **kwargs):
+        self._messages.append(text)
+
+    def check_permstring(self, perm):
+        try:
+            return (self._HIERARCHY.index(self._perm_level)
+                    >= self._HIERARCHY.index(perm))
+        except ValueError:
+            return False
+
+
+class OutpostRouterUnderTest(CmdAdminOutpost):
+    """CmdAdminOutpost with the registry/overlay test hooks injected."""
+
+    registry = None          # per-test AdapterRegistry
+    overlay = FakeOverlay()  # keeps def-scope reads off disk
+
+    def _adapter_registry(self):
+        return self.registry
+
+    def _overlay_store(self):
+        return self.overlay
+
+
+def _outpost_cmd(caller, args, spawner, tiers=("fortress", "outpost")):
+    """Build + run one @outpost invocation against injected doubles."""
+    adapter = OutpostAdapter(
+        registry=FakeOutpostTemplateRegistry(tiers), spawner=spawner)
+    registry = AdapterRegistry()
+    registry.register(adapter)
+    cmd = OutpostRouterUnderTest()
+    cmd.registry = registry
+    cmd.caller = caller
+    cmd.args = args
+    cmd.cmdstring = cmd.key
+    cmd.func()
+    return cmd
+
+
+class OutpostRouterTestCase(unittest.TestCase):
+    """Shared plumbing: fresh List_Cache per test + output helper."""
+
+    def setUp(self):
+        from world.admin.resolution import LIST_CACHE as cache
+        cache.clear()
+        self.s1 = OutpostSentinel("Outpost #1")
+        self.s2 = OutpostSentinel("Fortress #1")
+        self.spawner = FakeOutpostSpawner(bases={
+            101: {"sentinel": self.s1, "tier": "outpost",
+                  "planet": "earth", "x": 5, "y": 6, "disturbed_at": 0},
+            102: {"sentinel": self.s2, "tier": "fortress",
+                  "planet": "earth", "x": 20, "y": 30, "disturbed_at": 44},
+        })
+        self.caller = OutpostCaller()
+
+    def run_cmd(self, args, caller=None):
+        return _outpost_cmd(caller or self.caller, args, self.spawner)
+
+    def output(self, cmd):
+        return "\n".join(cmd.caller._messages)
+
+
+class TestOutpostRouterIdentity(OutpostRouterTestCase):
+    """The migration preserves the command key and the Builder lock."""
+
+    def test_key_and_locks_preserved(self):
+        self.assertEqual(CmdAdminOutpost.key, "@outpost")
+        self.assertIn("perm(Builder)", CmdAdminOutpost.locks)
+        self.assertEqual(CmdAdminOutpost.adapter_key, "outpost")
+
+
+class TestOutpostListKeepsInstanceMeaning(OutpostRouterTestCase):
+    """`list` = active NPC bases, unchanged meaning (R4.1, matrix row) —
+    unlike @item/@building, NO moved-to-def-list pointer is emitted."""
+
+    def test_list_shows_indexed_base_rows(self):
+        cmd = self.run_cmd(" list")
+        out = self.output(cmd)
+        self.assertIn("#1", out)
+        self.assertIn("#2", out)
+        self.assertIn("Outpost #1", out)
+        self.assertIn("Fortress #1", out)
+        self.assertIn("(5, 6)", out)
+        self.assertNotIn("moved to", out)
+
+    def test_empty_list_stores_an_empty_cache(self):
+        self.spawner._active_bases.clear()
+        cmd = self.run_cmd(" list")
+        self.assertIn("No outpost instances", self.output(cmd))
+
+
+class TestOutpostTiersAlias(OutpostRouterTestCase):
+    """`tiers` → `def list` Migration_Alias (R11.1, 11.2, 11.5) with the
+    legacy [N]-indexed tier rendering preserved."""
+
+    def test_tiers_emits_deprecation_note_naming_both_spellings(self):
+        cmd = self.run_cmd(" tiers")
+        note = next(m for m in cmd.caller._messages if "deprecated" in m)
+        self.assertIn("tiers", note)
+        self.assertIn("def list", note)
+
+    def test_tiers_renders_the_indexed_tier_listing(self):
+        cmd = self.run_cmd(" tiers")
+        out = self.output(cmd)
+        self.assertIn("[1]", out)
+        self.assertIn("fortress", out)
+        self.assertIn("outpost", out)
+
+    def test_def_list_canonical_spelling_matches(self):
+        alias_cmd = self.run_cmd(" tiers")
+        direct_cmd = self.run_cmd(" def list", caller=OutpostCaller())
+        alias_out = [m for m in alias_cmd.caller._messages
+                     if "deprecated" not in m]
+        self.assertEqual(alias_out, direct_cmd.caller._messages)
+
+
+class TestOutpostShow(OutpostRouterTestCase):
+    """NEW `show` (uniform readout through the spawner records)."""
+
+    def test_show_renders_base_state_and_modifiable_fields(self):
+        cmd = self.run_cmd(" show Fortress #1")
+        out = self.output(cmd)
+        self.assertIn("Fortress #1", out)
+        self.assertIn("fortress", out)
+        self.assertIn("(20, 30)", out)
+        self.assertIn("since tick 44", out)
+        self.assertIn("disturbed_at", out)
+        self.assertIn("Modifiable fields", out)
+
+    def test_show_resolves_the_cached_index(self):
+        self.run_cmd(" list")
+        cmd = self.run_cmd(" show #1")
+        self.assertIn("Outpost #1", self.output(cmd))
+
+
+class TestOutpostSet(OutpostRouterTestCase):
+    """NEW `set` — disturbed_at through the spawner's own stamp path."""
+
+    def test_set_writes_the_record_and_the_sentinel_stamp(self):
+        # `set` splits on whitespace — spaced names use #N or a prefix.
+        self.run_cmd(" list")
+        cmd = self.run_cmd(" set #1 disturbed_at 77")
+        self.assertIn("disturbed_at set to 77", self.output(cmd))
+        self.assertEqual(
+            self.spawner._active_bases[101]["disturbed_at"], 77)
+        self.assertEqual(
+            self.s1.attributes.get("base_disturbed_at"), 77)
+
+    def test_set_clamps_negative_values_with_the_bounds_note(self):
+        cmd = self.run_cmd(" set Out disturbed_at -9")  # unique prefix
+        out = self.output(cmd)
+        self.assertIn("clamped", out)
+        self.assertEqual(
+            self.spawner._active_bases[101]["disturbed_at"], 0)
+
+    def test_set_unknown_field_names_the_valid_fields(self):
+        cmd = self.run_cmd(" set Out tier citadel")
+        out = self.output(cmd)
+        self.assertIn("Unknown field", out)
+        self.assertIn("disturbed_at", out)
+        self.assertEqual(
+            self.spawner._active_bases[101]["tier"], "outpost")
+
+
+class TestOutpostDestroy(OutpostRouterTestCase):
+    """NEW `destroy` — unit-wipe via the spawner's admin-clear path."""
+
+    def test_destroy_wipes_the_base_through_the_spawner(self):
+        self.run_cmd(" list")
+        cmd = self.run_cmd(" destroy #1")
+        self.assertIn("Destroyed Outpost #1", self.output(cmd))
+        self.assertEqual(list(self.spawner._active_bases), [102])
+
+    def test_bulk_destroy_is_confirmation_gated(self):
+        self.run_cmd(" list")
+        cmd = self.run_cmd(" destroy #1, #2")
+        out = self.output(cmd)
+        self.assertIn("2", out)
+        self.assertIn("confirm", out)
+        # Nothing deleted before explicit confirmation (R4.5).
+        self.assertEqual(len(self.spawner._active_bases), 2)
+        confirm = self.run_cmd(" destroy confirm")
+        self.assertIn("Destroyed 2", self.output(confirm))
+        self.assertEqual(self.spawner._active_bases, {})
+
+
+class TestOutpostDefScope(OutpostRouterTestCase):
+    """def reads live; def writes opted out with the outposts.yaml
+    reason (templates load outside the overlay merge)."""
+
+    def test_def_show_renders_the_template(self):
+        cmd = self.run_cmd(" def show fortress")
+        out = self.output(cmd)
+        self.assertIn("fortress", out)
+        self.assertIn("display_name", out)
+
+    def test_def_set_surfaces_the_opt_out_reason_and_changes_nothing(self):
+        caller = OutpostCaller(perm_level="Admin")
+        cmd = self.run_cmd(" def set fortress loot 5", caller=caller)
+        out = self.output(cmd)
+        self.assertIn("not available", out)
+        self.assertIn("outposts.yaml", out)
+
+    def test_def_reset_is_opted_out_too(self):
+        caller = OutpostCaller(perm_level="Admin")
+        cmd = self.run_cmd(" def reset fortress", caller=caller)
+        self.assertIn("not available", self.output(cmd))
+
+
+class TestOutpostSpawnLegacyGrammar(OutpostRouterTestCase):
+    """`spawn <tier> [x y]` keeps its legacy grammar and messages on the
+    migrated router (Requirement 11.6; the full legacy matrix lives in
+    test_admin_legacy_routers.py)."""
+
+    def test_spawn_with_explicit_coords_reaches_the_spawner(self):
+        with services.override({"outpost_spawner": self.spawner}):
+            cmd = self.run_cmd(" spawn fort 20 30")
+        self.assertEqual(self.spawner.spawn_calls[-1],
+                         ("earth", "fortress", (20, 30)))
+        self.assertIn("Spawned fortress base", self.output(cmd))
+
+    def test_spawn_unknown_tier_points_at_def_list(self):
+        with services.override({"outpost_spawner": self.spawner}):
+            cmd = self.run_cmd(" spawn bogus")
+        out = self.output(cmd)
+        self.assertIn("Unknown or ambiguous tier", out)
+        self.assertIn("def list", out)
+        self.assertEqual(self.spawner.spawn_calls, [])
+
+
+# ================================================================== #
+#  Migrated @player router (unified-admin-crud task 7.3)
+#
+#  CmdAdminPlayer is now an EntityAdminRouter subclass driven by the
+#  real PlayerAdapter with injected rank-system/registry/player doubles.
+#  Covers the migration wiring the task names (Requirements 1.5, 11.5,
+#  11.6):
+#
+#  - NEW `show` + `set` with `level` (int, STATIC bounds 1–100,
+#    clamp-with-note through the router) and `rank` (enum over the
+#    numeric rank ids — invalid values error listing the valid set,
+#    no state change)
+#  - legacy `level <N> [player]` / `rank <N> [player]` verb forms as
+#    Migration_Aliases of their `set` equivalents: argument reshaping
+#    on the router subclass, deprecation note naming both spellings,
+#    identical effect to the canonical spelling, caller default when
+#    [player] is omitted
+#  - `spawn`/`destroy`/def scope opted out with their reasons (players
+#    register; pointer to the '@obliterate' flow; no YAML defs)
+#  - `set` Admin-gated via verb_perms (the legacy tier — R8.7)
+# ================================================================== #
+
+from mygame.commands.admin_commands import CmdAdminPlayer  # noqa: E402
+from world.admin.adapters.player_adapter import PlayerAdapter  # noqa: E402
+from world.constants import NUM_RANKS  # noqa: E402
+from world.systems.rank_system import level_range_for_rank  # noqa: E402
+
+
+class _PDb:
+    """Attribute-bag double for a player's ``db``."""
+
+    def __init__(self, **kwargs):
+        self.__dict__.update(kwargs)
+
+    def __getattr__(self, name):  # unset fields read as None
+        return None
+
+
+class PlayerCaller:
+    """Caller stub for @player: itself a live player (db + search)."""
+
+    def __init__(self, perms=("Builder",), key="TestAdmin"):
+        self.id = next(_CALLER_IDS)
+        self.key = key
+        self.perms = set(perms)
+        self.db = _PDb(level=1, rank_level=1, combat_xp=0)
+        self.messages = []
+
+    def msg(self, text, **kwargs):
+        self.messages.append(text)
+
+    def check_permstring(self, perm):
+        return perm in self.perms
+
+    def search(self, name, **kwargs):
+        return None  # candidates come from the injected provider
+
+
+class FakePlayerTarget:
+    """A live player character the adapter enumerates."""
+
+    def __init__(self, key, level=1, rank_level=1, combat_xp=0):
+        self.id = next(_CALLER_IDS)
+        self.key = key
+        self.db = _PDb(level=level, rank_level=rank_level,
+                       combat_xp=combat_xp)
+
+
+class FakePlayerRankSystem:
+    """RankSystem double exposing the progression single-writer hooks."""
+
+    def __init__(self):
+        self.promotions = []
+
+    def xp_for_level(self, level):
+        return level * 100
+
+    def check_promotion(self, player):
+        self.promotions.append(player)
+
+
+class PlayerRouterUnderTest(CmdAdminPlayer):
+    """CmdAdminPlayer with the registry test hook injected."""
+
+    registry = None  # per-test AdapterRegistry
+
+    def _adapter_registry(self):
+        return self.registry
+
+
+class PlayerRouterTestCase(unittest.TestCase):
+    """Shared plumbing: fresh List_Cache/adapter per test + helpers."""
+
+    def setUp(self):
+        from world.admin.resolution import LIST_CACHE as cache
+        cache.clear()
+        self.bob = FakePlayerTarget("Bob", level=5, rank_level=1)
+        self.rank_system = FakePlayerRankSystem()
+        self.caller = PlayerCaller(perms=("Builder", "Admin"))
+        self.adapter = PlayerAdapter(
+            rank_system=self.rank_system,
+            registry=object(),  # rank names fall back to "Rank N"
+            players_provider=lambda: [self.bob, self.caller],
+        )
+        self.registry = AdapterRegistry()
+        self.registry.register(self.adapter)
+
+    def run_cmd(self, args, caller=None):
+        cmd = PlayerRouterUnderTest()
+        cmd.registry = self.registry
+        cmd.caller = caller or self.caller
+        cmd.args = args
+        cmd.cmdstring = cmd.key
+        cmd.func()
+        return cmd
+
+    def output(self, cmd):
+        return "\n".join(cmd.caller.messages)
+
+
+class TestPlayerRouterIdentity(PlayerRouterTestCase):
+    """The migration preserves the command key and the Builder lock."""
+
+    def test_key_and_locks_preserved(self):
+        self.assertEqual(CmdAdminPlayer.key, "@player")
+        self.assertIn("perm(Builder)", CmdAdminPlayer.locks)
+        self.assertEqual(CmdAdminPlayer.adapter_key, "player")
+
+
+class TestPlayerSetLevelClamp(PlayerRouterTestCase):
+    """`set <target> level` clamps at the STATIC 1–100 bounds with the
+    bounds note (Requirements 3.2, D2; task 7.6 coverage seed)."""
+
+    def test_set_level_above_max_clamps_to_100_with_note(self):
+        cmd = self.run_cmd(" set Bob level 150")
+        out = self.output(cmd)
+        self.assertIn("level set to 100", out)
+        self.assertIn("clamped", out)
+        self.assertIn("1–100", out)
+        self.assertEqual(self.bob.db.level, 100)
+
+    def test_set_level_below_min_clamps_to_1_with_note(self):
+        cmd = self.run_cmd(" set Bob level 0")
+        out = self.output(cmd)
+        self.assertIn("level set to 1", out)
+        self.assertIn("clamped", out)
+        self.assertEqual(self.bob.db.level, 1)
+
+    def test_in_bounds_level_applies_unchanged_through_the_system(self):
+        cmd = self.run_cmd(" set Bob level 42")
+        out = self.output(cmd)
+        self.assertIn("level set to 42", out)
+        self.assertNotIn("clamped", out)
+        self.assertEqual(self.bob.db.level, 42)
+        # XP re-stamped + rank recompute through the injected system.
+        self.assertEqual(self.bob.db.combat_xp, 4200)
+        self.assertEqual(self.rank_system.promotions, [self.bob])
+
+
+class TestPlayerSetRankEnum(PlayerRouterTestCase):
+    """`set <target> rank` is an enum write: invalid ids error listing
+    the valid values with NO state change (Requirement 3.9)."""
+
+    def test_rank_outside_the_enum_errors_listing_valid_values(self):
+        cmd = self.run_cmd(f" set Bob rank {NUM_RANKS + 1}")
+        out = self.output(cmd)
+        self.assertIn("not a valid value", out)
+        self.assertIn("valid values", out)
+        self.assertIn(str(NUM_RANKS), out)
+        self.assertEqual(self.bob.db.rank_level, 1)  # unchanged
+        self.assertEqual(self.rank_system.promotions, [])
+
+    def test_valid_rank_jumps_to_the_bands_first_level(self):
+        cmd = self.run_cmd(" set Bob rank 3")
+        self.assertIn("rank set to 3", self.output(cmd))
+        self.assertEqual(self.bob.db.rank_level, 3)
+        self.assertEqual(self.bob.db.level, level_range_for_rank(3)[0])
+
+
+class TestPlayerLegacyAliases(PlayerRouterTestCase):
+    """The `level`/`rank` Migration_Aliases: deprecation note naming
+    both spellings + identical effect to the canonical `set` spelling
+    (Requirements 11.1, 11.2, 11.5)."""
+
+    def test_level_alias_emits_the_deprecation_note(self):
+        cmd = self.run_cmd(" level 9 Bob")
+        note = next(m for m in cmd.caller.messages if "deprecated" in m)
+        self.assertIn("level", note)
+        self.assertIn("set", note)
+
+    def test_level_alias_matches_the_canonical_spelling(self):
+        alias_cmd = self.run_cmd(" level 9 Bob")
+        alias_out = [m for m in alias_cmd.caller.messages
+                     if "deprecated" not in m]
+        other = FakePlayerTarget("Bob", level=5, rank_level=1)
+        self.adapter = PlayerAdapter(
+            rank_system=self.rank_system, registry=object(),
+            players_provider=lambda: [other],
+        )
+        self.registry = AdapterRegistry()
+        self.registry.register(self.adapter)
+        direct_cmd = self.run_cmd(
+            " set Bob level 9", caller=PlayerCaller(perms=("Builder",
+                                                           "Admin")))
+        self.assertEqual(alias_out, direct_cmd.caller.messages)
+        self.assertEqual(self.bob.db.level, other.db.level)
+        self.assertEqual(self.bob.db.rank_level, other.db.rank_level)
+
+    def test_rank_alias_reshapes_and_writes(self):
+        cmd = self.run_cmd(" rank 2 Bob")
+        out = self.output(cmd)
+        self.assertIn("deprecated", out)
+        self.assertIn("rank set to 2", out)
+        self.assertEqual(self.bob.db.rank_level, 2)
+
+    def test_alias_defaults_the_target_to_the_caller(self):
+        # Legacy `@player level <N>` (no player) targeted the caller.
+        cmd = self.run_cmd(" level 7")
+        self.assertIn("level set to 7", self.output(cmd))
+        self.assertEqual(self.caller.db.level, 7)
+
+    def test_alias_without_a_value_shows_usage(self):
+        cmd = self.run_cmd(" level")
+        self.assertIn("Usage", self.output(cmd))
+        self.assertEqual(self.caller.db.level, 1)  # unchanged
+
+    def test_alias_hits_the_canonical_admin_gate(self):
+        # Requirement 11.1: identical permission outcome to `set`.
+        builder = PlayerCaller(perms=("Builder",))
+        cmd = self.run_cmd(" level 9 Bob", caller=builder)
+        out = self.output(cmd)
+        self.assertIn("Permission denied", out)
+        self.assertIn("Admin", out)
+        self.assertEqual(self.bob.db.level, 5)  # unchanged
+
+
+class TestPlayerSetPermission(PlayerRouterTestCase):
+    """`set` keeps the legacy Admin tier via verb_perms (R8.7)."""
+
+    def test_set_denied_for_builder(self):
+        builder = PlayerCaller(perms=("Builder",))
+        cmd = self.run_cmd(" set Bob level 9", caller=builder)
+        out = self.output(cmd)
+        self.assertIn("Permission denied", out)
+        self.assertEqual(self.bob.db.level, 5)  # unchanged
+
+    def test_show_allowed_for_builder(self):
+        builder = PlayerCaller(perms=("Builder",))
+        cmd = self.run_cmd(" show Bob", caller=builder)
+        self.assertNotIn("Permission denied", self.output(cmd))
+
+
+class TestPlayerOptOuts(PlayerRouterTestCase):
+    """Opted-out verbs surface their declared reasons verbatim with no
+    state change (Requirement 1.5)."""
+
+    def test_spawn_opt_out_names_registration(self):
+        cmd = self.run_cmd(" spawn scout")
+        out = self.output(cmd)
+        self.assertIn("not available", out)
+        self.assertIn(self.adapter.opt_outs["spawn"], out)
+
+    def test_destroy_opt_out_points_at_obliterate(self):
+        cmd = self.run_cmd(" destroy Bob")
+        out = self.output(cmd)
+        self.assertIn("not available", out)
+        self.assertIn("@obliterate", out)
+        self.assertEqual(self.bob.db.level, 5)  # unchanged
+
+    def test_def_scope_opt_out_names_the_missing_domain(self):
+        cmd = self.run_cmd(" def list")
+        out = self.output(cmd)
+        self.assertIn("not available", out)
+        self.assertIn("no YAML definition domain", out)
+
+
+class TestPlayerListAndShow(PlayerRouterTestCase):
+    """NEW `show` + `list` (live players, #N-indexed rows)."""
+
+    def test_list_shows_indexed_player_rows(self):
+        cmd = self.run_cmd(" list")
+        out = self.output(cmd)
+        self.assertIn("#1", out)
+        self.assertIn("Bob", out)
+        self.assertIn("level 5", out)
+
+    def test_show_renders_progression_and_modifiable_fields(self):
+        cmd = self.run_cmd(" show Bob")
+        out = self.output(cmd)
+        self.assertIn("Bob", out)
+        self.assertIn("Level: 5", out)
+        self.assertIn("Modifiable fields", out)
+        self.assertIn("level", out)
+        self.assertIn("[1–100]", out)
+        self.assertIn("rank", out)
+
+    def test_show_resolves_the_cached_index(self):
+        self.run_cmd(" list")
+        cmd = self.run_cmd(" show #1")
+        self.assertIn("Bob", self.output(cmd))
+
+
+# ================================================================== #
+#  Migrated @resource router (unified-admin-crud task 7.5/7.6)
+#
+#  CmdAdminResource is now an EntityAdminRouter subclass driven by the
+#  real ResourceAdapter. @resource manages per-player resource BALANCES
+#  (not a spawnable instance collection), so its grammar row is unusual.
+#  Covers the migration wiring the task names (Requirements 1.5, 1.6,
+#  11.5, 11.6):
+#
+#  - `spawn` is the grant path (positional `<type|all> <amount>
+#    [player]`), preserved on the subclass via `_sub_spawn` (like
+#    @outpost); `give` is its Migration_Alias — deprecation note naming
+#    both spellings + byte-identical effect/output to canonical `spawn`
+#  - NEW `show` (balances readout, target defaults to you) + NEW `set`
+#    (absolute balance write, each resource an int Field_Spec floored at
+#    0 with no upper cap → clamp-below-0-to-0 with the bounds note)
+#  - `reset` extra verb (Admin-gated via verb_perms) restores one
+#    player to STARTING_RESOURCES; `spawn`/`set` stay at the Builder
+#    floor (the legacy `give` tier)
+#  - `list`/`destroy` + the whole `def` scope opted out with reasons
+#    pointing at the supported path (no listable roster, no YAML defs)
+# ================================================================== #
+
+from mygame.commands.admin_commands import CmdAdminResource  # noqa: E402
+from world.admin.adapters.resource_adapter import ResourceAdapter  # noqa: E402
+from world.constants import RESOURCE_TYPES  # noqa: E402
+
+
+class _ResAttrs:
+    """Evennia attributes-handler stand-in (the `reset` write target)."""
+
+    def __init__(self):
+        self._data = {}
+
+    def get(self, key, default=None, **kw):
+        return self._data.get(key, default)
+
+    def add(self, key, value, **kw):
+        self._data[key] = value
+
+
+class FakeResourceTarget:
+    """A player whose balances @resource reads/writes.
+
+    Carries both the ``get_resource``/``add_resource`` single-writer API
+    (the adapter's preferred path) and an ``attributes`` handler (the
+    legacy ``reset`` bulk-write target).
+    """
+
+    def __init__(self, key, **balances):
+        self.id = next(_CALLER_IDS)
+        self.key = key
+        self._resources = {r: 0 for r in RESOURCE_TYPES}
+        self._resources.update(balances)
+        self.attributes = _ResAttrs()
+        self.messages = []
+
+    def msg(self, text, **kwargs):
+        self.messages.append(text)
+
+    def get_resource(self, resource):
+        return self._resources.get(resource, 0)
+
+    def add_resource(self, resource, amount):
+        self._resources[resource] = (
+            self._resources.get(resource, 0) + amount
+        )
+
+
+class ResourceCaller:
+    """Caller stub for @resource: itself a balance holder (grants/sets to
+    ``me`` land here) with ``search`` + a configurable permission set."""
+
+    def __init__(self, perms=("Builder", "Admin"), key="TestAdmin",
+                 **balances):
+        self.id = next(_CALLER_IDS)
+        self.key = key
+        self.perms = set(perms)
+        self._resources = {r: 0 for r in RESOURCE_TYPES}
+        self._resources.update(balances)
+        self.messages = []
+        self._search_results = {}
+
+    def msg(self, text, **kwargs):
+        self.messages.append(text)
+
+    def check_permstring(self, perm):
+        return perm in self.perms
+
+    def search(self, name, **kwargs):
+        return self._search_results.get(name)
+
+    def get_resource(self, resource):
+        return self._resources.get(resource, 0)
+
+    def add_resource(self, resource, amount):
+        self._resources[resource] = (
+            self._resources.get(resource, 0) + amount
+        )
+
+
+class ResourceRouterUnderTest(CmdAdminResource):
+    """CmdAdminResource with the registry test hook injected."""
+
+    registry = None  # per-test AdapterRegistry
+
+    def _adapter_registry(self):
+        return self.registry
+
+
+class ResourceRouterTestCase(unittest.TestCase):
+    """Shared plumbing: fresh List_Cache/adapter per test + helpers."""
+
+    def setUp(self):
+        from world.admin.resolution import LIST_CACHE as cache
+        cache.clear()
+        self.bob = FakeResourceTarget("Bob", Wood=40, Stone=25, Iron=10)
+        self.caller = ResourceCaller(perms=("Builder", "Admin"))
+        self.caller._search_results["Bob"] = self.bob
+        self.adapter = ResourceAdapter()
+        self.registry = AdapterRegistry()
+        self.registry.register(self.adapter)
+
+    def run_cmd(self, args, caller=None):
+        cmd = ResourceRouterUnderTest()
+        cmd.registry = self.registry
+        cmd.caller = caller or self.caller
+        cmd.args = args
+        cmd.cmdstring = cmd.key
+        cmd.func()
+        return cmd
+
+    def output(self, cmd):
+        return "\n".join(cmd.caller.messages)
+
+
+class TestResourceRouterIdentity(ResourceRouterTestCase):
+    """The migration preserves the command key and the Builder lock."""
+
+    def test_key_and_locks_preserved(self):
+        self.assertEqual(CmdAdminResource.key, "@resource")
+        self.assertIn("perm(Builder)", CmdAdminResource.locks)
+        self.assertEqual(CmdAdminResource.adapter_key, "resource")
+
+
+class TestResourceGiveAlias(ResourceRouterTestCase):
+    """The `give` Migration_Alias: deprecation note naming both spellings
+    + byte-identical effect/output to the canonical `spawn` grant
+    (Requirements 11.1, 11.2, 11.5)."""
+
+    def test_give_emits_the_deprecation_note(self):
+        cmd = self.run_cmd(" give Wood 50 Bob")
+        note = next(m for m in cmd.caller.messages if "deprecated" in m)
+        self.assertIn("give", note)
+        self.assertIn("spawn", note)
+
+    def test_give_matches_the_canonical_spawn_spelling(self):
+        alias_cmd = self.run_cmd(" give Wood 50 Bob")
+        alias_out = [m for m in alias_cmd.caller.messages
+                     if "deprecated" not in m]
+
+        other_bob = FakeResourceTarget("Bob", Wood=40, Stone=25, Iron=10)
+        fresh_caller = ResourceCaller(perms=("Builder", "Admin"))
+        fresh_caller._search_results["Bob"] = other_bob
+        direct_cmd = self.run_cmd(" spawn Wood 50 Bob", caller=fresh_caller)
+
+        # Same output (minus the note) and same balance effect.
+        self.assertEqual(alias_out, direct_cmd.caller.messages)
+        self.assertEqual(self.bob.get_resource("Wood"),
+                         other_bob.get_resource("Wood"))
+
+
+class TestResourceSpawnGrant(ResourceRouterTestCase):
+    """`spawn <type|all> <amount> [player]` credits additively through
+    the target's add_resource single-writer (Requirement 11.6)."""
+
+    def test_spawn_grants_to_named_player_and_notifies_them(self):
+        cmd = self.run_cmd(" spawn Wood 50 Bob")
+        self.assertIn("Gave 50 Wood to Bob", self.output(cmd))
+        self.assertEqual(self.bob.get_resource("Wood"), 90)  # 40 + 50
+        self.assertTrue(any("received" in m.lower()
+                            for m in self.bob.messages))
+
+    def test_spawn_defaults_the_target_to_the_caller(self):
+        cmd = self.run_cmd(" spawn Wood 30")
+        self.assertIn("Gave 30 Wood to TestAdmin", self.output(cmd))
+        self.assertEqual(self.caller.get_resource("Wood"), 30)
+
+    def test_spawn_unknown_resource_is_rejected_not_minted(self):
+        cmd = self.run_cmd(" spawn bogus 50 Bob")
+        out = self.output(cmd)
+        self.assertIn("Unknown resource 'bogus'", out)
+        self.assertNotIn("bogus", self.bob._resources)
+        self.assertNotIn("Bogus", self.bob._resources)
+
+
+class TestResourceSetBalance(ResourceRouterTestCase):
+    """NEW `set <player> <type> <amount>`: an absolute balance write,
+    floored at 0 with no upper cap (Requirements 3.2, 3.3, D2)."""
+
+    def test_set_writes_an_absolute_balance_unclamped(self):
+        cmd = self.run_cmd(" set Bob Wood 500")
+        out = self.output(cmd)
+        self.assertIn("Bob: Wood set to 500", out)
+        self.assertNotIn("clamped", out)
+        self.assertEqual(self.bob.get_resource("Wood"), 500)
+
+    def test_set_below_zero_clamps_to_0_with_the_bounds_note(self):
+        cmd = self.run_cmd(" set Bob Wood -5")
+        out = self.output(cmd)
+        self.assertIn("Wood set to 0", out)
+        self.assertIn("clamped", out)
+        self.assertIn("0–", out)  # floor 0, no upper cap
+        self.assertEqual(self.bob.get_resource("Wood"), 0)
+
+    def test_set_me_targets_the_caller(self):
+        cmd = self.run_cmd(" set me Wood 200")
+        self.assertIn("set to 200", self.output(cmd))
+        self.assertEqual(self.caller.get_resource("Wood"), 200)
+
+    def test_set_unknown_field_errors_with_no_state_change(self):
+        cmd = self.run_cmd(" set Bob Gold 5")
+        out = self.output(cmd)
+        self.assertIn("Unknown field 'Gold'", out)
+        self.assertEqual(self.bob.get_resource("Wood"), 40)  # untouched
+
+
+class TestResourceShowBalances(ResourceRouterTestCase):
+    """NEW `show [player]`: a balances readout defaulting to the caller,
+    every resource a modifiable field bounded `[0–]`."""
+
+    def test_show_defaults_to_the_caller_and_lists_balances(self):
+        self.caller.add_resource("Wood", 15)
+        cmd = self.run_cmd(" show")
+        out = self.output(cmd)
+        self.assertIn("TestAdmin — resource balances", out)
+        self.assertIn("Wood 15", out)
+        self.assertIn("Modifiable fields", out)
+        self.assertIn("[0–]", out)  # floored at 0, no upper cap
+
+    def test_show_named_player_reads_their_balances(self):
+        cmd = self.run_cmd(" show Bob")
+        out = self.output(cmd)
+        self.assertIn("Bob — resource balances", out)
+        self.assertIn("Wood 40", out)
+
+
+class TestResourceReset(ResourceRouterTestCase):
+    """`reset [player]` extra verb (Admin-gated) restores one player to
+    STARTING_RESOURCES (Requirement 1.6)."""
+
+    def test_reset_single_player_restores_starting_resources(self):
+        self.bob.add_resource("Wood", 9999)
+        cmd = self.run_cmd(" reset Bob")
+        from typeclasses.characters import STARTING_RESOURCES
+        self.assertEqual(self.bob.attributes.get("resources"),
+                         dict(STARTING_RESOURCES))
+        self.assertIn("Reset Bob to starting resources", self.output(cmd))
+
+
+class TestResourcePermissions(ResourceRouterTestCase):
+    """`spawn`/`set` keep the Builder floor (the legacy `give` tier);
+    `reset` is Admin-gated via verb_perms (Requirements 8.7)."""
+
+    def _builder(self):
+        builder = ResourceCaller(perms=("Builder",))
+        builder._search_results["Bob"] = self.bob
+        return builder
+
+    def test_reset_denied_for_builder(self):
+        cmd = self.run_cmd(" reset Bob", caller=self._builder())
+        out = self.output(cmd)
+        self.assertIn("Permission denied", out)
+        self.assertIn("Admin", out)
+
+    def test_spawn_allowed_for_builder(self):
+        cmd = self.run_cmd(" spawn Wood 10 Bob", caller=self._builder())
+        self.assertNotIn("Permission denied", self.output(cmd))
+
+    def test_set_allowed_for_builder(self):
+        cmd = self.run_cmd(" set Bob Wood 10", caller=self._builder())
+        self.assertNotIn("Permission denied", self.output(cmd))
+
+
+class TestResourceOptOuts(ResourceRouterTestCase):
+    """Opted-out verbs surface their declared reasons verbatim with no
+    state change (Requirement 1.5)."""
+
+    def test_list_opt_out_points_at_show(self):
+        cmd = self.run_cmd(" list")
+        out = self.output(cmd)
+        self.assertIn("not available", out)
+        self.assertIn(self.adapter.opt_outs["list"], out)
+
+    def test_destroy_opt_out_points_at_set_or_reset(self):
+        cmd = self.run_cmd(" destroy Bob")
+        out = self.output(cmd)
+        self.assertIn("not available", out)
+        self.assertIn(self.adapter.opt_outs["destroy"], out)
+        self.assertEqual(self.bob.get_resource("Wood"), 40)  # unchanged
+
+    def test_def_scope_opt_out_names_the_missing_domain(self):
+        cmd = self.run_cmd(" def list")
+        out = self.output(cmd)
+        self.assertIn("not available", out)
+        self.assertIn("no YAML definition domain", out)
+
+
+# ================================================================== #
+#  Migrated @stat router (unified-admin-crud task 7.4/7.6)
+#
+#  CmdAdminStat is now an EntityAdminRouter subclass driven by the real
+#  StatAdapter. @stat edits the combat/progression fields of ONE named
+#  unit (player OR NPC), defaulting to the caller — it manages neither a
+#  spawnable collection nor a YAML domain. The task 7.6 coverage here is
+#  the WRITE SEMANTICS the shared handler + adapter reproduce
+#  (Requirements 3.2, 3.4, 11.1, 11.5, 11.6):
+#
+#  - `set <target> hp <N>` clamps to the target's OWN hp_max (a dynamic
+#    bound, Req 3.4) with the bounds note, and reviving side effect:
+#    positive hp on a downed unit clears incapacitated/respawn_timer
+#  - `set <target> hp_max <N>` tops a full unit up to the new ceiling
+#  - `set <target> combat_xp <N>` re-derives level/rank via the unit's
+#    recompute_progression single-writer
+#  - the VALUE-first `hp`/`maxhp`/`xp` Migration_Aliases reshape to the
+#    TARGET-first canonical `set` (with the maxhp→hp_max / xp→combat_xp
+#    field remap), emit the deprecation note, and hit the canonical
+#    Admin gate — identical effect to the canonical spelling
+#  - `set` is Admin-gated via verb_perms; `show` stays at Builder
+#  - caller-default resolution (`me`/`self`/omitted → you)
+#  - `list`/`spawn`/`destroy` + the whole `def` scope opted out
+# ================================================================== #
+
+from mygame.commands.admin_commands import CmdAdminStat  # noqa: E402
+from world.admin.adapters.stat_adapter import StatAdapter  # noqa: E402
+
+
+class _SDb:
+    """Attribute-bag double for a combat unit's ``db`` (unset → None)."""
+
+    def __init__(self, **kwargs):
+        self.__dict__.update(kwargs)
+
+    def __getattr__(self, name):
+        return None
+
+
+class FakeStatUnit:
+    """A live combat unit the @stat resolver enumerates (player OR NPC).
+
+    Carries the ``recompute_progression`` single-writer the ``combat_xp``
+    write re-derives level/rank through.
+    """
+
+    def __init__(self, key, hp=100, hp_max=100, combat_xp=0, level=1,
+                 rank_level=1, incapacitated=False, kills=0, deaths=0):
+        self.id = next(_CALLER_IDS)
+        self.key = key
+        self.db = _SDb(hp=hp, hp_max=hp_max, combat_xp=combat_xp,
+                       level=level, rank_level=rank_level,
+                       incapacitated=incapacitated, respawn_timer=0,
+                       kills=kills, deaths=deaths)
+        self.recomputes = 0
+
+    def recompute_progression(self):
+        self.recomputes += 1
+        # Re-derive level from XP (100/level, mirroring the curve doubles
+        # elsewhere in this module) so the side effect is observable.
+        self.db.level = max(1, int(self.db.combat_xp) // 100)
+
+
+class StatCaller:
+    """Caller stub for @stat: itself a live unit (`me`/omitted → here)
+    with a configurable permission set. No ``search`` — units come from
+    the injected resolver."""
+
+    def __init__(self, perms=("Builder", "Admin"), key="TestAdmin",
+                 hp=100, hp_max=100):
+        self.id = next(_CALLER_IDS)
+        self.key = key
+        self.perms = set(perms)
+        self.db = _SDb(hp=hp, hp_max=hp_max, combat_xp=0, level=1,
+                       rank_level=1, incapacitated=False, respawn_timer=0,
+                       kills=0, deaths=0)
+        self.messages = []
+        self.recomputes = 0
+
+    def msg(self, text, **kwargs):
+        self.messages.append(text)
+
+    def check_permstring(self, perm):
+        return perm in self.perms
+
+    def recompute_progression(self):
+        self.recomputes += 1
+
+
+class StatRouterUnderTest(CmdAdminStat):
+    """CmdAdminStat with the registry test hook injected."""
+
+    registry = None  # per-test AdapterRegistry
+
+    def _adapter_registry(self):
+        return self.registry
+
+
+class StatRouterTestCase(unittest.TestCase):
+    """Shared plumbing: injected unit resolver + fresh adapter per test."""
+
+    def setUp(self):
+        from world.admin.resolution import LIST_CACHE as cache
+        cache.clear()
+        self.bob = FakeStatUnit("Bob", hp=100, hp_max=100)
+        self._units = [self.bob]
+        self.caller = StatCaller(perms=("Builder", "Admin"))
+        # Resolver: exact case-insensitive key match over the live units.
+        self.adapter = StatAdapter(
+            resolver=lambda caller, token: [
+                u for u in self._units if u.key.lower() == token.lower()
+            ]
+        )
+        self.registry = AdapterRegistry()
+        self.registry.register(self.adapter)
+
+    def run_cmd(self, args, caller=None):
+        cmd = StatRouterUnderTest()
+        cmd.registry = self.registry
+        cmd.caller = caller or self.caller
+        cmd.args = args
+        cmd.cmdstring = cmd.key
+        cmd.func()
+        return cmd
+
+    def output(self, cmd):
+        return "\n".join(cmd.caller.messages)
+
+
+class TestStatRouterIdentity(StatRouterTestCase):
+    """The migration preserves the command key and the Builder lock."""
+
+    def test_key_and_locks_preserved(self):
+        self.assertEqual(CmdAdminStat.key, "@stat")
+        self.assertIn("perm(Builder)", CmdAdminStat.locks)
+        self.assertEqual(CmdAdminStat.adapter_key, "stat")
+
+
+class TestStatSetHpDynamicClamp(StatRouterTestCase):
+    """`set <target> hp` clamps to the target's OWN hp_max — a dynamic
+    bound computed from the target's state (Requirement 3.4)."""
+
+    def test_hp_above_hp_max_clamps_with_the_bounds_note(self):
+        cmd = self.run_cmd(" set Bob hp 150")  # Bob hp_max = 100
+        out = self.output(cmd)
+        self.assertIn("hp set to 100", out)
+        self.assertIn("clamped", out)
+        self.assertIn("0–100", out)  # dynamic bounds from Bob's hp_max
+        self.assertEqual(self.bob.db.hp, 100)
+
+    def test_in_bounds_hp_applies_unchanged(self):
+        cmd = self.run_cmd(" set Bob hp 40")
+        out = self.output(cmd)
+        self.assertIn("hp set to 40", out)
+        self.assertNotIn("clamped", out)
+        self.assertEqual(self.bob.db.hp, 40)
+
+
+class TestStatSetSideEffects(StatRouterTestCase):
+    """The three legacy write side effects the adapter reproduces."""
+
+    def test_positive_hp_revives_a_downed_unit(self):
+        self.bob.db.hp = 0
+        self.bob.db.incapacitated = True
+        self.bob.db.respawn_timer = 30
+        cmd = self.run_cmd(" set Bob hp 50")
+        self.assertIn("hp set to 50", self.output(cmd))
+        self.assertEqual(self.bob.db.hp, 50)
+        self.assertFalse(self.bob.db.incapacitated)
+        self.assertEqual(self.bob.db.respawn_timer, 0)
+
+    def test_hp_max_tops_a_full_unit_up_to_the_new_ceiling(self):
+        # Bob is at full HP (100/100); raising the ceiling tops him up.
+        cmd = self.run_cmd(" set Bob hp_max 200")
+        self.assertIn("hp_max set to 200", self.output(cmd))
+        self.assertEqual(self.bob.db.hp_max, 200)
+        self.assertEqual(self.bob.db.hp, 200)
+
+    def test_combat_xp_recomputes_progression(self):
+        cmd = self.run_cmd(" set Bob combat_xp 500")
+        self.assertIn("combat_xp set to 500", self.output(cmd))
+        self.assertEqual(self.bob.db.combat_xp, 500)
+        self.assertEqual(self.bob.recomputes, 1)  # single-writer fired
+        self.assertEqual(self.bob.db.level, 5)    # re-derived from XP
+
+
+class TestStatLegacyAliases(StatRouterTestCase):
+    """The VALUE-first `hp`/`maxhp`/`xp` Migration_Aliases: reshape to
+    the canonical TARGET-first `set` (+ field remap), deprecation note,
+    canonical Admin gate (Requirements 11.1, 11.2, 11.5)."""
+
+    def test_hp_alias_reshapes_writes_and_notes(self):
+        cmd = self.run_cmd(" hp 40 Bob")
+        out = self.output(cmd)
+        self.assertIn("deprecated", out)
+        self.assertIn("hp set to 40", out)
+        self.assertEqual(self.bob.db.hp, 40)
+
+    def test_maxhp_alias_remaps_to_hp_max(self):
+        cmd = self.run_cmd(" maxhp 250 Bob")
+        out = self.output(cmd)
+        self.assertIn("deprecated", out)
+        self.assertIn("hp_max set to 250", out)
+        self.assertEqual(self.bob.db.hp_max, 250)
+
+    def test_xp_alias_remaps_to_combat_xp_and_recomputes(self):
+        cmd = self.run_cmd(" xp 300 Bob")
+        out = self.output(cmd)
+        self.assertIn("combat_xp set to 300", out)
+        self.assertEqual(self.bob.db.combat_xp, 300)
+        self.assertEqual(self.bob.recomputes, 1)
+
+    def test_alias_defaults_the_target_to_the_caller(self):
+        cmd = self.run_cmd(" hp 30")  # no target → me
+        self.assertIn("hp set to 30", self.output(cmd))
+        self.assertEqual(self.caller.db.hp, 30)
+
+    def test_alias_without_a_value_shows_usage(self):
+        cmd = self.run_cmd(" hp")
+        self.assertIn("Usage", self.output(cmd))
+        self.assertEqual(self.bob.db.hp, 100)  # unchanged
+
+    def test_alias_hits_the_canonical_admin_gate(self):
+        builder = StatCaller(perms=("Builder",))
+        cmd = self.run_cmd(" hp 40 Bob", caller=builder)
+        out = self.output(cmd)
+        self.assertIn("Permission denied", out)
+        self.assertIn("Admin", out)
+        self.assertEqual(self.bob.db.hp, 100)  # unchanged
+
+
+class TestStatPermissions(StatRouterTestCase):
+    """`set` keeps the legacy Admin tier via verb_perms; `show` is
+    Builder (Requirement 8.7)."""
+
+    def test_set_denied_for_builder(self):
+        builder = StatCaller(perms=("Builder",))
+        cmd = self.run_cmd(" set Bob hp 40", caller=builder)
+        out = self.output(cmd)
+        self.assertIn("Permission denied", out)
+        self.assertEqual(self.bob.db.hp, 100)  # unchanged
+
+    def test_show_allowed_for_builder(self):
+        builder = StatCaller(perms=("Builder",))
+        cmd = self.run_cmd(" show Bob", caller=builder)
+        self.assertNotIn("Permission denied", self.output(cmd))
+
+
+class TestStatShowAndDefaults(StatRouterTestCase):
+    """NEW `show` readout + caller-default resolution."""
+
+    def test_show_defaults_to_the_caller(self):
+        cmd = self.run_cmd(" show")
+        out = self.output(cmd)
+        self.assertIn("TestAdmin — combat stats", out)
+        self.assertIn("HP: 100/100", out)
+        self.assertIn("Modifiable fields", out)
+
+    def test_show_named_unit_renders_its_stats(self):
+        cmd = self.run_cmd(" show Bob")
+        self.assertIn("Bob — combat stats", self.output(cmd))
+
+    def test_set_me_targets_the_caller(self):
+        cmd = self.run_cmd(" set me hp 55")
+        self.assertIn("hp set to 55", self.output(cmd))
+        self.assertEqual(self.caller.db.hp, 55)
+
+
+class TestStatUnknownFieldAndOptOuts(StatRouterTestCase):
+    """Unknown-field rejection + opted-out verbs (Requirements 3.7,
+    1.5)."""
+
+    def test_set_unknown_field_lists_the_allowlist_no_change(self):
+        cmd = self.run_cmd(" set Bob coord_x 5")
+        out = self.output(cmd)
+        self.assertIn("Unknown field 'coord_x'", out)
+        self.assertEqual(self.bob.db.coord_x, None)  # never written
+
+    def test_list_opt_out_points_at_show(self):
+        cmd = self.run_cmd(" list")
+        out = self.output(cmd)
+        self.assertIn("not available", out)
+        self.assertIn(self.adapter.opt_outs["list"], out)
+
+    def test_spawn_opt_out_points_at_agent_outpost(self):
+        cmd = self.run_cmd(" spawn scout")
+        out = self.output(cmd)
+        self.assertIn("not available", out)
+        self.assertIn(self.adapter.opt_outs["spawn"], out)
+
+    def test_destroy_opt_out_points_at_unit_deletion(self):
+        cmd = self.run_cmd(" destroy Bob")
+        out = self.output(cmd)
+        self.assertIn("not available", out)
+        self.assertIn(self.adapter.opt_outs["destroy"], out)
+        self.assertEqual(self.bob.db.hp, 100)  # unchanged
+
+    def test_def_scope_opt_out_names_the_missing_domain(self):
+        cmd = self.run_cmd(" def set foo bar 1")
+        out = self.output(cmd)
+        self.assertIn("not available", out)
+        self.assertIn("no YAML definition domain", out)

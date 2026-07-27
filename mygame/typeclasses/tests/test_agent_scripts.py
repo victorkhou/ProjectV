@@ -565,6 +565,42 @@ class TestEngineerScript(unittest.TestCase):
         self.assertEqual(building.db.construction_progress, 3)
         self.assertEqual(building.db.research_progress, 5)
 
+    def test_repair_respects_cadence_interval(self):
+        """An idle Engineer repairs a damaged building only on the cadence
+        boundary (repair_interval_ticks), matching the owner-driven repair.
+
+        Uses a recording ``building_system`` in the services facade to count
+        how many ``at_repeat`` ticks actually call ``apply_repair_step``.
+        """
+        from contextlib import contextmanager
+        from world import services
+        from world.definitions import BalanceConfig
+
+        interval = int(BalanceConfig().repair_interval_ticks)
+
+        calls = []
+
+        class _RecordingBuildingSystem:
+            def apply_repair_step(self, building, payer):
+                calls.append((building, payer))
+                return (False, "repaired")
+
+        # Building with no construction/research and damaged HP → repair branch.
+        building = FakeBuilding(building_type="AR")
+        building.db.hp = 100
+        building.db.hp_max = 500
+        building.db.owner = object()
+        npc = FakeNPC(role="engineer", role_target=building)
+        script = self._make_script(npc)
+
+        with services.override({"building_system": _RecordingBuildingSystem()}):
+            # Drive 2 full intervals worth of ticks.
+            for _ in range(interval * 2):
+                script.at_repeat()
+
+        # Exactly one repair step per interval — 2 steps over 2*interval ticks.
+        self.assertEqual(len(calls), 2)
+
 
 # -------------------------------------------------------------- #
 #  Placeholder Script Tests

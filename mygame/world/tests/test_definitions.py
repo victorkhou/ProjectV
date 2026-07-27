@@ -379,8 +379,12 @@ class TestDataclassContracts:
         #    rendered map size from player_vision_radius so vision balance
         #    changes never resize the minimap (regression fix; 10 preserves
         #    the pre-rebalance viewport).
+        #  + 1 repair cadence (repair_interval_ticks) — early-game rebalance:
+        #    the "per N ticks" repair period (mirrors hp_regen_interval_ticks),
+        #    gating BOTH repair drivers (owner active-presence + Engineer) so a
+        #    building repairs one step every other tick instead of every tick.
         # Bump this when adding a balance tunable.
-        assert len(fields(BalanceConfig)) == 151
+        assert len(fields(BalanceConfig)) == 152
 
     def test_coordinate_space_def_field_count(self):
         # 14 core + 2 graduation-economy scales (yield_scale, npc_scale).

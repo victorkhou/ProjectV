@@ -14,9 +14,26 @@ let custom_out_plugin = (function () {
 
         if (cls === "prompt-line") {
             // The status line (HP/level/position/terrain) is printed as normal
-            // text so raw telnet clients always see it. The webclient already
-            // shows the same fields in the map footer (via prompt_status), so
-            // drop it here to avoid duplicating it in the output panel.
+            // text so raw telnet clients always see it. Presentation here is
+            // per-view: in MAP view the map footer (#map-info, fed by
+            // prompt_status) already shows the same fields, so drop the inline
+            // copy to avoid duplicating it. In TEXT view the map panel (and its
+            // footer) is hidden, so render the line inline in the output panel —
+            // matching raw telnet, so the terminal view always shows a prompt.
+            var wrap = document.getElementById("clientwrapper");
+            var textMode = wrap && wrap.classList.contains("text-mode");
+            if (!textMode) {
+                return true;  // map view: footer covers it — drop the copy
+            }
+            var pwin = document.getElementById("messagewindow");
+            if (pwin) {
+                var pdiv = document.createElement("div");
+                pdiv.className = "out prompt-line";
+                pdiv.innerHTML = html;
+                pwin.appendChild(pdiv);
+                var pouter = document.getElementById("text-scroll-outer");
+                if (pouter) pouter.scrollTop = pouter.scrollHeight;
+            }
             return true;
         }
 

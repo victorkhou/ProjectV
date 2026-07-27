@@ -175,6 +175,14 @@ html, body { height: 100%; width: 100%; margin: 0; padding: 0; overflow: hidden;
 #clientwrapper.text-mode .resize-handle-h-live { display: none; }
 #clientwrapper.text-mode #right-panel { border-left: none; }
 
+/* Inline status line in the Text view's output panel (custom_out renders the
+   'prompt-line' message here when the map footer is hidden). Styled as a subtle
+   status row so it reads as a prompt, not ordinary game text. */
+#messagewindow .prompt-line {
+    color: #9aa; font-family: 'DejaVu Sans Mono', Consolas, monospace;
+    font-size: 12px; margin-top: 2px;
+}
+
 /* -- Hide ASCII map in text panel when graphical map is visible -- */
 #clientwrapper:not(.text-mode) #messagewindow .ascii-map { display: none; }
 

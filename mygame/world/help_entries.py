@@ -1538,6 +1538,81 @@ HELP_ENTRY_DICTS = [
         """,
     },
     # ----------------------------------------------------------------- #
+    #  Admin — the unified @<entity> CRUD grammar (staff only)
+    # ----------------------------------------------------------------- #
+    {
+        "key": "admin",
+        "aliases": ["admin commands", "admin crud", "entity admin",
+                    "@entity", "staff commands"],
+        "category": "Admin",
+        "locks": "read:perm(Builder)",
+        "text": """
+            |wAdmin: the unified entity grammar|n
+
+            Every |w@<entity>|n staff command — |w@item|n, |w@building|n, |w@agent|n, |w@tech|n, |w@outpost|n, |w@alliance|n, |w@player|n, |w@stat|n, |w@resource|n, |w@powerup|n, |w@terrain|n, |w@planet|n — speaks one grammar: the same verbs, the same target addressing, and the same |cdefinition|n scope. Learn it once and it works everywhere. Type |whelp @item|n (or any command) for that entity's exact fields, kwargs, and opt-outs.
+
+            # The Core Verbs
+
+            Ten verbs, split into the |cinstance plane|n (live objects in the world) and the |cdefinition plane|n (the YAML data the world is built from):
+
+            |wlist|n [filter] [player] — live instances as numbered rows (fills the |c#N|n cache)
+            |wspawn|n <def> [kwargs] [player] — create an instance from a definition
+            |wshow|n <target> — full readout of one instance
+            |wset|n <target> <field> <value> — write one bounded field (out-of-range values clamp, with a note)
+            |wdestroy|n <target>[, <target> …] — delete an instance (multi-target needs confirmation)
+            |wdef list|n — every loaded definition
+            |wdef show|n <key> — one definition's merged fields, overrides flagged
+            |wdef set|n <key> <field> <value> — override a definition field (overlay-backed, validated reload)
+            |wdef reset|n <key> [field] — drop an override and reload
+            |wdef diff|n — the current overrides in this entity's domain
+
+            An entity supports each verb or |copts out|n of it with a reason — there is no third state. Invoking an opted-out verb prints its reason and a pointer to the supported path, and changes nothing (e.g. |w@player destroy|n points you at |wobliterate|n; |w@agent def list|n explains agents have no YAML domain).
+
+            # Permissions
+
+            Read and instance verbs (|wlist|n, |wspawn|n, |wshow|n, |wset|n, |wdestroy|n) and the read side of the def scope (|wdef list|n, |wdef show|n, |wdef diff|n) sit at |cBuilder|n. The two definition |cwrites|n — |wdef set|n and |wdef reset|n — are |cAdmin|n on every entity and cannot be lowered. A few entities pin an instance verb higher (e.g. |w@stat set|n is Admin).
+
+            # Target Grammar
+
+            Every |w<target>|n resolves the same way, trying each tier in order and stopping at the first hit:
+
+            |c#N|n — the Nth row from your most recent |wlist|n on that entity (run |wlist|n first; a stale index tells you to re-list)
+            |ckey|n — exact, case-sensitive (e.g. |cassault_rifle|n)
+            |cname|n — exact, case-insensitive (e.g. |cAssault Rifle|n)
+            |cprefix|n — case-insensitive prefix of a key or name; an ambiguous prefix lists the candidates instead of guessing
+
+            A trailing |c[player]|n scopes to that player's holdings (roster, items, resources); omit it and it defaults to you. |wme|n / |wself|n also mean you.
+
+            # The Definition Scope
+
+            |wdef set|n writes to a shared overlay file layered over the base YAML, then triggers a validated hot-reload: on success the new value goes live and you see the before→after; on any validation, parse, or I/O failure the live data is untouched and the overlay is rolled back, with the validator's errors relayed. |wdef reset|n removes an override (a field, or a whole key) and reloads. |wdef diff|n shows what you've overridden. Not every entity has a definition domain — see the opt-outs below.
+
+            # Definition-Only & Read-Only Commands
+
+            |w@powerup|n and |w@terrain|n are |cdefinition-only|n: they are never spawned as standalone objects, so every instance verb opts out and points at the |wdef|n scope. |w@planet|n is |cdefinition-read-only|n: |wdef list|n and |wdef show|n serve straight from the planet registry, but planets are not hot-reloadable, so |wdef set|n / |wdef reset|n / |wdef diff|n opt out — to change a planet, edit |cplanets.yaml|n and restart.
+
+            # Legacy Spellings
+
+            Old command spellings still work during the migration. Each prints a one-line deprecation note naming its canonical replacement, then behaves identically. Pairs (alias → canonical):
+
+            |w@item stats|n → |wshow|n
+            |w@agent create|n → |wspawn|n
+            |w@alliance inspect|n → |wshow|n, |w@alliance disband|n → |wdestroy|n
+            |w@outpost tiers|n → |wdef list|n
+            |w@resource give|n → |wspawn|n
+            |w@player level|n / |wrank|n → |wset|n
+            |w@stat hp|n / |wmaxhp|n / |wxp|n → |wset|n
+
+            # Extra Verbs
+
+            Some entities add verbs beyond the core ten (these are current spellings, not deprecated): |w@building open|n (open/close to ranged fire), |w@alliance kick|n / |wtransfer|n / |wrename|n (staff moderation), |w@tech grant|n / |wrevoke|n (the tech write model, mapped onto spawn/destroy), and |w@resource reset|n (restore starting resources).
+
+            # See Also
+
+            |whelp @item|n · |whelp @building|n · |whelp @player|n · |whelp @stat|n · |whelp @tech|n · |whelp @outpost|n · |whelp @alliance|n · |whelp @resource|n · |whelp @powerup|n · |whelp @terrain|n · |whelp @planet|n
+        """,
+    },
+    # ----------------------------------------------------------------- #
     #  Framework (dev only)
     # ----------------------------------------------------------------- #
     {

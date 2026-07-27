@@ -410,6 +410,109 @@ class TestTechBonusRecompute(unittest.TestCase):
         self.assertEqual(dict(player.db.tech_bonuses), first)
 
 
+class TestTechAdminGrantRevoke(unittest.TestCase):
+    """The admin single-writer paths behind the ``@tech`` adapter
+    (unified-admin-crud R7.7, R7.8, R7.9). Grant/revoke mutate the
+    researched set through the research path and recompute the derived
+    ``db.tech_bonuses`` BEFORE returning; grant-state violations return
+    ``(False, error)`` and change nothing."""
+
+    def test_grant_adds_tech_and_recomputes_bonuses(self):
+        system, _ = _make_system()
+        player = FakePlayer(rank_level=5)
+
+        ok, error = system.admin_grant_technology(player, "basic_armor")
+
+        self.assertTrue(ok)
+        self.assertEqual(error, "")
+        self.assertIn("basic_armor", player.db.researched_techs)
+        # Derived bonus present the instant the call returns (R7.7).
+        self.assertEqual(player.db.tech_bonuses.get("damage_reduction"), 20)
+
+    def test_grant_publishes_the_research_event(self):
+        system, bus = _make_system()
+        events = []
+        bus.subscribe(TECHNOLOGY_RESEARCHED, lambda **kw: events.append(kw))
+        player = FakePlayer(rank_level=5)
+
+        system.admin_grant_technology(player, "basic_armor")
+
+        # Mirrors research-completion: subscribers see the grant (R7.7).
+        self.assertEqual(len(events), 1)
+        self.assertEqual(events[0]["technology"].key, "basic_armor")
+
+    def test_grant_unknown_tech_errors_and_changes_nothing(self):
+        system, _ = _make_system()
+        player = FakePlayer(rank_level=5)
+
+        ok, error = system.admin_grant_technology(player, "no_such_tech")
+
+        self.assertFalse(ok)
+        self.assertIn("Unknown technology", error)
+        self.assertEqual(player.db.researched_techs, set())
+
+    def test_double_grant_states_current_state_and_changes_nothing(self):
+        system, _ = _make_system()
+        player = FakePlayer(rank_level=5)
+        system.admin_grant_technology(player, "basic_armor")
+        bonuses_before = dict(player.db.tech_bonuses)
+
+        ok, error = system.admin_grant_technology(player, "basic_armor")
+
+        self.assertFalse(ok)  # R7.9: already-granted grant is rejected
+        self.assertIn("already holds", error)
+        self.assertIn("granted", error)
+        self.assertEqual(player.db.researched_techs, {"basic_armor"})
+        self.assertEqual(player.db.tech_bonuses, bonuses_before)
+
+    def test_revoke_removes_tech_and_recomputes_bonuses(self):
+        system, _ = _make_system()
+        player = FakePlayer(rank_level=5)
+        system.admin_grant_technology(player, "basic_armor")
+
+        ok, error = system.admin_revoke_technology(player, "basic_armor")
+
+        self.assertTrue(ok)
+        self.assertEqual(error, "")
+        self.assertNotIn("basic_armor", player.db.researched_techs)
+        # The derived bonus is gone after the recompute (R7.8).
+        self.assertNotIn("damage_reduction", player.db.tech_bonuses)
+
+    def test_revoke_leaves_other_grants_bonuses_intact(self):
+        system, _ = _make_system()
+        player = FakePlayer(rank_level=5)
+        system.admin_grant_technology(player, "basic_armor")
+        system.admin_grant_technology(player, "reinforced_walls")
+
+        system.admin_revoke_technology(player, "basic_armor")
+
+        # Revoking one tech recomputes from the surviving set (R7.8).
+        self.assertEqual(player.db.researched_techs, {"reinforced_walls"})
+        self.assertNotIn("damage_reduction", player.db.tech_bonuses)
+        self.assertEqual(player.db.tech_bonuses.get("building_hp"), 50)
+
+    def test_absent_revoke_states_current_state_and_changes_nothing(self):
+        system, _ = _make_system()
+        player = FakePlayer(rank_level=5)
+
+        ok, error = system.admin_revoke_technology(player, "basic_armor")
+
+        self.assertFalse(ok)  # R7.9: not-held revoke is rejected
+        self.assertIn("does not hold", error)
+        self.assertIn("not granted", error)
+        self.assertEqual(player.db.researched_techs, set())
+
+    def test_grant_then_revoke_round_trips_to_the_prior_state(self):
+        system, _ = _make_system()
+        player = FakePlayer(rank_level=5)
+
+        system.admin_grant_technology(player, "basic_armor")
+        system.admin_revoke_technology(player, "basic_armor")
+
+        self.assertEqual(player.db.researched_techs, set())
+        self.assertEqual(player.db.tech_bonuses, {})
+
+
 class TestReactivePlatingResearch(unittest.TestCase):
     """Reactive Plating (item-loot-economy R11.3) — data-only DR tech.
 

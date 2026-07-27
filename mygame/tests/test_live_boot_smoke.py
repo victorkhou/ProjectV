@@ -688,6 +688,41 @@ class LiveBootSmokeTest(EvenniaTest):
             _teardown_game(systems)
 
     # -------------------------------------------------------------- #
+    #  Admin adapter registry — the composition root registers every
+    #  EntityAdapter on real boot (unified-admin-crud task 9.2)
+    # -------------------------------------------------------------- #
+
+    def test_initialize_game_registers_every_admin_adapter(self):
+        """The composition root runs ``register_all()`` on real boot and
+        installs the AdapterRegistry into ``game_systems`` — so every
+        ``@<entity>`` command has a live adapter and the core-verb
+        coverage contract was enforced at start (Requirement 1.3). This
+        exercises the real registration path (a bad adapter would have
+        raised during ``initialize_game`` above), not a stubbed registry."""
+        from server.conf.game_init import initialize_game
+        from world.admin.adapter_registry import AdapterRegistry
+
+        systems = initialize_game()
+        try:
+            registry = systems.get("adapter_registry")
+            self.assertIsInstance(
+                registry, AdapterRegistry,
+                "initialize_game must install the AdapterRegistry",
+            )
+            keys = sorted(a.entity_key for a in registry.all())
+            self.assertEqual(
+                keys,
+                sorted((
+                    "agent", "alliance", "building", "item", "outpost",
+                    "planet", "player", "powerup", "resource", "stat",
+                    "tech", "terrain",
+                )),
+                "every migrated @<entity> adapter must register on real boot",
+            )
+        finally:
+            _teardown_game(systems)
+
+    # -------------------------------------------------------------- #
     #  Fix #1 blast radius — a destroyed real Building routes to destruction,
     #  not player-respawn (so BUILDING_DESTROYED fires).
     # -------------------------------------------------------------- #

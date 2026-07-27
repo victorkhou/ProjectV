@@ -275,3 +275,79 @@ def test_loot_economy_topic_names_do_not_collide():
             other_names.update(other.get("aliases", []))
         clashes = my_names & other_names
         assert not clashes, f"{this_key} topic names collide: {clashes}"
+
+
+# ------------------------------------------------------------------ #
+#  Admin — the unified @<entity> CRUD grammar umbrella topic
+#  (unified-admin-crud task 9.1 / Requirement 11.3)
+# ------------------------------------------------------------------ #
+
+def test_admin_topic_exists_and_is_staff_gated():
+    """The umbrella 'admin' topic exists, sits in the Admin category, and is
+    lock-gated so ordinary players never see it in their help index."""
+    assert "admin" in _BY_KEY
+    entry = _BY_KEY["admin"]
+    assert entry["category"] == "Admin"
+    # Staff-only: readable at Builder+ (the admin-command floor), like the
+    # dev 'evennia' topic is Developer-gated.
+    assert "perm(Builder)" in entry.get("locks", "")
+
+
+def test_admin_topic_names_the_full_core_verb_grammar():
+    """The topic must teach all ten core verbs and the def scope — the
+    single grammar every @<entity> command shares (Requirement 11.3)."""
+    text = _BY_KEY["admin"]["text"]
+    lowered = text.lower()
+    for verb in ("list", "spawn", "show", "set", "destroy",
+                 "def list", "def show", "def set", "def reset", "def diff"):
+        assert verb in lowered, f"admin topic missing core verb '{verb}'"
+    # The #N / key / name / prefix target grammar and player scoping.
+    assert "#N" in text
+    for concept in ("key", "name", "prefix", "player"):
+        assert concept in lowered, f"admin topic missing target concept '{concept}'"
+
+
+def test_admin_topic_documents_the_full_legacy_alias_matrix():
+    """Every installed migration alias is paired with its canonical verb so
+    the legacy-spellings section can't drift from the adapters (R11.3/11.5)."""
+    text = _BY_KEY["admin"]["text"].lower()
+    for alias in ("stats", "create", "inspect", "disband", "tiers", "give"):
+        assert alias in text, f"admin topic missing legacy alias '{alias}'"
+    # The def-only / read-only surfaces and their opt-out rationale.
+    for concept in ("powerup", "terrain", "planet",
+                    "not hot-reloadable", "opt"):
+        assert concept in text, f"admin topic missing '{concept}'"
+
+
+def test_admin_topic_lists_every_entity_command():
+    """The topic (and its See Also) must name all twelve @<entity> commands
+    so each is discoverable from the umbrella (Requirement 11.3)."""
+    text = _BY_KEY["admin"]["text"]
+    for cmd in ("@item", "@building", "@agent", "@tech", "@outpost",
+                "@alliance", "@player", "@stat", "@resource",
+                "@powerup", "@terrain", "@planet"):
+        assert cmd in text, f"admin topic missing command '{cmd}'"
+    assert "# See Also" in text
+
+
+def test_admin_topic_color_tags_balanced():
+    """Every color code opened is closed by a |n (HELP_STYLE §6)."""
+    text = _BY_KEY["admin"]["text"]
+    assert len(_OPEN.findall(text)) <= len(_CLOSE.findall(text)), (
+        "admin: unbalanced color tags"
+    )
+
+
+def test_admin_topic_names_do_not_collide():
+    """The 'admin' topic's key + aliases must not clash with any OTHER
+    topic's key or aliases (a clash would let one shadow the other)."""
+    entry = _BY_KEY["admin"]
+    my_names = {entry["key"], *entry.get("aliases", [])}
+    other_names = set()
+    for other in HELP_ENTRY_DICTS:
+        if other["key"] == "admin":
+            continue
+        other_names.add(other["key"])
+        other_names.update(other.get("aliases", []))
+    clashes = my_names & other_names
+    assert not clashes, f"admin topic names collide with other topics: {clashes}"

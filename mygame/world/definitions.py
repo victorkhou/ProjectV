@@ -502,6 +502,12 @@ class BalanceConfig:
     #: Buildings don't passively heal (unlike players/agents) — repair is the
     #: only way to restore building HP.
     repair_hp_percent_per_tick: float = 5.0
+    #: Ticks between repair steps (the "per N ticks" repair period, mirroring
+    #: ``hp_regen_interval_ticks``). Default 2 → a step lands every other tick,
+    #: so the effective rate is ``repair_hp_percent_per_tick`` per this many
+    #: ticks. Applies to BOTH repair drivers (the owner's active-presence loop
+    #: and the assigned Engineer). Non-positive is treated as 1 (every tick).
+    repair_interval_ticks: int = 2
     #: 'disarm' — a multi-tick attempt on a ticking bomb. The bomb's own fuse
     #: keeps counting down during the attempt (it explodes if the fuse hits 0
     #: first). After ``bomb_disarm_ticks_min..max`` ticks a single roll decides:

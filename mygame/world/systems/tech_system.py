@@ -252,6 +252,87 @@ class TechLabSystem(BaseSystem):
                 self._apply_tech_effect(player, tdef)
 
     # ------------------------------------------------------------------ #
+    #  Admin single-writer paths (unified-admin-crud @tech adapter)
+    # ------------------------------------------------------------------ #
+    #
+    # The TechnologyAdapter (``world/admin/adapters/tech_adapter.py``)
+    # routes every admin grant/revoke through these methods so
+    # TechLabSystem stays the single writer for researched-tech state
+    # (Requirement 3.5). Derived tech bonuses are recomputed BEFORE the
+    # methods return, so the admin response never precedes the recompute
+    # (Requirements 7.7, 7.8).
+
+    def admin_grant_technology(self, player: Any, tech_key: str
+                               ) -> tuple[bool, str]:
+        """Grant *tech_key* to *player* through the research path.
+
+        Adds the technology to the player's researched set exactly like
+        research completion does (same set, same event publish), then
+        rebuilds ``db.tech_bonuses`` from scratch via
+        :meth:`recompute_tech_bonuses` before returning — so derived
+        bonuses are current when the admin gets the success response
+        (Requirement 7.7).
+
+        Returns:
+            ``(True, "")`` on success; ``(False, error)`` when the tech
+            key is unknown or the player already holds the technology —
+            the error states the player's current grant state and no
+            state changes (Requirement 7.9).
+        """
+        tdef = self.registry.technologies.get(tech_key)
+        if tdef is None:
+            return False, f"Unknown technology: {tech_key}"
+        name = getattr(player, "key", "?")
+        researched = self._get_researched_techs(player)
+        if tech_key in researched:
+            return False, (
+                f"{name} already holds technology '{tech_key}' — "
+                "current grant state: granted. Nothing changed."
+            )
+        researched.add(tech_key)
+        self._set_researched_techs(player, researched)
+        # Derived state: rebuild the bonus dict from the researched set
+        # (idempotent — never double-applies) BEFORE returning (R7.7).
+        self.recompute_tech_bonuses(player)
+        # Mirror the research-completion publish; best-effort — a
+        # subscriber error must never fail the completed admin grant.
+        try:
+            self.event_bus.publish(
+                TECHNOLOGY_RESEARCHED, player=player, technology=tdef,
+            )
+        except Exception:  # noqa: BLE001
+            logger.exception("admin grant event publish failed")
+        logger.info("Admin-granted tech %s to %s", tech_key, name)
+        return True, ""
+
+    def admin_revoke_technology(self, player: Any, tech_key: str
+                                ) -> tuple[bool, str]:
+        """Revoke *tech_key* from *player* and recompute derived bonuses.
+
+        Removes the technology from the player's researched set, then
+        rebuilds ``db.tech_bonuses`` from scratch before returning
+        (Requirement 7.8).
+
+        Returns:
+            ``(True, "")`` on success; ``(False, error)`` when the
+            player does not hold the technology — the error states the
+            player's current grant state and no state changes
+            (Requirement 7.9).
+        """
+        name = getattr(player, "key", "?")
+        researched = self._get_researched_techs(player)
+        if tech_key not in researched:
+            return False, (
+                f"{name} does not hold technology '{tech_key}' — "
+                "current grant state: not granted. Nothing changed."
+            )
+        researched.discard(tech_key)
+        self._set_researched_techs(player, researched)
+        self.recompute_tech_bonuses(player)
+        logger.info("Admin-revoked tech %s from %s", tech_key, name)
+        return True, ""
+
+    # ------------------------------------------------------------------ #
     #  Internal helpers
     # ------------------------------------------------------------------ #
 

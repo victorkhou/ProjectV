@@ -49,6 +49,17 @@ from world.systems.agent_constants import (  # noqa: E402
     ABILITY_SCRIPT_KEYS,
 )
 
+#: Agent fields the admin ``@agent set`` verb may write through
+#: :meth:`AgentSystem.admin_set_agent_field` (the single-writer path for
+#: admin field writes — unified-admin-crud Requirement 3.5). Bounds and
+#: permission tiers for these live in the AgentAdapter's Field_Specs.
+ADMIN_SETTABLE_AGENT_FIELDS: tuple[str, ...] = (
+    "hp",
+    "hp_max",
+    "kills",
+    "deaths",
+)
+
 
 class AgentSystem(AgentProgressionMixin, AgentBehaviorMixin, BaseSystem):
     """Manages player-owned NPC agents: training, assignment, reserve.
@@ -639,6 +650,126 @@ class AgentSystem(AgentProgressionMixin, AgentBehaviorMixin, BaseSystem):
             rank_def = (max(candidates, key=lambda r: r.level)
                         if candidates else self.registry.ranks[0])
         return rank_def.agent_cap - 1
+
+    # ------------------------------------------------------------------ #
+    #  Admin single-writer paths (unified-admin-crud @agent adapter)
+    # ------------------------------------------------------------------ #
+    #
+    # The AgentAdapter (``world/admin/adapters/agent_adapter.py``) routes
+    # every admin write through these methods so AgentSystem stays the
+    # single writer for agent state (Requirement 3.5).
+
+    def admin_create_agent(self, player: Any) -> Any | None:
+        """Create one agent NPC for *player* instantly (admin spawn path).
+
+        Bypasses the training cost and timer (the admin override the
+        legacy ``@agent create`` provided) but uses the same monotonic
+        ``next_agent_id`` rule as :meth:`train_agent`, so agent IDs stay
+        strictly increasing and are never reused.
+
+        Returns the new NPC, or ``None`` when the factory fails.
+        """
+        counter = getattr(getattr(player, "db", None), "next_agent_id", None)
+        try:
+            counter = int(counter)
+        except (TypeError, ValueError):
+            counter = 1
+        roster_floor = 1
+        agents = self.get_agents(player)
+        if agents:
+            roster_floor = max(
+                getattr(a.db, "agent_id", 0) for a in agents
+            ) + 1
+        next_id = max(counter, roster_floor)
+
+        npc = self._create_npc_func(player, next_id)
+        if npc is None:
+            return None
+        player.db.next_agent_id = next_id + 1
+        return npc
+
+    def admin_set_agent_field(
+        self, agent: Any, field: str, value: Any
+    ) -> bool:
+        """Write one admin-settable field onto *agent*.
+
+        The single-writer path for admin field writes (``@agent set``).
+        Only fields in :data:`ADMIN_SETTABLE_AGENT_FIELDS` are accepted;
+        bounds/clamping are the admin layer's concern — this method only
+        performs the guarded write. Returns ``True`` on success.
+        """
+        if field not in ADMIN_SETTABLE_AGENT_FIELDS:
+            return False
+        db = getattr(agent, "db", None)
+        if db is None:
+            return False
+        try:
+            setattr(db, field, value)
+        except Exception:
+            logger.exception(
+                "admin_set_agent_field failed: %s=%r on %r",
+                field, value, agent,
+            )
+            return False
+        return True
+
+    def admin_destroy_agent(self, agent: Any) -> bool:
+        """Delete *agent* through the existing deletion path.
+
+        Clears the agent's building assignment (if any) before deleting
+        the NPC object — the same sequence the legacy ``@agent destroy``
+        performed. Returns ``True`` when the deletion succeeded.
+        """
+        building = getattr(getattr(agent, "db", None), "role_target", None)
+        if building is not None and hasattr(building, "db"):
+            if getattr(building.db, "assigned_agent", None) is agent:
+                building.db.assigned_agent = None
+        deleter = getattr(agent, "delete", None)
+        if not callable(deleter):
+            return False
+        try:
+            deleter()
+        except Exception:
+            logger.exception("admin_destroy_agent failed for %r", agent)
+            return False
+        return True
+
+    def admin_clear_training(self, player: Any) -> int:
+        """Clear stuck training state on *player*'s buildings.
+
+        The legacy ``@agent destroy training <player>`` unstick tool:
+        wipes ``training_agent_id`` / ``training_ticks_remaining`` /
+        ``training_owner`` on every building currently training for the
+        player (their own buildings, plus any entry in the in-memory
+        training cache owned by them). Returns the number of buildings
+        cleared.
+        """
+        candidates: list[Any] = []
+        try:
+            candidates.extend(player.get_buildings() or [])
+        except Exception:
+            pass
+        for building in list(self._training_buildings):
+            if building not in candidates:
+                candidates.append(building)
+
+        cleared = 0
+        for building in candidates:
+            tid = self._get_building_attr(building, "training_agent_id")
+            if tid is None:
+                continue
+            owner = self._get_building_attr(building, "training_owner")
+            if owner is not None and owner is not player:
+                continue
+            self._set_building_attr(building, "training_agent_id", None)
+            self._set_building_attr(building, "training_ticks_remaining", None)
+            self._set_building_attr(building, "training_owner", None)
+            try:
+                self._training_buildings.remove(building)
+            except ValueError:
+                pass
+            cleared += 1
+        return cleared
 
     # ------------------------------------------------------------------ #
     #  Training timer processing

@@ -362,13 +362,31 @@ class EngineerScript(DefaultScript):
                 return
 
         # No construction/research pending: repair the building if it's damaged.
-        # An assigned Engineer restores repair_hp_percent_per_tick% HP per tick,
-        # charged to the building's OWNER (the same active-presence repair the
-        # owner would drive by standing on the tile — the Engineer just does it
-        # autonomously). Award construction XP on the tick the repair completes.
+        # An assigned Engineer restores repair_hp_percent_per_tick% HP every
+        # repair_interval_ticks ticks, charged to the building's OWNER (the same
+        # active-presence repair the owner would drive by standing on the tile —
+        # the Engineer just does it autonomously, at the same cadence). Award
+        # construction XP on the tick the repair completes.
         hp = _get_attr(building, "hp", 0) or 0
         hp_max = _get_attr(building, "hp_max", 0) or 0
         if hp_max and hp < hp_max:
+            # Cadence gate — a per-npc counter mirrors HarvesterScript's
+            # _harvest_tick_counter, using the same hot-tunable balance so the
+            # Engineer and owner-driven repairs share one rate and can't desync
+            # on @reload.
+            from world.adapters.registry_definitions_provider import (
+                default_balance,
+            )
+            interval = int(getattr(default_balance(),
+                                   "repair_interval_ticks", 1) or 1)
+            if interval > 1:
+                counter = getattr(getattr(npc, "db", None),
+                                  "_repair_tick_counter", 0) or 0
+                counter += 1
+                if counter % interval != 0:
+                    npc.db._repair_tick_counter = counter
+                    return
+                npc.db._repair_tick_counter = 0
             finished = _engineer_repair_step(npc, building)
             if finished:
                 _award_agent_xp(npc, "construction")
