@@ -30,6 +30,12 @@ from world.admin.def_write import (
     OVERLAY_ERROR,
     DefWriteTransaction,
 )
+from world.admin.outcomes import (
+    FIELD_SET,
+    PERM_DENIED,
+    UNKNOWN_FIELD,
+    OutcomeRecorder,
+)
 from world.admin.overlay_store import OverlayStore, OverlayStoreError
 from world.admin.resolution import LIST_CACHE, caller_key, resolve_player_scope
 from world.admin.show_renderer import fmt_bound, render_show
@@ -40,13 +46,19 @@ from world.utils import get_system, require_system
 logger = logging.getLogger("mygame.admin")
 
 
-class SubcommandDispatchMixin:
+class SubcommandDispatchMixin(OutcomeRecorder):
     """Shared verb-dispatch behavior + handler guard helpers.
 
     A pure mixin (extends ``object`` only) so it can be combined with either
     ``BaseCommand`` or ``GameCommand`` without MRO conflicts.  It relies on the
     command instance providing ``self.args``, ``self.caller`` and ``self.key``
     (both Evennia command bases do).
+
+    Via :class:`~world.admin.outcomes.OutcomeRecorder` every dispatch also
+    records its *decisions* (see ``record_outcome`` call sites) alongside the
+    prose it sends. The messages are unchanged; the record is what lets a test
+    assert "this clamped to the upper bound" without quoting the sentence that
+    said so.
     """
 
     # Subclasses override this:
@@ -100,6 +112,8 @@ class SubcommandDispatchMixin:
         """Check caller permission; msg on failure. Returns True if allowed."""
         if self.caller.check_permstring(perm):
             return True
+        self.record_outcome(PERM_DENIED, required=perm, scope="verb",
+                            target=verb)
         self.caller.msg(
             f"Permission denied. {perm}+ required for '{verb}'."
         )
@@ -914,6 +928,8 @@ class EntityAdminRouter(AdminSubcommandRouter):
         spec = fields.get(field_name)
         if spec is None:
             valid = ", ".join(sorted(fields)) or "(none)"
+            self.record_outcome(UNKNOWN_FIELD, field=field_name,
+                                valid=sorted(fields), plane="instance")
             self.caller.msg(
                 f"Unknown field '{field_name}' — valid fields: {valid}."
             )
@@ -926,6 +942,8 @@ class EntityAdminRouter(AdminSubcommandRouter):
         # the required tier (Requirement 8.5).
         if _perm_rank(spec.perm) > _perm_rank(self._verb_perm("set")):
             if not self.caller.check_permstring(spec.perm):
+                self.record_outcome(PERM_DENIED, required=spec.perm,
+                                    scope="field", target=spec.name)
                 self.caller.msg(
                     f"Permission denied. {spec.perm}+ required for "
                     f"field '{spec.name}'."
@@ -964,6 +982,14 @@ class EntityAdminRouter(AdminSubcommandRouter):
             return
 
         identity = self._describe_instance(target)
+        # Recorded on every successful set, clamped or not, so a test can
+        # assert "this did not clamp" as a fact instead of as the absence of
+        # the word "clamped" from a sentence. ``target`` is the same identity
+        # string the message opens with, so a test can assert "the write
+        # landed on the caller, not on Bob" without matching that prefix.
+        self.record_outcome(FIELD_SET, field=spec.name, requested=requested,
+                            applied=applied, clamped=clamped, lo=lo, hi=hi,
+                            target=identity)
         clamp_note = ""
         if clamped:
             clamp_note = (
@@ -1184,6 +1210,8 @@ class EntityAdminRouter(AdminSubcommandRouter):
         spec = fields.get(field_name)
         if spec is None:
             valid = ", ".join(sorted(fields)) or "(none)"
+            self.record_outcome(UNKNOWN_FIELD, field=field_name,
+                                valid=sorted(fields), plane="definition")
             self.caller.msg(
                 f"Unknown definition field '{field_name}' — valid fields: "
                 f"{valid}. The overlay was not modified."
@@ -1194,6 +1222,8 @@ class EntityAdminRouter(AdminSubcommandRouter):
         # the verb-level check and before the write (R8.4, R8.5).
         if _perm_rank(spec.perm) > _perm_rank(self._verb_perm("def set")):
             if not self.caller.check_permstring(spec.perm):
+                self.record_outcome(PERM_DENIED, required=spec.perm,
+                                    scope="field", target=spec.name)
                 self.caller.msg(
                     f"Permission denied. {spec.perm}+ required for "
                     f"field '{spec.name}'."

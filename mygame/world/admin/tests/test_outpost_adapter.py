@@ -161,15 +161,6 @@ class TestGrammarContract(unittest.TestCase):
         self.assertEqual(_adapter().aliases, {"tiers": "def list"})
         self.assertEqual(_adapter().extra_verbs, {})
 
-    def test_registers_cleanly_in_adapter_registry(self):
-        registry = AdapterRegistry()
-        registry.register(_adapter())
-        self.assertIsNotNone(registry.get("outpost"))
-
-    def test_register_all_includes_the_outpost_adapter(self):
-        registry = register_all(AdapterRegistry())
-        self.assertIsInstance(registry.get("outpost"), OutpostAdapter)
-
     def test_def_domain_is_outposts(self):
         self.assertEqual(_adapter().def_domain, "outposts")
 

@@ -155,6 +155,8 @@ from world.admin.adapters.player_adapter import PlayerAdapter  # noqa: E402
 from world.admin.adapters.resource_adapter import ResourceAdapter  # noqa: E402
 from world.admin.adapters.stat_adapter import StatAdapter  # noqa: E402
 
+from .router_harness import OutcomeAssertions  # noqa: E402
+
 # CmdAdminBuilding migrated onto EntityAdminRouter (unified-admin-crud task
 # 5.1), CmdAdminOutpost in task 7.1, CmdAdminPlayer in task 7.3, CmdAdminStat
 # in task 7.4, CmdAdminResource in task 7.5: the routers resolve their adapters
@@ -519,7 +521,7 @@ class TestResourceReset(unittest.TestCase):
 #  CmdAdminPlayer tests
 # -------------------------------------------------------------- #
 
-class TestPlayerLevel(unittest.TestCase):
+class TestPlayerLevel(OutcomeAssertions, unittest.TestCase):
     """Req 4.1: @player level delegates to level-setting logic.
 
     UPDATED for unified-admin-crud task 7.3 (Requirements 11.1, 11.5):
@@ -540,8 +542,8 @@ class TestPlayerLevel(unittest.TestCase):
         cmd.func()
 
         self.assertEqual(target.db.level, 5)
-        # Canonical `set` output (Req 11.1) + the deprecation note (11.2).
-        self.assertTrue(any("level set to 5" in m for m in caller._messages))
+        # Canonical `set` write (Req 11.1) + the deprecation note (11.2).
+        self.assertFieldSet(cmd, field="level", applied=5, target="Bob")
         self.assertTrue(any("deprecated" in m for m in caller._messages))
 
     def test_level_no_args_shows_usage(self):
@@ -576,7 +578,7 @@ class TestPlayerRank(unittest.TestCase):
 #  Permission enforcement tests
 # -------------------------------------------------------------- #
 
-class TestPermissionEnforcement(unittest.TestCase):
+class TestPermissionEnforcement(OutcomeAssertions, unittest.TestCase):
     """Req 2.7, 2.8, 3.5, 3.6, 4.5: Per-subcommand permission checks."""
 
     def test_resource_give_allowed_for_builder(self):
@@ -594,21 +596,25 @@ class TestPermissionEnforcement(unittest.TestCase):
         caller = FakeCaller(perm_level="Builder")
         cmd = _make_cmd(CmdAdminResource, caller, " reset Bob")
         cmd.func()
-        self.assertTrue(any("Permission denied" in m for m in caller._messages))
+        self.assertPermDenied(cmd, required="Admin", scope="verb",
+                              target="reset")
 
     def test_player_level_denied_for_builder(self):
         """@player level requires Admin+; Builder should be denied."""
         caller = FakeCaller(perm_level="Builder")
         cmd = _make_cmd(CmdAdminPlayer, caller, " level 5 Bob")
         cmd.func()
-        self.assertTrue(any("Permission denied" in m for m in caller._messages))
+        # `level` is an alias for `set`, so the canonical verb's gate refuses.
+        self.assertPermDenied(cmd, required="Admin", scope="verb",
+                              target="set")
 
     def test_player_rank_denied_for_builder(self):
         """@player rank requires Admin+; Builder should be denied."""
         caller = FakeCaller(perm_level="Builder")
         cmd = _make_cmd(CmdAdminPlayer, caller, " rank 3 Bob")
         cmd.func()
-        self.assertTrue(any("Permission denied" in m for m in caller._messages))
+        self.assertPermDenied(cmd, required="Admin", scope="verb",
+                              target="set")
 
     def test_building_spawn_allowed_for_builder(self):
         """@building spawn requires Builder+; Builder should be allowed."""
@@ -1082,7 +1088,7 @@ class FakeSpawner:
         return rec
 
 
-class TestCmdAdminOutpost(unittest.TestCase):
+class TestCmdAdminOutpost(OutcomeAssertions, unittest.TestCase):
 
     def _caller(self, spawner, x=3, y=4, planet="earth", perm="Builder"):
         caller = FakeCaller(perm_level=perm,
@@ -1127,7 +1133,8 @@ class TestCmdAdminOutpost(unittest.TestCase):
         caller = self._caller(spawner, perm="Player")
         cmd = _make_cmd(CmdAdminOutpost, caller, "spawn outpost")
         cmd.func()
-        self.assertTrue(any("Permission denied" in m for m in caller._messages))
+        self.assertPermDenied(cmd, required="Builder", scope="verb",
+                              target="spawn")
         self.assertEqual(spawner.calls, [])
 
     def test_list_shows_active_bases(self):
@@ -1286,7 +1293,7 @@ class TestRestore(unittest.TestCase):
 #  CmdAdminStat tests — set hp / maxhp / xp / arbitrary fields
 # -------------------------------------------------------------- #
 
-class TestAdminStat(unittest.TestCase):
+class TestAdminStat(OutcomeAssertions, unittest.TestCase):
     """@stat sets combat/progression fields on a player or NPC.
 
     UPDATED for unified-admin-crud task 7.4 (Requirements 1.5, 11.1,
@@ -1353,11 +1360,10 @@ class TestAdminStat(unittest.TestCase):
     def test_set_rejects_unlisted_field(self):
         """A field outside the allowlist is refused, naming valid fields."""
         caller = FakeCaller(perm_level="Admin")
-        _make_cmd(CmdAdminStat, caller, " set me coord_x 5").func()
+        cmd = _make_cmd(CmdAdminStat, caller, " set me coord_x 5")
+        cmd.func()
         self.assertIsNone(caller.db.coord_x)
-        self.assertTrue(
-            any("Unknown field" in m for m in caller._messages)
-        )
+        self.assertUnknownField(cmd, field="coord_x", plane="instance")
 
     def test_show_lists_stats(self):
         caller = FakeCaller(perm_level="Builder")
@@ -1370,8 +1376,11 @@ class TestAdminStat(unittest.TestCase):
 
     def test_hp_denied_for_builder(self):
         caller = FakeCaller(perm_level="Builder")
-        _make_cmd(CmdAdminStat, caller, " hp 50").func()
-        self.assertTrue(any("Permission denied" in m for m in caller._messages))
+        cmd = _make_cmd(CmdAdminStat, caller, " hp 50")
+        cmd.func()
+        # `hp` is a Migration_Alias for `set` (stat_adapter.aliases).
+        self.assertPermDenied(cmd, required="Admin", scope="verb",
+                              target="set")
 
     def test_show_allowed_for_builder(self):
         caller = FakeCaller(perm_level="Builder")

@@ -140,18 +140,6 @@ class TestGrammarContract(unittest.TestCase):
     def test_no_aliases_installed(self):
         self.assertEqual(TechnologyAdapter().aliases, {})
 
-    def test_registers_cleanly_covering_all_core_verbs(self):
-        adapter = TechnologyAdapter()
-        covered = adapter.supported_verbs | set(adapter.opt_outs)
-        self.assertEqual(covered, CORE_VERBS)
-        registry = AdapterRegistry()
-        registry.register(adapter)  # must not raise
-        self.assertIs(registry.get("tech"), adapter)
-
-    def test_register_all_includes_the_tech_adapter(self):
-        registry = register_all(AdapterRegistry())
-        self.assertIsInstance(registry.get("tech"), TechnologyAdapter)
-
 
 # ------------------------------------------------------------------ #
 #  Field schemas

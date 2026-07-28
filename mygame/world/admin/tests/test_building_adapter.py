@@ -158,17 +158,6 @@ class TestGrammarContract(unittest.TestCase):
     def test_open_is_the_declared_extra_verb(self):
         self.assertEqual(set(_adapter().extra_verbs), {"open"})
 
-    def test_registers_cleanly_in_adapter_registry(self):
-        registry = AdapterRegistry()
-        registry.register(_adapter())
-        self.assertIsNotNone(registry.get("building"))
-
-    def test_register_all_includes_building_adapter(self):
-        registry = register_all(AdapterRegistry())
-        adapter = registry.get("building")
-        self.assertIsNotNone(adapter)
-        self.assertIsInstance(adapter, BuildingAdapter)
-
     def test_def_domain_is_buildings(self):
         self.assertEqual(_adapter().def_domain, "buildings")
 

@@ -24,7 +24,6 @@ serialized-reload → respond flow runs without touching disk:
 """
 
 import copy
-import itertools
 import unittest
 
 from mygame.commands.command_router import EntityAdminRouter
@@ -33,23 +32,11 @@ from world.admin.overlay_store import OverlayStoreError
 from world.admin.types import FieldSpec
 from world.data_registry import OVERLAY_RELOAD_LOCK
 
-_CALLER_IDS = itertools.count(50_000)
-
-
-class FakeCaller:
-    """Caller mock with msg() and a configurable permission set."""
-
-    def __init__(self, perms=("Builder", "Admin")):
-        self.id = next(_CALLER_IDS)
-        self.key = "TestAdmin"
-        self.perms = set(perms)
-        self.messages = []
-
-    def msg(self, text, **kwargs):
-        self.messages.append(text)
-
-    def check_permstring(self, perm):
-        return perm in self.perms
+# Shared caller double + base class. This file previously seeded its own
+# caller ids at 50_000 — the same seed as test_prop_admin_set.py and
+# test_outpost_adapter.py, so callers in different files collided on the
+# identity that keys LIST_CACHE and the pending-destroy map.
+from .router_harness import RouterCaller, RouterTestCase
 
 
 class FakeOverlayStore:
@@ -244,10 +231,16 @@ class DefRouter(EntityAdminRouter):
         self.audit_log.append((verb, detail))
 
 
-class DefMutationTestCase(unittest.TestCase):
-    """Fresh adapter/store/registry/lock per test; shared run() helper."""
+class DefMutationTestCase(RouterTestCase):
+    """Fresh adapter/store/registry/lock per test; caller + run_cmd from
+    the shared harness. Def writes are Admin-gated, so the caller holds
+    Admin here rather than the harness default of Builder."""
+
+    router_class = DefRouter
 
     def setUp(self):
+        super().setUp()
+        self.caller = RouterCaller(perms=("Builder", "Admin"))
         self.adapter = DefAdapter()
         self.adapter_registry = AdapterRegistry()
         self.adapter_registry.register(self.adapter)
@@ -256,24 +249,14 @@ class DefMutationTestCase(unittest.TestCase):
         self.data_registry = FakeRegistry(
             self.adapter, self.store, "toydefs", lock=self.lock
         )
-        self.caller = FakeCaller()
-        self.audit_log = []
-
-    def run_cmd(self, args, caller=None, audit_fail=False):
-        cmd = DefRouter()
-        cmd.registry = self.adapter_registry
-        cmd.store = self.store
-        cmd.data_registry = self.data_registry
-        cmd.lock = self.lock
-        cmd.audit_log = self.audit_log
-        cmd.audit_fail = audit_fail
-        cmd.caller = caller or self.caller
-        cmd.args = args
-        cmd.func()
-        return cmd
-
-    def output(self, cmd):
-        return "\n".join(cmd.caller.messages)
+        self.cmd_attrs = {
+            "registry": self.adapter_registry,
+            "store": self.store,
+            "data_registry": self.data_registry,
+            "lock": self.lock,
+            "audit_log": self.audit_log,
+            "audit_fail": False,
+        }
 
 
 # ------------------------------------------------------------------ #
@@ -321,10 +304,8 @@ class TestDefSetValidation(DefMutationTestCase):
 
     def test_unknown_field_names_valid_fields_overlay_untouched(self):
         cmd = self.run_cmd(" def set teddy bogus 4")
-        out = self.output(cmd)
-        self.assertIn("Unknown definition field 'bogus'", out)
-        for name in ("level", "name", "xp_mult"):
-            self.assertIn(name, out)
+        self.assertUnknownField(cmd, field="bogus", plane="definition",
+                                valid=("level", "name", "xp_mult"))
         self.assertEqual(self.store.set_calls, [])
         self.assertEqual(self.data_registry.reload_calls, 0)
 
@@ -346,14 +327,13 @@ class TestDefSetFieldPerm(DefMutationTestCase):
     def test_escalated_field_rejected_below_tier_nothing_written(self):
         # Caller holds Admin (the def-set verb tier) but not Developer.
         cmd = self.run_cmd(" def set teddy xp_mult 2")
-        out = self.output(cmd)
-        self.assertIn("Permission denied", out)
-        self.assertIn("Developer", out)
+        self.assertPermDenied(cmd, required="Developer", scope="field",
+                              target="xp_mult")
         self.assertEqual(self.store.set_calls, [])
         self.assertEqual(self.data_registry.reload_calls, 0)
 
     def test_escalated_field_applies_at_sufficient_tier(self):
-        dev = FakeCaller(perms=("Builder", "Admin", "Developer"))
+        dev = RouterCaller(perms=("Builder", "Admin", "Developer"))
         self.run_cmd(" def set teddy xp_mult 2", caller=dev)
         self.assertEqual(self.store.set_calls,
                          [("toydefs", "teddy", "xp_mult", 2.0)])

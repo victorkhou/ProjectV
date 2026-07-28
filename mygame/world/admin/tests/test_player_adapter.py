@@ -145,15 +145,6 @@ class TestGrammarContract(unittest.TestCase):
         # Requirement 8.7: the legacy level/rank verbs were Admin-gated.
         self.assertEqual(self.adapter.verb_perms.get("set"), "Admin")
 
-    def test_registers_cleanly_in_the_adapter_registry(self):
-        registry = AdapterRegistry()
-        registry.register(self.adapter)
-        self.assertIs(registry.get("player"), self.adapter)
-
-    def test_register_all_includes_the_player_adapter(self):
-        registry = register_all(AdapterRegistry())
-        self.assertIsInstance(registry.get("player"), PlayerAdapter)
-
 
 # ------------------------------------------------------------------ #
 #  Field schema

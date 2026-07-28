@@ -104,6 +104,8 @@ from mygame.commands.admin_commands import CmdAdminResource  # noqa: E402
 from world.admin.adapter_registry import get_registry  # noqa: E402
 from world.admin.adapters.resource_adapter import ResourceAdapter  # noqa: E402
 
+from .router_harness import OutcomeAssertions  # noqa: E402
+
 # CmdAdminResource migrated onto EntityAdminRouter (unified-admin-crud task
 # 7.5): it resolves the resource adapter through the process-wide
 # AdapterRegistry, which only ``register_all()`` (server startup) populates.
@@ -243,7 +245,7 @@ class TestCmdRebootPaths(unittest.TestCase):
         cmd.func()
         self.assertTrue(any("unavailable" in m.lower() for m in caller._messages))
 
-class TestCmdGiveResourcePermission(unittest.TestCase):
+class TestCmdGiveResourcePermission(OutcomeAssertions, unittest.TestCase):
     def test_denied_without_builder(self):
         caller = FakeCaller(permissions={"Player"})
         # CmdAdminResource uses check_permstring; FakeCaller uses permissions set
@@ -252,7 +254,9 @@ class TestCmdGiveResourcePermission(unittest.TestCase):
         caller.check_permstring = lambda perm: False
         cmd = _make_cmd(CmdAdminResource, caller, " give Iron 50 Player1")
         cmd.func()
-        self.assertTrue(any("Permission denied" in m for m in caller._messages))
+        # `give` is a Migration_Alias for `spawn`, so the gate that refuses
+        # it is the canonical verb's (resource_adapter.aliases).
+        self.assertPermDenied(cmd, scope="verb", target="spawn")
 
 class TestCmdGiveResourceValidation(unittest.TestCase):
     def test_missing_args(self):

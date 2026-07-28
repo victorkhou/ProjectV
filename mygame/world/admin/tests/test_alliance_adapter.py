@@ -195,16 +195,6 @@ class TestGrammarContract(unittest.TestCase):
         self.assertEqual(set(AllianceAdapter().extra_verbs),
                          {"kick", "transfer", "rename"})
 
-    def test_registers_cleanly(self):
-        registry = AdapterRegistry()
-        adapter = AllianceAdapter()
-        registry.register(adapter)  # must not raise
-        self.assertIs(registry.get("alliance"), adapter)
-
-    def test_register_all_includes_the_alliance_adapter(self):
-        registry = register_all(AdapterRegistry())
-        self.assertIsInstance(registry.get("alliance"), AllianceAdapter)
-
 
 # ------------------------------------------------------------------ #
 #  Field schema

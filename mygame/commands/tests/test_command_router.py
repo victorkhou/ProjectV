@@ -69,23 +69,28 @@ _ensure_evennia_stubs()
 
 from mygame.commands.command_router import SubcommandRouter  # noqa: E402
 
+from .router_harness import (  # noqa: E402
+    OutcomeAssertions,
+    RouterCaller,
+)
+
 # -------------------------------------------------------------- #
 #  Test helpers
 # -------------------------------------------------------------- #
 
 
-class FakeCaller:
-    """Minimal caller mock with msg() and check_permstring()."""
+class FakeCaller(RouterCaller):
+    """Caller mock that holds every tier.
+
+    Deliberately the TOP tier rather than a bare ``return True``: these
+    tests exercise dispatch and argument parsing and want the perm gate to
+    never be what fails. ``Developer`` tops PERMISSION_HIERARCHY, so the
+    inherited hierarchy check answers True for every real tier while still
+    answering False for a bogus permstring.
+    """
 
     def __init__(self):
-        self.key = "TestPlayer"
-        self._messages = []
-
-    def msg(self, text, **kwargs):
-        self._messages.append(text)
-
-    def check_permstring(self, perm):
-        return True
+        super().__init__(perms=("Developer",), key="TestPlayer")
 
 
 def _handler_a(self, args):
@@ -360,7 +365,7 @@ class FakeCallerDenied(FakeCaller):
         return False
 
 
-class TestPermissionDenied(unittest.TestCase):
+class TestPermissionDenied(OutcomeAssertions, unittest.TestCase):
     """When _check_sub_perm fails, the caller gets a permission-denied message.
 
     **Validates: Requirements 8.2**
@@ -381,10 +386,11 @@ class TestPermissionDenied(unittest.TestCase):
         result = cmd._check_sub_perm("Admin", "create")
 
         self.assertFalse(result)
+        # Still one message: the operator-facing prose is unchanged, and
+        # this test's subject (R8.2) is that exactly one is sent.
         self.assertEqual(len(cmd.caller._messages), 1)
-        self.assertIn("Permission denied", cmd.caller._messages[0])
-        self.assertIn("Admin", cmd.caller._messages[0])
-        self.assertIn("create", cmd.caller._messages[0])
+        self.assertPermDenied(cmd, required="Admin", scope="verb",
+                              target="create")
 
     def test_perm_denied_handler_not_invoked(self):
         """When permission is denied, the handler is NOT called."""
@@ -402,7 +408,8 @@ class TestPermissionDenied(unittest.TestCase):
         cmd.func()
 
         self.assertIsNone(cmd._called_handler)
-        self.assertIn("Permission denied", cmd.caller._messages[0])
+        self.assertPermDenied(cmd, required="Admin", scope="verb",
+                              target="secret")
 
 
 # -------------------------------------------------------------- #

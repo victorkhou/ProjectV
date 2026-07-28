@@ -14,8 +14,6 @@ Module-level strategies and helpers are shared: task 1.14 appends its
 Property 6 (set idempotence at bounds) test class to this same module.
 """
 
-import itertools
-
 from hypothesis import given, settings
 from hypothesis import strategies as st
 
@@ -27,6 +25,10 @@ from mygame.commands.command_router import (
 from world.admin.adapter_registry import AdapterRegistry
 from world.admin.resolution import Resolution
 from world.admin.types import FieldSpec, InstanceRow, ShowReport
+
+from world.admin.outcomes import FIELD_SET
+
+from .router_harness import RouterCaller
 
 # ------------------------------------------------------------------ #
 #  Shared strategies and helpers (used by tasks 1.13 and 1.14)
@@ -199,24 +201,6 @@ class TestProperty1BoundedSetInvariant:
 #  Property 1 end-to-end: the shared ``set`` handler through the router
 # ------------------------------------------------------------------ #
 
-_CALLER_IDS = itertools.count(50_000)
-
-
-class _PropCaller:
-    """Minimal Builder-tier caller double."""
-
-    def __init__(self):
-        self.id = next(_CALLER_IDS)
-        self.key = "PropAdmin"
-        self.messages = []
-
-    def msg(self, text, **kwargs):
-        self.messages.append(text)
-
-    def check_permstring(self, perm):
-        return perm == "Builder"
-
-
 class _PropAdapter:
     """Toy adapter exercising only the ``set`` path (full verb coverage
     to satisfy AdapterRegistry registration)."""
@@ -281,17 +265,30 @@ class _PropRouter(EntityAdminRouter):
 
 
 def run_set_through_router(spec, entity, raw_value):
-    """Drive ``set toy field <raw_value>`` end-to-end; returns
-    (entity, joined output)."""
+    """Drive ``set toy field <raw_value>`` end-to-end; returns (entity, cmd).
+
+    The command carries the recorded outcomes, so a property can assert
+    "clamped exactly when applied != requested" against the router's own
+    decision rather than against the presence of the word "clamped" in a
+    sentence — which is what the bounded-set invariant (R3.2/R3.3, D2)
+    actually claims.
+    """
     adapter = _PropAdapter({spec.name: spec}, entity)
     registry = AdapterRegistry()
     registry.register(adapter)
     cmd = _PropRouter()
     cmd.registry = registry
-    cmd.caller = _PropCaller()
+    cmd.caller = RouterCaller(tier="Builder", key="PropAdmin")
     cmd.args = f" set toy {spec.name} {raw_value}"
     cmd.func()
-    return entity, "\n".join(cmd.caller.messages)
+    return entity, cmd
+
+
+def _clamped(cmd):
+    """Whether the router reported clamping on its last field write."""
+    writes = cmd.outcomes_of(FIELD_SET)
+    assert writes, f"no field was set — outcomes={cmd.outcomes!r}"
+    return writes[-1]["clamped"]
 
 
 class TestProperty1EndToEnd:
@@ -316,15 +313,15 @@ class TestProperty1EndToEnd:
         spec = FieldSpec(name="level", kind="int", min_value=lo,
                          max_value=hi, perm="Builder")
         entity = BoundedEntity(lo, hi, level=lo)
-        entity, out = run_set_through_router(spec, entity, requested)
+        entity, cmd = run_set_through_router(spec, entity, requested)
 
         assert lo <= entity.level <= hi
         if lo <= requested <= hi:
             assert entity.level == requested
-            assert "clamped" not in out
+            assert not _clamped(cmd)
         else:
             assert entity.level in (lo, hi)  # nearest bound
-            assert "clamped" in out
+            assert _clamped(cmd)
 
     @settings(max_examples=25)
     @given(
@@ -343,15 +340,15 @@ class TestProperty1EndToEnd:
         # Float round-trip: repr(float) → coerce_field_value is exact.
         coerced, err = coerce_field_value(spec, repr(requested))
         assert err is None and coerced == requested
-        entity, out = run_set_through_router(spec, entity, repr(requested))
+        entity, cmd = run_set_through_router(spec, entity, repr(requested))
 
         assert lo <= entity.power <= hi
         if lo <= requested <= hi:
             assert entity.power == requested
-            assert "clamped" not in out
+            assert not _clamped(cmd)
         else:
             assert entity.power in (lo, hi)
-            assert "clamped" in out
+            assert _clamped(cmd)
 
 
 # ------------------------------------------------------------------ #

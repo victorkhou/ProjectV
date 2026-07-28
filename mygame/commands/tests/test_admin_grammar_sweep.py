@@ -31,7 +31,6 @@ silently break without any single per-router test noticing:
 _Requirements: 1.4, 1.5, 9.1, 11.1, 11.5_
 """
 
-import itertools
 import unittest
 from contextlib import nullcontext
 
@@ -58,7 +57,8 @@ from mygame.commands.admin_commands import (
 from mygame.commands.agent_commands import CmdAdminAgent
 from mygame.commands.alliance_commands import CmdAdminAlliance
 
-_CALLER_IDS = itertools.count(900_000)
+from .router_harness import RouterCaller
+
 
 
 #: adapter_key -> the concrete router class the cmdset installs. The
@@ -80,22 +80,13 @@ _ROUTER_FOR = {
 }
 
 
-class FakeCaller:
-    """Caller mock: msg() + a configurable permission set (Builder+Admin
-    by default so neither the verb tier nor the def-write Admin pin ever
-    short-circuits a sweep before the behaviour under test)."""
+class FakeCaller(RouterCaller):
+    """Caller mock: Builder+Admin by default so neither the verb tier nor
+    the def-write Admin pin ever short-circuits a sweep before the
+    behaviour under test."""
 
     def __init__(self, perms=("Builder", "Admin")):
-        self.id = next(_CALLER_IDS)
-        self.key = "SweepAdmin"
-        self.perms = set(perms)
-        self.messages = []
-
-    def msg(self, text, **kwargs):
-        self.messages.append(text)
-
-    def check_permstring(self, perm):
-        return perm in self.perms
+        super().__init__(perms=perms, key="SweepAdmin")
 
 
 def _output(caller):

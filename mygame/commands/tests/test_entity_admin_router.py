@@ -22,7 +22,6 @@ Verifies with a toy adapter + router subclass that:
 The full router test suite is task 1.16; these are scaffolding checks.
 """
 
-import itertools
 import unittest
 
 from mygame.commands.command_router import EntityAdminRouter
@@ -35,27 +34,15 @@ from mygame.world.admin.types import FieldSpec, InstanceRow, ShowReport
 # it the same way here, not via `mygame.world...` (a distinct module).
 from world.admin.resolution import LIST_CACHE
 
+from .router_harness import OutcomeAssertions, RouterCaller
+
 # ------------------------------------------------------------------ #
 #  Test doubles
 # ------------------------------------------------------------------ #
 
-_CALLER_IDS = itertools.count(1)
+FakeCaller = RouterCaller
 
 
-class FakeCaller:
-    """Caller mock with msg() and a configurable permission set."""
-
-    def __init__(self, perms=("Builder",)):
-        self.id = next(_CALLER_IDS)  # unique List_Cache identity per test
-        self.key = "TestAdmin"
-        self.perms = set(perms)
-        self.messages = []
-
-    def msg(self, text, **kwargs):
-        self.messages.append(text)
-
-    def check_permstring(self, perm):
-        return perm in self.perms
 
 
 class FakeOverlay:
@@ -329,7 +316,7 @@ class TestOptOutsAndUnknownVerbs(unittest.TestCase):
 #  permission tiers (R8.1, R8.2; def set/reset registered Admin, R8.3)
 # ------------------------------------------------------------------ #
 
-class TestPermissionTiers(unittest.TestCase):
+class TestPermissionTiers(OutcomeAssertions, unittest.TestCase):
 
     def test_read_verbs_allowed_at_builder(self):
         for args in (" list", " show teddy", " def list",
@@ -341,13 +328,13 @@ class TestPermissionTiers(unittest.TestCase):
 
     def test_def_set_denied_below_admin(self):
         cmd = _run(" def set teddy level 5", perms=("Builder",))
-        self.assertIn("Permission denied", cmd.caller.messages[0])
-        self.assertIn("Admin", cmd.caller.messages[0])
+        self.assertPermDenied(cmd, required="Admin", scope="verb",
+                              target="def set")
 
     def test_def_reset_denied_below_admin(self):
         cmd = _run(" def reset teddy level", perms=("Builder",))
-        self.assertIn("Permission denied", cmd.caller.messages[0])
-        self.assertIn("Admin", cmd.caller.messages[0])
+        self.assertPermDenied(cmd, required="Admin", scope="verb",
+                              target="def reset")
 
     def test_def_set_reaches_handler_at_admin(self):
         cmd = _run(" def set teddy level 5", perms=("Builder", "Admin"))

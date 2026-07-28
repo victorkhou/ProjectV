@@ -38,23 +38,10 @@ from world.admin.adapter_registry import AdapterRegistry
 from world.admin.resolution import Resolution
 from world.admin.types import FieldSpec, InstanceRow, SetResult, ShowReport
 
-_CALLER_IDS = itertools.count(10_000)
-
-
-class FakeCaller:
-    """Caller mock with msg() and a configurable permission set."""
-
-    def __init__(self, perms=("Builder",)):
-        self.id = next(_CALLER_IDS)  # unique pending/cache identity
-        self.key = "TestAdmin"
-        self.perms = set(perms)
-        self.messages = []
-
-    def msg(self, text, **kwargs):
-        self.messages.append(text)
-
-    def check_permstring(self, perm):
-        return perm in self.perms
+# Shared caller double + base class: real Evennia hierarchy permissions,
+# process-unique caller ids, and per-test cleanup of the router's module
+# globals. See mygame/commands/tests/router_harness.py.
+from .router_harness import RouterCaller, RouterTestCase
 
 
 class Toy:
@@ -187,28 +174,21 @@ class MutRouter(EntityAdminRouter):
         self.audit_log.append((verb, detail))
 
 
-class MutationTestCase(unittest.TestCase):
-    """Fresh adapter/registry/caller per test; shared run() helper."""
+class MutationTestCase(RouterTestCase):
+    """Fresh adapter/registry per test; caller + run_cmd from the harness."""
+
+    router_class = MutRouter
 
     def setUp(self):
+        super().setUp()
         self.adapter = MutAdapter()
         self.registry = AdapterRegistry()
         self.registry.register(self.adapter)
-        self.caller = FakeCaller(perms=("Builder",))
-        self.audit_log = []
-
-    def run_cmd(self, args, caller=None, audit_fail=False):
-        cmd = MutRouter()
-        cmd.registry = self.registry
-        cmd.audit_log = self.audit_log
-        cmd.audit_fail = audit_fail
-        cmd.caller = caller or self.caller
-        cmd.args = args
-        cmd.func()
-        return cmd
-
-    def output(self, cmd):
-        return "\n".join(cmd.caller.messages)
+        self.cmd_attrs = {
+            "registry": self.registry,
+            "audit_log": self.audit_log,
+            "audit_fail": False,
+        }
 
 
 # ------------------------------------------------------------------ #
@@ -254,10 +234,10 @@ class TestSetValidation(MutationTestCase):
 
     def test_unknown_field_names_valid_fields_no_state_change(self):
         cmd = self.run_cmd(" set toy_1 bogus 4")
-        out = self.output(cmd)
-        self.assertIn("Unknown field 'bogus'", out)
-        for name in ("level", "power", "rarity", "xp_mult", "label"):
-            self.assertIn(name, out)
+        self.assertUnknownField(
+            cmd, field="bogus", plane="instance",
+            valid=("level", "power", "rarity", "xp_mult", "label"))
+        self.assertNoFieldSet(cmd)
         self.assertEqual(self.adapter.instances["toy_1"].level, 3)
 
     def test_kind_error_states_expected_kind(self):
@@ -289,29 +269,27 @@ class TestSetBounds(MutationTestCase):
     def test_in_bounds_value_applies_unchanged_no_clamp_note(self):
         cmd = self.run_cmd(" set toy_1 level 4")
         self.assertEqual(self.adapter.instances["toy_1"].level, 4)
-        out = self.output(cmd)
-        self.assertIn("level set to 4", out)
-        self.assertNotIn("clamped", out)
+        self.assertNotClamped(cmd, field="level", applied=4)
 
     def test_out_of_bounds_clamps_with_note_stating_value_and_bounds(self):
         cmd = self.run_cmd(" set toy_1 level 99")
         self.assertEqual(self.adapter.instances["toy_1"].level, 5)
-        out = self.output(cmd)
-        self.assertIn("clamped to 5", out)
-        self.assertIn("1–5", out)
+        self.assertClamped(cmd, field="level", applied=5, lo=1, hi=5,
+                           requested=99)
 
     def test_below_lower_bound_clamps_to_lower(self):
         cmd = self.run_cmd(" set toy_1 level -3")
         self.assertEqual(self.adapter.instances["toy_1"].level, 1)
-        self.assertIn("clamped to 1", self.output(cmd))
+        self.assertClamped(cmd, field="level", applied=1, lo=1, hi=5,
+                           requested=-3)
 
     def test_dynamic_bounds_computed_from_current_entity_state(self):
         self.adapter.instances["toy_1"].cap = 7.5
         cmd = self.run_cmd(" set toy_1 power 50")
         self.assertEqual(self.adapter.instances["toy_1"].power, 7.5)
-        out = self.output(cmd)
-        self.assertIn("clamped to 7.5", out)
-        self.assertIn("0–7.5", out)
+        # Upper bound is the entity's own ``cap``, set to 7.5 above.
+        self.assertClamped(cmd, field="power", applied=7.5, lo=0, hi=7.5,
+                           requested=50.0)
 
     def test_unbounded_str_field_applies_unchanged(self):
         cmd = self.run_cmd(" set toy_1 label shiny")
@@ -352,15 +330,14 @@ class TestFieldPermEscalation(MutationTestCase):
 
     def test_escalated_field_rejected_below_tier_naming_tier(self):
         cmd = self.run_cmd(" set toy_1 xp_mult 2")
-        out = self.output(cmd)
-        self.assertIn("Permission denied", out)
-        self.assertIn("Admin", out)
-        self.assertIn("xp_mult", out)
+        self.assertPermDenied(cmd, required="Admin", scope="field",
+                              target="xp_mult")
+        self.assertNoFieldSet(cmd)
         self.assertEqual(self.adapter.instances["toy_1"].xp_mult, 1.0)
         self.assertEqual(self.audit_log, [])
 
     def test_escalated_field_applies_at_sufficient_tier(self):
-        admin = FakeCaller(perms=("Builder", "Admin"))
+        admin = RouterCaller(perms=("Builder", "Admin"))
         self.run_cmd(" set toy_1 xp_mult 2", caller=admin)
         self.assertEqual(self.adapter.instances["toy_1"].xp_mult, 2.0)
 

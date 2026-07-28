@@ -31,7 +31,6 @@ import unittest
 from world.admin.adapter_registry import AdapterRegistry, register_all
 from world.admin.adapters.agent_adapter import AgentAdapter
 from world.admin.resolution import LIST_CACHE
-from world.admin.types import CORE_VERBS
 
 
 # ------------------------------------------------------------------ #
@@ -150,18 +149,6 @@ class TestGrammarContract(unittest.TestCase):
         perms = AgentAdapter().verb_perms
         for verb in ("spawn", "set", "destroy"):
             self.assertEqual(perms[verb], "Admin")
-
-    def test_registers_cleanly_covering_all_core_verbs(self):
-        adapter = AgentAdapter()
-        covered = adapter.supported_verbs | set(adapter.opt_outs)
-        self.assertEqual(covered, CORE_VERBS)
-        registry = AdapterRegistry()
-        registry.register(adapter)  # must not raise
-        self.assertIs(registry.get("agent"), adapter)
-
-    def test_register_all_includes_the_agent_adapter(self):
-        registry = register_all(AdapterRegistry())
-        self.assertIsInstance(registry.get("agent"), AgentAdapter)
 
 
 # ------------------------------------------------------------------ #

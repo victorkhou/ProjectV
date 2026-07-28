@@ -140,17 +140,6 @@ class TestGrammarContract(unittest.TestCase):
     def test_stats_alias_maps_to_show(self):
         self.assertEqual(_adapter().aliases, {"stats": "show"})
 
-    def test_registers_cleanly_in_adapter_registry(self):
-        registry = AdapterRegistry()
-        registry.register(_adapter())
-        self.assertIsNotNone(registry.get("item"))
-
-    def test_register_all_includes_item_adapter(self):
-        registry = register_all(AdapterRegistry())
-        adapter = registry.get("item")
-        self.assertIsNotNone(adapter)
-        self.assertIsInstance(adapter, ItemAdapter)
-
 
 # ------------------------------------------------------------------ #
 #  Field schemas

@@ -59,6 +59,8 @@ from mygame.world.tests.test_data_registry import (
     VALID_TERRAIN,
 )
 
+from .router_harness import OutcomeAssertions, RouterCaller
+
 
 def _write_yaml(path, data):
     with open(path, "w") as f:
@@ -83,19 +85,11 @@ def _make_data_dir():
     return tmpdir
 
 
-class FakeCaller:
-    """Caller mock with msg() and a configurable permission set."""
+class FakeCaller(RouterCaller):
+    """Caller mock: Builder+Admin by default (def writes are Admin-pinned)."""
 
     def __init__(self, perms=("Builder", "Admin")):
-        self.key = "TestAdmin"
-        self.perms = set(perms)
-        self.messages = []
-
-    def msg(self, text, **kwargs):
-        self.messages.append(text)
-
-    def check_permstring(self, perm):
-        return perm in self.perms
+        super().__init__(perms=perms)
 
 
 # ================================================================== #
@@ -140,7 +134,7 @@ class TerrainRoundTripRouter(_OverlayRoundTripRouter, CmdAdminTerrain):
     pass
 
 
-class DefOnlyRoundTripTestCase(unittest.TestCase):
+class DefOnlyRoundTripTestCase(OutcomeAssertions, unittest.TestCase):
     """Temp data dir + real registry/store/adapter per test.
 
     Subclasses declare ``router_cls``, ``adapter_cls`` and ``entity_key``.
@@ -173,8 +167,6 @@ class DefOnlyRoundTripTestCase(unittest.TestCase):
         cmd.func()
         return cmd
 
-    def output(self, cmd):
-        return "\n".join(str(m) for m in cmd.caller.messages)
 
 
 # ------------------------------------------------------------------ #
@@ -289,9 +281,8 @@ class TestPowerupDefWritePerms(PowerupTestCase):
     def test_def_set_gated_at_admin(self):
         cmd = self.run_cmd(" def set adrenaline_rush duration_ticks 45",
                            caller=FakeCaller(perms=("Builder",)))
-        msg = self.output(cmd)
-        self.assertIn("Permission denied", msg)
-        self.assertIn("Admin", msg)
+        self.assertPermDenied(cmd, required="Admin", scope="verb",
+                              target="def set")
 
     def test_def_read_passes_at_builder(self):
         cmd = self.run_cmd(" def list", caller=FakeCaller(perms=("Builder",)))
@@ -421,9 +412,8 @@ class TestTerrainDefWritePerms(TerrainTestCase):
     def test_def_set_gated_at_admin(self):
         cmd = self.run_cmd(" def set Plains vision_modifier 2",
                            caller=FakeCaller(perms=("Builder",)))
-        msg = self.output(cmd)
-        self.assertIn("Permission denied", msg)
-        self.assertIn("Admin", msg)
+        self.assertPermDenied(cmd, required="Admin", scope="verb",
+                              target="def set")
 
 
 class TestTerrainInstanceOptOuts(TerrainTestCase):
@@ -484,7 +474,7 @@ class PlanetRouterUnderTest(CmdAdminPlanet):
         return self.registry
 
 
-class PlanetTestCase(unittest.TestCase):
+class PlanetTestCase(OutcomeAssertions, unittest.TestCase):
     """Real PlanetRegistry loaded from a temp planets.yaml per test."""
 
     def setUp(self):
@@ -507,8 +497,6 @@ class PlanetTestCase(unittest.TestCase):
         cmd.func()
         return cmd
 
-    def output(self, cmd):
-        return "\n".join(str(m) for m in cmd.caller.messages)
 
 
 class TestPlanetRouterIdentity(PlanetTestCase):

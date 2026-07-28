@@ -62,6 +62,8 @@ from mygame.world.tests.test_data_registry import (
     VALID_TERRAIN,
 )
 
+from .router_harness import RouterCaller
+
 
 def _write_yaml(path, data):
     with open(path, "w") as f:
@@ -86,19 +88,11 @@ def _make_data_dir():
     return tmpdir
 
 
-class FakeCaller:
-    """Caller mock with msg() and a configurable permission set."""
+class FakeCaller(RouterCaller):
+    """Caller mock: Builder+Admin by default (def writes are Admin-pinned)."""
 
     def __init__(self, perms=("Builder", "Admin")):
-        self.key = "TestAdmin"
-        self.perms = set(perms)
-        self.messages = []
-
-    def msg(self, text, **kwargs):
-        self.messages.append(text)
-
-    def check_permstring(self, perm):
-        return perm in self.perms
+        super().__init__(perms=perms)
 
 
 class ItemDefIntegrationRouter(CmdAdminItem):

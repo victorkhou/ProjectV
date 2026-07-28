@@ -1145,6 +1145,8 @@ from mygame.commands.agent_commands import CmdAdminAgent  # noqa: E402
 from world.admin.adapter_registry import AdapterRegistry  # noqa: E402
 from world.admin.adapters.agent_adapter import AgentAdapter  # noqa: E402
 
+from .router_harness import OutcomeAssertions, RouterCaller
+
 
 class _AdminDb:
     """Attribute-bag double for an agent's ``db`` (admin router tests)."""
@@ -1195,27 +1197,21 @@ class _AdminFakeAgentSystem:
         return 2
 
 
-class _AdminCaller:
-    """Admin caller: full perms, message capture, player search."""
+class _AdminCaller(RouterCaller):
+    """Admin caller: top tier, message capture, case-insensitive search.
 
-    _next_id = 9000
+    ``Developer`` rather than a bare ``return True`` — it tops
+    PERMISSION_HIERARCHY, so every real tier still passes while a bogus
+    permstring correctly fails.
+    """
 
     def __init__(self, known_players=()):
-        _AdminCaller._next_id += 1
-        self.id = _AdminCaller._next_id
-        self.key = "AdminUser"
-        self._messages = []
-        self._known = {p.key.lower(): p for p in known_players}
-
-    def check_permstring(self, perm):
-        return True
+        super().__init__(perms=("Developer",), key="AdminUser")
+        self.search_results.update({p.key: p for p in known_players})
 
     def msg(self, text=None, **kwargs):
         if text is not None:
-            self._messages.append(text)
-
-    def search(self, name, **kwargs):
-        return self._known.get(str(name).lower())
+            self.messages.append(text)
 
 
 class _TargetPlayer(_AdminCaller):
@@ -1233,7 +1229,7 @@ class _AdminAgentRouter(CmdAdminAgent):
         return self.registry
 
 
-class AdminAgentRouterTestCase(unittest.TestCase):
+class AdminAgentRouterTestCase(OutcomeAssertions, unittest.TestCase):
     """Fresh adapter/registry/caller per test; shared run helper."""
 
     def setUp(self):
@@ -1253,9 +1249,6 @@ class AdminAgentRouterTestCase(unittest.TestCase):
         cmd.func()
         return cmd
 
-    @staticmethod
-    def output(caller):
-        return "\n".join(caller._messages)
 
 
 class TestAdminAgentIsEntityAdminRouter(AdminAgentRouterTestCase):
@@ -1334,16 +1327,18 @@ class TestAdminAgentShowSetDestroy(AdminAgentRouterTestCase):
     def test_set_writes_through_the_agent_system(self):
         caller = _AdminCaller()
         agent = self._with_agent(caller, hp=50, hp_max=100)
-        self.run_cmd(" set 1 hp 70", caller)
+        cmd = self.run_cmd(" set 1 hp 70", caller)
         self.assertEqual(agent.db.hp, 70)
-        self.assertIn("hp set to 70", self.output(caller))
+        self.assertNotClamped(cmd, field="hp", applied=70)
 
     def test_set_clamps_hp_to_the_targets_hp_max_with_note(self):
         caller = _AdminCaller()
         agent = self._with_agent(caller, hp=50, hp_max=100)
-        self.run_cmd(" set 1 hp 500", caller)
+        cmd = self.run_cmd(" set 1 hp 500", caller)
         self.assertEqual(agent.db.hp, 100)
-        self.assertIn("clamped", self.output(caller))
+        # Upper bound is the target agent's own hp_max (100), not a constant.
+        self.assertClamped(cmd, field="hp", applied=100, hi=100,
+                           requested=500)
 
     def test_destroy_deletes_through_the_agent_system(self):
         caller = _AdminCaller()

@@ -24,7 +24,6 @@ Covers the seven router-base behaviors the task names:
   the response — Requirement 9.4
 """
 
-import itertools
 import unittest
 
 from mygame.commands.admin_commands import CmdAdminItem
@@ -35,23 +34,15 @@ from world.admin.resolution import Resolution
 from world.admin.types import FieldSpec, InstanceRow, ShowReport
 from world.definitions import ItemDef
 
-_CALLER_IDS = itertools.count(100_000)
+# Shared caller double: real Evennia hierarchy permissions, process-unique
+# caller ids, and one message-capture spelling. The eight hand-written
+# callers this file used to carry implemented TWO different permission
+# rules — four the hierarchy rule, four a bare set-membership check — so
+# whether a Builder could pass a "Player"-tier gate depended on which
+# entity's section the test sat in. See router_harness.py.
+from .router_harness import RouterCaller, RouterTestCase, next_entity_id
 
-
-class FakeCaller:
-    """Caller mock with msg() and a configurable permission set."""
-
-    def __init__(self, perms=("Builder",)):
-        self.id = next(_CALLER_IDS)  # unique cache/pending identity
-        self.key = "TestAdmin"
-        self.perms = set(perms)
-        self.messages = []
-
-    def msg(self, text, **kwargs):
-        self.messages.append(text)
-
-    def check_permstring(self, perm):
-        return perm in self.perms
+FakeCaller = RouterCaller
 
 
 class Gadget:
@@ -189,10 +180,11 @@ class GadgetRouter(EntityAdminRouter):
         self.caller.msg("Zap!")
 
 
-class RouterBaseTestCase(unittest.TestCase):
+class RouterBaseTestCase(RouterTestCase):
     """Fresh adapter/registry/caller per test; shared run() helper."""
 
     def setUp(self):
+        super().setUp()
         self.adapter = GadgetAdapter()
         self.registry = AdapterRegistry()
         self.registry.register(self.adapter)
@@ -209,8 +201,6 @@ class RouterBaseTestCase(unittest.TestCase):
         cmd.func()
         return cmd
 
-    def output(self, cmd):
-        return "\n".join(cmd.caller.messages)
 
 
 # ------------------------------------------------------------------ #
@@ -245,8 +235,8 @@ class TestAliasDispatch(RouterBaseTestCase):
         # perm check — a denied caller is rejected identically (R11.1).
         denier = FakeCaller(perms=())
         cmd = self.run_cmd(" stats gadget_1", caller=denier)
-        joined = self.output(cmd)
-        self.assertIn("Permission denied", joined)
+        # The alias is rejected by the CANONICAL verb's gate, not its own.
+        self.assertPermDenied(cmd, scope="verb", target="show")
         self.assertEqual(self.adapter.mutations, [])
 
     def test_alias_state_change_and_audit_identical_to_canonical(self):
@@ -344,11 +334,11 @@ class TestDefSubDispatch(RouterBaseTestCase):
             self.assertIn(verb, out)
 
     def test_def_write_verbs_gated_at_admin_inside_the_sub_dispatch(self):
-        for args in (" def set widget level 5", " def reset widget level"):
+        for verb, args in ((" def set", " def set widget level 5"),
+                          (" def reset", " def reset widget level")):
             cmd = self.run_cmd(args, caller=FakeCaller(perms=("Builder",)))
-            msg = cmd.caller.messages[0]
-            self.assertIn("Permission denied", msg)
-            self.assertIn("Admin", msg)
+            self.assertPermDenied(cmd, required="Admin", scope="verb",
+                                  target=verb.strip())
 
     def test_def_read_verbs_pass_at_builder(self):
         for args in (" def list", " def show widget", " def diff"):
@@ -364,10 +354,8 @@ class TestFieldPermEscalation(RouterBaseTestCase):
 
     def test_escalated_field_rejected_in_full_naming_required_tier(self):
         cmd = self.run_cmd(" set gadget_1 xp_mult 2")
-        out = self.output(cmd)
-        self.assertIn("Permission denied", out)
-        self.assertIn("Admin", out)                        # the required tier
-        self.assertIn("xp_mult", out)
+        self.assertPermDenied(cmd, required="Admin", scope="field",
+                              target="xp_mult")
         self.assertEqual(self.adapter.instances["gadget_1"].xp_mult, 1.0)
         self.assertEqual(self.adapter.mutations, [])       # nothing written
         self.assertEqual(self.audit_log, [])
@@ -536,31 +524,11 @@ class FakeDataRegistry:
         return self.items[key]
 
 
-class ItemCaller:
+class ItemCaller(RouterCaller):
     """Caller stub for @item: holdings, perm hierarchy, player search."""
 
-    _HIERARCHY = ["Player", "Helper", "Builder", "Admin", "Developer"]
-
     def __init__(self, name="Admin", perm_level="Builder", contents=None):
-        self.id = next(_CALLER_IDS)
-        self.key = name
-        self._perm_level = perm_level
-        self.contents = list(contents or [])
-        self._messages = []
-        self._search_results = {}
-
-    def msg(self, text, **kwargs):
-        self._messages.append(text)
-
-    def check_permstring(self, perm):
-        try:
-            return (self._HIERARCHY.index(self._perm_level)
-                    >= self._HIERARCHY.index(perm))
-        except ValueError:
-            return False
-
-    def search(self, name, **kwargs):
-        return self._search_results.get(name)
+        super().__init__(tier=perm_level, key=name, contents=contents)
 
 
 class ItemTarget:
@@ -644,15 +612,12 @@ def _patch_create_game_item(created):
     })
 
 
-class ItemRouterTestCase(unittest.TestCase):
+class ItemRouterTestCase(RouterTestCase):
     """Shared plumbing: fresh List_Cache per test + output helper."""
 
     def setUp(self):
-        from world.admin.resolution import LIST_CACHE as cache
-        cache.clear()
+        super().setUp()
 
-    def output(self, cmd):
-        return "\n".join(cmd.caller._messages)
 
 
 # ------------------------------------------------------------------ #
@@ -861,24 +826,23 @@ class TestItemPermissions(ItemRouterTestCase):
     def test_spawn_denied_for_player(self):
         cmd = _item_cmd(ItemCaller(perm_level="Player"),
                         " spawn frag_grenade")
-        self.assertIn("Permission denied", self.output(cmd))
+        self.assertPermDenied(cmd, scope="verb", target="spawn")
 
     def test_set_denied_for_player(self):
         cmd = _item_cmd(ItemCaller(perm_level="Player"),
                         " set rifle damage 50")
-        self.assertIn("Permission denied", self.output(cmd))
+        self.assertPermDenied(cmd, scope="verb", target="set")
 
     def test_stats_denied_for_player(self):
         # The alias runs the CANONICAL verb's perm check (R11.1).
         cmd = _item_cmd(ItemCaller(perm_level="Player"), " stats rifle")
-        self.assertIn("Permission denied", self.output(cmd))
+        self.assertPermDenied(cmd, scope="verb", target="show")
 
     def test_def_set_denied_for_builder(self):
         cmd = _item_cmd(ItemCaller(perm_level="Builder"),
                         " def set sniper_rifle weight 5")
-        out = self.output(cmd)
-        self.assertIn("Permission denied", out)
-        self.assertIn("Admin", out)
+        self.assertPermDenied(cmd, required="Admin", scope="verb",
+                              target="def set")
 
 
 # ------------------------------------------------------------------ #
@@ -1024,7 +988,7 @@ class TestItemSet(ItemRouterTestCase):
         self.assertEqual(item.db.rolled_stats, {"damage": 50.0})
         # Only damage is rolled: q = (50-40)/20 = 0.5 → IQS 50.
         self.assertEqual(item.db.iqs, 50)
-        self.assertIn("damage set to 50", self.output(cmd))
+        self.assertFieldSet(cmd, field="damage", applied=50.0)
 
     def test_set_above_band_clamps_with_note(self):
         caller, item = self._caller_with_item()
@@ -1032,17 +996,17 @@ class TestItemSet(ItemRouterTestCase):
 
         self.assertEqual(item.db.rolled_stats["damage"], 60.0)
         self.assertEqual(item.db.iqs, 100)
-        out = self.output(cmd)
-        self.assertIn("clamped", out)
-        self.assertIn("40", out)   # the bounds are named in the note
-        self.assertIn("60", out)
+        # The band is 40-60; 999 clamps to the upper bound.
+        self.assertClamped(cmd, field="damage", applied=60.0,
+                           lo=40.0, hi=60.0, requested=999.0)
 
     def test_set_below_band_clamps_with_note(self):
         caller, item = self._caller_with_item()
         cmd = _item_cmd(caller, " set sniper damage -5")
 
         self.assertEqual(item.db.rolled_stats["damage"], 40.0)
-        self.assertIn("clamped", self.output(cmd))
+        self.assertClamped(cmd, field="damage", applied=40.0,
+                           lo=40.0, hi=60.0, requested=-5.0)
 
     def test_set_preserves_other_rolled_stats(self):
         caller, item = self._caller_with_item(
@@ -1057,10 +1021,9 @@ class TestItemSet(ItemRouterTestCase):
         cmd = _item_cmd(caller, " set sniper accuracy 5")
 
         self.assertIsNone(item.db.rolled_stats)
-        out = self.output(cmd)
-        self.assertIn("Unknown field", out)      # R3.7: names valid fields
-        self.assertIn("damage", out)
-        self.assertIn("range", out)
+        # R3.7: rejected by name, and the offered list names the real fields.
+        self.assertUnknownField(cmd, field="accuracy",
+                                valid=("damage", "range"), plane="instance")
 
     def test_set_on_fixed_item_rejected(self):
         # assault_rifle's def declares no roll_spec — nothing is settable.
@@ -1075,7 +1038,7 @@ class TestItemSet(ItemRouterTestCase):
         cmd = _item_cmd(caller, " set sniper rarity epic")
 
         self.assertEqual(item.db.rarity, "epic")
-        self.assertIn("rarity set to epic", self.output(cmd))
+        self.assertFieldSet(cmd, field="rarity", applied="epic")
 
     def test_set_rarity_invalid_tier_rejected(self):
         caller, item = self._caller_with_item()
@@ -1118,7 +1081,7 @@ class TestItemSet(ItemRouterTestCase):
 #  stats → show alias readout (ported)
 # ------------------------------------------------------------------ #
 
-class TestItemStatsAlias(ItemRouterTestCase):
+class TestItemStatsAliasRolledBands(ItemRouterTestCase):
     """@item stats <item> (the legacy spelling of `show`) lists each
     modifiable stat with its current value and [min–max] band, plus
     IQS/rarity state."""
@@ -1212,10 +1175,11 @@ class FakeItemRegistry:
         return self.items[key]
 
 
-class ItemRouterTestCase(unittest.TestCase):
+class ItemRouterTestCase(RouterTestCase):
     """CmdAdminItem + real ItemAdapter over dict-shaped held items."""
 
     def setUp(self):
+        super().setUp()
         self.data_registry = FakeItemRegistry([
             ItemDef(key="rifle", name="Rifle", slot="weapon",
                     category="weapon", weapon_type="ranged", weight=3.0,
@@ -1255,8 +1219,6 @@ class ItemRouterTestCase(unittest.TestCase):
         cmd.func()
         return cmd
 
-    def output(self, cmd):
-        return "\n".join(cmd.caller.messages)
 
 
 class TestItemRouterIdentity(ItemRouterTestCase):
@@ -1374,9 +1336,8 @@ class TestItemDefScopeReachable(ItemRouterTestCase):
 
     def test_def_write_verbs_registered_at_admin(self):
         cmd = self.run_cmd(" def set rifle weight 5")
-        msg = self.output(cmd)
-        self.assertIn("Permission denied", msg)
-        self.assertIn("Admin", msg)
+        self.assertPermDenied(cmd, required="Admin", scope="verb",
+                              target="def set")
 
 
 # ================================================================== #
@@ -1407,25 +1368,22 @@ class TestItemRouterSetClampNote(ItemRouterTestCase):
         # RIFLE_SPEC bands damage 10–50: 999 clamps to the upper bound
         # and the response names the applied value AND the bounds.
         cmd = self.run_cmd(" set rifle damage 999")
-        out = self.output(cmd)
-        self.assertIn("damage set to 50.0", out)
-        self.assertIn("clamped to 50; bounds 10\u201350", out)
+        self.assertClamped(cmd, field="damage", applied=50.0,
+                           lo=10.0, hi=50.0, requested=999.0)
         # The clamped value actually landed on the instance.
         self.assertEqual(
             self.caller.contents[0]["rolled_stats"]["damage"], 50.0)
 
     def test_below_band_set_clamps_to_the_lower_bound(self):
         cmd = self.run_cmd(" set rifle damage 1")
-        out = self.output(cmd)
-        self.assertIn("clamped to 10; bounds 10\u201350", out)
+        self.assertClamped(cmd, field="damage", applied=10.0,
+                           lo=10.0, hi=50.0, requested=1.0)
         self.assertEqual(
             self.caller.contents[0]["rolled_stats"]["damage"], 10.0)
 
     def test_in_band_set_has_no_clamp_note(self):
         cmd = self.run_cmd(" set rifle damage 40")
-        out = self.output(cmd)
-        self.assertIn("damage set to 40.0", out)
-        self.assertNotIn("clamped", out)
+        self.assertNotClamped(cmd, field="damage", applied=40.0)
 
 
 class TestItemRouterSetRestampsIqs(ItemRouterTestCase):
@@ -1436,7 +1394,7 @@ class TestItemRouterSetRestampsIqs(ItemRouterTestCase):
         # recompute path must re-stamp IQS to 100.
         self.assertEqual(self.caller.contents[0]["iqs"], 72.0)
         cmd = self.run_cmd(" set rifle damage 50")
-        self.assertIn("damage set to 50.0", self.output(cmd))
+        self.assertFieldSet(cmd, field="damage", applied=50.0)
         self.assertEqual(self.caller.contents[0]["iqs"], 100)
 
     def test_clamped_set_restamps_iqs_from_the_applied_value(self):
@@ -1638,28 +1596,13 @@ class _BuildingDb:
         return None
 
 
-class BuildingCaller:
+class BuildingCaller(RouterCaller):
     """Caller stub for @building: location, coords, perm hierarchy."""
 
-    _HIERARCHY = ["Player", "Helper", "Builder", "Admin", "Developer"]
-
     def __init__(self, perm_level="Builder", location=None, coords=(3, 7)):
-        self.id = next(_CALLER_IDS)
-        self.key = "TestAdmin"
-        self._perm_level = perm_level
+        super().__init__(tier=perm_level)
         self.location = location
         self.db = _BuildingDb(coord_x=coords[0], coord_y=coords[1])
-        self._messages = []
-
-    def msg(self, text, **kwargs):
-        self._messages.append(text)
-
-    def check_permstring(self, perm):
-        try:
-            return (self._HIERARCHY.index(self._perm_level)
-                    >= self._HIERARCHY.index(perm))
-        except ValueError:
-            return False
 
 
 class BuildingRouterUnderTest(CmdAdminBuilding):
@@ -1690,12 +1633,11 @@ def _building_cmd(caller, args, defs=None):
     return cmd
 
 
-class BuildingRouterTestCase(unittest.TestCase):
+class BuildingRouterTestCase(RouterTestCase):
     """Shared plumbing: fresh List_Cache per test + output helper."""
 
     def setUp(self):
-        from world.admin.resolution import LIST_CACHE as cache
-        cache.clear()
+        super().setUp()
         self.hq = FakeLiveBuilding(key="Headquarters", building_type="HQ",
                                    level=2, hp=500, hp_max=1000)
         self.ex = FakeLiveBuilding(key="Extractor", building_type="EX",
@@ -1703,8 +1645,6 @@ class BuildingRouterTestCase(unittest.TestCase):
         self.room = FakePlanetRoom([self.hq, self.ex])
         self.caller = BuildingCaller(location=self.room)
 
-    def output(self, cmd):
-        return "\n".join(cmd.caller._messages)
 
 
 class TestBuildingMigrationWiring(BuildingRouterTestCase):
@@ -1769,40 +1709,36 @@ class TestBuildingSet(BuildingRouterTestCase):
 
     def test_set_level_in_bounds_writes_the_attribute(self):
         cmd = _building_cmd(self.caller, " set Headquarters level 4")
-        out = self.output(cmd)
-        self.assertIn("level set to 4", out)
-        self.assertNotIn("clamped", out)
+        self.assertNotClamped(cmd, field="level", applied=4,
+                              target="Headquarters")
         self.assertEqual(self.hq.attributes.get("building_level"), 4)
 
     def test_set_level_above_max_clamps_to_five_with_note(self):
         # Task 5.4 names this case verbatim: `@building set level` clamps
         # to the static 1–5 bound with a note (Requirements 7.2, 3.2, D2).
         cmd = _building_cmd(self.caller, " set Headquarters level 9")
-        out = self.output(cmd)
-        self.assertIn(f"level set to {MAX_BUILDING_LEVEL}", out)
-        self.assertIn(f"clamped to {MAX_BUILDING_LEVEL}; bounds "
-                      f"1–{MAX_BUILDING_LEVEL}", out)
+        self.assertClamped(cmd, field="level", applied=MAX_BUILDING_LEVEL,
+                           lo=1, hi=MAX_BUILDING_LEVEL, requested=9)
         self.assertEqual(self.hq.attributes.get("building_level"),
                          MAX_BUILDING_LEVEL)
 
     def test_set_level_below_min_clamps_to_one_with_note(self):
         cmd = _building_cmd(self.caller, " set Headquarters level 0")
-        out = self.output(cmd)
-        self.assertIn("level set to 1", out)
-        self.assertIn(f"clamped to 1; bounds 1–{MAX_BUILDING_LEVEL}", out)
+        self.assertClamped(cmd, field="level", applied=1,
+                           lo=1, hi=MAX_BUILDING_LEVEL, requested=0)
         self.assertEqual(self.hq.attributes.get("building_level"), 1)
 
     def test_set_hp_clamps_into_the_targets_hp_max_with_note(self):
         cmd = _building_cmd(self.caller, " set Extractor hp 9999")
-        out = self.output(cmd)
-        self.assertIn("clamped to 400", out)
+        # Dynamic upper bound: the Extractor's own hp_max.
+        self.assertClamped(cmd, field="hp", applied=400, hi=400,
+                           requested=9999)
         self.assertEqual(self.ex.attributes.get("hp"), 400)
 
     def test_set_unknown_field_names_the_valid_fields(self):
         cmd = _building_cmd(self.caller, " set Headquarters shield 5")
-        out = self.output(cmd)
-        self.assertIn("Unknown field 'shield'", out)
-        self.assertIn("level", out)
+        self.assertUnknownField(cmd, field="shield", valid=("level",),
+                                plane="instance")
         self.assertEqual(self.hq.attributes.get("building_level"), 2)
 
 
@@ -1924,32 +1860,16 @@ class _TechDb:
         return None
 
 
-class TechCaller:
+class TechCaller(RouterCaller):
     """Caller stub for @tech: granted techs, perm hierarchy, player search."""
-
-    _HIERARCHY = ["Player", "Helper", "Builder", "Admin", "Developer"]
 
     def __init__(self, key="TestAdmin", perm_level="Builder",
                  researched=(), known_players=()):
-        self.id = next(_CALLER_IDS)
-        self.key = key
-        self._perm_level = perm_level
+        super().__init__(tier=perm_level, key=key)
         self.db = _TechDb(researched_techs=set(researched), tech_bonuses={})
-        self._known = {p.key.lower(): p for p in known_players}
-        self._messages = []
-
-    def msg(self, text, **kwargs):
-        self._messages.append(text)
-
-    def check_permstring(self, perm):
-        try:
-            return (self._HIERARCHY.index(self._perm_level)
-                    >= self._HIERARCHY.index(perm))
-        except ValueError:
-            return False
-
-    def search(self, name, **kwargs):
-        return self._known.get(str(name).lower())
+        # RouterCaller.search falls back to a case-insensitive lookup, which
+        # is what this caller's own ``_known`` map did explicitly.
+        self.search_results.update({p.key: p for p in known_players})
 
 
 class TechRouterUnderTest(CmdAdminTech):
@@ -1994,16 +1914,13 @@ def _tech_cmd(caller, args, tech_system=None):
     return cmd
 
 
-class TechRouterTestCase(unittest.TestCase):
+class TechRouterTestCase(RouterTestCase):
     """Shared plumbing: fresh List_Cache per test + output helper."""
 
     def setUp(self):
-        from world.admin.resolution import LIST_CACHE as cache
-        cache.clear()
+        super().setUp()
         self.caller = TechCaller()
 
-    def output(self, cmd):
-        return "\n".join(cmd.caller._messages)
 
 
 class TestTechGrantRevokeRoundTrip(TechRouterTestCase):
@@ -2160,9 +2077,8 @@ class TestTechDefScope(TechRouterTestCase):
 
     def test_def_set_requires_admin(self):
         cmd = _tech_cmd(self.caller, " def set drone_swarm research_ticks 9")
-        out = self.output(cmd)
-        self.assertIn("Permission denied", out)
-        self.assertIn("Admin", out)
+        self.assertPermDenied(cmd, required="Admin", scope="verb",
+                              target="def set")
 
 
 # ================================================================== #
@@ -2281,29 +2197,14 @@ class _OutpostDb:
         return None
 
 
-class OutpostCaller:
+class OutpostCaller(RouterCaller):
     """Caller stub for @outpost: coords, planet, perm hierarchy."""
-
-    _HIERARCHY = ["Player", "Helper", "Builder", "Admin", "Developer"]
 
     def __init__(self, perm_level="Builder", coords=(3, 4),
                  planet="earth"):
-        self.id = next(_CALLER_IDS)
-        self.key = "TestAdmin"
-        self._perm_level = perm_level
+        super().__init__(tier=perm_level)
         self.db = _OutpostDb(coord_x=coords[0], coord_y=coords[1],
                              coord_planet=planet)
-        self._messages = []
-
-    def msg(self, text, **kwargs):
-        self._messages.append(text)
-
-    def check_permstring(self, perm):
-        try:
-            return (self._HIERARCHY.index(self._perm_level)
-                    >= self._HIERARCHY.index(perm))
-        except ValueError:
-            return False
 
 
 class OutpostRouterUnderTest(CmdAdminOutpost):
@@ -2334,12 +2235,11 @@ def _outpost_cmd(caller, args, spawner, tiers=("fortress", "outpost")):
     return cmd
 
 
-class OutpostRouterTestCase(unittest.TestCase):
+class OutpostRouterTestCase(RouterTestCase):
     """Shared plumbing: fresh List_Cache per test + output helper."""
 
     def setUp(self):
-        from world.admin.resolution import LIST_CACHE as cache
-        cache.clear()
+        super().setUp()
         self.s1 = OutpostSentinel("Outpost #1")
         self.s2 = OutpostSentinel("Fortress #1")
         self.spawner = FakeOutpostSpawner(bases={
@@ -2353,8 +2253,6 @@ class OutpostRouterTestCase(unittest.TestCase):
     def run_cmd(self, args, caller=None):
         return _outpost_cmd(caller or self.caller, args, self.spawner)
 
-    def output(self, cmd):
-        return "\n".join(cmd.caller._messages)
 
 
 class TestOutpostRouterIdentity(OutpostRouterTestCase):
@@ -2437,7 +2335,7 @@ class TestOutpostSet(OutpostRouterTestCase):
         # `set` splits on whitespace — spaced names use #N or a prefix.
         self.run_cmd(" list")
         cmd = self.run_cmd(" set #1 disturbed_at 77")
-        self.assertIn("disturbed_at set to 77", self.output(cmd))
+        self.assertFieldSet(cmd, field="disturbed_at", applied=77)
         self.assertEqual(
             self.spawner._active_bases[101]["disturbed_at"], 77)
         self.assertEqual(
@@ -2445,16 +2343,15 @@ class TestOutpostSet(OutpostRouterTestCase):
 
     def test_set_clamps_negative_values_with_the_bounds_note(self):
         cmd = self.run_cmd(" set Out disturbed_at -9")  # unique prefix
-        out = self.output(cmd)
-        self.assertIn("clamped", out)
+        self.assertClamped(cmd, field="disturbed_at", applied=0, lo=0,
+                           requested=-9)
         self.assertEqual(
             self.spawner._active_bases[101]["disturbed_at"], 0)
 
     def test_set_unknown_field_names_the_valid_fields(self):
         cmd = self.run_cmd(" set Out tier citadel")
-        out = self.output(cmd)
-        self.assertIn("Unknown field", out)
-        self.assertIn("disturbed_at", out)
+        self.assertUnknownField(cmd, field="tier", valid=("disturbed_at",),
+                                plane="instance")
         self.assertEqual(
             self.spawner._active_bases[101]["tier"], "outpost")
 
@@ -2563,21 +2460,12 @@ class _PDb:
         return None
 
 
-class PlayerCaller:
+class PlayerCaller(RouterCaller):
     """Caller stub for @player: itself a live player (db + search)."""
 
     def __init__(self, perms=("Builder",), key="TestAdmin"):
-        self.id = next(_CALLER_IDS)
-        self.key = key
-        self.perms = set(perms)
+        super().__init__(perms=perms, key=key)
         self.db = _PDb(level=1, rank_level=1, combat_xp=0)
-        self.messages = []
-
-    def msg(self, text, **kwargs):
-        self.messages.append(text)
-
-    def check_permstring(self, perm):
-        return perm in self.perms
 
     def search(self, name, **kwargs):
         return None  # candidates come from the injected provider
@@ -2587,7 +2475,7 @@ class FakePlayerTarget:
     """A live player character the adapter enumerates."""
 
     def __init__(self, key, level=1, rank_level=1, combat_xp=0):
-        self.id = next(_CALLER_IDS)
+        self.id = next_entity_id()
         self.key = key
         self.db = _PDb(level=level, rank_level=rank_level,
                        combat_xp=combat_xp)
@@ -2615,12 +2503,11 @@ class PlayerRouterUnderTest(CmdAdminPlayer):
         return self.registry
 
 
-class PlayerRouterTestCase(unittest.TestCase):
+class PlayerRouterTestCase(RouterTestCase):
     """Shared plumbing: fresh List_Cache/adapter per test + helpers."""
 
     def setUp(self):
-        from world.admin.resolution import LIST_CACHE as cache
-        cache.clear()
+        super().setUp()
         self.bob = FakePlayerTarget("Bob", level=5, rank_level=1)
         self.rank_system = FakePlayerRankSystem()
         self.caller = PlayerCaller(perms=("Builder", "Admin"))
@@ -2641,8 +2528,6 @@ class PlayerRouterTestCase(unittest.TestCase):
         cmd.func()
         return cmd
 
-    def output(self, cmd):
-        return "\n".join(cmd.caller.messages)
 
 
 class TestPlayerRouterIdentity(PlayerRouterTestCase):
@@ -2660,24 +2545,19 @@ class TestPlayerSetLevelClamp(PlayerRouterTestCase):
 
     def test_set_level_above_max_clamps_to_100_with_note(self):
         cmd = self.run_cmd(" set Bob level 150")
-        out = self.output(cmd)
-        self.assertIn("level set to 100", out)
-        self.assertIn("clamped", out)
-        self.assertIn("1–100", out)
+        self.assertClamped(cmd, field="level", applied=100, lo=1, hi=100,
+                           requested=150)
         self.assertEqual(self.bob.db.level, 100)
 
     def test_set_level_below_min_clamps_to_1_with_note(self):
         cmd = self.run_cmd(" set Bob level 0")
-        out = self.output(cmd)
-        self.assertIn("level set to 1", out)
-        self.assertIn("clamped", out)
+        self.assertClamped(cmd, field="level", applied=1, lo=1, hi=100,
+                           requested=0)
         self.assertEqual(self.bob.db.level, 1)
 
     def test_in_bounds_level_applies_unchanged_through_the_system(self):
         cmd = self.run_cmd(" set Bob level 42")
-        out = self.output(cmd)
-        self.assertIn("level set to 42", out)
-        self.assertNotIn("clamped", out)
+        self.assertNotClamped(cmd, field="level", applied=42, target="Bob")
         self.assertEqual(self.bob.db.level, 42)
         # XP re-stamped + rank recompute through the injected system.
         self.assertEqual(self.bob.db.combat_xp, 4200)
@@ -2699,7 +2579,9 @@ class TestPlayerSetRankEnum(PlayerRouterTestCase):
 
     def test_valid_rank_jumps_to_the_bands_first_level(self):
         cmd = self.run_cmd(" set Bob rank 3")
-        self.assertIn("rank set to 3", self.output(cmd))
+        # ``rank`` is a str-valued enum spec (_RANK_ENUM_VALUES); the adapter
+        # coerces to int on the way to db.rank_level, asserted below.
+        self.assertFieldSet(cmd, field="rank", applied="3", target="Bob")
         self.assertEqual(self.bob.db.rank_level, 3)
         self.assertEqual(self.bob.db.level, level_range_for_rank(3)[0])
 
@@ -2735,15 +2617,15 @@ class TestPlayerLegacyAliases(PlayerRouterTestCase):
 
     def test_rank_alias_reshapes_and_writes(self):
         cmd = self.run_cmd(" rank 2 Bob")
-        out = self.output(cmd)
-        self.assertIn("deprecated", out)
-        self.assertIn("rank set to 2", out)
+        self.assertIn("deprecated", self.output(cmd))
+        self.assertFieldSet(cmd, field="rank", applied="2", target="Bob")
         self.assertEqual(self.bob.db.rank_level, 2)
 
     def test_alias_defaults_the_target_to_the_caller(self):
         # Legacy `@player level <N>` (no player) targeted the caller.
         cmd = self.run_cmd(" level 7")
-        self.assertIn("level set to 7", self.output(cmd))
+        self.assertFieldSet(cmd, field="level", applied=7,
+                            target=self.caller.key)
         self.assertEqual(self.caller.db.level, 7)
 
     def test_alias_without_a_value_shows_usage(self):
@@ -2755,9 +2637,8 @@ class TestPlayerLegacyAliases(PlayerRouterTestCase):
         # Requirement 11.1: identical permission outcome to `set`.
         builder = PlayerCaller(perms=("Builder",))
         cmd = self.run_cmd(" level 9 Bob", caller=builder)
-        out = self.output(cmd)
-        self.assertIn("Permission denied", out)
-        self.assertIn("Admin", out)
+        self.assertPermDenied(cmd, required="Admin", scope="verb",
+                              target="set")
         self.assertEqual(self.bob.db.level, 5)  # unchanged
 
 
@@ -2767,8 +2648,8 @@ class TestPlayerSetPermission(PlayerRouterTestCase):
     def test_set_denied_for_builder(self):
         builder = PlayerCaller(perms=("Builder",))
         cmd = self.run_cmd(" set Bob level 9", caller=builder)
-        out = self.output(cmd)
-        self.assertIn("Permission denied", out)
+        self.assertPermDenied(cmd, required="Admin", scope="verb",
+                              target="set")
         self.assertEqual(self.bob.db.level, 5)  # unchanged
 
     def test_show_allowed_for_builder(self):
@@ -2877,7 +2758,7 @@ class FakeResourceTarget:
     """
 
     def __init__(self, key, **balances):
-        self.id = next(_CALLER_IDS)
+        self.id = next_entity_id()
         self.key = key
         self._resources = {r: 0 for r in RESOURCE_TYPES}
         self._resources.update(balances)
@@ -2896,28 +2777,15 @@ class FakeResourceTarget:
         )
 
 
-class ResourceCaller:
+class ResourceCaller(RouterCaller):
     """Caller stub for @resource: itself a balance holder (grants/sets to
     ``me`` land here) with ``search`` + a configurable permission set."""
 
     def __init__(self, perms=("Builder", "Admin"), key="TestAdmin",
                  **balances):
-        self.id = next(_CALLER_IDS)
-        self.key = key
-        self.perms = set(perms)
+        super().__init__(perms=perms, key=key)
         self._resources = {r: 0 for r in RESOURCE_TYPES}
         self._resources.update(balances)
-        self.messages = []
-        self._search_results = {}
-
-    def msg(self, text, **kwargs):
-        self.messages.append(text)
-
-    def check_permstring(self, perm):
-        return perm in self.perms
-
-    def search(self, name, **kwargs):
-        return self._search_results.get(name)
 
     def get_resource(self, resource):
         return self._resources.get(resource, 0)
@@ -2937,12 +2805,11 @@ class ResourceRouterUnderTest(CmdAdminResource):
         return self.registry
 
 
-class ResourceRouterTestCase(unittest.TestCase):
+class ResourceRouterTestCase(RouterTestCase):
     """Shared plumbing: fresh List_Cache/adapter per test + helpers."""
 
     def setUp(self):
-        from world.admin.resolution import LIST_CACHE as cache
-        cache.clear()
+        super().setUp()
         self.bob = FakeResourceTarget("Bob", Wood=40, Stone=25, Iron=10)
         self.caller = ResourceCaller(perms=("Builder", "Admin"))
         self.caller._search_results["Bob"] = self.bob
@@ -2959,8 +2826,6 @@ class ResourceRouterTestCase(unittest.TestCase):
         cmd.func()
         return cmd
 
-    def output(self, cmd):
-        return "\n".join(cmd.caller.messages)
 
 
 class TestResourceRouterIdentity(ResourceRouterTestCase):
@@ -3029,28 +2894,26 @@ class TestResourceSetBalance(ResourceRouterTestCase):
 
     def test_set_writes_an_absolute_balance_unclamped(self):
         cmd = self.run_cmd(" set Bob Wood 500")
-        out = self.output(cmd)
-        self.assertIn("Bob: Wood set to 500", out)
-        self.assertNotIn("clamped", out)
+        self.assertNotClamped(cmd, field="Wood", applied=500, target="Bob")
         self.assertEqual(self.bob.get_resource("Wood"), 500)
 
     def test_set_below_zero_clamps_to_0_with_the_bounds_note(self):
         cmd = self.run_cmd(" set Bob Wood -5")
-        out = self.output(cmd)
-        self.assertIn("Wood set to 0", out)
-        self.assertIn("clamped", out)
-        self.assertIn("0–", out)  # floor 0, no upper cap
+        # Floor of 0, no upper cap.
+        self.assertClamped(cmd, field="Wood", applied=0, lo=0, hi=None,
+                           requested=-5)
         self.assertEqual(self.bob.get_resource("Wood"), 0)
 
     def test_set_me_targets_the_caller(self):
         cmd = self.run_cmd(" set me Wood 200")
-        self.assertIn("set to 200", self.output(cmd))
+        self.assertFieldSet(cmd, field="Wood", applied=200,
+                            target=self.caller.key)
         self.assertEqual(self.caller.get_resource("Wood"), 200)
 
     def test_set_unknown_field_errors_with_no_state_change(self):
         cmd = self.run_cmd(" set Bob Gold 5")
-        out = self.output(cmd)
-        self.assertIn("Unknown field 'Gold'", out)
+        self.assertUnknownField(cmd, field="Gold", valid=("Wood", "Iron"),
+                                plane="instance")
         self.assertEqual(self.bob.get_resource("Wood"), 40)  # untouched
 
 
@@ -3098,9 +2961,8 @@ class TestResourcePermissions(ResourceRouterTestCase):
 
     def test_reset_denied_for_builder(self):
         cmd = self.run_cmd(" reset Bob", caller=self._builder())
-        out = self.output(cmd)
-        self.assertIn("Permission denied", out)
-        self.assertIn("Admin", out)
+        self.assertPermDenied(cmd, required="Admin", scope="verb",
+                              target="reset")
 
     def test_spawn_allowed_for_builder(self):
         cmd = self.run_cmd(" spawn Wood 10 Bob", caller=self._builder())
@@ -3183,7 +3045,7 @@ class FakeStatUnit:
 
     def __init__(self, key, hp=100, hp_max=100, combat_xp=0, level=1,
                  rank_level=1, incapacitated=False, kills=0, deaths=0):
-        self.id = next(_CALLER_IDS)
+        self.id = next_entity_id()
         self.key = key
         self.db = _SDb(hp=hp, hp_max=hp_max, combat_xp=combat_xp,
                        level=level, rank_level=rank_level,
@@ -3198,27 +3060,18 @@ class FakeStatUnit:
         self.db.level = max(1, int(self.db.combat_xp) // 100)
 
 
-class StatCaller:
+class StatCaller(RouterCaller):
     """Caller stub for @stat: itself a live unit (`me`/omitted → here)
     with a configurable permission set. No ``search`` — units come from
     the injected resolver."""
 
     def __init__(self, perms=("Builder", "Admin"), key="TestAdmin",
                  hp=100, hp_max=100):
-        self.id = next(_CALLER_IDS)
-        self.key = key
-        self.perms = set(perms)
+        super().__init__(perms=perms, key=key)
         self.db = _SDb(hp=hp, hp_max=hp_max, combat_xp=0, level=1,
                        rank_level=1, incapacitated=False, respawn_timer=0,
                        kills=0, deaths=0)
-        self.messages = []
         self.recomputes = 0
-
-    def msg(self, text, **kwargs):
-        self.messages.append(text)
-
-    def check_permstring(self, perm):
-        return perm in self.perms
 
     def recompute_progression(self):
         self.recomputes += 1
@@ -3233,12 +3086,11 @@ class StatRouterUnderTest(CmdAdminStat):
         return self.registry
 
 
-class StatRouterTestCase(unittest.TestCase):
+class StatRouterTestCase(RouterTestCase):
     """Shared plumbing: injected unit resolver + fresh adapter per test."""
 
     def setUp(self):
-        from world.admin.resolution import LIST_CACHE as cache
-        cache.clear()
+        super().setUp()
         self.bob = FakeStatUnit("Bob", hp=100, hp_max=100)
         self._units = [self.bob]
         self.caller = StatCaller(perms=("Builder", "Admin"))
@@ -3260,8 +3112,6 @@ class StatRouterTestCase(unittest.TestCase):
         cmd.func()
         return cmd
 
-    def output(self, cmd):
-        return "\n".join(cmd.caller.messages)
 
 
 class TestStatRouterIdentity(StatRouterTestCase):
@@ -3279,17 +3129,14 @@ class TestStatSetHpDynamicClamp(StatRouterTestCase):
 
     def test_hp_above_hp_max_clamps_with_the_bounds_note(self):
         cmd = self.run_cmd(" set Bob hp 150")  # Bob hp_max = 100
-        out = self.output(cmd)
-        self.assertIn("hp set to 100", out)
-        self.assertIn("clamped", out)
-        self.assertIn("0–100", out)  # dynamic bounds from Bob's hp_max
+        # Dynamic bounds derived from Bob's own hp_max.
+        self.assertClamped(cmd, field="hp", applied=100, lo=0, hi=100,
+                           requested=150)
         self.assertEqual(self.bob.db.hp, 100)
 
     def test_in_bounds_hp_applies_unchanged(self):
         cmd = self.run_cmd(" set Bob hp 40")
-        out = self.output(cmd)
-        self.assertIn("hp set to 40", out)
-        self.assertNotIn("clamped", out)
+        self.assertNotClamped(cmd, field="hp", applied=40, target="Bob")
         self.assertEqual(self.bob.db.hp, 40)
 
 
@@ -3301,7 +3148,7 @@ class TestStatSetSideEffects(StatRouterTestCase):
         self.bob.db.incapacitated = True
         self.bob.db.respawn_timer = 30
         cmd = self.run_cmd(" set Bob hp 50")
-        self.assertIn("hp set to 50", self.output(cmd))
+        self.assertFieldSet(cmd, field="hp", applied=50, target="Bob")
         self.assertEqual(self.bob.db.hp, 50)
         self.assertFalse(self.bob.db.incapacitated)
         self.assertEqual(self.bob.db.respawn_timer, 0)
@@ -3309,13 +3156,14 @@ class TestStatSetSideEffects(StatRouterTestCase):
     def test_hp_max_tops_a_full_unit_up_to_the_new_ceiling(self):
         # Bob is at full HP (100/100); raising the ceiling tops him up.
         cmd = self.run_cmd(" set Bob hp_max 200")
-        self.assertIn("hp_max set to 200", self.output(cmd))
+        self.assertFieldSet(cmd, field="hp_max", applied=200, target="Bob")
         self.assertEqual(self.bob.db.hp_max, 200)
         self.assertEqual(self.bob.db.hp, 200)
 
     def test_combat_xp_recomputes_progression(self):
         cmd = self.run_cmd(" set Bob combat_xp 500")
-        self.assertIn("combat_xp set to 500", self.output(cmd))
+        self.assertFieldSet(cmd, field="combat_xp", applied=500,
+                            target="Bob")
         self.assertEqual(self.bob.db.combat_xp, 500)
         self.assertEqual(self.bob.recomputes, 1)  # single-writer fired
         self.assertEqual(self.bob.db.level, 5)    # re-derived from XP
@@ -3328,28 +3176,27 @@ class TestStatLegacyAliases(StatRouterTestCase):
 
     def test_hp_alias_reshapes_writes_and_notes(self):
         cmd = self.run_cmd(" hp 40 Bob")
-        out = self.output(cmd)
-        self.assertIn("deprecated", out)
-        self.assertIn("hp set to 40", out)
+        self.assertIn("deprecated", self.output(cmd))
+        self.assertFieldSet(cmd, field="hp", applied=40, target="Bob")
         self.assertEqual(self.bob.db.hp, 40)
 
     def test_maxhp_alias_remaps_to_hp_max(self):
         cmd = self.run_cmd(" maxhp 250 Bob")
-        out = self.output(cmd)
-        self.assertIn("deprecated", out)
-        self.assertIn("hp_max set to 250", out)
+        self.assertIn("deprecated", self.output(cmd))
+        self.assertFieldSet(cmd, field="hp_max", applied=250, target="Bob")
         self.assertEqual(self.bob.db.hp_max, 250)
 
     def test_xp_alias_remaps_to_combat_xp_and_recomputes(self):
         cmd = self.run_cmd(" xp 300 Bob")
-        out = self.output(cmd)
-        self.assertIn("combat_xp set to 300", out)
+        self.assertFieldSet(cmd, field="combat_xp", applied=300,
+                            target="Bob")
         self.assertEqual(self.bob.db.combat_xp, 300)
         self.assertEqual(self.bob.recomputes, 1)
 
     def test_alias_defaults_the_target_to_the_caller(self):
         cmd = self.run_cmd(" hp 30")  # no target → me
-        self.assertIn("hp set to 30", self.output(cmd))
+        self.assertFieldSet(cmd, field="hp", applied=30,
+                            target=self.caller.key)
         self.assertEqual(self.caller.db.hp, 30)
 
     def test_alias_without_a_value_shows_usage(self):
@@ -3360,9 +3207,8 @@ class TestStatLegacyAliases(StatRouterTestCase):
     def test_alias_hits_the_canonical_admin_gate(self):
         builder = StatCaller(perms=("Builder",))
         cmd = self.run_cmd(" hp 40 Bob", caller=builder)
-        out = self.output(cmd)
-        self.assertIn("Permission denied", out)
-        self.assertIn("Admin", out)
+        self.assertPermDenied(cmd, required="Admin", scope="verb",
+                              target="set")
         self.assertEqual(self.bob.db.hp, 100)  # unchanged
 
 
@@ -3373,8 +3219,8 @@ class TestStatPermissions(StatRouterTestCase):
     def test_set_denied_for_builder(self):
         builder = StatCaller(perms=("Builder",))
         cmd = self.run_cmd(" set Bob hp 40", caller=builder)
-        out = self.output(cmd)
-        self.assertIn("Permission denied", out)
+        self.assertPermDenied(cmd, required="Admin", scope="verb",
+                              target="set")
         self.assertEqual(self.bob.db.hp, 100)  # unchanged
 
     def test_show_allowed_for_builder(self):
@@ -3399,7 +3245,8 @@ class TestStatShowAndDefaults(StatRouterTestCase):
 
     def test_set_me_targets_the_caller(self):
         cmd = self.run_cmd(" set me hp 55")
-        self.assertIn("hp set to 55", self.output(cmd))
+        self.assertFieldSet(cmd, field="hp", applied=55,
+                            target=self.caller.key)
         self.assertEqual(self.caller.db.hp, 55)
 
 
@@ -3409,8 +3256,9 @@ class TestStatUnknownFieldAndOptOuts(StatRouterTestCase):
 
     def test_set_unknown_field_lists_the_allowlist_no_change(self):
         cmd = self.run_cmd(" set Bob coord_x 5")
-        out = self.output(cmd)
-        self.assertIn("Unknown field 'coord_x'", out)
+        self.assertUnknownField(cmd, field="coord_x",
+                                valid=("hp", "hp_max", "level"),
+                                plane="instance")
         self.assertEqual(self.bob.db.coord_x, None)  # never written
 
     def test_list_opt_out_points_at_show(self):
