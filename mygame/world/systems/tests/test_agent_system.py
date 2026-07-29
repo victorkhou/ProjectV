@@ -903,6 +903,113 @@ class TestOwnerCap(AgentSystemTestBase):
         self.assertLess(agent.db.level or 1, self.system.get_cap_ceiling(agent))
 
 
+class TestLevelYieldMultiplier(AgentSystemTestBase):
+    """Agent experience scales the agent's ECONOMIC output.
+
+    Before this, agent level fed only the roster display and the delivery
+    ability gate — a level-30 harvester produced exactly what a fresh one did,
+    so agent XP bought nothing observable.
+    """
+
+    def _multiplier(self, owner_level, raw_level):
+        owner = FakePlayer()
+        owner.db.level = owner_level
+        agent = CappedAgent(1, owner=owner, raw_level=raw_level)
+        return self.system.get_level_yield_multiplier(agent)
+
+    def test_level_one_agent_gets_no_bonus(self):
+        """A fresh agent is exactly 1.0 — the bonus is per level ABOVE 1, so a
+        new player's first agent is unaffected."""
+        self.assertEqual(self._multiplier(owner_level=1, raw_level=1), 1.0)
+
+    def test_bonus_scales_per_effective_level(self):
+        """+bonus per level above 1 (default 0.02 → level 6 == +10%)."""
+        per_level = self.registry.balance.agent_level_yield_bonus
+        self.assertAlmostEqual(
+            self._multiplier(owner_level=10, raw_level=6),
+            1.0 + per_level * 5,
+        )
+
+    def test_bonus_is_capped(self):
+        """A very high level stops at the cap, not at bonus × level.
+
+        This is the guard that keeps a veteran agent under the 2× line the
+        design's second binding principle sets for progression bonuses.
+
+        The expected value is written as a LITERAL rather than read back from
+        ``self.registry.balance``. Deriving it from the same config the code
+        reads would pin only that the cap *binds*, never its magnitude, so any
+        drift inside (bonus × 99, 1.0) — including a near-2× cap of 0.99 —
+        would pass. ``TestShippedAgentYieldTunables`` covers the value the
+        running game actually loads from balance.yaml.
+        """
+        self.assertAlmostEqual(
+            self._multiplier(owner_level=100, raw_level=100), 1.5)
+        self.assertLess(self._multiplier(owner_level=100, raw_level=100), 2.0)
+
+    def test_owner_cap_throttles_the_bonus(self):
+        """Keyed on EFFECTIVE level, so the owner cap limits the yield edge for
+        free: a level-3 player's level-50 agent is capped to level 3, and its
+        bonus matches a genuinely level-3 agent's."""
+        per_level = self.registry.balance.agent_level_yield_bonus
+        throttled = self._multiplier(owner_level=3, raw_level=50)
+        self.assertAlmostEqual(throttled, 1.0 + per_level * 2)
+        self.assertEqual(throttled, self._multiplier(owner_level=3, raw_level=3))
+
+    def test_negative_bonus_never_penalizes(self):
+        """A nonsense tunable can never invert into a production penalty.
+
+        (A zero bonus is covered implicitly: it reaches the same guard, and the
+        formula yields 1.0 with or without it, so a separate zero case would
+        assert nothing a mutation could break.)
+        """
+        self.registry.balance.agent_level_yield_bonus = -0.5
+        self.assertEqual(self._multiplier(owner_level=50, raw_level=50), 1.0)
+
+    def test_negative_cap_never_penalizes(self):
+        """The ``cap <= 0`` half of the guard is load-bearing on its own.
+
+        ``min(bonus × levels, cap)`` with a negative cap returns the CAP, so
+        without this guard a mis-typed ``agent_level_yield_cap: -0.5`` would
+        silently halve every harvester's output instead of disabling the bonus.
+        """
+        self.registry.balance.agent_level_yield_cap = -0.5
+        self.assertEqual(self._multiplier(owner_level=50, raw_level=50), 1.0)
+
+    def test_non_numeric_tunable_falls_back_to_no_bonus(self):
+        """A junk tunable degrades to 1.0 rather than raising into the tick."""
+        self.registry.balance.agent_level_yield_bonus = "lots"
+        self.assertEqual(self._multiplier(owner_level=50, raw_level=50), 1.0)
+
+    def test_nan_tunable_falls_back_to_no_bonus(self):
+        """NaN must be rejected here or it kills autonomous harvesting.
+
+        YAML parses ``.nan`` into a real float that passes the schema
+        validator's isinstance check, and NaN slips through comparison guards
+        (``nan <= 0`` is False; ``min(nan, cap)`` is nan). A NaN multiplier
+        reaches ``int()`` in HarvesterScript.at_repeat and raises ValueError on
+        every production cycle.
+        """
+        self.registry.balance.agent_level_yield_bonus = float("nan")
+        self.assertEqual(self._multiplier(owner_level=50, raw_level=50), 1.0)
+
+    def test_infinite_cap_falls_back_to_no_bonus(self):
+        """``.inf`` in the cap is rejected for the same reason as NaN."""
+        self.registry.balance.agent_level_yield_cap = float("inf")
+        self.assertEqual(self._multiplier(owner_level=50, raw_level=50), 1.0)
+
+    def test_orphaned_agent_gets_no_bonus(self):
+        """No owner → ceiling 1 → no bonus (never a crash on the tick path).
+
+        Distinct from the level-1 case above: that agent has an owner and a raw
+        level of 1, whereas this one has raw level 40 and no owner at all, so it
+        pins the OWNER-LOOKUP path (``get_cap_ceiling`` defaulting to 1) rather
+        than the arithmetic.
+        """
+        agent = CappedAgent(1, owner=None, raw_level=40)
+        self.assertEqual(self.system.get_level_yield_multiplier(agent), 1.0)
+
+
 class TestHiddenRoles(AgentSystemTestBase):
     """Hidden placeholder roles are excluded from VALID_ROLES (R6)."""
 

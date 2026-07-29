@@ -311,6 +311,118 @@ class TestHarvesterScript(unittest.TestCase):
         # 2x production_multiplier → 2x the un-teched output.
         self.assertEqual(spawned_tech[0]["amount"], spawned_base[0]["amount"] * 2)
 
+    def _produce_with_agent_system(self, agent_system):
+        """Run one production cycle with *agent_system* installed; return amount."""
+        from world import services
+
+        tile = FakeTile(resource_type="Iron")
+        building = FakeBuilding(
+            building_type="EX", building_level=1, location=tile,
+        )
+        npc = FakeNPC(role="harvester", role_target=building)
+        with self._capture_drops() as spawned:
+            with services.override({"agent_system": agent_system}):
+                self._run_until_production(self._make_script(npc))
+        return spawned[0]["amount"]
+
+    def _produce_cycles(self, agent_system, cycles):
+        """Run *cycles* production cycles on ONE agent; return the amounts list.
+
+        Reuses a single NPC so the fractional-yield carry accumulates across
+        cycles the way it does for a real long-lived harvester.
+        """
+        from world import services
+
+        tile = FakeTile(resource_type="Iron")
+        building = FakeBuilding(
+            building_type="EX", building_level=1, location=tile,
+        )
+        npc = FakeNPC(role="harvester", role_target=building)
+        script = self._make_script(npc)
+        with self._capture_drops() as spawned:
+            with services.override({"agent_system": agent_system}):
+                for _ in range(cycles):
+                    self._run_until_production(script)
+        return [drop["amount"] for drop in spawned]
+
+    def test_small_bonus_accrues_via_fractional_carry(self):
+        """A sub-integer bonus is banked across cycles, not truncated away.
+
+        Base production at a level-1 Extractor is only 3 units, so a realistic
+        +20% bonus (0.6 of a unit) used to vanish entirely inside ``int()`` —
+        a heavily-levelled agent dropped the same 3 Iron as a fresh one, and
+        the whole feature was invisible in early play. Over 5 cycles the
+        veteran must out-produce the fresh agent by roughly the configured
+        rate.
+        """
+        class _Veteran:
+            def get_level_yield_multiplier(self, agent):
+                return 1.2
+
+        class _Fresh:
+            def get_level_yield_multiplier(self, agent):
+                return 1.0
+
+        veteran = self._produce_cycles(_Veteran(), 5)
+        fresh = self._produce_cycles(_Fresh(), 5)
+
+        # 5 cycles × 3 base = 15; +20% = 18. The carry must deliver the 3 extra
+        # units, where per-cycle truncation delivered zero.
+        self.assertEqual(sum(fresh), 15)
+        self.assertEqual(sum(veteran), 18)
+
+    def test_carry_never_inflates_a_flat_rate(self):
+        """The carry is a remainder, not free resources.
+
+        An exact-integer yield must stay exactly flat forever — the carry can
+        only ever pay out fractions that were genuinely earned.
+        """
+        class _Fresh:
+            def get_level_yield_multiplier(self, agent):
+                return 1.0
+
+        self.assertEqual(self._produce_cycles(_Fresh(), 8), [3] * 8)
+
+    def test_agent_level_scales_output(self):
+        """The harvester's OWN experience scales its output.
+
+        Regression guard for the wiring, not the curve: the multiplier is owned
+        by ``AgentSystem.get_level_yield_multiplier`` (which caps it), and this
+        asserts ``HarvesterScript.at_repeat`` actually consults it. Without this,
+        agent level stays inert on the production path and agent XP buys nothing.
+        """
+        class _Veteran:
+            def get_level_yield_multiplier(self, agent):
+                return 2.0
+
+        class _Fresh:
+            def get_level_yield_multiplier(self, agent):
+                return 1.0
+
+        self.assertEqual(
+            self._produce_with_agent_system(_Veteran()),
+            self._produce_with_agent_system(_Fresh()) * 2,
+        )
+
+    def test_production_survives_broken_agent_system(self):
+        """A raising multiplier must not stop the harvest — it falls back to 1.0.
+
+        ``at_repeat`` runs on the tick loop, so an exception here would silently
+        kill autonomous production rather than just dropping the bonus.
+        """
+        class _Broken:
+            def get_level_yield_multiplier(self, agent):
+                raise RuntimeError("boom")
+
+        class _Fresh:
+            def get_level_yield_multiplier(self, agent):
+                return 1.0
+
+        self.assertEqual(
+            self._produce_with_agent_system(_Broken()),
+            self._produce_with_agent_system(_Fresh()),
+        )
+
     def test_skips_incapacitated_agent(self):
         """Incapacitated agent should not produce."""
         tile = FakeTile(resource_type="Wood")

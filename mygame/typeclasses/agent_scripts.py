@@ -69,6 +69,30 @@ def _award_agent_xp(npc: Any, source: str) -> None:
         logger.debug("Agent XP award failed for source %r", source, exc_info=True)
 
 
+def _agent_yield_multiplier(npc: Any) -> float:
+    """Return *npc*'s experience multiplier on economic output (>= 1.0).
+
+    Mirrors :func:`_award_agent_xp`'s decoupling: the multiplier is owned by
+    AgentSystem (so the cap and the effective-level rule live in one place) and
+    reached through the services facade. Any lookup or computation failure
+    falls back to 1.0 — an unscaled yield is always safe, whereas letting this
+    raise would stop the harvest loop entirely.
+
+    The float() coercion is part of that guarantee: a service returning None or
+    a string would otherwise escape this guard and raise at the *call site*
+    (``production *= ...``), which is precisely the tick-loop break the
+    try/except exists to prevent.
+    """
+    try:
+        agent_system = get_service("agent_system")
+        if agent_system is None:
+            return 1.0
+        return float(agent_system.get_level_yield_multiplier(npc))
+    except Exception:  # noqa: BLE001 - never let the bonus break the tick loop
+        logger.debug("Agent yield multiplier failed", exc_info=True)
+        return 1.0
+
+
 def _engineer_repair_step(npc: Any, building: Any) -> bool:
     """Apply one Engineer repair tick to *building*, charged to its owner.
 
@@ -198,7 +222,32 @@ class HarvesterScript(DefaultScript):
         # not in the tick loop), so the multiplier must be read here.
         from world.utils import get_tech_bonus
         production *= get_tech_bonus(owner, "production_multiplier", default=1.0)
-        production = max(1, int(production))
+        # The harvester's OWN experience scales its output (capped — see
+        # AgentSystem.get_level_yield_multiplier). Applied last so it rides on
+        # top of the extractor level and the owner's research, matching how the
+        # roster presents agent level as the agent's personal contribution.
+        production *= _agent_yield_multiplier(npc)
+        # Bank the fractional remainder across harvest cycles instead of
+        # truncating it away. Base production is only 3-6 units (yield 1 ×
+        # multiplier 3, up to MAX_BUILDING_LEVEL 5), and int() discards up to
+        # 0.999 of a unit — more than 17 agent levels' worth of bonus at base
+        # 3. Without the carry, every per-level percentage tunable here
+        # (agent_level_yield_bonus AND extractor_level_bonus) silently rounds
+        # to nothing in the early game: a level-17 agent dropped the same 3
+        # Iron as a fresh one. Carrying the remainder makes the long-run
+        # average match the configured rate exactly, at the cost of one
+        # attribute of per-agent state (mirrors _harvest_tick_counter above).
+        production += float(_get_attr(npc, "_harvest_yield_carry", 0.0) or 0.0)
+        # The epsilon absorbs binary float error before truncating. Rates like
+        # 3 × 1.2 are not exactly representable, so the running carry drifts a
+        # few ULPs low and a cycle that should total exactly 4.0 arrives as
+        # 3.9999999999999982 — int() would floor that to 3 and eat a whole unit
+        # the agent had already earned.
+        whole = int(production + 1e-9)
+        # Always in [0, 1). When `whole` is 0 the max(1, ...) floor still grants
+        # a unit, exactly as before — the floor is a gift, so it is not debited.
+        _set_attr(npc, "_harvest_yield_carry", max(0.0, production - whole))
+        production = max(1, whole)
 
         # Drop resources at building coordinates in PlanetRoom
         from world.systems.resource_system import ResourceSystem
@@ -215,7 +264,7 @@ class HarvesterScript(DefaultScript):
 
         npc.db.activity_status = f"Harvesting {resource_type}"
         logger.debug(
-            "Harvester on %s produced %d %s (level %d)",
+            "Harvester on %s produced %d %s (building level %d)",
             building, production, resource_type, level,
         )
 

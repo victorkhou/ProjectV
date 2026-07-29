@@ -75,6 +75,7 @@ def _ensure_evennia_stubs():
 
 _ensure_evennia_stubs()
 
+from mygame.world.constants import MAX_LEVEL  # noqa: E402
 from mygame.world.data_registry import DataRegistry  # noqa: E402
 from mygame.world.event_bus import EventBus  # noqa: E402
 from mygame.world.systems.combat_engine import CombatEngine  # noqa: E402
@@ -616,6 +617,69 @@ class TestGodRollVsNewPlayer(unittest.TestCase):
         hits = self._hits_to_kill(fresh_hit, self.HP)
         self.assertLessEqual(hits, 2 * self._hits_to_kill(
             rifle.get_stat("damage"), self.HP))
+
+
+# -------------------------------------------------------------- #
+#  2b. Agent-level yield — the SHIPPED tunables vs the ~2× line
+# -------------------------------------------------------------- #
+
+class TestShippedAgentYieldTunables(unittest.TestCase):
+    """The agent-level yield bonus, as the running game loads it.
+
+    The unit tests in ``test_agent_system`` exercise this multiplier against a
+    bare ``DataRegistry()`` — i.e. the ``BalanceConfig`` dataclass DEFAULTS.
+    The shipped ``balance.yaml`` overrides those defaults at runtime
+    (``DataRegistry._build_balance`` prefers the yaml value whenever the key is
+    present), so without this class the number the game actually uses is
+    asserted by nothing: raising ``agent_level_yield_cap`` in balance.yaml past
+    the design's ~2× line stayed green across the whole suite.
+    """
+
+    def setUp(self):
+        self.balance = _real_registry().balance
+
+    def _multiplier(self, effective_level):
+        """The real formula from ``get_level_yield_multiplier``, on shipped values."""
+        levels = max(0, effective_level - 1)
+        return 1.0 + min(
+            self.balance.agent_level_yield_bonus * levels,
+            self.balance.agent_level_yield_cap,
+        )
+
+    def test_shipped_veteran_stays_under_the_two_x_line(self):
+        """A max-level agent's economic edge respects the binding principle."""
+        veteran = self._multiplier(MAX_LEVEL)
+
+        self.assertLess(
+            veteran, 2.0,
+            f"a max-level agent produces {veteran:.2f}× a fresh one from the "
+            f"SHIPPED balance.yaml — progression bonuses must stay under the "
+            f"~2× line (design: 'never ~2× without counterplay')")
+
+    def test_shipped_bonus_is_a_slow_sweetener(self):
+        """The per-level rate stays well below the chosen-investment rate.
+
+        Agent level accrues passively, whereas an Extractor upgrade is a
+        resource investment the player elects to make — so the agent's share of
+        the yield must remain the smaller term of the two.
+        """
+        self.assertGreater(self.balance.agent_level_yield_bonus, 0.0)
+        self.assertLess(
+            self.balance.agent_level_yield_bonus,
+            self.balance.extractor_level_bonus,
+            "agent level must not out-earn a deliberate Extractor upgrade")
+
+    def test_shipped_cap_actually_binds(self):
+        """The cap is reachable — it is a real ceiling, not dead config.
+
+        A cap above ``bonus × (MAX_LEVEL - 1)`` would never engage, leaving the
+        2× line unguarded no matter what the cap says.
+        """
+        uncapped = self.balance.agent_level_yield_bonus * (MAX_LEVEL - 1)
+
+        self.assertLess(
+            self.balance.agent_level_yield_cap, uncapped,
+            "agent_level_yield_cap can never be reached, so it guards nothing")
 
 
 # -------------------------------------------------------------- #

@@ -560,6 +560,17 @@ class BalanceConfig:
     extractor_harvest_multiplier: int = 3
     #: Per-level Extractor production bonus: base × (1 + BONUS × (level-1)).
     extractor_level_bonus: float = 0.25
+    #: Per-agent-level harvester production bonus, applied on the agent's
+    #: EFFECTIVE level: base × (1 + BONUS × (effective_level - 1)). Deliberately
+    #: an order of magnitude below ``extractor_level_bonus`` — the extractor is
+    #: a resource investment the player chooses to upgrade, whereas agent level
+    #: accrues passively, so the agent's share of the yield stays a slow
+    #: sweetener rather than the dominant term.
+    agent_level_yield_bonus: float = 0.02
+    #: Ceiling on the TOTAL agent-level yield bonus (0.5 == +50%). Keeps a
+    #: veteran agent under the 2× line that governs progression bonuses, so a
+    #: long-lived agent is an edge and never a different game.
+    agent_level_yield_cap: float = 0.5
     #: Base Extractor storage capacity at level 1.
     extractor_base_capacity: int = 100
     #: Additional Extractor storage per level above 1.

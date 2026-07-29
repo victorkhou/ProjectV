@@ -158,6 +158,8 @@ harvest_cooldown_ticks: 4        # ticks between harvest yields (active-presence
 harvest_yield_per_action: 1      # units per harvest action on raw terrain
 extractor_harvest_multiplier: 3  # yield multiplier at an Extractor vs raw terrain
 extractor_level_bonus: 0.25      # per-level Extractor production bonus
+agent_level_yield_bonus: 0.02    # per-agent-level harvester production bonus
+agent_level_yield_cap: 0.5       # max total agent-level yield bonus (+50%)
 extractor_base_capacity: 100     # Extractor storage at level 1
 extractor_capacity_per_level: 50 # extra Extractor storage per level above 1
 vault_base_capacity: 100         # Vault storage at level 1

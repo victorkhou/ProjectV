@@ -383,8 +383,13 @@ class TestDataclassContracts:
         #    the "per N ticks" repair period (mirrors hp_regen_interval_ticks),
         #    gating BOTH repair drivers (owner active-presence + Engineer) so a
         #    building repairs one step every other tick instead of every tick.
+        #  + 2 agent-level yield (agent_level_yield_bonus,
+        #    agent_level_yield_cap) — makes agent XP buy something observable:
+        #    a harvester's own effective level scales its production. The cap
+        #    is the load-bearing half, holding a veteran agent under the 2x
+        #    line that governs progression bonuses.
         # Bump this when adding a balance tunable.
-        assert len(fields(BalanceConfig)) == 152
+        assert len(fields(BalanceConfig)) == 154
 
     def test_coordinate_space_def_field_count(self):
         # 14 core + 2 graduation-economy scales (yield_scale, npc_scale).

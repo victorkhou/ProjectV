@@ -12,6 +12,7 @@ etc.) — this is a pure relocation, not a behavior change.
 
 from __future__ import annotations
 
+import math
 from typing import Any
 
 from world.systems.agent_constants import AGENT_XP_SOURCE_FIELDS, logger
@@ -107,6 +108,67 @@ class AgentProgressionMixin:
         the two can never disagree.
         """
         return max(1, min(self._raw_level(agent), self.get_cap_ceiling(agent)))
+
+    def get_level_yield_multiplier(self, agent: Any) -> float:
+        """Return *agent*'s experience multiplier on economic output (>= 1.0).
+
+        ``1 + min(bonus × (Effective_Level - 1), cap)`` — a veteran agent
+        produces more than a fresh one, which is what makes agent XP worth
+        accruing at all (before this, agent level fed only the roster display
+        and the delivery ability gate).
+
+        Keyed on the EFFECTIVE level, so the owner cap throttles this for free:
+        a level-3 player's agents are capped at level 3, and the yield edge can
+        never outrun the player's own progression. That reuse is deliberate —
+        a second cap keyed on raw level could disagree with the first.
+
+        Two guards, both load-bearing:
+
+        - The bonus is capped (``agent_level_yield_cap``) so a max-level agent
+          (``MAX_LEVEL`` = 100) stays under the 2× line that governs
+          progression bonuses.
+        - The result never drops below 1.0, so a negative or nonsense tunable
+          can slow production but never invert it into a penalty.
+
+        Two known interactions, both deliberately accepted:
+
+        - ``assign_agent`` does not reset ``combat_xp``, and construction XP is
+          4× harvest XP, so levelling an agent on the engineer role and then
+          reassigning it to harvest reaches the bonus faster. The cap bounds the
+          payoff either way, so laundering buys pace, never a higher ceiling.
+        - The cap is PER AGENT, so a full squad's aggregate economy still scales
+          with the rank's agent cap. That is the intended shape of rank
+          progression (more agents), not a hole in this multiplier — but a
+          future aggregate-scaling bonus would need its own separate cap.
+
+        Economic output only. Do NOT reuse this for combat power: agents scale
+        by squad size (a Lieutenant fields 8+), so a per-agent damage bonus
+        multiplies across the squad and needs its own cap — and the guard
+        combat path is shared with NPC outpost guards, which have no agent XP.
+        """
+        bal = getattr(self.registry, "balance", None)
+        try:
+            per_level = float(getattr(bal, "agent_level_yield_bonus", 0.0) or 0.0)
+            cap = float(getattr(bal, "agent_level_yield_cap", 0.0) or 0.0)
+        except (TypeError, ValueError):
+            logger.debug("Non-numeric agent yield tunables; no level bonus.")
+            return 1.0
+        # NaN/inf must die here, not downstream. YAML parses ``.nan`` and
+        # ``.inf`` into genuine floats that satisfy every isinstance check the
+        # schema validator applies, and NaN defeats comparison guards (``nan <=
+        # 0`` is False, ``min(nan, cap)`` is nan). A NaN reaching the harvest
+        # path raises ValueError inside ``int()`` on EVERY production cycle,
+        # silently killing all autonomous harvesting server-wide.
+        if not math.isfinite(per_level) or not math.isfinite(cap):
+            logger.warning(
+                "Non-finite agent yield tunables (bonus=%r, cap=%r); "
+                "no level bonus.", per_level, cap,
+            )
+            return 1.0
+        if per_level <= 0 or cap <= 0:
+            return 1.0
+        levels = max(0, self.compute_effective_level(agent) - 1)
+        return 1.0 + min(per_level * levels, cap)
 
     # ------------------------------------------------------------------ #
     #  Ability-status classification  (single source of truth)
