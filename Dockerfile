@@ -1,97 +1,64 @@
 #####
-# Base docker image for running Evennia-based games in a container.
+# Docker image for the RTS Combat Overworld game (Evennia 6.0, Python 3.14).
 #
-# Install:
-#   install `docker` (https://docker.com)
+# This repo is a monorepo: it vendors the Evennia framework at ./evennia and the
+# game instance at ./mygame. This image installs the vendored Evennia in
+# editable mode (so `import evennia` resolves to the in-repo copy) and runs the
+# game out of ./mygame.
 #
-# Usage:
-#    cd to a folder where you want your game data to be (or where it already is).
+# Quick start (recommended - uses docker-compose.yml):
+#     docker compose up --build
+#   then connect a MUD client to localhost:4000 or open http://localhost:4001
 #
-#        docker run -it --rm -p 4000:4000 -p 4001:4001 -p 4002:4002 -v $PWD:/usr/src/game evennia/evennia
+# Build/run directly (without compose):
+#     docker build -t projectv .
+#     docker run -it --rm -p 4000:4000 -p 4001:4001 -p 4002:4002 \
+#         -v "$PWD:/usr/src/projectv" projectv
 #
-#    (If your OS does not support $PWD, replace it with the full path to your current
-#    folder).
-#
-#    You will end up in a shell where the `evennia` command is available. From here you
-#    can initialize and/or run the game normally. Use Ctrl-D to exit the evennia docker container.
-#    For more info see: https://github.com/evennia/evennia/wiki/Getting-Started#quick-start
-#
-#    You can also start evennia directly by passing arguments to the folder:
-#
-#        docker run -it --rm -p 4000:4000 -p 4001:4001 -p 4002:4002 -v $PWD:/usr/src/game evennia/evennia evennia start -l
-#
-#    This will start Evennia running as the core process of the container. Note that you *must* use -l
-#    or one of the foreground modes (like evennia ipstart), since otherwise the container will immediately
-#    die because of having no foreground process.
-#
-# Build modes:
-#    Default build mode is editable and installs local Evennia source as:
-#        pip install -e /usr/src/evennia[extra]
-#    This is convenient for development of both game code and Evennia core.
-#
-#    To instead build from the latest Evennia release on PyPI:
-#        docker build --build-arg EVENNIA_INSTALL_MODE=pypi -t evennia/evennia .
-#
-# Editable mode development tip:
-#    Mount your Evennia checkout to /usr/src/evennia to edit the core live:
-#        docker run -it --rm -p 4000:4000 -p 4001:4001 -p 4002:4002 \
-#          -v $PWD:/usr/src/game -v /path/to/evennia:/usr/src/evennia evennia/evennia
-#
-# The evennia/evennia base image is found on DockerHub and can also be used
-# as a base for creating your own custom containerized Evennia game. For more
-# info, see https://evennia.com/docs/latest/Setup/Installation-Docker
-#
-FROM python:3.13-alpine
+# The game database (SQLite), secret_settings.py and logs are written under
+# mygame/server/ - bind-mounting the repo (as compose does) keeps them on the
+# host so they survive container recreation.
+#####
+FROM python:3.14-slim
 
-LABEL maintainer="https://www.evennia.com"
-ARG EVENNIA_INSTALL_MODE=editable
+LABEL maintainer="ProjectV"
 
-# install compilation environment
-RUN apk update && apk add --no-cache bash gcc jpeg-dev musl-dev procps \
-libffi-dev openssl-dev zlib-dev gettext \
-g++ gfortran python3-dev cmake openblas-dev
+# Keep Python output unbuffered so logs stream to `docker logs`, and don't write
+# .pyc files into the mounted source tree.
+ENV PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PIP_NO_CACHE_DIR=1
 
-# add the project source; this should always be done after all
-# expensive operations have completed to avoid prematurely
-# invalidating the build cache.
-COPY . /usr/src/evennia
+# Point the interpreter at the vendored Evennia (matches how the live server
+# treats mygame/ as the Python root; see the repo README's import-paths note).
+ENV PYTHONPATH=/usr/src/projectv
 
-# install dependencies/evennia
-# EVENNIA_INSTALL_MODE options:
-# - editable (default): install local source in editable mode for Evennia dev.
-# - pypi: install latest Evennia release from PyPI.
-RUN pip install --no-cache-dir --upgrade pip && \
-    if [ "$EVENNIA_INSTALL_MODE" = "pypi" ]; then \
-        pip install --no-cache-dir --upgrade evennia[extra]; \
-    else \
-        pip install --no-cache-dir -e /usr/src/evennia[extra]; \
-    fi
+# Build toolchain + runtime libs. Most core deps ship manylinux wheels for
+# 3.14, but keep a small toolchain so any source build (e.g. cffi) still works.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        build-essential \
+        libffi-dev \
+        libssl-dev \
+        git \
+    && rm -rf /var/lib/apt/lists/*
 
-# add the game source when rebuilding a new docker image from inside
-# a game dir
-ONBUILD COPY . /usr/src/game
+WORKDIR /usr/src/projectv
 
-# make the game source hierarchy persistent with a named volume.
-# mount on-disk game location here when using the container
-# to just get an evennia environment.
-VOLUME /usr/src/game
+# Install dependencies first for better layer caching: copy only the packaging
+# metadata + the vendored evennia package, install, then add the rest.
+COPY pyproject.toml setup.py ./
+COPY evennia ./evennia
+RUN pip install --upgrade pip && pip install -e .
 
-# set the working directory
-WORKDIR /usr/src/game
+# Add the remaining source (game code, etc.). At runtime compose bind-mounts the
+# repo over this, so edits on the host are picked up live.
+COPY . .
 
-# set bash prompt and pythonpath to evennia lib
-ENV PS1="evennia|docker \w $ "
-ENV PYTHONPATH=/usr/src/evennia
-
-# create and switch to a non-root user for runtime security
-# -D - do not set a password
-# -H - do not create a home directory
-# -s /bin/false - set login shell to /bin/false
-# RUN adduser -D -H -s /bin/false evennia
-# USER evennia
-
-# startup a shell when we start the container
-ENTRYPOINT ["/usr/src/evennia/bin/unix/evennia-docker-start.sh"]
-
-# expose the telnet, webserver and websocket client ports
+# Telnet, webserver (web client + website), and websocket client ports.
 EXPOSE 4000 4001 4002
+
+# Invoke the entrypoint via bash so it works even when the host copy lacks the
+# executable bit (common when building/mounting from Windows).
+ENTRYPOINT ["bash", "/usr/src/projectv/docker-entrypoint.sh"]
+# Default command: run the server in the foreground with logs to the console.
+CMD ["evennia", "start", "-l"]

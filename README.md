@@ -1,7 +1,7 @@
 # RTS Combat Overworld
 
 A real-time-strategy / PvP combat MUD built on the [Evennia](https://www.evennia.com)
-MU\* framework (Evennia 6.0, Python 3.12). Players explore procedurally
+MU\* framework (Evennia 6.0, Python 3.14). Players explore procedurally
 generated, coordinate-based planet maps, harvest terrain-specific resources,
 construct and upgrade a tech tree of buildings, command autonomous AI agents,
 and fight in real time while climbing a military rank ladder that gates access
@@ -19,7 +19,9 @@ startup, so most content tuning needs no code changes.
 
 ## Requirements
 
-- **Python 3.12** (the framework pins `>=3.12, <3.13`).
+- **Python 3.12 or newer.** The framework requires `>=3.12`; versions 3.12, 3.13
+  and 3.14 are all supported and CI-tested (see `pyproject.toml` and
+  `.github/workflows/`). **3.14 is recommended.**
 - A single, consistent **Evennia 6.0** install. This repo vendors the Evennia
   framework at the repository root (`evennia/`), so install it from there in
   editable mode rather than pulling a separate copy from PyPI — running with
@@ -27,9 +29,54 @@ startup, so most content tuning needs no code changes.
   install where command sets can fail to load. A virtualenv is strongly
   recommended.
 
-## First-time setup
+## Quick start
 
-Run these once, from the **repository root**:
+Two automated paths get you from a clean checkout to a running environment. Both
+are idempotent and safe to re-run.
+
+### Option A — bootstrap script (native, recommended for development)
+
+From the **repository root**. The script verifies Python, creates `.venv`,
+installs the vendored Evennia + deps, and runs the game's first-time init
+(`--initmissing`, `migrate`). It does *not* start the server.
+
+```powershell
+# Windows (PowerShell)
+.\bootstrap.ps1
+```
+
+```bash
+# macOS / Linux
+./bootstrap.sh
+```
+
+On the first run, `migrate` creates the "Account #1" superuser interactively
+(username / password prompt). To do this non-interactively (e.g. in CI), set
+`EVENNIA_SUPERUSER_USERNAME` and `EVENNIA_SUPERUSER_PASSWORD` before running.
+Pass `-SkipInit` (PowerShell) / `--skip-init` (bash) to set up only the
+environment without touching the database.
+
+If Python 3.14 isn't installed yet, the script tells you how to get it and
+exits — install it, then re-run.
+
+### Option B — Docker (reproducible, no host Python needed)
+
+Requires [Docker](https://docker.com). From the **repository root**:
+
+```bash
+docker compose up --build
+```
+
+This builds the image (Python 3.14 + Evennia 6.0), initialises the database, and
+starts the server in the foreground. The database, `secret_settings.py`, and
+logs are written under `mygame/server/` on the host (via a bind mount), so they
+persist across rebuilds. The first-boot superuser defaults to `admin` /
+`changeme` — **change these in `docker-compose.yml` before any non-local use.**
+Stop with `docker compose down`.
+
+### Manual setup
+
+If you prefer to do it by hand, run these once from the **repository root**:
 
 ```bash
 python3 -m venv .venv && source .venv/bin/activate   # recommended

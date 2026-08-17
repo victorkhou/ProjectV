@@ -1,0 +1,33 @@
+# docker-compose.yml - one-command setup + run for the RTS Combat Overworld game.
+#
+#   docker compose up --build      # build the image, init the DB, start the server
+#   docker compose down            # stop and remove the container
+#   docker compose logs -f         # follow server logs
+#   docker compose exec game bash  # shell inside the running container
+#
+# Connect a MUD client to localhost:4000, or open the web client at
+# http://localhost:4001. The database, secret_settings.py and logs live under
+# mygame/server/ on the host (via the bind mount below), so they persist across
+# container rebuilds.
+services:
+  game:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: projectv:latest
+    # Bind-mount the repo so the DB/secret_settings/logs persist on the host and
+    # code edits are picked up on `evennia reload` without a rebuild.
+    volumes:
+      - .:/usr/src/projectv
+    ports:
+      - "4000:4000" # telnet MUD protocol
+      - "4001:4001" # web server (website + web client)
+      - "4002:4002" # websocket (web client)
+    environment:
+      # First-boot superuser (Account #1). CHANGE THESE for any non-local use.
+      # Only used the first time the database is created; ignored afterwards.
+      EVENNIA_SUPERUSER_USERNAME: "admin"
+      EVENNIA_SUPERUSER_EMAIL: ""
+      EVENNIA_SUPERUSER_PASSWORD: "changeme"
+    stdin_open: true
+    tty: true

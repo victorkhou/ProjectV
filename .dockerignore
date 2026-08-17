@@ -1,0 +1,41 @@
+# Keep the build context small and avoid copying host-specific / generated files
+# into the image. The repo is bind-mounted at runtime by docker-compose anyway.
+
+# Virtualenvs (host-specific; a Windows .venv is useless in a Linux image)
+.venv/
+.env/
+
+# Git metadata
+.git/
+.gitignore
+
+# Python caches / build artifacts
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+eggs/
+.pytest_cache/
+.hypothesis/
+.coverage
+.tox/
+
+# Generated game state (created inside the container / on first run)
+mygame/server/*.db3
+mygame/server/*.pid
+mygame/server/*.restart
+mygame/server/logs/
+mygame/server/.cache/
+mygame/server/conf/secret_settings.py
+
+# Docs build output
+docs/build/
+.doctrees/
+
+# Editor / OS cruft
+.vscode/
+.idea/
+.obsidian/
+.DS_Store
+*.swp

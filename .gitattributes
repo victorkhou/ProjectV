@@ -1,0 +1,7 @@
+# Shell scripts must use LF line endings: they run under bash and inside the
+# Linux Docker image, where CRLF ('\r') breaks the shebang and the entrypoint.
+*.sh            text eol=lf
+docker-entrypoint.sh text eol=lf
+
+# PowerShell scripts are Windows-facing; keep CRLF.
+*.ps1           text eol=crlf
