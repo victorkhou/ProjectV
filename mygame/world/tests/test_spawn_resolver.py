@@ -10,6 +10,7 @@ from world.spawn_resolver import (
     SPAWN_DEATH,
     SPAWN_HQ,
     SPAWN_RANDOM,
+    SPAWN_RESPAWN,
     SpawnResolver,
 )
 
@@ -185,6 +186,54 @@ class TestFallbackAndDegradation(unittest.TestCase):
         # the player where they are).
         r = SpawnResolver()  # nothing wired
         self.assertIsNone(r.resolve(_Player(), SPAWN_HQ, "terra"))
+
+
+class TestOptionAvailable(unittest.TestCase):
+    """option_available() — the menu-filtering predicate (no fallback)."""
+
+    def test_random_always_available(self):
+        r = SpawnResolver()  # nothing wired
+        self.assertTrue(r.option_available(_Player(), SPAWN_RANDOM, "terra"))
+
+    def test_hq_available_when_locator_hits(self):
+        r = _resolver(hq_locator_func=lambda player, p: (10, 20))
+        self.assertTrue(r.option_available(_Player(), SPAWN_HQ, "terra"))
+
+    def test_hq_unavailable_when_locator_misses(self):
+        r = _resolver(hq_locator_func=lambda player, p: None)
+        self.assertFalse(r.option_available(_Player(), SPAWN_HQ, "terra"))
+
+    def test_hq_unavailable_when_no_locator_wired(self):
+        r = SpawnResolver()
+        self.assertFalse(r.option_available(_Player(), SPAWN_HQ, "terra"))
+
+    def test_respawn_available_when_locator_hits(self):
+        r = _resolver(respawn_locator_func=lambda player, p: (5, 5))
+        self.assertTrue(r.option_available(_Player(), SPAWN_RESPAWN, "terra"))
+
+    def test_respawn_unavailable_when_no_beacon(self):
+        r = _resolver(respawn_locator_func=lambda player, p: None)
+        self.assertFalse(r.option_available(_Player(), SPAWN_RESPAWN, "terra"))
+
+    def test_death_available_when_recorded(self):
+        r = _resolver()
+        p = _Player(death_x=1, death_y=1, death_planet="terra")
+        self.assertTrue(r.option_available(p, SPAWN_DEATH, "terra"))
+
+    def test_death_unavailable_when_never_died(self):
+        r = _resolver()
+        self.assertFalse(r.option_available(_Player(), SPAWN_DEATH, "terra"))
+
+    def test_first_time_player_only_random_available(self):
+        # No HQ, no beacon, no death record -> only random.
+        r = _resolver(hq_locator_func=lambda player, p: None,
+                      respawn_locator_func=lambda player, p: None)
+        p = _Player()
+        available = [
+            opt for opt in (SPAWN_RESPAWN, SPAWN_HQ, SPAWN_DEATH, SPAWN_RANDOM)
+            if r.option_available(p, opt, "terra")
+        ]
+        self.assertEqual(available, [SPAWN_RANDOM])
 
 
 if __name__ == "__main__":

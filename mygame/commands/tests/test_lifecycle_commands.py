@@ -243,6 +243,70 @@ class TestCmdSpawn(unittest.TestCase):
         self.assertIsNone(c.db.pending_spawn_choice)
 
 
+class _FakeResolver:
+    """Fake spawn_resolver system: option_available() from a fixed set."""
+
+    def __init__(self, available):
+        self._available = set(available)
+
+    def option_available(self, player, choice, planet_key):
+        return choice in self._available
+
+
+class TestCmdSpawnFiltering(unittest.TestCase):
+    """Only options the player has a target for are offered (state 3.1)."""
+
+    def test_first_time_player_only_sees_random(self):
+        # No HQ, no beacon, never died -> the resolver reports nothing but
+        # random available, so the menu offers only it.
+        c = _Caller(state=PLAYER_STATE_SPAWNING)
+        _install_systems({"spawn_resolver": _FakeResolver({"random"})})
+        _run(CmdSpawn, c, "")
+        msg = c.last()
+        self.assertIn("Random location", msg)
+        self.assertNotIn("Headquarters", msg)
+        self.assertNotIn("Respawn Beacon", msg)
+        self.assertNotIn("Place of death", msg)
+
+    def test_hq_hidden_without_hq(self):
+        c = _Caller(state=PLAYER_STATE_SPAWNING)
+        _install_systems({"spawn_resolver": _FakeResolver({"random", "respawn"})})
+        _run(CmdSpawn, c, "hq")
+        self.assertIsNone(c.db.pending_spawn_choice)
+        self.assertIn("unknown", c.last().lower())
+
+    def test_respawn_hidden_without_beacon(self):
+        c = _Caller(state=PLAYER_STATE_SPAWNING)
+        _install_systems({"spawn_resolver": _FakeResolver({"random", "hq"})})
+        _run(CmdSpawn, c, "respawn")
+        self.assertIsNone(c.db.pending_spawn_choice)
+        self.assertIn("unknown", c.last().lower())
+
+    def test_available_option_still_selectable(self):
+        c = _Caller(state=PLAYER_STATE_SPAWNING)
+        _install_systems({"spawn_resolver": _FakeResolver({"random", "hq"})})
+        _run(CmdSpawn, c, "hq")
+        self.assertEqual(c.db.pending_spawn_choice, "hq")
+
+    def test_numbering_renumbers_around_hidden_options(self):
+        # respawn/hq/death hidden -> random becomes option 1.
+        c = _Caller(state=PLAYER_STATE_SPAWNING)
+        _install_systems({"spawn_resolver": _FakeResolver({"random"})})
+        _run(CmdSpawn, c, "1")
+        self.assertEqual(c.db.pending_spawn_choice, "random")
+
+    def test_no_resolver_installed_fails_open_shows_all(self):
+        # No spawn_resolver system wired -> unchanged legacy behavior (all
+        # four options shown) rather than hiding everything.
+        c = _Caller(state=PLAYER_STATE_SPAWNING)
+        _run(CmdSpawn, c, "")
+        msg = c.last()
+        self.assertIn("Headquarters", msg)
+        self.assertIn("Respawn Beacon", msg)
+        self.assertIn("Place of death", msg)
+        self.assertIn("Random location", msg)
+
+
 # -------------------------------------------------------------- #
 #  Advance SPAWNING -> LOBBY once both chosen
 # -------------------------------------------------------------- #

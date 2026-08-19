@@ -85,10 +85,32 @@ def _class_choices(caller):
 #  Spawning menu — numbered, presented one step at a time
 # ------------------------------------------------------------------ #
 
-def _spawn_options():
-    """Return the ordered ``[(key, label)]`` spawn options for the menu."""
-    from world.spawn_resolver import SPAWN_OPTIONS, SPAWN_OPTION_LABELS
-    return [(opt, SPAWN_OPTION_LABELS[opt]) for opt in SPAWN_OPTIONS]
+def _spawn_options(caller):
+    """Return the ordered ``[(key, label)]`` spawn options selectable by *caller*.
+
+    Filtered to options *caller* actually has a target for right now (a live
+    HQ, an owned respawn beacon, a recorded death tile) — an unavailable
+    option would otherwise silently redirect to a random tile at deploy time,
+    which reads as a bug rather than a limit. ``random`` is always available,
+    so a first-time player (no HQ/beacon/death yet) is offered only it.
+
+    Fails open (all options shown) when the resolver or the caller's planet
+    isn't available, so a wiring gap never blocks the spawn step.
+    """
+    from world.spawn_resolver import SPAWN_OPTIONS, SPAWN_OPTION_LABELS, SPAWN_RANDOM
+    resolver = _get_system(caller, "spawn_resolver")
+    planet = getattr(caller.db, "coord_planet", None)
+    options = []
+    for opt in SPAWN_OPTIONS:
+        if opt != SPAWN_RANDOM and resolver is not None and planet:
+            try:
+                available = resolver.option_available(caller, opt, planet)
+            except Exception:  # noqa: BLE001 - a lookup failure must not hide options
+                available = True
+            if not available:
+                continue
+        options.append((opt, SPAWN_OPTION_LABELS[opt]))
+    return options
 
 
 def _present_class_menu(caller, prefix=""):
@@ -115,7 +137,7 @@ def _present_spawn_menu(caller, prefix=""):
     """Show the numbered spawn-point menu (spawning step 2)."""
     lines = [prefix] if prefix else []
     lines.append("|wStep 2/2 — choose your spawn point|n (type the number):")
-    for i, (_key, label) in enumerate(_spawn_options(), 1):
+    for i, (_key, label) in enumerate(_spawn_options(caller), 1):
         lines.append(f"  |w{i}|n. |c{label}|n")
     caller.msg("\n".join(lines))
 
@@ -179,7 +201,7 @@ def _select_class_by_number(caller, n):
 
 def _select_spawn_by_number(caller, n):
     """Pick the nth spawn option from the numbered menu (1-based)."""
-    options = _spawn_options()
+    options = _spawn_options(caller)
     if n < 1 or n > len(options):
         caller.msg(f"Choose a number between |w1|n and |w{len(options)}|n.")
         _present_spawn_menu(caller)
@@ -259,9 +281,11 @@ class CmdSpawn(BaseCommand):
       spawn death      — deploy at your last place of death
       spawn random     — deploy at a random location
 
-    While spawning you can also just type the number of your choice. If your
-    chosen point is unavailable (no HQ, never died), you deploy at the planet's
-    default spawn instead. See 'help spawning'.
+    Only options you currently have a target for are offered — hq/respawn/
+    death are hidden until you have a live headquarters, an owned respawn
+    beacon, or a recorded place of death respectively. A first-time character
+    has none of these yet, so only 'random' is available. While spawning you
+    can also just type the number of your choice. See 'help spawning'.
     """
 
     key = "spawn"
@@ -285,7 +309,7 @@ class CmdSpawn(BaseCommand):
             return
 
         # Otherwise accept a prefix of an option (hq/death/random).
-        options = _spawn_options()
+        options = _spawn_options(caller)
         match = [(k, lbl) for (k, lbl) in options if k.startswith(arg)]
         if len(match) != 1:
             caller.msg(f"Unknown spawn option '{arg}'. Type |wspawn|n to list them.")

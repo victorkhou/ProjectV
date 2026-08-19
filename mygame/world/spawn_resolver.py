@@ -128,6 +128,27 @@ class SpawnResolver:
         self._respawn_locator_func = fn
 
     # ------------------------------------------------------------------ #
+    #  Menu filtering — which options are actually reachable right now
+    # ------------------------------------------------------------------ #
+
+    def option_available(self, player: Any, choice: str, planet_key: str) -> bool:
+        """Return True if *choice* has a real target for *player* right now.
+
+        Unlike :meth:`resolve`, this does NOT fall back to random/planet-spawn:
+        it answers "does the player actually have an HQ / beacon / death tile",
+        so the selection menu can hide an option that would otherwise silently
+        redirect to a random tile at deploy time. ``SPAWN_RANDOM`` is always
+        available.
+        """
+        if choice == SPAWN_RESPAWN:
+            return self._respawn_tile(player, planet_key) is not None
+        if choice == SPAWN_HQ:
+            return self._hq_tile(player, planet_key) is not None
+        if choice == SPAWN_DEATH:
+            return self._death_tile(player, planet_key) is not None
+        return True
+
+    # ------------------------------------------------------------------ #
     #  Resolution
     # ------------------------------------------------------------------ #
 
