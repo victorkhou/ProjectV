@@ -79,7 +79,7 @@ class FakeEquipmentHandler:
         self._slots = {}
 
     def equip(self, item):
-        slot = getattr(item, "slot", "weapon")
+        slot = getattr(item, "slot", "weapon_melee")
         self._slots[slot] = item
         return True, f"Equipped to {slot}."
 
@@ -99,7 +99,7 @@ class FakeWeapon:
     """Lightweight stand-in for a weapon GameItem."""
     def __init__(self, damage=25, weapon_range=3, ammo_cost=None, key="assault_rifle"):
         self.key = key
-        self.slot = "weapon"
+        self.slot = "weapon_melee"
         self.stat_modifiers = {"damage": damage, "range": weapon_range}
         self.ammo_cost = ammo_cost
 
@@ -1671,7 +1671,7 @@ class FakeTypedWeapon:
                  ammo_type=None, ammo_per_shot=1, magazine_size=None,
                  loaded=None, ammo_cost=None, key="typed_weapon"):
         self.key = key
-        self.slot = "weapon"
+        self.slot = "weapon_melee"
         self.weapon_type = weapon_type
         self.ammo_type = ammo_type
         self.ammo_per_shot = ammo_per_shot
@@ -1840,7 +1840,7 @@ class TestFreshRangedWeaponFull(unittest.TestCase):
         from mygame.world.definitions import ItemDef
 
         item_def = ItemDef(
-            key="rifle", name="Rifle", slot="weapon", category="weapon",
+            key="rifle", name="Rifle", slot="weapon_ranged", category="weapon",
             weapon_type="ranged", ammo_type="rifle_rounds",
             ammo_per_shot=1, magazine_size=30,
         )
@@ -1853,7 +1853,7 @@ class TestFreshRangedWeaponFull(unittest.TestCase):
         from mygame.world.definitions import ItemDef
 
         item_def = ItemDef(
-            key="blade", name="Blade", slot="weapon", category="weapon",
+            key="blade", name="Blade", slot="weapon_melee", category="weapon",
             weapon_type="melee",
         )
         owner = FakePlayer(name="Owner")
@@ -3447,7 +3447,10 @@ class TestWeaponProcAffixes(unittest.TestCase):
         self.assertEqual(engine._resolve_weapon_range(attacker, weapon), 6)
         # Distance 6: beyond the def base (3) but within base+affix (6).
         target = FakePlayer(name="T", location=FakeTile(xyz=(6, 0, "earth")))
-        ok, msg = engine.queue_attack(attacker, target)
+        # A ranged weapon lives in the dedicated ranged slot, so pass it
+        # explicitly (as 'shoot' does) rather than relying on the implicit
+        # melee-slot fallback queue_attack uses when no weapon is given.
+        ok, msg = engine.queue_attack(attacker, target, weapon=weapon)
         self.assertTrue(ok, msg)
 
 
@@ -3817,7 +3820,7 @@ class FakeRolledWeapon:
     def __init__(self, base_range=3, rolled_range=None, range_affix=0,
                  damage=10, key="sniper_rifle"):
         self.key = key
-        self.slot = "weapon"
+        self.slot = "weapon_ranged"
         self.weapon_type = "ranged"
         self.stat_modifiers = {"damage": damage, "range": base_range}
         self.rolled_stats = (

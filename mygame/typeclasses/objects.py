@@ -169,7 +169,7 @@ class GameItem(GameEntity):
 
     Attributes set at creation from ItemDef:
         item_key (str) — references the ItemDef in DataRegistry
-        slot (str) — one of EQUIPMENT_SLOTS (e.g. "weapon", "torso"); "" for Supplies
+        slot (str) — one of EQUIPMENT_SLOTS (e.g. "weapon_melee", "torso"); "" for Supplies
         category (str) — armor|weapon|accessory|ammo|consumable|throwable
         stat_modifiers (dict) — {"damage": 25, "range": 3} etc.
         weapon_type (str | None) — "melee" or "ranged" (weapon category)

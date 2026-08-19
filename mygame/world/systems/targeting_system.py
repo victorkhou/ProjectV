@@ -65,14 +65,16 @@ class TargetingSystem(BaseSystem):
     def get_ranged_weapon(player: Any) -> Any | None:
         """Return *player*'s equipped RANGED weapon, or None.
 
-        A weapon is ranged when its ``weapon_type`` is ``"ranged"``. Melee
-        weapons (or an empty slot) yield None, so the 'target'/'shoot' commands
-        can reject a player with no ranged weapon.
+        Read from the dedicated ``weapon_ranged`` slot (distinct from
+        ``weapon_melee``, which backs the plain 'attack' command). Still
+        confirms ``weapon_type == "ranged"`` as a defensive check — a stray
+        item in the slot (legacy data, a test fixture) yields None rather than
+        being treated as a working ranged weapon.
         """
         equipment = getattr(player, "equipment", None)
         if equipment is None or not hasattr(equipment, "get_equipped"):
             return None
-        weapon = equipment.get_equipped("weapon")
+        weapon = equipment.get_equipped("weapon_ranged")
         if weapon is None:
             return None
         wtype = getattr(weapon, "weapon_type", None)

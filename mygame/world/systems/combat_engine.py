@@ -1895,12 +1895,18 @@ class CombatEngine(BaseSystem):
 
     @staticmethod
     def _get_weapon_item(attacker: Any) -> Any | None:
-        """Get the weapon-slot GameItem from the attacker."""
+        """Get the attacker's melee-slot GameItem (backs the plain 'attack').
+
+        Ranged combat ('target'/'shoot') resolves its own weapon via
+        ``targeting_system.get_ranged_weapon`` (the ``weapon_ranged`` slot) and
+        passes it in explicitly, so this fallback only ever needs the melee
+        slot.
+        """
         equipment = getattr(attacker, "equipment", None)
         if equipment is None:
             return None
         if hasattr(equipment, "get_equipped"):
-            return equipment.get_equipped("weapon")
+            return equipment.get_equipped("weapon_melee")
         return None
 
     def _validate_range(

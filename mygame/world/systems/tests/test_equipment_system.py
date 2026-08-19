@@ -107,7 +107,7 @@ class FakeWeapon:
                  loaded=0, weapon_type=None, ammo_cost=None):
         self.key = key
         self.name = key
-        self.slot = "weapon"
+        self.slot = "weapon_ranged"
         self.ammo_type = ammo_type
         self.magazine_size = magazine_size
         self.weapon_type = weapon_type
@@ -262,7 +262,7 @@ ITEMS = {
     # drop-on-death path (which looks item_key up in the registry) can spawn a
     # drop. TestDeathLoss equips these by key and only checked the stash before.
     "assault_rifle": ItemDef(
-        key="assault_rifle", name="Assault Rifle", slot="weapon",
+        key="assault_rifle", name="Assault Rifle", slot="weapon_ranged",
         category="weapon", stat_modifiers={"damage": 25}, weight=8.0,
     ),
     "kevlar_vest": ItemDef(
@@ -344,19 +344,19 @@ class TestEquip(unittest.TestCase):
         system, _, sink = _make_system()
         # Sergeant requires rank level 3; player level 11 -> rank 3.
         player = FakePlayer(level=11)
-        item = FakeItem("rifle", "weapon", {"damage": 20},
+        item = FakeItem("rifle", "weapon_melee", {"damage": 20},
                         required_rank="Sergeant")
         self.assertTrue(system.equip(player, item))
-        self.assertIs(player.equipment.get_equipped("weapon"), item)
+        self.assertIs(player.equipment.get_equipped("weapon_melee"), item)
         self.assertIn("equipped", sink.kinds())
 
     def test_equip_denied_when_below_rank(self):
         system, _, sink = _make_system()
         player = FakePlayer(level=1)  # rank 1 < Sergeant (3)
-        item = FakeItem("rifle", "weapon", {"damage": 20},
+        item = FakeItem("rifle", "weapon_melee", {"damage": 20},
                         required_rank="Sergeant")
         self.assertFalse(system.equip(player, item))
-        self.assertIsNone(player.equipment.get_equipped("weapon"))
+        self.assertIsNone(player.equipment.get_equipped("weapon_melee"))
         self.assertIn("equip_denied", sink.kinds())
         _kind, data = sink.last()
         self.assertEqual(data.get("required_rank"), "Sergeant")
@@ -371,23 +371,23 @@ class TestEquip(unittest.TestCase):
         """Slot cardinality: re-equip replaces the occupant (Req 1.2, 1.3)."""
         system, _, _ = _make_system()
         player = FakePlayer(level=60)
-        old = FakeItem("knife", "weapon", {"damage": 10})
-        new = FakeItem("rifle", "weapon", {"damage": 25})
+        old = FakeItem("knife", "weapon_melee", {"damage": 10})
+        new = FakeItem("rifle", "weapon_melee", {"damage": 25})
         self.assertTrue(system.equip(player, old))
         self.assertTrue(system.equip(player, new))
         # Exactly one item occupies the slot, and it is the newest.
-        self.assertIs(player.equipment.get_equipped("weapon"), new)
+        self.assertIs(player.equipment.get_equipped("weapon_melee"), new)
         self.assertEqual(
-            [k for k in player.equipment.get_slot_names() if k == "weapon"],
-            ["weapon"],
+            [k for k in player.equipment.get_slot_names() if k == "weapon_melee"],
+            ["weapon_melee"],
         )
 
     def test_reequip_emits_unequipped_then_equipped(self):
         """Swapping an occupied slot notifies unequip-old then equip-new."""
         system, _, sink = _make_system()
         player = FakePlayer(level=60)
-        old = FakeItem("knife", "weapon", {"damage": 10})
-        new = FakeItem("rifle", "weapon", {"damage": 25})
+        old = FakeItem("knife", "weapon_melee", {"damage": 10})
+        new = FakeItem("rifle", "weapon_melee", {"damage": 25})
         system.equip(player, old)
         sink.events.clear()
 
@@ -416,18 +416,18 @@ class TestEquipAll(unittest.TestCase):
         system, _, sink = _make_system()
         player = FakePlayer(level=60)
         # Pre-equip a weapon.
-        knife = FakeItem("knife", "weapon", {"damage": 10})
+        knife = FakeItem("knife", "weapon_melee", {"damage": 10})
         system.equip(player, knife)
         sink.events.clear()
 
         # Offer two weapons and one helmet.
-        rifle = FakeItem("rifle", "weapon", {"damage": 25})
+        rifle = FakeItem("rifle", "weapon_melee", {"damage": 25})
         helmet = FakeItem("helmet", "head", {"damage_reduction": 3})
         count = system.equip_all(player, [rifle, helmet])
 
         # Only the helmet (empty slot) was equipped; weapon was skipped.
         self.assertEqual(count, 1)
-        self.assertIs(player.equipment.get_equipped("weapon"), knife)
+        self.assertIs(player.equipment.get_equipped("weapon_melee"), knife)
         self.assertIs(player.equipment.get_equipped("head"), helmet)
         # Only 'equipped' for helmet — no swap, no unequipped.
         self.assertEqual([k for k, _ in sink.events], ["equipped"])
@@ -437,12 +437,12 @@ class TestEquipAll(unittest.TestCase):
         player = FakePlayer(level=60)
 
         # Two weapons offered; first in list claims the slot.
-        knife = FakeItem("knife", "weapon", {"damage": 10})
-        rifle = FakeItem("rifle", "weapon", {"damage": 25})
+        knife = FakeItem("knife", "weapon_melee", {"damage": 10})
+        rifle = FakeItem("rifle", "weapon_melee", {"damage": 25})
         count = system.equip_all(player, [knife, rifle])
 
         self.assertEqual(count, 1)
-        self.assertIs(player.equipment.get_equipped("weapon"), knife)
+        self.assertIs(player.equipment.get_equipped("weapon_melee"), knife)
         # Only one equipped notification.
         self.assertEqual([k for k, _ in sink.events], ["equipped"])
 
@@ -466,7 +466,7 @@ class TestUnequip(unittest.TestCase):
     def test_unequip_empty_slot_returns_false(self):
         system, _, _ = _make_system()
         player = FakePlayer(level=60)
-        self.assertFalse(system.unequip(player, "weapon"))
+        self.assertFalse(system.unequip(player, "weapon_melee"))
 
     def test_unequip_success(self):
         system, _, sink = _make_system()
@@ -893,7 +893,7 @@ class TestDeathLoss(unittest.TestCase):
     def _player_with_loadout(self, planet="earth", resources=None):
         p = FakePlayer(level=10, resources=resources or {"Iron": 100, "Wood": 40})
         p.db.coord_planet = planet
-        p.equipment.equip(FakeItem("assault_rifle", "weapon", {"damage": 25}))
+        p.equipment.equip(FakeItem("assault_rifle", "weapon_ranged", {"damage": 25}))
         p.equipment.equip(FakeItem("kevlar_vest", "torso", {"damage_reduction": 5}))
         p.equipment.add_supply("medkit", 4)
         p._buildings = []
@@ -1017,7 +1017,7 @@ class TestPvPGearDropOnDeath(unittest.TestCase):
     def _victim(self, level=10, planet="earth"):
         p = FakePlayer(level=level, resources={"Iron": 100})
         p.db.coord_planet = planet
-        p.equipment.equip(FakeItem("assault_rifle", "weapon", {"damage": 25}))
+        p.equipment.equip(FakeItem("assault_rifle", "weapon_ranged", {"damage": 25}))
         p.equipment.equip(FakeItem("kevlar_vest", "torso", {"damage_reduction": 5}))
         p.equipment.add_supply("medkit", 4)
         p._buildings = []
@@ -2309,7 +2309,7 @@ class TestSellAndJunk(unittest.TestCase):
         registry = _make_registry()
         # Add a gear item with a known craft_cost for the sell refund test.
         registry.items["combat_knife"] = ItemDef(
-            key="combat_knife", name="Combat Knife", slot="weapon",
+            key="combat_knife", name="Combat Knife", slot="weapon_melee",
             category="weapon", stat_modifiers={"damage": 8},
             craft_cost={"Iron": 5, "Stone": 3},
         )
@@ -2354,7 +2354,7 @@ class TestSellAndJunk(unittest.TestCase):
     def test_sell_rejects_equipped_item(self):
         system, sink = self._sys()
         player = self._player()
-        item = FakeItem("combat_knife", "weapon")
+        item = FakeItem("combat_knife", "weapon_melee")
         player.equipment.equip(item)
 
         ok = system.sell_item(player, item)
@@ -2399,7 +2399,7 @@ _ROLL_SPEC = {
 
 def _rolled_rifle_def():
     return ItemDef(
-        key="rolled_rifle", name="Rolled Rifle", slot="weapon",
+        key="rolled_rifle", name="Rolled Rifle", slot="weapon_ranged",
         category="weapon", stat_modifiers={"damage": 25, "range": 5},
         craft_cost={"Iron": 5}, roll_spec=_ROLL_SPEC,
     )
@@ -2604,7 +2604,7 @@ class TestPvPDropPreservesInstanceState(unittest.TestCase):
         victim.db.coord_planet = "earth"
         victim._buildings = []
         victim.get_buildings = lambda: list(victim._buildings)
-        rifle = FakeItem("assault_rifle", "weapon", {"damage": 25})
+        rifle = FakeItem("assault_rifle", "weapon_ranged", {"damage": 25})
         for name, value in self._STATE.items():
             setattr(rifle, name, value)
         victim.equipment.equip(rifle)
@@ -2763,7 +2763,7 @@ class TestApplyInsert(unittest.TestCase):
         registry = _make_registry()
         registry.items.update(INSERT_DEFS)
         registry.items["assault_rifle"] = ItemDef(
-            key="assault_rifle", name="Assault Rifle", slot="weapon",
+            key="assault_rifle", name="Assault Rifle", slot="weapon_ranged",
             category="weapon", stat_modifiers={"damage": 25, "range": 5},
             roll_spec=self.ROLL_SPEC, weight=8.0)
         registry.buildings["BS"] = BuildingDef(
@@ -3060,7 +3060,7 @@ class TestReroll(unittest.TestCase):
         registry = _make_registry()
         registry.items.update(INSERT_DEFS)
         registry.items["assault_rifle"] = ItemDef(
-            key="assault_rifle", name="Assault Rifle", slot="weapon",
+            key="assault_rifle", name="Assault Rifle", slot="weapon_ranged",
             category="weapon", stat_modifiers={"damage": 25, "range": 5},
             roll_spec=self.ROLL_SPEC, weight=8.0)
         # A fixed (unrolled) gear def — never rerollable (R1.3).
@@ -3307,7 +3307,7 @@ class TestSalvageProtocolsCostConsumer(unittest.TestCase):
     def _make(self):
         registry = _make_registry()
         registry.items["assault_rifle"] = ItemDef(
-            key="assault_rifle", name="Assault Rifle", slot="weapon",
+            key="assault_rifle", name="Assault Rifle", slot="weapon_ranged",
             category="weapon", stat_modifiers={"damage": 25, "range": 5},
             roll_spec=self.ROLL_SPEC, weight=8.0)
         registry.buildings["BS"] = BuildingDef(
@@ -3424,7 +3424,7 @@ class TestSalvage(unittest.TestCase):
     def _make(self):
         registry = _make_registry()
         registry.items["assault_rifle"] = ItemDef(
-            key="assault_rifle", name="Assault Rifle", slot="weapon",
+            key="assault_rifle", name="Assault Rifle", slot="weapon_ranged",
             category="weapon", stat_modifiers={"damage": 25, "range": 5},
             weight=8.0)
         # A fixed (unrolled) gear def — still salvageable at the floor.

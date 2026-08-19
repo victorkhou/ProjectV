@@ -76,7 +76,7 @@ VALID_ITEMS = {
         {
             "key": "combat_knife",
             "name": "Combat Knife",
-            "slot": "weapon",
+            "slot": "weapon_melee",
             "stat_modifiers": {"damage": 10, "range": 1},
             "ammo_cost": None,
             "classification": "modern",
@@ -320,7 +320,7 @@ class TestLoadAll:
         reg.load_all(data_dir)
 
         knife = reg.get_item("combat_knife")
-        assert knife.slot == "weapon"
+        assert knife.slot == "weapon_melee"
         assert knife.stat_modifiers["damage"] == 10
 
     def test_ranks_sorted_by_level(self, data_dir):
@@ -606,7 +606,7 @@ class TestGetters:
             self.reg.get_item("nonexistent")
 
     def test_get_items_for_slot(self):
-        weapons = self.reg.get_items_for_slot("weapon")
+        weapons = self.reg.get_items_for_slot("weapon_melee")
         assert len(weapons) == 1
         assert weapons[0].key == "combat_knife"
 

@@ -120,7 +120,7 @@ class _Entity:
 class FakeWeapon:
     def __init__(self, damage, weapon_range, weapon_type="ranged", key="rifle"):
         self.key = key
-        self.slot = "weapon"
+        self.slot = "weapon_melee"
         self.weapon_type = weapon_type
         self.ammo_type = None
         self.ammo_cost = None
@@ -135,7 +135,7 @@ class FakeEquipment:
         self._weapon = weapon
 
     def get_equipped(self, slot):
-        return self._weapon if slot == "weapon" else None
+        return self._weapon if slot == "weapon_melee" else None
 
     def get_stat_total(self, stat):
         return 0.0

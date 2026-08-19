@@ -73,13 +73,17 @@ RESOURCE_TYPES: tuple[str, ...] = (
 #  Equipment & Items
 # ------------------------------------------------------------------ #
 
-#: The eleven canonical equipment slots (nine armor-bearing body slots plus
-#: ``weapon`` and ``accessory``). Single source of truth for the slot
-#: vocabulary: the schema validator requires every Gear item's ``slot`` to be a
-#: member of this tuple, and the equipment system rejects equipping into any
-#: slot outside it. Structural, not balance: adding a slot is a constant edit.
+#: The twelve canonical equipment slots (nine armor-bearing body slots plus
+#: ``weapon_melee``, ``weapon_ranged``, and ``accessory``). Single source of
+#: truth for the slot vocabulary: the schema validator requires every Gear
+#: item's ``slot`` to be a member of this tuple, and the equipment system
+#: rejects equipping into any slot outside it. Structural, not balance: adding
+#: a slot is a constant edit. A ``category: weapon`` item's required slot is
+#: derived from its ``weapon_type`` (melee -> ``weapon_melee``, ranged ->
+#: ``weapon_ranged``) — see ``schema_validator``.
 EQUIPMENT_SLOTS = ("head", "eyes", "face", "torso", "arms", "hands",
-                   "legs", "feet", "back", "weapon", "accessory")
+                   "legs", "feet", "back", "weapon_melee", "weapon_ranged",
+                   "accessory")
 
 #: Item categories stored as unique Game_Item objects in ``db.equipment_slots``
 #: (one per slot).

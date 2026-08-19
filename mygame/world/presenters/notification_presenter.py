@@ -763,6 +763,11 @@ def _fmt_insert_failed(d: dict) -> str:
             f"You don't have {d.get('weapon_name', 'that weapon')} equipped — "
             f"inserts apply to your equipped weapon."
         ),
+        "ambiguous_weapon": (
+            f"You have both a {d.get('melee_name', 'melee weapon')} and a "
+            f"{d.get('ranged_name', 'ranged weapon')} equipped — say which "
+            f"one, e.g. |winsert {item} {d.get('melee_name', '<weapon>')}|n."
+        ),
         "no_slots": (
             f"Your {d.get('weapon_name', 'weapon')} has no free insert slots "
             f"({d.get('slot_limit', 1)} at this Blacksmith's level) — upgrade "

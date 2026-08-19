@@ -271,6 +271,7 @@ class SchemaValidator:
 
             # ---- slot: required for Gear, not for Supply (Req 3.5, 3.6) -- #
             slot = entry.get("slot")
+            weapon_type = entry.get("weapon_type")
             if effective_category in GEAR_CATEGORIES:
                 if slot is None:
                     errors.append(
@@ -282,19 +283,25 @@ class SchemaValidator:
                         f"{prefix}: slot '{slot}' not in EQUIPMENT_SLOTS "
                         f"{list(EQUIPMENT_SLOTS)}"
                     )
-                # A `weapon`-category item must occupy the `weapon` slot:
-                # combat resolves the attacker's weapon via the `weapon` slot
-                # specifically, so a weapon parked in a body slot (e.g. `head`)
-                # would never be found and could never be used to attack.
-                # (`armor`/`accessory` gear may occupy any body slot — e.g. a
-                # scope in `eyes`, a jetpack in `back`.)
-                elif effective_category == "weapon" and slot != "weapon":
-                    errors.append(
-                        f"{prefix}: weapon items must use slot 'weapon', got '{slot}'"
+                # A `weapon`-category item must occupy the slot matching its
+                # `weapon_type`: combat resolves melee attacks via the
+                # `weapon_melee` slot and ranged attacks (target/shoot/reload)
+                # via `weapon_ranged` specifically, so a weapon parked in the
+                # wrong slot (or a body slot) would never be found by the
+                # command that's supposed to use it. (`armor`/`accessory` gear
+                # may occupy any body slot — e.g. a scope in `eyes`, a jetpack
+                # in `back`.)
+                elif effective_category == "weapon" and weapon_type in WEAPON_TYPES:
+                    expected_slot = (
+                        "weapon_melee" if weapon_type == "melee" else "weapon_ranged"
                     )
+                    if slot != expected_slot:
+                        errors.append(
+                            f"{prefix}: {weapon_type} weapon items must use slot "
+                            f"'{expected_slot}', got '{slot}'"
+                        )
 
             # ---- weapon_type: required iff weapon, rejected otherwise (Req 4.5)
-            weapon_type = entry.get("weapon_type")
             if effective_category == "weapon":
                 if weapon_type not in WEAPON_TYPES:
                     errors.append(

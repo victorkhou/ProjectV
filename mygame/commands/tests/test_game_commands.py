@@ -1242,10 +1242,15 @@ class _FakeBuilding:
 
 
 class _FakeRangedWeapon:
-    """A weapon Game_Item exposing slot + a range stat for reach tests."""
+    """A weapon Game_Item exposing slot + a range stat for reach tests.
+
+    'attack' reach is driven by the melee slot (see _attack_reach), so this
+    equips there even though it's flavored as a long-range weapon — these
+    tests exercise the reach-widening math, not weapon-type semantics.
+    """
     def __init__(self, key, weapon_range):
         self.key = key
-        self.slot = "weapon"
+        self.slot = "weapon_melee"
         self.stat_modifiers = {"range": weapon_range}
 
     def get_stat(self, stat_name, default=0):
@@ -1782,7 +1787,7 @@ class TestCmdUnequip(unittest.TestCase):
 
     def test_system_unavailable(self):
         caller = FakeCaller()
-        cmd = _make_cmd(CmdUnequip, caller, " weapon")
+        cmd = _make_cmd(CmdUnequip, caller, " weapon_melee")
         cmd.func()
         self.assertTrue(any("unavailable" in m for m in caller._messages))
 
@@ -1802,10 +1807,10 @@ class TestCmdUnequip(unittest.TestCase):
                 return True
 
         caller = FakeCaller(systems={"equipment_system": FakeEquipmentSystem()})
-        self._equip_item(caller, "weapon", "Assault Rifle", "assault_rifle")
-        cmd = _make_cmd(CmdUnequip, caller, " weapon")
+        self._equip_item(caller, "weapon_melee", "Assault Rifle", "assault_rifle")
+        cmd = _make_cmd(CmdUnequip, caller, " weapon_melee")
         cmd.func()
-        self.assertEqual(calls, [(caller, "weapon")])
+        self.assertEqual(calls, [(caller, "weapon_melee")])
 
     def test_slot_name_case_insensitive(self):
         calls = []
@@ -1816,10 +1821,10 @@ class TestCmdUnequip(unittest.TestCase):
                 return True
 
         caller = FakeCaller(systems={"equipment_system": FakeEquipmentSystem()})
-        self._equip_item(caller, "weapon", "Assault Rifle", "assault_rifle")
-        cmd = _make_cmd(CmdUnequip, caller, " WEAPON")
+        self._equip_item(caller, "weapon_melee", "Assault Rifle", "assault_rifle")
+        cmd = _make_cmd(CmdUnequip, caller, " WEAPON_MELEE")
         cmd.func()
-        self.assertEqual(calls, [(caller, "weapon")])
+        self.assertEqual(calls, [(caller, "weapon_melee")])
 
     def test_delegates_by_item_name(self):
         # UX #1: accept the item's name, resolving it to its slot.
@@ -1831,11 +1836,11 @@ class TestCmdUnequip(unittest.TestCase):
                 return True
 
         caller = FakeCaller(systems={"equipment_system": FakeEquipmentSystem()})
-        self._equip_item(caller, "weapon", "Assault Rifle", "assault_rifle")
+        self._equip_item(caller, "weapon_melee", "Assault Rifle", "assault_rifle")
         # By display name (case/space-insensitive) and by key both resolve.
         _make_cmd(CmdUnequip, caller, " assault rifle").func()
         _make_cmd(CmdUnequip, caller, " assault_rifle").func()
-        self.assertEqual(calls, [(caller, "weapon"), (caller, "weapon")])
+        self.assertEqual(calls, [(caller, "weapon_melee"), (caller, "weapon_melee")])
 
     def test_no_match_reports_and_does_not_delegate(self):
         calls = []
@@ -1862,9 +1867,9 @@ class TestCmdUnequip(unittest.TestCase):
                 return True
 
         caller = FakeCaller(systems={"equipment_system": FakeEquipmentSystem()})
-        self._equip_item(caller, "weapon", "Assault Rifle", "assault_rifle")
+        self._equip_item(caller, "weapon_melee", "Assault Rifle", "assault_rifle")
         _make_cmd(CmdUnequip, caller, " assault").func()
-        self.assertEqual(calls, [(caller, "weapon")])
+        self.assertEqual(calls, [(caller, "weapon_melee")])
 
     def test_ambiguous_partial_name_reports_and_does_not_delegate(self):
         calls = []
@@ -1891,10 +1896,10 @@ class TestCmdUnequip(unittest.TestCase):
                 return True
 
         caller = FakeCaller(systems={"equipment_system": FakeEquipmentSystem()})
-        self._equip_item(caller, "weapon", "Assault Rifle", "assault_rifle")
+        self._equip_item(caller, "weapon_melee", "Assault Rifle", "assault_rifle")
         self._equip_item(caller, "head", "Combat Helmet", "combat_helmet")
         _make_cmd(CmdUnequip, caller, " all").func()
-        self.assertEqual(sorted(calls), ["head", "weapon"])
+        self.assertEqual(sorted(calls), ["head", "weapon_melee"])
 
     def test_unequip_all_when_nothing_equipped(self):
         calls = []
@@ -2205,7 +2210,7 @@ class TestCmdCraft(unittest.TestCase):
         registry = DataRegistry()
         registry.items = {
             "assault_rifle": ItemDef(key="assault_rifle", name="Assault Rifle",
-                                     slot="weapon", category="weapon",
+                                     slot="weapon_ranged", category="weapon",
                                      craft_cost={"Iron": 25}),
         }
         registry.item_production_map = {"AR": ["assault_rifle"]}
@@ -2970,7 +2975,7 @@ class TestCmdEquipment(unittest.TestCase):
         def get_stat(self, stat_name, default=0):
             return float(self.stat_modifiers.get(stat_name, default))
 
-    def test_lists_all_eleven_slots_including_empties(self):
+    def test_lists_all_slots_including_empties(self):
         from world.constants import EQUIPMENT_SLOTS
 
         caller = FakeCaller()
@@ -2991,8 +2996,8 @@ class TestCmdEquipment(unittest.TestCase):
         out = "\n".join(caller._messages)
         self.assertIn("[head] combat helmet", out)
         self.assertIn("damage_reduction: +2", out)
-        # head is no longer empty; the other ten slots are.
-        self.assertEqual(out.count("(empty)"), 10)
+        # head is no longer empty; the other eleven slots are.
+        self.assertEqual(out.count("(empty)"), 11)
 
     def test_ranged_weapon_shows_ammo_count(self):
         caller = FakeCaller()
@@ -3000,7 +3005,7 @@ class TestCmdEquipment(unittest.TestCase):
             "rifle", {"damage": 10}, weapon_type="ranged",
             magazine_size=30, loaded=24,
         )
-        caller._equipment_slots = {"weapon": rifle}
+        caller._equipment_slots = {"weapon_ranged": rifle}
         cmd = _make_cmd(CmdEquipment, caller, "")
         cmd.func()
         out = "\n".join(caller._messages)
@@ -3009,7 +3014,7 @@ class TestCmdEquipment(unittest.TestCase):
     def test_melee_weapon_has_no_ammo_line(self):
         caller = FakeCaller()
         blade = self._FakeItem("blade", {"damage": 5}, weapon_type="melee")
-        caller._equipment_slots = {"weapon": blade}
+        caller._equipment_slots = {"weapon_melee": blade}
         cmd = _make_cmd(CmdEquipment, caller, "")
         cmd.func()
         out = "\n".join(caller._messages)
@@ -3672,7 +3677,7 @@ class TestCmdInventory(unittest.TestCase):
         caller = FakeCaller()
         equipped_rifle = types.SimpleNamespace(
             key="Equipped Rifle",
-            slot="weapon",
+            slot="weapon_ranged",
             db=types.SimpleNamespace(item_key="equipped_rifle", count=None),
         )
         supply_drop = types.SimpleNamespace(

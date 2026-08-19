@@ -13,7 +13,7 @@
 
 items:
   # ------------------------------------------------------------------ #
-  #  Weapons (Gear, slot: weapon)
+  #  Weapons (Gear, slot: weapon_melee or weapon_ranged, by weapon_type)
   # ------------------------------------------------------------------ #
   # roll_spec calibration (item-loot-economy task 1.7, design §9): loot bands
   # put today's flat base at ~60-70%+ of max (a "good but not great" roll) with
@@ -23,7 +23,7 @@ items:
   # Ammo, consumables, fuel, throwables and mines stay unrolled (R1.3).
   - key: combat_knife
     name: Combat Knife
-    slot: weapon
+    slot: weapon_melee
     category: weapon
     weapon_type: melee
     stat_modifiers:
@@ -44,7 +44,7 @@ items:
 
   - key: assault_rifle
     name: Assault Rifle
-    slot: weapon
+    slot: weapon_ranged
     category: weapon
     weapon_type: ranged
     stat_modifiers:
@@ -70,7 +70,7 @@ items:
 
   - key: plasma_rifle
     name: Plasma Rifle
-    slot: weapon
+    slot: weapon_ranged
     category: weapon
     weapon_type: ranged
     stat_modifiers:
@@ -96,7 +96,7 @@ items:
 
   - key: sniper_rifle
     name: Sniper Rifle
-    slot: weapon
+    slot: weapon_ranged
     category: weapon
     weapon_type: ranged
     stat_modifiers:
@@ -125,7 +125,7 @@ items:
   # `rifle_rounds` Supply_Bag reserve via reload, fires from db.loaded.
   - key: service_rifle
     name: Service Rifle
-    slot: weapon
+    slot: weapon_ranged
     category: weapon
     weapon_type: ranged
     stat_modifiers:
@@ -155,7 +155,7 @@ items:
   # ------------------------------------------------------------------ #
   - key: incendiary_rifle
     name: Incendiary Rifle
-    slot: weapon
+    slot: weapon_ranged
     category: weapon
     weapon_type: ranged
     damage_type: fire
@@ -181,7 +181,7 @@ items:
 
   - key: psi_blade
     name: Psi Blade
-    slot: weapon
+    slot: weapon_melee
     category: weapon
     weapon_type: melee
     damage_type: psychic
@@ -203,7 +203,7 @@ items:
 
   - key: blast_launcher
     name: Blast Launcher
-    slot: weapon
+    slot: weapon_ranged
     category: weapon
     weapon_type: ranged
     damage_type: blast

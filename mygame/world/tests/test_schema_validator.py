@@ -23,7 +23,7 @@ def make_valid_building(**overrides):
 
 
 def make_valid_item(**overrides):
-    base = {"key": "rifle", "name": "Rifle", "slot": "weapon"}
+    base = {"key": "rifle", "name": "Rifle", "slot": "torso"}
     base.update(overrides)
     return base
 
@@ -221,7 +221,7 @@ class TestValidateItems:
 
     def test_valid_melee_weapon(self):
         data = {
-            "items": [make_valid_item(category="weapon", slot="weapon", weapon_type="melee")]
+            "items": [make_valid_item(category="weapon", slot="weapon_melee", weapon_type="melee")]
         }
         assert self.v.validate_items(data) == []
 
@@ -230,7 +230,7 @@ class TestValidateItems:
         data = {
             "items": [
                 make_valid_item(
-                    category="weapon", slot="weapon", weapon_type="ranged",
+                    category="weapon", slot="weapon_ranged", weapon_type="ranged",
                     ammo_per_shot=0,
                 )
             ]
@@ -242,7 +242,7 @@ class TestValidateItems:
         data = {
             "items": [
                 make_valid_item(
-                    category="weapon", slot="weapon", weapon_type="ranged",
+                    category="weapon", slot="weapon_ranged", weapon_type="ranged",
                     magazine_size=-5,
                 )
             ]
@@ -254,7 +254,7 @@ class TestValidateItems:
         data = {
             "items": [
                 make_valid_item(
-                    category="weapon", slot="weapon", weapon_type="ranged",
+                    category="weapon", slot="weapon_ranged", weapon_type="ranged",
                     ammo_type="rifle_rounds", ammo_per_shot=1, magazine_size=30,
                 )
             ]
@@ -267,7 +267,7 @@ class TestValidateItems:
         data = {
             "items": [
                 make_valid_item(
-                    category="weapon", slot="weapon", weapon_type="ranged",
+                    category="weapon", slot="weapon_ranged", weapon_type="ranged",
                     ammo_type="rifle_rounds", ammo_per_shot=1,
                     # magazine_size intentionally omitted
                 )
@@ -277,8 +277,9 @@ class TestValidateItems:
         assert any("must declare a positive magazine_size" in e for e in errs)
 
     def test_weapon_in_body_slot_rejected(self):
-        # A weapon must occupy the `weapon` slot; combat resolves it there, so a
-        # weapon in a body slot could never be used to attack.
+        # A weapon must occupy the slot matching its weapon_type; combat
+        # resolves it there, so a weapon in a body slot could never be used
+        # to attack.
         data = {
             "items": [
                 make_valid_item(
@@ -287,7 +288,7 @@ class TestValidateItems:
             ]
         }
         errs = self.v.validate_items(data)
-        assert any("weapon items must use slot 'weapon'" in e for e in errs)
+        assert any("melee weapon items must use slot 'weapon_melee'" in e for e in errs)
 
     def test_accessory_in_body_slot_allowed(self):
         # Accessory/armor gear may occupy any body slot (e.g. scope in eyes).
@@ -376,7 +377,8 @@ class TestValidateRollSpec:
         self.v = SchemaValidator()
 
     def _errs(self, roll_spec):
-        item = make_valid_item(category="weapon", weapon_type="ranged",
+        item = make_valid_item(category="weapon", slot="weapon_ranged",
+                               weapon_type="ranged",
                                magazine_size=10, roll_spec=roll_spec)
         return self.v.validate_items({"items": [item], "production_map": {}})
 
@@ -1482,7 +1484,7 @@ class TestCrossValidate:
                 ),
             },
             "items": {
-                "rifle": ItemDef(key="rifle", name="Rifle", slot="weapon",
+                "rifle": ItemDef(key="rifle", name="Rifle", slot="weapon_ranged",
                                  required_rank="Recruit"),
             },
             "technologies": {
@@ -1530,7 +1532,7 @@ class TestCrossValidate:
     def test_item_invalid_rank(self):
         from mygame.world.definitions import ItemDef
         reg = self._make_registry(items={
-            "rifle": ItemDef(key="rifle", name="Rifle", slot="weapon",
+            "rifle": ItemDef(key="rifle", name="Rifle", slot="weapon_ranged",
                              required_rank="General"),
         })
         errs = self.v.cross_validate(reg)
@@ -1639,7 +1641,7 @@ class TestCrossValidate:
     def test_item_ammo_cost_invalid_resource(self):
         from mygame.world.definitions import ItemDef
         reg = self._make_registry(items={
-            "rifle": ItemDef(key="rifle", name="Rifle", slot="weapon",
+            "rifle": ItemDef(key="rifle", name="Rifle", slot="weapon_ranged",
                              ammo_cost={"Plutonium": 1}),
         })
         errs = self.v.cross_validate(reg)
@@ -1711,7 +1713,7 @@ class TestCrossValidate:
                 ),
             },
             items={
-                "rifle": ItemDef(key="rifle", name="Rifle", slot="weapon",
+                "rifle": ItemDef(key="rifle", name="Rifle", slot="weapon_ranged",
                                  ammo_cost={"Circuits": 1}),
             },
             item_production_map={},
@@ -1766,7 +1768,7 @@ class TestCrossValidate:
         from mygame.world.definitions import ItemDef
         reg = self._make_registry(items={
             "rifle": ItemDef(
-                key="rifle", name="Rifle", slot="weapon", category="weapon",
+                key="rifle", name="Rifle", slot="weapon_ranged", category="weapon",
                 weapon_type="ranged", ammo_type="nonexistent_rounds",
                 magazine_size=30,
             ),
@@ -1784,7 +1786,7 @@ class TestCrossValidate:
         from mygame.world.definitions import ItemDef
         reg = self._make_registry(items={
             "rifle": ItemDef(
-                key="rifle", name="Rifle", slot="weapon", category="weapon",
+                key="rifle", name="Rifle", slot="weapon_ranged", category="weapon",
                 weapon_type="ranged", ammo_type="kevlar_vest",
                 magazine_size=30,
             ),
@@ -1806,7 +1808,7 @@ class TestCrossValidate:
         from mygame.world.definitions import ItemDef
         reg = self._make_registry(items={
             "rifle": ItemDef(
-                key="rifle", name="Rifle", slot="weapon", category="weapon",
+                key="rifle", name="Rifle", slot="weapon_ranged", category="weapon",
                 weapon_type="ranged", ammo_type="rifle_rounds",
                 magazine_size=30,
             ),
@@ -1824,7 +1826,7 @@ class TestCrossValidate:
         from mygame.world.definitions import ItemDef
         reg = self._make_registry(items={
             "combat_knife": ItemDef(
-                key="combat_knife", name="Combat Knife", slot="weapon",
+                key="combat_knife", name="Combat Knife", slot="weapon_melee",
                 category="weapon", weapon_type="melee",
                 ammo_type="rifle_rounds",
             ),
@@ -1842,7 +1844,7 @@ class TestCrossValidate:
         from mygame.world.definitions import ItemDef
         reg = self._make_registry(items={
             "combat_knife": ItemDef(
-                key="combat_knife", name="Combat Knife", slot="weapon",
+                key="combat_knife", name="Combat Knife", slot="weapon_melee",
                 category="weapon", weapon_type="melee", magazine_size=10,
             ),
         })
@@ -1856,7 +1858,7 @@ class TestCrossValidate:
         from mygame.world.definitions import ItemDef
         reg = self._make_registry(items={
             "combat_knife": ItemDef(
-                key="combat_knife", name="Combat Knife", slot="weapon",
+                key="combat_knife", name="Combat Knife", slot="weapon_melee",
                 category="weapon", weapon_type="melee", ammo_per_shot=3,
             ),
         })
@@ -1871,7 +1873,7 @@ class TestCrossValidate:
         from mygame.world.definitions import ItemDef
         reg = self._make_registry(items={
             "combat_knife": ItemDef(
-                key="combat_knife", name="Combat Knife", slot="weapon",
+                key="combat_knife", name="Combat Knife", slot="weapon_melee",
                 category="weapon", weapon_type="melee",
             ),
         })

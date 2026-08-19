@@ -404,7 +404,7 @@ HELP_ENTRY_DICTS = [
         "text": """
             |wEquipment|n
 
-            Gear makes you tougher and deadlier. You have eleven equipment |cslots|n covering you head to toe, plus a weapon and an accessory slot. Every equipped piece adds armor and other bonuses.
+            Gear makes you tougher and deadlier. You have twelve equipment |cslots|n covering you head to toe, plus a melee weapon slot, a ranged weapon slot, and an accessory slot. Every equipped piece adds armor and other bonuses.
 
             # Getting Gear
 
@@ -412,7 +412,7 @@ HELP_ENTRY_DICTS = [
 
             # Slots
 
-            |chead eyes face torso arms hands legs feet back|n — armor and utility. |cweapon|n — your active weapon. |caccessory|n — a utility item (scope, hauler pack). One item per slot; equipping a new one swaps out the old.
+            |chead eyes face torso arms hands legs feet back|n — armor and utility. |cweapon_melee|n — your melee weapon, used by |wattack|n. |cweapon_ranged|n — your ranged weapon, used by |wtarget|n/|wshoot|n/|wreload|n. |caccessory|n — a utility item (scope, hauler pack). One item per slot; equipping a new one swaps out the old. A melee weapon auto-equips to |cweapon_melee|n and a ranged weapon to |cweapon_ranged|n, so you can carry one of each at once.
 
             # Stat Bonuses
 
@@ -460,7 +460,7 @@ HELP_ENTRY_DICTS = [
 
             # Attacking
 
-            |wattack <target>|n (|wa|n) — attack a player, building, or agent in reach. You can target anything within your |creach|n — whichever is greater of what you can |csee|n ('scan') and your equipped weapon's |crange|n — so 'attack guard' picks the nearest matching foe within reach (a long-range weapon like a sniper rifle can hit a foe beyond your sight range). Your equipped |cweapon|n decides your damage and reach: a melee weapon only reaches a foe on your |csame tile|n (close in first — an adjacent enemy is not yet in melee reach), while ranged weapons strike at a distance. Buildings can be meleed from an adjacent tile (to break a wall by hand). Equip a weapon first (|whelp equipment|n).
+            |wattack <target>|n (|wa|n) — attack a player, building, or agent in reach with your equipped |cmelee|n weapon. You can target anything within your |creach|n — whichever is greater of what you can |csee|n ('scan') and your melee weapon's |crange|n — so 'attack guard' picks the nearest matching foe within reach. In practice a melee weapon only reaches a foe on your |csame tile|n (close in first — an adjacent enemy is not yet in melee reach). Buildings can be meleed from an adjacent tile (to break a wall by hand). To fight at range instead, equip a ranged weapon and use |wtarget|n/|wshoot|n below — melee and ranged live in separate slots, so you can carry both at once. Equip a weapon first (|whelp equipment|n).
 
             # Ranged: Target & Shoot
 
@@ -1384,7 +1384,7 @@ HELP_ENTRY_DICTS = [
 
             # The Bench
 
-            |winsert <item> [weapon]|n — permanently apply a crafted insert to your equipped weapon: a damage-type coating (|cVenom Coating|n → poison, |cIncendiary Core|n → fire), an |cExtended Barrel|n (+range), or a |cHollow-Point Kit|n (+damage, -range). Inserts |rcannot be removed|n and a weapon has limited insert slots. Craft inserts at the Armory/Lab first.
+            |winsert <item> [weapon]|n — permanently apply a crafted insert to your equipped weapon: a damage-type coating (|cVenom Coating|n → poison, |cIncendiary Core|n → fire), an |cExtended Barrel|n (+range), or a |cHollow-Point Kit|n (+damage, -range). Inserts |rcannot be removed|n and a weapon has limited insert slots. If you have both a melee and a ranged weapon equipped, name the |c[weapon]|n to say which one gets the insert. Craft inserts at the Armory/Lab first.
             |wreroll <item>|n — draw fresh base stats for a rolled item and re-stamp its quality score. Costs |cSalvage|n plus a little Iron. Affixes, rarity, and applied inserts are untouched.
             |wsalvage <item>|n — destroy a carried item and pocket |cSalvage|n; better items pay more.
 

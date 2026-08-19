@@ -19,7 +19,7 @@ class _Weapon:
     """A weapon Game_Item with a weapon_type + stat modifiers."""
     def __init__(self, weapon_type="ranged", weapon_range=8, **stats):
         self.key = "rifle"
-        self.slot = "weapon"
+        self.slot = "weapon_ranged"
         self.weapon_type = weapon_type
         self.stat_modifiers = {"range": weapon_range, **stats}
 
@@ -32,7 +32,7 @@ class _Equipment:
         self._weapon = weapon
 
     def get_equipped(self, slot):
-        return self._weapon if slot == "weapon" else None
+        return self._weapon if slot == "weapon_ranged" else None
 
 
 class _Player:
@@ -297,7 +297,7 @@ class TestRangeResolverInjection(unittest.TestCase):
     def test_effective_range_uses_injected_resolver(self):
         sys, _ = _make()
         p = _Player(weapon=_Weapon(weapon_range=4))
-        weapon = p.equipment.get_equipped("weapon")
+        weapon = p.equipment.get_equipped("weapon_ranged")
         self.assertEqual(sys.effective_range(p, weapon), 4)  # fallback: raw
         sys.set_range_resolver(self._resolver(bonus=2))
         self.assertEqual(sys.effective_range(p, weapon), 6)

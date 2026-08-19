@@ -927,17 +927,17 @@ class EquipmentSystem(CarryWeightMixin, StorageMixin, BaseSystem):
     def reload(self, player: Any, *_args: Any, **_kwargs: Any) -> bool:
         """Reload the player's equipped ranged weapon from the Supply_Bag.
 
-        Implements the magazine model (D5, Req 11): a ranged ``weapon``-slot
+        Implements the magazine model (D5, Req 11): the ``weapon_ranged``-slot
         Game_Item holds its loaded rounds in ``db.loaded`` (0..``magazine_size``)
         and is refilled from the counted Ammo_Type in the player's Supply_Bag.
 
         The use-case mediates the raw :class:`EquipmentHandler` Supply_Bag and
         the weapon's magazine state:
 
-        1. Read the ``weapon``-slot Game_Item via
-           ``player.equipment.get_equipped("weapon")``. Reject if there is no
-           equipped weapon, or the weapon declares no ``ammo_type`` (it is not
-           a ranged, ammo-using weapon) — ``reload_failed`` reason
+        1. Read the ``weapon_ranged``-slot Game_Item via
+           ``player.equipment.get_equipped("weapon_ranged")``. Reject if there
+           is no equipped weapon, or the weapon declares no ``ammo_type`` (it
+           is not a ranged, ammo-using weapon) — ``reload_failed`` reason
            ``no_ammo_weapon`` (Req 11.5).
         2. Reject if the magazine is already full (``db.loaded ==
            magazine_size``) — ``reload_failed`` reason ``already_loaded``; no
@@ -965,7 +965,7 @@ class EquipmentSystem(CarryWeightMixin, StorageMixin, BaseSystem):
             self.notify(player, "reload_failed", reason="no_ammo_weapon")
             return False
 
-        weapon = handler.get_equipped("weapon")
+        weapon = handler.get_equipped("weapon_ranged")
 
         # 1. Ranged-weapon gate — must be an equipped weapon with an ammo_type.
         ammo_type = (
@@ -1183,8 +1183,13 @@ class EquipmentSystem(CarryWeightMixin, StorageMixin, BaseSystem):
         4. ``not_owner`` — the Blacksmith is not the player's.
         5. ``building_offline`` / ``building_upgrading`` — operational gate.
         6. rank gate — reuses :meth:`_rank_allows` (emits ``equip_denied``).
-        7. ``no_weapon`` / ``weapon_not_equipped`` — an equipped weapon is
-           required (and must match the optional *weapon_token*).
+        7. ``no_weapon`` / ``weapon_not_equipped`` / ``ambiguous_weapon`` —
+           an equipped weapon is required. With two weapon slots
+           (``weapon_melee`` + ``weapon_ranged``), *weapon_token* picks which
+           one when both are equipped; if only one slot is filled that one is
+           used with no token needed; if both are filled and no token (or a
+           non-matching one) is given, the insert is refused as ambiguous
+           rather than guessing.
         8. ``no_slots`` — slot limit ``1 + blacksmith_level // 3`` (L1–2 →
            1 slot, L3+ → 2); over-limit is REFUSED with the weapon
            unchanged and the insert NOT consumed (design §4.3, R5.3).
@@ -1258,22 +1263,43 @@ class EquipmentSystem(CarryWeightMixin, StorageMixin, BaseSystem):
         if not self._rank_allows(player, item_def.required_rank, item_name):
             return False
 
-        # 7. Weapon gate — inserts mutate the EQUIPPED weapon only (R5.1).
+        # 7. Weapon gate — inserts mutate an EQUIPPED weapon only (R5.1).
+        #    Two weapon slots means *weapon_token* disambiguates when both
+        #    are filled; see docstring point 7.
         handler = getattr(player, "equipment", None)
-        weapon = (
-            handler.get_equipped("weapon")
-            if handler is not None and hasattr(handler, "get_equipped")
-            else None
-        )
-        if weapon is None:
+        can_get = handler is not None and hasattr(handler, "get_equipped")
+        melee = handler.get_equipped("weapon_melee") if can_get else None
+        ranged = handler.get_equipped("weapon_ranged") if can_get else None
+        equipped = [w for w in (melee, ranged) if w is not None]
+
+        if not equipped:
             self.notify(player, "insert_failed", reason="no_weapon",
                         item_name=item_name)
             return False
-        weapon_name = self._item_name(weapon)
-        if weapon_token and not self._weapon_matches(weapon, weapon_token):
-            self.notify(player, "insert_failed", reason="weapon_not_equipped",
-                        item_name=item_name, weapon_name=weapon_token)
+
+        if weapon_token:
+            weapon = next(
+                (w for w in equipped if self._weapon_matches(w, weapon_token)),
+                None,
+            )
+            if weapon is None:
+                self.notify(player, "insert_failed",
+                            reason="weapon_not_equipped",
+                            item_name=item_name, weapon_name=weapon_token)
+                return False
+        elif len(equipped) == 1:
+            weapon = equipped[0]
+        else:
+            # Both slots filled and nothing to disambiguate with — refuse
+            # rather than silently guessing which weapon gets mutated.
+            self.notify(
+                player, "insert_failed", reason="ambiguous_weapon",
+                item_name=item_name,
+                melee_name=self._item_name(melee),
+                ranged_name=self._item_name(ranged),
+            )
             return False
+        weapon_name = self._item_name(weapon)
 
         # 8. Slot-limit gate — refuse BEFORE consuming, weapon unchanged
         #    (R5.3). Limit = 1 + level//3: L1–2 → 1 slot, L3+ → 2.

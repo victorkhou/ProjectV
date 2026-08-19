@@ -1296,7 +1296,10 @@ def _attack_reach(caller):
     equipment = getattr(caller, "equipment", None)
     if equipment is not None and hasattr(equipment, "get_equipped"):
         try:
-            weapon = equipment.get_equipped("weapon")
+            # 'attack' resolves via the melee slot (see _get_weapon_item in
+            # combat_engine) — bound the search to that weapon's range, not
+            # the ranged slot (which 'target'/'shoot' use instead).
+            weapon = equipment.get_equipped("weapon_melee")
             if weapon is not None:
                 engine = _get_system(caller, "combat_engine")
                 resolver = getattr(engine, "resolve_weapon_range", None)
@@ -1382,13 +1385,16 @@ def _resolve_attack_target(caller, target_name):
     return None, f"You don't see '{target_name}' nearby to attack."
 
 
-def _attack_cooldown_seconds(caller, combat_engine):
+def _attack_cooldown_seconds(caller, combat_engine, weapon=None):
     """The wall-clock cooldown (seconds) between this caller's instant attacks.
 
     A player's own ``attack``/``shoot`` resolve instantly (not tick-queued), so
     a wall-clock cooldown throttles them in place of the 1-second tick. The
     equipped weapon may override the global ``balance.attack_cooldown_seconds``
     with an ``attack_cooldown`` stat modifier (e.g. a heavy weapon fires slower).
+    *weapon* is the weapon actually being fired — 'shoot' passes its already-
+    resolved ranged-slot weapon; plain 'attack' passes none and this falls
+    back to the melee slot (matching ``combat_engine._get_weapon_item``).
     Returns a non-negative float; falls back to 1.0 if balance is unavailable.
     """
     default = 1.0
@@ -1396,13 +1402,13 @@ def _attack_cooldown_seconds(caller, combat_engine):
     balance = getattr(registry, "balance", None)
     if balance is not None:
         default = float(getattr(balance, "attack_cooldown_seconds", 1.0))
-    weapon = None
-    equipment = getattr(caller, "equipment", None)
-    if equipment is not None and hasattr(equipment, "get_equipped"):
-        try:
-            weapon = equipment.get_equipped("weapon")
-        except Exception:  # pragma: no cover - defensive
-            weapon = None
+    if weapon is None:
+        equipment = getattr(caller, "equipment", None)
+        if equipment is not None and hasattr(equipment, "get_equipped"):
+            try:
+                weapon = equipment.get_equipped("weapon_melee")
+            except Exception:  # pragma: no cover - defensive
+                weapon = None
     if weapon is not None and hasattr(weapon, "get_stat"):
         try:
             override = float(weapon.get_stat("attack_cooldown", 0) or 0)
@@ -1413,13 +1419,14 @@ def _attack_cooldown_seconds(caller, combat_engine):
     return max(0.0, default)
 
 
-def _instant_attack_gate(caller, combat_engine):
+def _instant_attack_gate(caller, combat_engine, weapon=None):
     """Return (ok, wait_seconds): is the caller off cooldown for an instant attack?
 
     Tracks the earliest wall-clock time the caller may attack again on
     ``caller.ndb.next_attack_time`` (a ``time.monotonic()`` stamp). On success
     (ok=True) it STAMPS the next-allowed time and returns wait=0.0; on cooldown
-    (ok=False) it returns the remaining seconds and stamps nothing.
+    (ok=False) it returns the remaining seconds and stamps nothing. *weapon* is
+    forwarded to :func:`_attack_cooldown_seconds` (see there).
 
     The stamp lives on ``ndb`` (memory-only), NOT ``db`` (persistent): a
     ``time.monotonic()`` value is meaningless across a process/OS restart (the
@@ -1437,7 +1444,7 @@ def _instant_attack_gate(caller, combat_engine):
         ready_at = 0.0
     if now < ready_at:
         return False, ready_at - now
-    cooldown = _attack_cooldown_seconds(caller, combat_engine)
+    cooldown = _attack_cooldown_seconds(caller, combat_engine, weapon=weapon)
     caller.ndb.next_attack_time = now + cooldown
     return True, 0.0
 
@@ -1696,7 +1703,7 @@ class CmdShoot(GameCommand):
         # INSTANTLY (like directional shoot), throttled by the wall-clock
         # cooldown — not tick-queued. Gate AFTER the lock/range checks so a
         # held-fire or lock-lost doesn't burn the cooldown.
-        ready, wait = _instant_attack_gate(caller, combat_engine)
+        ready, wait = _instant_attack_gate(caller, combat_engine, weapon=weapon)
         if not ready:
             caller.msg(f"Weapon not ready — {wait:.1f}s until you can fire again.")
             return
@@ -1752,7 +1759,7 @@ class CmdShoot(GameCommand):
         # wall-clock cooldown. Gate AFTER target resolution so an empty line of
         # fire doesn't burn the cooldown. A LOCKED tracking shot (_shoot_locked)
         # deliberately stays tick-queued and is NOT cooldown-gated.
-        ready, wait = _instant_attack_gate(caller, combat_engine)
+        ready, wait = _instant_attack_gate(caller, combat_engine, weapon=weapon)
         if not ready:
             caller.msg(f"Weapon not ready — {wait:.1f}s until you can fire again.")
             return
@@ -2578,7 +2585,9 @@ class CmdInsert(GameCommand):
     Options:
       <insert item>  which insert to apply, by key or name (venom_coating |
                      "venom coating"). Consumes one from your supply bag.
-      [weapon]       optional: name your equipped weapon as a safety check.
+      [weapon]       which equipped weapon to modify. Optional if you only
+                     have one weapon equipped; required to pick between a
+                     melee and a ranged weapon equipped at the same time.
 
     Examples:
       insert venom_coating
@@ -3461,11 +3470,12 @@ class CmdEquipment(GameCommand):
       equipment
 
     Notes:
-      Aliases: eq, gear. Lists all eleven slots (empties included), each
-      item's stat bonuses, your ranged weapon's loaded/magazine count, and
-      combined totals for armor, damage, move speed, and sight range (plus
-      max HP when gear grants it). To put gear on use 'equip <item>'; to
-      take it off use 'unequip <item>'. See 'help equipment'.
+      Aliases: eq, gear. Lists all twelve slots (empties included, including
+      separate melee and ranged weapon slots), each item's stat bonuses, your
+      ranged weapon's loaded/magazine count, and combined totals for armor,
+      damage, move speed, and sight range (plus max HP when gear grants it).
+      To put gear on use 'equip <item>'; to take it off use 'unequip <item>'.
+      See 'help equipment'.
     """
 
     key = "equipment"
@@ -3501,7 +3511,7 @@ class CmdEquipment(GameCommand):
                 line = f"  [{slot}] {item_name}"
 
             # Show the ammunition count for an equipped ranged weapon.
-            if slot == "weapon":
+            if slot == "weapon_ranged":
                 ammo = self._weapon_ammo(item)
                 if ammo is not None:
                     line += f"  Ammo: {ammo}"
