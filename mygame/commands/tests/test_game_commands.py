@@ -4902,6 +4902,16 @@ class TestSendMapUpdateAdminGate(unittest.TestCase):
         self.assertEqual(data["player"].get("resource"), "Wood")
         self.assertEqual(data["discovered_count"], 5)
 
+    def test_moving_to_resourceless_tile_explicitly_clears_resource(self):
+        """Regression: the webclient footer merges incoming fields into a
+        persistent status object (map_renderer.js updateInfoFooter), so an
+        OMITTED key leaves the previous tile's resource on screen. The
+        payload must always carry 'resource', explicitly empty when the new
+        tile has none, so the client's merge actually clears it."""
+        data = self._run(admin=True, terrain_and_resource=("Plains", None))
+        self.assertIn("resource", data["player"])
+        self.assertEqual(data["player"]["resource"], "")
+
 
 if __name__ == "__main__":
     unittest.main()
