@@ -14,6 +14,7 @@ from typing import Any, TYPE_CHECKING
 from world.constants import UNIT_KIND_LABELS
 from world.event_bus import (
     EventBus,
+    LEVEL_CHANGED,
     PLAYER_LOGIN,
     PLAYER_LOGOUT,
     PLAYER_ELIMINATED,
@@ -51,6 +52,7 @@ class NotificationSystem:
         self.event_bus.subscribe(PLAYER_LOGIN, self.on_player_login)
         self.event_bus.subscribe(PLAYER_LOGOUT, self.on_player_logout)
         self.event_bus.subscribe(PLAYER_ELIMINATED, self.on_player_eliminated)
+        self.event_bus.subscribe(LEVEL_CHANGED, self.on_level_changed)
         self.event_bus.subscribe(RANK_PROMOTED, self.on_rank_promoted)
         self.event_bus.subscribe(RANK_DEMOTED, self.on_rank_demoted)
 
@@ -108,6 +110,31 @@ class NotificationSystem:
         if attacker is killer or not attacker_kind:
             return ""
         return f"'s {UNIT_KIND_LABELS.get(attacker_kind, 'unit')}"
+
+    def on_level_changed(
+        self,
+        event_name: str = "",
+        player: Any = None,
+        old_level: Any = None,
+        new_level: Any = None,
+        **kwargs,
+    ) -> None:
+        """Broadcast every level GAIN to the public feed.
+
+        Fires for level increases only. A level DROP (death XP loss) is not a
+        celebratory event and is left unannounced here — a rank drop that
+        accompanies it still gets its own ``on_rank_demoted`` line. Guards
+        against a missing/garbage payload so a bad event never breaks the feed.
+        """
+        try:
+            new = int(new_level)
+            old = int(old_level) if old_level is not None else new - 1
+        except (TypeError, ValueError):
+            return
+        if new <= old:
+            return
+        name = getattr(player, "key", "Unknown") if player else "Unknown"
+        self._broadcast(f"|G[Level] {name} reached level {new}!|n")
 
     def on_rank_promoted(
         self,

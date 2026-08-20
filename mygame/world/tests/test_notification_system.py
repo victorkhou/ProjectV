@@ -8,6 +8,7 @@ the module-level ``world.utils.broadcast``.
 
 from mygame.world.event_bus import (
     EventBus,
+    LEVEL_CHANGED,
     PLAYER_LOGIN,
     PLAYER_LOGOUT,
     PLAYER_ELIMINATED,
@@ -85,6 +86,28 @@ class TestNotificationBroadcasts:
         bus.publish(PLAYER_ELIMINATED, attacker=agent, victim=_Player("Bob"),
                     attacker_owner=_Player("Ann"), attacker_kind="agent")
         assert any("Ann's Agent has eliminated Bob" in m for m in notifier.sent)
+
+    def test_level_gain_broadcast(self):
+        bus, notifier, _ = _make()
+        bus.publish(LEVEL_CHANGED, player=_Player("Eve"), old_level=5, new_level=6)
+        assert any("Eve reached level 6" in m for m in notifier.sent)
+
+    def test_multi_level_gain_announces_the_new_level(self):
+        bus, notifier, _ = _make()
+        bus.publish(LEVEL_CHANGED, player=_Player("Fay"), old_level=3, new_level=6)
+        assert any("Fay reached level 6" in m for m in notifier.sent)
+
+    def test_level_drop_is_not_broadcast_as_a_gain(self):
+        """A death XP loss lowers the level; it must not read as a level-up."""
+        bus, notifier, _ = _make()
+        bus.publish(LEVEL_CHANGED, player=_Player("Gus"), old_level=6, new_level=4)
+        assert not any("reached level" in m for m in notifier.sent)
+
+    def test_missing_old_level_still_announces_the_gain(self):
+        """A payload without old_level (defensive) still announces the level."""
+        bus, notifier, _ = _make()
+        bus.publish(LEVEL_CHANGED, player=_Player("Hal"), new_level=2)
+        assert any("Hal reached level 2" in m for m in notifier.sent)
 
     def test_promotion_broadcast(self):
         bus, notifier, _ = _make()

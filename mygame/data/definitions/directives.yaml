@@ -9,7 +9,32 @@
 #   condition:      optional payload filters (all must match)
 #   reward:         xp + resource grants (one-time; forfeited while muted — D2)
 #
-# Non-combat steps total 200 XP; step 8's combat reward is 50 (D6).
+# TARGET: a player who finishes the whole chain should be ~level 6.
+#
+# The chain's XP is deliberately a MINOR share of that. Completing a step
+# almost always also fires the action's own economy XP, which dwarfs the
+# directive bonus — building completion grants xp_build_complete (30), an
+# upgrade xp_upgrade_complete (30), training an agent xp_agent_trained (40)
+# (all in balance.yaml). Summing those action rewards for the guided path is
+# ~190 XP (level 4) and the directive bonuses below add ~160, landing a
+# completer in the middle of the level-6 band (298–397 XP at the default
+# curve). The directive rewards are the tuning lever for that target; the
+# action XP is fixed combat/economy balance and must not be retuned here.
+#
+# NOTE: the chain deliberately does NOT include "destroy an outpost". A first
+# outpost kill alone awards xp_hq_destroy (300) — enough to blow past level 6
+# on its own — so forcing it into onboarding made the target unreachable AND
+# gated tutorial completion behind a real walled-base fight. The chain now ends
+# by FINDING a base with the Survey Array (a zero-action-XP step that teaches
+# the recon building and hands the player a target), and the kill itself is
+# left as the natural next thing to do once onboarding is done. Destroying a
+# base still awards its XP and its deed (outpost_cleared / fortress_cleared) —
+# those are handled by the BASE_ELIMINATED path, independent of this chain.
+#
+# Directive XP by step:
+#   HQ 15 / Extractor 15 / train 20 / assign 10 / Wall 15 / equip 15 /
+#   guard 10 / Munitions Plant 15 / survey 20 / upgrade HQ 25 / scout 15
+#   = 160 total. With ~190 action XP that is ~350 grand total → mid level 6.
 
 - key: build_hq
   description: "Build your Headquarters"
@@ -32,7 +57,7 @@
   description: "Train your first agent at an Academy"
   trigger_event: agent_trained
   reward:
-    xp: 30
+    xp: 20
     Iron: 10
 
 - key: assign_harvester
@@ -41,7 +66,7 @@
   condition:
     role: harvester
   reward:
-    xp: 15
+    xp: 10
 
 - key: build_wall
   description: "Build a Wall to protect your base"
@@ -49,14 +74,14 @@
   condition:
     building_type: WL
   reward:
-    xp: 20
+    xp: 15
     Stone: 15
 
 - key: equip_weapon
   description: "Equip a weapon from the Armory"
   trigger_event: item_equipped
   reward:
-    xp: 20
+    xp: 15
 
 - key: guard_patrol
   description: "Assign a guard and set a patrol route"
@@ -64,17 +89,23 @@
   condition:
     role: guard
   reward:
-    xp: 20
+    xp: 10
 
-- key: destroy_outpost
-  description: "Destroy an NPC outpost"
-  trigger_event: base_eliminated
-  player_key: attacker
+- key: build_munitions_plant
+  description: "Build a Munitions Plant to craft bombs"
+  trigger_event: construction_completed
   condition:
-    base_kind: outpost
+    building_type: MP
   reward:
-    xp: 50
-    Iron: 30
+    xp: 15
+    Iron: 10
+
+- key: survey_outpost
+  description: "Locate an enemy base with a Survey Array"
+  trigger_event: outpost_surveyed
+  reward:
+    xp: 20
+    Circuits: 10
 
 - key: upgrade_hq
   description: "Upgrade your HQ to level 2"
@@ -83,7 +114,7 @@
     building_type: HQ
     new_level: 2
   reward:
-    xp: 40
+    xp: 25
 
 - key: scout_patrol
   description: "Explore with a scout patrol"
@@ -91,4 +122,4 @@
   condition:
     role: scout
   reward:
-    xp: 25
+    xp: 15

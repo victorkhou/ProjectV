@@ -691,6 +691,37 @@ class TestProbe(unittest.TestCase):
         self.assertIsNone(_contract(player))
         self.assertEqual(fog.marked, [(50, 50, "HQ", "Outpost")])
 
+    def test_a_pinpoint_publishes_the_outpost_surveyed_event(self):
+        """The find (not opening a search) is what feeds the directive chain."""
+        from mygame.world.event_bus import OUTPOST_SURVEYED
+        system, _sink, _fog, player, building = self._open()
+        seen = []
+        system.event_bus.subscribe(
+            OUTPOST_SURVEYED, lambda **kw: seen.append(kw)
+        )
+
+        system.probe(player, building, 50, 50)
+
+        self.assertEqual(len(seen), 1)
+        self.assertIs(seen[0]["player"], player)
+        self.assertEqual((seen[0]["x"], seen[0]["y"]), (50, 50))
+
+    def test_no_event_until_the_base_is_actually_found(self):
+        from mygame.world.event_bus import OUTPOST_SURVEYED
+        system, sink, _fog, player, building = self._open()
+        box = sink.last_data()  # the search box from the scan notification
+        seen = []
+        system.event_bus.subscribe(
+            OUTPOST_SURVEYED, lambda **kw: seen.append(kw)
+        )
+
+        # A probe that only reports a bearing must not fire the find event.
+        for px, py in ((box["x1"], box["y1"]), (box["x2"], box["y2"])):
+            if max(abs(50 - px), abs(50 - py)) > system._reveal_radius():
+                system.probe(player, building, px, py)
+                break
+        self.assertEqual(seen, [])
+
     def test_probe_charges_less_than_a_sweep(self):
         balance = BalanceConfig()
         self.assertLess(

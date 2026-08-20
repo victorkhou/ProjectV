@@ -63,6 +63,9 @@ AGENT_TRAINED = "agent_trained"        # player, agent_id
 AGENT_ASSIGNED = "agent_assigned"      # player, agent_id, role
 ITEM_EQUIPPED = "item_equipped"        # player, item_key, slot
 PATROL_SET = "patrol_set"              # player, agent_id, role
+# A Survey Array search pinpointed an enemy base (the objective completes on the
+# FIND, not on opening a search). Payload: player, base_name, planet, x, y
+OUTPOST_SURVEYED = "outpost_surveyed"
 
 # --- Alliances --- (all published by world.systems.alliance_system.AllianceSystem)
 # Payload conventions noted per event; publishing is best-effort (swallowed on
@@ -106,6 +109,7 @@ ALL_EVENTS = (
     AGENT_ASSIGNED,
     ITEM_EQUIPPED,
     PATROL_SET,
+    OUTPOST_SURVEYED,
     ALLIANCE_CREATED,
     ALLIANCE_MEMBER_JOINED,
     ALLIANCE_MEMBER_LEFT,

@@ -597,6 +597,16 @@ class OutpostSurveySystem(BenchGateMixin, BaseSystem):
             player, "survey_found", name=name, x=tx, y=ty,
             planet=contract.get("planet"), marked=marked, via=via,
         )
+        # Announce the FIND so the onboarding directive chain (and any future
+        # listener) can react. Best-effort: telemetry must never break a find.
+        try:
+            from world.event_bus import OUTPOST_SURVEYED
+            self.event_bus.publish(
+                OUTPOST_SURVEYED, player=player, base_name=name,
+                planet=contract.get("planet"), x=tx, y=ty,
+            )
+        except Exception:  # noqa: BLE001 - the find still stands
+            logger.debug("survey: OUTPOST_SURVEYED publish failed", exc_info=True)
 
     # ------------------------------------------------------------------ #
     #  Contract persistence
