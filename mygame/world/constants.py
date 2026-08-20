@@ -95,6 +95,24 @@ WEAPON_SLOT_BY_TYPE = {
     "ranged": "weapon_ranged",
 }
 
+#: Human-readable labels for the equipment slots, for player-facing text
+#: (equip/unequip notifications, the paperdoll) — the raw keys read fine as
+#: command arguments (``unequip weapon_melee``) but not as prose.
+EQUIPMENT_SLOT_LABELS = {
+    "head": "head",
+    "eyes": "eyes",
+    "face": "face",
+    "torso": "torso",
+    "arms": "arms",
+    "hands": "hands",
+    "legs": "legs",
+    "feet": "feet",
+    "back": "back",
+    "weapon_melee": "melee weapon",
+    "weapon_ranged": "ranged weapon",
+    "accessory": "accessory",
+}
+
 #: Item categories stored as unique Game_Item objects in ``db.equipment_slots``
 #: (one per slot).
 GEAR_CATEGORIES = ("armor", "weapon", "accessory")

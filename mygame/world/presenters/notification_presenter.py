@@ -245,14 +245,22 @@ def _fmt_ability_available(d: dict) -> str:
 # --------------------------------------------------------------------------- #
 
 
+def _slot_label(slot) -> str:
+    from world.constants import EQUIPMENT_SLOT_LABELS
+    return EQUIPMENT_SLOT_LABELS.get(slot, slot or "?")
+
+
 def _fmt_equipped(d: dict) -> str:
-    return f"|g[Equip] Equipped {d.get('item_name', 'item')} in {d.get('slot', '?')}.|n"
+    return (
+        f"|g[Equip] Equipped {d.get('item_name', 'item')} "
+        f"({_slot_label(d.get('slot'))}).|n"
+    )
 
 
 def _fmt_unequipped(d: dict) -> str:
     return (
         f"|y[Equip] Unequipped {d.get('item_name', 'item')} "
-        f"from {d.get('slot', '?')}.|n"
+        f"({_slot_label(d.get('slot'))}).|n"
     )
 
 

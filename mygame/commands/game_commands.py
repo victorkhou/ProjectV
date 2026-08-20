@@ -3551,15 +3551,16 @@ class CmdEquipment(GameCommand):
             caller.msg("Equipment system unavailable.")
             return
 
-        from world.constants import EQUIPMENT_SLOTS
+        from world.constants import EQUIPMENT_SLOT_LABELS, EQUIPMENT_SLOTS
 
         lines = ["|wEquipment:|n"]
 
         # Paperdoll: iterate ALL slots, including empties.
         for slot in EQUIPMENT_SLOTS:
+            label = EQUIPMENT_SLOT_LABELS.get(slot, slot)
             item = handler.get_equipped(slot)
             if item is None:
-                lines.append(f"  [{slot}] (empty)")
+                lines.append(f"  [{label}] (empty)")
                 continue
 
             item_name = _gear_display_name(item, caller)
@@ -3568,9 +3569,9 @@ class CmdEquipment(GameCommand):
                 mod_str = ", ".join(
                     f"{k}: +{v}" for k, v in mods.items() if v
                 )
-                line = f"  [{slot}] {item_name} ({mod_str})"
+                line = f"  [{label}] {item_name} ({mod_str})"
             else:
-                line = f"  [{slot}] {item_name}"
+                line = f"  [{label}] {item_name}"
 
             # Show the ammunition count for an equipped ranged weapon.
             if slot == "weapon_ranged":
