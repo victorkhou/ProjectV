@@ -158,9 +158,10 @@ automatically by `evennia --initmissing`.
   share one `GameItem` typeclass, differentiated by YAML slot/stat data).
   Turrets auto-attack in range. Defeats award/deduct Combat XP.
 - **Equipment & supplies.** Items fall into six categories. Three are **Gear**
-  (`armor`, `weapon`, `accessory`) — unique objects `equip`ped into one of eleven
-  body slots (`head`, `eyes`, `face`, `torso`, `arms`, `hands`, `legs`, `feet`,
-  `back`, `weapon`, `accessory`), whose stats aggregate across every slot
+  (`armor`, `weapon`, `accessory`) — unique objects `equip`ped into one of twelve
+  equipment slots (`head`, `eyes`, `face`, `torso`, `arms`, `hands`, `legs`,
+  `feet`, `back`, `weapon_melee`, `weapon_ranged`, `accessory`), whose stats
+  aggregate across every slot
   (armor, damage bonus, move speed, sight range, carry capacity). Three are
   **Supplies** (`ammo`, `consumable`, `throwable`) — fungible counted stacks held
   in a Supply bag. `use` a consumable to heal or apply a timed buff; `throw` a
@@ -207,7 +208,7 @@ automatically by `evennia --initmissing`.
 | `leave` | `out` `outside` | Step outside the building you're in |
 | `closeexit` / `openexit` | | Close / open a building exit |
 | `attack <target>` | `at` `a` | Attack a player, building, or NPC |
-| `equip` / `unequip` | `eq` `gear` | Equip/remove Gear into one of the 11 body slots |
+| `equip` / `unequip` | `eq` `gear` | Equip/remove Gear into one of the 12 equipment slots |
 | `use <item>` | | Use a consumable from your supplies (medkit heals, stim buffs) |
 | `throw <item> <target\|x y>` | | Throw a throwable (grenade) at a target or coordinates |
 | `reload` | | Reload your equipped ranged weapon from carried ammo |
@@ -218,7 +219,7 @@ automatically by `evennia --initmissing`.
 | `research <tech>` | `re` | Research a technology at a Lab |
 | `technology` | `tech` | View the tech tree |
 | `powerup` | `pu` | Activate / view powerups |
-| `equipment` | | Paperdoll: all 11 equipment slots, per-slot stats + totals |
+| `equipment` | | Paperdoll: all 12 equipment slots, per-slot stats + totals |
 | `buildings` | `bl` | List your buildings |
 | `score` | `status` `st` `sc` | Show your stats, rank, and resources |
 | `stop` | `cancel` | Cancel your current action |

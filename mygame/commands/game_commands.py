@@ -1463,17 +1463,18 @@ class CmdAttack(GameCommand):
       attack turret
 
     Notes:
-      Aliases: at, a. You can attack a target within your reach — the greater
-      of your view ('scan' range) and your weapon's range, so a long-range
-      weapon can hit a foe beyond sight. The name matches the nearest such foe.
-      Damage is your equipped weapon's power plus bonuses, minus the target's
-      armor. Melee weapons reach any of the 8 adjacent tiles (including
-      diagonals); ranged weapons reach further and fire from a loaded magazine
-      (see 'reload').
-      Equip a weapon first with 'equip'. Friendly fire is allowed — you can
-      attack your own buildings and agents, but it grants no XP and still puts
-      you in combat. Any attack puts you 'in combat' briefly (see 'score').
-      See 'help combat'.
+      Aliases: at, a. This command always uses the item in
+      |cweapon_melee|n. Mobile targets (players, agents, and enemies) must be
+      on your same tile; buildings may be struck from an adjacent tile. The
+      target name is searched among nearby visible entities, then the combat
+      engine enforces melee reach. Damage is that melee weapon's power plus
+      shared gear bonuses and its own affixes, minus the target's armor; your
+      equipped ranged weapon does not add to the hit.
+      For ranged combat use |wtarget|n and |wshoot|n with a weapon in
+      |cweapon_ranged|n. Equip weapons first with 'equip'. Friendly fire is
+      allowed — you can attack your own buildings and agents, but it grants no
+      XP and still puts you in combat. Any attack puts you 'in combat' briefly
+      (see 'score'). See 'help combat'.
     """
 
     key = "attack"
@@ -1502,9 +1503,9 @@ class CmdAttack(GameCommand):
 
         # A player's direct attack resolves INSTANTLY (not tick-queued), gated by
         # a wall-clock cooldown instead of the 1-second tick. Check the cooldown
-        # BEFORE resolving so a rejected attack consumes no ammo. (Turrets/guards/
-        # locked-tracking shots still queue via queue_attack — the tick delay is
-        # their dodge window.)
+        # BEFORE resolving so a rejected attack consumes no ammo. Automated
+        # turret/guard attacks still queue; both direct and locked player shots
+        # resolve immediately and share this cooldown gate.
         ready, wait = _instant_attack_gate(self.caller, combat_engine)
         if not ready:
             self.caller.msg(f"Weapon not ready — {wait:.1f}s until you can attack again.")
@@ -1757,8 +1758,8 @@ class CmdShoot(GameCommand):
                 return
         # A directional shot resolves INSTANTLY (not tick-queued), gated by the
         # wall-clock cooldown. Gate AFTER target resolution so an empty line of
-        # fire doesn't burn the cooldown. A LOCKED tracking shot (_shoot_locked)
-        # deliberately stays tick-queued and is NOT cooldown-gated.
+        # fire doesn't burn the cooldown. Locked tracking shots use the same
+        # immediate resolution and cooldown path in ``_shoot_locked``.
         ready, wait = _instant_attack_gate(caller, combat_engine, weapon=weapon)
         if not ready:
             caller.msg(f"Weapon not ready — {wait:.1f}s until you can fire again.")
@@ -1866,12 +1867,12 @@ class CmdUnequip(GameCommand):
               (e.g. "assault" for "Assault Rifle").
       <slot>  or the slot to clear directly. One of:
               head, eyes, face, torso, arms, hands, legs, feet, back,
-              weapon, accessory
+              weapon_melee, weapon_ranged, accessory
       all     take off everything you have equipped.
 
     Examples:
       unequip assault
-      unequip weapon
+      unequip weapon_ranged
       unequip head
       unequip all
 
@@ -1937,8 +1938,8 @@ class CmdUnequip(GameCommand):
 def _resolve_unequip_slot(caller, arg):
     """Resolve an ``unequip`` argument to an occupied equipment slot.
 
-    Accepts either a canonical slot name (``weapon``, ``head``, …) or the name
-    of an equipped item — full or a partial prefix (``assault`` → "Assault
+    Accepts either a canonical slot name (``weapon_melee``,
+    ``weapon_ranged``, ``head``, …) or the name of an equipped item — full or a partial prefix (``assault`` → "Assault
     Rifle"), matching the leniency of ``equip``'s ``caller.search``. Returns:
 
     * the slot string to clear (a single unambiguous match),
@@ -2588,6 +2589,7 @@ class CmdInsert(GameCommand):
       [weapon]       which equipped weapon to modify. Optional if you only
                      have one weapon equipped; required to pick between a
                      melee and a ranged weapon equipped at the same time.
+                     Exact names/keys win; a prefix must match only one.
 
     Examples:
       insert venom_coating
@@ -3187,6 +3189,50 @@ def _gear_display_name(item, looker=None):
     return getattr(item, "key", str(item))
 
 
+def _gear_stat(item, stat_name):
+    """Read an effective item stat for command displays."""
+    getter = getattr(item, "get_stat", None)
+    if callable(getter):
+        try:
+            return float(getter(stat_name, 0))
+        except (TypeError, ValueError):
+            return 0.0
+    modifiers = getattr(item, "stat_modifiers", None)
+    if isinstance(modifiers, dict):
+        try:
+            return float(modifiers.get(stat_name, 0) or 0)
+        except (TypeError, ValueError):
+            return 0.0
+    return 0.0
+
+
+def _equipment_damage_summary(handler):
+    """Return shared bonus and effective totals for each equipped weapon.
+
+    Each total is the selected weapon's effective ``damage`` plus non-weapon
+    ``damage_bonus`` and that weapon's own bonus. The other weapon is excluded,
+    matching combat's command-scoped melee/ranged selection.
+    """
+    scoped_total = getattr(handler, "get_attack_stat_total", None)
+    if not callable(scoped_total):
+        return 0.0, []
+
+    shared_bonus = float(scoped_total("damage_bonus", active_weapon=None))
+    weapon_totals = []
+    for slot, label in (
+        ("weapon_melee", "Melee damage"),
+        ("weapon_ranged", "Ranged damage"),
+    ):
+        weapon = handler.get_equipped(slot)
+        if weapon is None:
+            continue
+        total = _gear_stat(weapon, "damage") + float(
+            scoped_total("damage_bonus", active_weapon=weapon)
+        )
+        weapon_totals.append((label, total))
+    return shared_bonus, weapon_totals
+
+
 def _append_carried_gear_section(caller, lines):
     """Append a ``Carried gear:`` section (loose, unequipped Gear) to *lines*.
 
@@ -3380,17 +3426,26 @@ class CmdScore(GameCommand):
                     for slot, item in equipped.items()
                 }))
 
-            # Aggregated equipment stat totals (only non-zero, to stay clean).
+            # Passive all-slot totals plus attack-scoped damage. Weapon base
+            # damage is not additive across melee/ranged slots, so report each
+            # weapon's effective pre-mitigation value separately.
             totals = [
                 ("Armor", handler.get_stat_total("damage_reduction")),
-                ("Damage",
-                 handler.get_stat_total("damage_bonus")
-                 + handler.get_stat_total("damage")),
                 ("Move speed", handler.get_stat_total("move_speed")),
                 ("Sight range", handler.get_stat_total("sight_range")),
                 ("Max HP", handler.get_stat_total("max_hp")),
             ]
-            total_rows = [(label, f"+{value:.0f}") for label, value in totals if value]
+            total_rows = [
+                (label, f"+{value:.0f}") for label, value in totals if value
+            ]
+            shared_bonus, weapon_totals = _equipment_damage_summary(handler)
+            if shared_bonus:
+                total_rows.append(
+                    ("Shared damage bonus", f"{shared_bonus:+.0f}")
+                )
+            total_rows.extend(
+                (label, f"{value:.0f}") for label, value in weapon_totals
+            )
             if total_rows:
                 lines.extend(format_section("Equipment totals", total_rows))
 
@@ -3472,8 +3527,8 @@ class CmdEquipment(GameCommand):
     Notes:
       Aliases: eq, gear. Lists all twelve slots (empties included, including
       separate melee and ranged weapon slots), each item's stat bonuses, your
-      ranged weapon's loaded/magazine count, and combined totals for armor,
-      damage, move speed, and sight range (plus max HP when gear grants it).
+      ranged weapon's loaded/magazine count, passive totals, the shared
+      non-weapon damage bonus, and separate effective melee/ranged damage.
       To put gear on use 'equip <item>'; to take it off use 'unequip <item>'.
       See 'help equipment'.
     """
@@ -3518,15 +3573,17 @@ class CmdEquipment(GameCommand):
 
             lines.append(line)
 
-        # Aggregated stat totals.
+        # Passive all-slot totals and attack-scoped weapon damage.
         lines.append("  ---")
-        damage = handler.get_stat_total("damage_bonus") + handler.get_stat_total("damage")
         armor = handler.get_stat_total("damage_reduction")
         move = handler.get_stat_total("move_speed")
         sight = handler.get_stat_total("sight_range")
         max_hp = handler.get_stat_total("max_hp")
+        shared_bonus, weapon_totals = _equipment_damage_summary(handler)
         lines.append(f"  Armor (damage_reduction): +{armor:.0f}")
-        lines.append(f"  Damage: +{damage:.0f}")
+        lines.append(f"  Shared damage bonus: {shared_bonus:+.0f}")
+        for label, value in weapon_totals:
+            lines.append(f"  {label}: {value:.0f}")
         lines.append(f"  Move speed: +{move:.0f}")
         lines.append(f"  Sight range: +{sight:.0f}")
         # Max HP shows only when gear grants it (the common case is none).

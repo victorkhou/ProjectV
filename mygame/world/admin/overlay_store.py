@@ -96,7 +96,7 @@ class OverlayStore:
         if not os.path.isfile(path):
             return {}
         try:
-            with open(path, "r") as f:
+            with open(path, "r", encoding="utf-8") as f:
                 raw = yaml.safe_load(f)
         except Exception as exc:
             raise OverlayStoreError(
@@ -118,12 +118,17 @@ class OverlayStore:
         path = self.overlay_path
         directory = os.path.dirname(path) or "."
         os.makedirs(directory, exist_ok=True)
-        body = yaml.safe_dump(overlay, default_flow_style=False, sort_keys=True)
+        body = yaml.safe_dump(
+            overlay,
+            allow_unicode=True,
+            default_flow_style=False,
+            sort_keys=True,
+        )
         fd, tmp_path = tempfile.mkstemp(
             prefix=".definitions_overrides.", suffix=".tmp", dir=directory
         )
         try:
-            with os.fdopen(fd, "w") as f:
+            with os.fdopen(fd, "w", encoding="utf-8") as f:
                 f.write(_HEADER)
                 f.write(body)
                 f.flush()

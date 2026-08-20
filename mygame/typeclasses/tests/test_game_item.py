@@ -178,6 +178,58 @@ class TestGameItemAccessorValues(unittest.TestCase):
         self.assertEqual(item.effect["radius"], 2)
 
 
+class TestLegacyWeaponSlotMigration(unittest.TestCase):
+    """A loose or ground legacy GameItem repairs itself on slot access."""
+
+    def test_loose_ranged_item_migrates_in_place_and_preserves_state(self):
+        affixes = [{"stat": "damage_bonus", "magnitude": 3}]
+        inserts = [{"type": "damage_type", "value": "fire"}]
+        rolled_stats = {"damage": 28.5}
+        item = _make_item(
+            key="old_rifle",
+            slot="weapon",
+            category="weapon",
+            weapon_type="ranged",
+            loaded=11,
+            rolled_stats=rolled_stats,
+            rarity="rare",
+            affixes=affixes,
+            inserts=inserts,
+            damage_type="fire",
+        )
+
+        self.assertEqual(item.slot, "weapon_ranged")
+        self.assertEqual(
+            item.attributes.get("slot", default=""), "weapon_ranged"
+        )
+        self.assertEqual(item.attributes.get("loaded", default=0), 11)
+        self.assertIs(item.attributes.get("rolled_stats", default=None), rolled_stats)
+        self.assertIs(item.attributes.get("affixes", default=None), affixes)
+        self.assertIs(item.attributes.get("inserts", default=None), inserts)
+        self.assertEqual(item.attributes.get("rarity", default=None), "rare")
+        self.assertEqual(item.damage_type, "fire")
+
+        # A second read is a no-op and returns the persisted canonical value.
+        self.assertEqual(item.slot, "weapon_ranged")
+
+    def test_untyped_legacy_item_defaults_to_melee_and_records_type(self):
+        item = _make_item(key="old_baton", slot="weapon", category="weapon")
+
+        self.assertEqual(item.slot, "weapon_melee")
+        self.assertEqual(item.weapon_type, "melee")
+
+    def test_untyped_legacy_item_uses_ranged_magazine_hint(self):
+        item = _make_item(
+            key="old_rifle",
+            slot="weapon",
+            category="weapon",
+            magazine_size=30,
+        )
+
+        self.assertEqual(item.slot, "weapon_ranged")
+        self.assertEqual(item.weapon_type, "ranged")
+
+
 # -------------------------------------------------------------- #
 #  Tests: per-instance roll storage + get_stat preference
 #  (item-loot-economy task 1.3 — Requirements 1.2, 12.1)
@@ -246,7 +298,9 @@ class TestRolledStatStorage(unittest.TestCase):
 
         weapon = _make_item(
             key="rifle",
-            slot="weapon",
+            slot="weapon_ranged",
+            category="weapon",
+            weapon_type="ranged",
             stat_modifiers={"damage": 25},
             rolled_stats={"damage": 31.5},
         )
@@ -344,7 +398,9 @@ class TestAffixStatContribution(unittest.TestCase):
 
         weapon = _make_item(
             key="rifle",
-            slot="weapon",
+            slot="weapon_ranged",
+            category="weapon",
+            weapon_type="ranged",
             stat_modifiers={"damage": 25},
             affixes=[{"key": "warding_f", "stat": "fire_resist",
                       "magnitude": 4}],
@@ -410,15 +466,20 @@ class TestDamageTypeAccessor(unittest.TestCase):
 
     def test_def_damage_type_falls_through(self):
         """A shipped typed weapon (def-level damage_type) reads its type."""
-        idef = ItemDef(key="incendiary_rifle", name="Incendiary Rifle",
-                       slot="weapon", category="weapon", damage_type="fire")
+        idef = ItemDef(
+            key="incendiary_rifle", name="Incendiary Rifle",
+            slot="weapon_ranged", category="weapon", weapon_type="ranged",
+            damage_type="fire",
+        )
         item = _make_item_with_def(idef)
         self.assertEqual(item.damage_type, "fire")
 
     def test_instance_override_beats_def(self):
         """An insert conversion (db.damage_type) overrides the def."""
-        idef = ItemDef(key="assault_rifle", name="Assault Rifle",
-                       slot="weapon", category="weapon")  # physical def
+        idef = ItemDef(
+            key="assault_rifle", name="Assault Rifle",
+            slot="weapon_ranged", category="weapon", weapon_type="ranged",
+        )  # physical def
         item = _make_item_with_def(idef, damage_type="poison")
         self.assertEqual(item.damage_type, "poison")
 
@@ -516,7 +577,8 @@ class TestRollInspectDetails(unittest.TestCase):
 
     def _rifle_def(self):
         return ItemDef(
-            key="assault_rifle", name="Assault Rifle", slot="weapon",
+            key="assault_rifle", name="Assault Rifle", slot="weapon_ranged",
+            category="weapon", weapon_type="ranged",
             stat_modifiers={"damage": 25, "range": 5},
             roll_spec=self.ROLL_SPEC,
         )
@@ -613,7 +675,7 @@ class TestCreationFactoryFieldCopy(unittest.TestCase):
         item_def = ItemDef(
             key="assault_rifle",
             name="Assault Rifle",
-            slot="weapon",
+            slot="weapon_ranged",
             category="weapon",
             stat_modifiers={"damage": 25, "range": 3},
             weapon_type="ranged",

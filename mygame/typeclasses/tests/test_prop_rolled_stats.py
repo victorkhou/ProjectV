@@ -106,7 +106,10 @@ def unrolled_item_def_strategy(draw):
         ),
         max_size=4,
     ))
-    return ItemDef(key=key, name=key, slot="weapon", stat_modifiers=stats)
+    return ItemDef(
+        key=key, name=key, slot="weapon_ranged", category="weapon",
+        weapon_type="ranged", stat_modifiers=stats,
+    )
 
 
 def _spawn_unrolled(item_def: ItemDef) -> GameItem:

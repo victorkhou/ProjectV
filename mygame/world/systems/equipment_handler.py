@@ -8,6 +8,8 @@ Adapted from EvAdventure's EquipmentHandler pattern.
 
 from __future__ import annotations
 
+from world.constants import LEGACY_WEAPON_SLOT, WEAPON_SLOT_BY_TYPE
+from world.equipment_slots import weapon_slot_for_item
 from world.utils import coords_of
 
 
@@ -30,18 +32,118 @@ class EquipmentHandler:
     # ------------------------------------------------------------------ #
 
     def _get_slots(self) -> dict:
-        """Return the current equipment slots dict."""
-        # Try Evennia Attribute first
+        """Return slots, lazily migrating the persisted singular weapon key.
+
+        Older characters store an item under ``equipment_slots["weapon"]``.
+        Re-key that same object according to its persisted ``weapon_type`` and
+        update the item's own slot Attribute. If the destination is already
+        occupied, the canonical entry wins and the legacy item simply becomes
+        loose inventory (its location is already the character), so no item or
+        per-instance state is destroyed. Re-reading is idempotent.
+        """
+        slots = None
         if hasattr(self.character, "attributes") and hasattr(
             self.character.attributes, "get"
         ):
             slots = self.character.attributes.get("equipment_slots", default=None)
-            if slots is not None:
-                return dict(slots)
-        # Fallback for testing: use a plain dict on the character
-        if not hasattr(self.character, "_equipment_slots"):
-            self.character._equipment_slots = {}
-        return self.character._equipment_slots
+        if slots is None:
+            if not hasattr(self.character, "_equipment_slots"):
+                self.character._equipment_slots = {}
+            slots = self.character._equipment_slots
+
+        slots = dict(slots)
+        changed = False
+        canonical_slots = frozenset(WEAPON_SLOT_BY_TYPE.values())
+        weapon_keys = canonical_slots | {LEGACY_WEAPON_SLOT}
+        moves = []
+
+        # First canonicalize every weapon-keyed item and PLAN map-key repairs
+        # without mutating ``slots``. Planning lets reciprocal partial
+        # migrations swap destinations instead of treating the not-yet-moved
+        # peer as a real collision. A correctly occupied destination still wins.
+        for mapping_slot, item in tuple(slots.items()):
+            # Only the legacy key and the two canonical weapon keys can be
+            # re-keyed by the split, so armor/accessory keys are skipped
+            # outright. That keeps this read path (called per attack and per
+            # damage calculation) from touching every equipped item's
+            # Attributes, and avoids half-repairing an item parked under an
+            # unrelated key by rewriting its slot without moving it.
+            if mapping_slot not in weapon_keys:
+                continue
+            if item is None:
+                if mapping_slot == LEGACY_WEAPON_SLOT:
+                    moves.append((1, mapping_slot, None, None))
+                continue
+
+            before = self._raw_item_slot(item)
+            after = weapon_slot_for_item(item, stored_slot=before)
+            changed = changed or (
+                before == LEGACY_WEAPON_SLOT and after != before
+            )
+
+            if mapping_slot == LEGACY_WEAPON_SLOT:
+                if after in canonical_slots:
+                    destination = after
+                else:
+                    # The persisted map key itself proves this is a weapon,
+                    # even if a very old item has no usable slot Attribute.
+                    destination = weapon_slot_for_item(
+                        item, stored_slot=LEGACY_WEAPON_SLOT
+                    )
+                # Canonical-key repairs take precedence over the singular
+                # legacy-key item when both claim the same empty destination.
+                moves.append((1, mapping_slot, item, destination))
+            elif (
+                mapping_slot in canonical_slots
+                and after in canonical_slots
+                and mapping_slot != after
+            ):
+                moves.append((0, mapping_slot, item, after))
+
+        # Remove every stale source before filling destinations. This is what
+        # makes a reciprocal melee/ranged mismatch a lossless swap.
+        for _priority, source, _item, _destination in moves:
+            slots.pop(source, None)
+            changed = True
+
+        for _priority, _source, item, destination in sorted(
+            moves, key=lambda move: move[0]
+        ):
+            if item is None or destination is None:
+                continue
+            if slots.get(destination) is None:
+                slots[destination] = item
+            # Otherwise the occupant that remained at its canonical
+            # destination wins; this migrated object stays loose inventory.
+
+        if changed:
+            self._set_slots(slots)
+        return slots
+
+    @staticmethod
+    def _raw_item_slot(item) -> str:
+        """Read an item's stored slot without triggering GameItem migration.
+
+        Never raises. A stale reference to a deleted object (``pk is None``)
+        can raise from its Attribute handler, and this runs on every equipment
+        read — including mid-combat armor and weapon lookups — so an unreadable
+        item is reported as slot-less and left untouched by the migration
+        instead of breaking the read.
+        """
+        if isinstance(item, dict):
+            return str(item.get("slot", "") or "")
+        try:
+            if getattr(item, "pk", "unset") is None:
+                return ""
+            attributes = getattr(item, "attributes", None)
+            if attributes is not None and hasattr(attributes, "get"):
+                try:
+                    return str(attributes.get("slot", default="") or "")
+                except TypeError:
+                    return str(attributes.get("slot", "") or "")
+            return str(getattr(item, "slot", "") or "")
+        except Exception:  # noqa: BLE001 - a stale item must not break reads
+            return ""
 
     def _set_slots(self, slots: dict) -> None:
         """Persist the equipment slots dict."""
@@ -98,13 +200,9 @@ class EquipmentHandler:
         Returns:
             Tuple of (success, message).
         """
-        slot = getattr(item, "slot", None)
+        slot = weapon_slot_for_item(item)
         if not slot:
-            # Try reading from attributes for mock items
-            if hasattr(item, "attributes") and hasattr(item.attributes, "get"):
-                slot = item.attributes.get("slot", default=None)
-            if not slot:
-                return False, "Item has no equipment slot defined."
+            return False, "Item has no equipment slot defined."
 
         slots = self._get_slots()
 
@@ -207,23 +305,50 @@ class EquipmentHandler:
         slots = self._get_slots()
         return {k: v for k, v in slots.items() if v is not None}
 
+    @staticmethod
+    def _item_stat(item, stat_name: str) -> float:
+        """Read one numeric stat from a live item or lightweight fake."""
+        if hasattr(item, "get_stat"):
+            return float(item.get_stat(stat_name, 0))
+        if hasattr(item, "stat_modifiers"):
+            mods = item.stat_modifiers
+            if isinstance(mods, dict):
+                return float(mods.get(stat_name, 0))
+        if isinstance(item, dict):
+            mods = item.get("stat_modifiers", {})
+            if isinstance(mods, dict):
+                return float(mods.get(stat_name, 0))
+        return 0.0
+
     def get_stat_total(self, stat_name: str) -> float:
-        """Sum a stat across all equipped items.
+        """Sum a passive stat across all equipped items.
 
-        Args:
-            stat_name: The stat key to sum (e.g. "damage", "damage_reduction").
-
-        Returns:
-            The total value as a float.
+        Use :meth:`get_attack_stat_total` for an attack-scoped stat such as
+        ``damage_bonus``; this generic API deliberately retains its historical
+        all-slot behavior for armor, movement, sight, carrying, and callers
+        that explicitly need a paper total.
         """
+        return sum(
+            self._item_stat(item, stat_name)
+            for item in self.get_all_equipped().values()
+        )
+
+    def get_attack_stat_total(self, stat_name: str, active_weapon=None) -> float:
+        """Sum an attack stat without leaking the other weapon slot.
+
+        Non-weapon gear always contributes. Of the two canonical weapon slots,
+        only *active_weapon* contributes, identified by object identity. Passing
+        ``None`` therefore returns the shared non-weapon contribution. This
+        models command-scoped weapon use: ``attack`` supplies the melee item and
+        ``shoot`` supplies the ranged item; there is no mutable global active
+        weapon state.
+        """
+        weapon_slots = frozenset(WEAPON_SLOT_BY_TYPE.values())
         total = 0.0
-        for item in self.get_all_equipped().values():
-            if hasattr(item, "get_stat"):
-                total += item.get_stat(stat_name, 0)
-            elif hasattr(item, "stat_modifiers"):
-                mods = item.stat_modifiers
-                if isinstance(mods, dict):
-                    total += float(mods.get(stat_name, 0))
+        for slot, item in self.get_all_equipped().items():
+            if slot in weapon_slots and item is not active_weapon:
+                continue
+            total += self._item_stat(item, stat_name)
         return total
 
     def get_slot_names(self) -> list[str]:

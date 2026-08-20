@@ -70,6 +70,24 @@ class TestTransition(unittest.TestCase):
         self.assertIn((PLAYER_STATE_LOBBY, PLAYER_STATE_PLAYING, "enter"),
                       sink.events)
 
+    def test_lobby_may_return_to_spawning_for_invalidated_spawn(self):
+        bus, sink = _bus_with_sink()
+        p = _Player(state=PLAYER_STATE_LOBBY)
+
+        self.assertTrue(
+            pl.transition(
+                p,
+                PLAYER_STATE_SPAWNING,
+                reason="spawn_unavailable",
+                event_bus=bus,
+            )
+        )
+        self.assertEqual(p.db.player_state, PLAYER_STATE_SPAWNING)
+        self.assertIn(
+            (PLAYER_STATE_LOBBY, PLAYER_STATE_SPAWNING, "spawn_unavailable"),
+            sink.events,
+        )
+
     def test_illegal_edge_rejected(self):
         bus, sink = _bus_with_sink()
         # spawning -> playing is NOT a declared edge (must go via lobby).

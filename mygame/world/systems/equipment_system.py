@@ -29,9 +29,11 @@ from world.constants import (
     EQUIPMENT_SLOTS,
     GEAR_CATEGORIES,
     SUPPLY_CATEGORIES,
+    WEAPON_SLOT_BY_TYPE,
 )
 from world.data_registry import DataRegistry
 from world.definitions import ItemDef
+from world.equipment_slots import weapon_slot_for_item
 from world.event_bus import EventBus
 from world.systems.base_system import BaseSystem
 from world.systems.equipment_carry import CarryWeightMixin
@@ -647,9 +649,10 @@ class EquipmentSystem(CarryWeightMixin, StorageMixin, BaseSystem):
 
         The use-case mediates the raw :class:`EquipmentHandler` store:
 
-        1. Reject an item whose ``slot`` is not one of the canonical
-           :data:`~world.constants.EQUIPMENT_SLOTS` (defensive — content is
-           also slot-validated at load).
+        1. Lazily migrate the legacy singular ``weapon`` slot, then reject an
+           item whose canonical slot is not in
+           :data:`~world.constants.EQUIPMENT_SLOTS` or does not match its
+           weapon category/type.
         2. If the item declares a ``required_rank``, permit the equip only
            when the player's current rank is at least that rank. The rank name
            is resolved to a rank level via the registry rank table (the same
@@ -671,11 +674,19 @@ class EquipmentSystem(CarryWeightMixin, StorageMixin, BaseSystem):
         """
         item_name = self._item_name(item)
 
-        # 1. Slot gate — reject items whose slot is not canonical.
-        slot = self._item_attr(item, "slot", "")
+        # 1. Compatibility + slot gate. Migrate persisted singular weapon
+        # slots before enforcing the same category/type pairing as the schema.
+        slot = weapon_slot_for_item(item)
         if slot not in EQUIPMENT_SLOTS:
             logger.info(
                 "Rejected equip of %s: slot %r not in EQUIPMENT_SLOTS",
+                item_name, slot,
+            )
+            return False
+        if not self._item_matches_slot(item, slot):
+            logger.info(
+                "Rejected equip of %s: category/weapon_type does not match "
+                "slot %r",
                 item_name, slot,
             )
             return False
@@ -750,7 +761,7 @@ class EquipmentSystem(CarryWeightMixin, StorageMixin, BaseSystem):
         filled: set[str] = set(handler.get_all_equipped().keys())
         count = 0
         for item in loose_items:
-            slot = self._item_attr(item, "slot", "")
+            slot = weapon_slot_for_item(item)
             if not slot or slot in filled:
                 continue
             if self.equip(player, item):
@@ -1186,10 +1197,10 @@ class EquipmentSystem(CarryWeightMixin, StorageMixin, BaseSystem):
         7. ``no_weapon`` / ``weapon_not_equipped`` / ``ambiguous_weapon`` —
            an equipped weapon is required. With two weapon slots
            (``weapon_melee`` + ``weapon_ranged``), *weapon_token* picks which
-           one when both are equipped; if only one slot is filled that one is
-           used with no token needed; if both are filled and no token (or a
-           non-matching one) is given, the insert is refused as ambiguous
-           rather than guessing.
+           one when both are equipped. Exact names/keys beat prefix matches;
+           a prefix must identify exactly one equipped weapon. If both slots
+           are filled and no token is given, or the token is ambiguous, the
+           insert is refused before anything is consumed.
         8. ``no_slots`` — slot limit ``1 + blacksmith_level // 3`` (L1–2 →
            1 slot, L3+ → 2); over-limit is REFUSED with the weapon
            unchanged and the insert NOT consumed (design §4.3, R5.3).
@@ -1270,7 +1281,12 @@ class EquipmentSystem(CarryWeightMixin, StorageMixin, BaseSystem):
         can_get = handler is not None and hasattr(handler, "get_equipped")
         melee = handler.get_equipped("weapon_melee") if can_get else None
         ranged = handler.get_equipped("weapon_ranged") if can_get else None
-        equipped = [w for w in (melee, ranged) if w is not None]
+        equipped = []
+        for candidate in (melee, ranged):
+            if candidate is not None and not any(
+                candidate is existing for existing in equipped
+            ):
+                equipped.append(candidate)
 
         if not equipped:
             self.notify(player, "insert_failed", reason="no_weapon",
@@ -1278,15 +1294,28 @@ class EquipmentSystem(CarryWeightMixin, StorageMixin, BaseSystem):
             return False
 
         if weapon_token:
-            weapon = next(
-                (w for w in equipped if self._weapon_matches(w, weapon_token)),
-                None,
-            )
-            if weapon is None:
+            ranked = [
+                (self._weapon_match_rank(candidate, weapon_token), candidate)
+                for candidate in equipped
+            ]
+            best_rank = max((rank for rank, _candidate in ranked), default=0)
+            if best_rank == 0:
                 self.notify(player, "insert_failed",
                             reason="weapon_not_equipped",
                             item_name=item_name, weapon_name=weapon_token)
                 return False
+            matches = [
+                candidate for rank, candidate in ranked if rank == best_rank
+            ]
+            if len(matches) != 1:
+                self.notify(
+                    player, "insert_failed", reason="ambiguous_weapon",
+                    item_name=item_name,
+                    melee_name=self._item_name(melee),
+                    ranged_name=self._item_name(ranged),
+                )
+                return False
+            weapon = matches[0]
         elif len(equipped) == 1:
             weapon = equipped[0]
         else:
@@ -1391,28 +1420,42 @@ class EquipmentSystem(CarryWeightMixin, StorageMixin, BaseSystem):
         write_instance_field(weapon, "rolled_stats", rolled)
 
     @classmethod
-    def _weapon_matches(cls, weapon: Any, token: str) -> bool:
-        """Return True if *token* names the equipped *weapon* (lenient).
+    def _weapon_match_rank(cls, weapon: Any, token: str) -> int:
+        """Rank a weapon-name match: exact ``2``, prefix ``1``, none ``0``.
 
-        Case-, space- and underscore-insensitive against the weapon's
-        item_key, object key, and display name; a token that is a prefix
-        of the name also matches (``insert hollowpoint assault`` works).
+        Ranking one weapon at a time lets callers compare the complete equipped
+        set before choosing. In particular, an exact ranged match must beat a
+        melee prefix encountered first, and a prefix matching both slots must
+        remain ambiguous.
         """
         token_norm = " ".join(str(token).lower().replace("_", " ").split())
         if not token_norm:
-            return False
+            return 0
         candidates = (
             cls._item_attr(weapon, "item_key", None),
             getattr(weapon, "key", None),
             cls._item_name(weapon),
         )
-        for cand in candidates:
-            if not cand:
-                continue
-            cand_norm = " ".join(str(cand).lower().replace("_", " ").split())
-            if cand_norm == token_norm or cand_norm.startswith(token_norm):
-                return True
-        return False
+        normalised = {
+            " ".join(str(candidate).lower().replace("_", " ").split())
+            for candidate in candidates if candidate
+        }
+        if token_norm in normalised:
+            return 2
+        if any(candidate.startswith(token_norm) for candidate in normalised):
+            return 1
+        return 0
+
+    @classmethod
+    def _weapon_matches(cls, weapon: Any, token: str) -> bool:
+        """Return whether *token* exactly or prefix-matches *weapon*.
+
+        A single-item predicate cannot establish that a prefix is unique among
+        multiple candidates. It remains for reroll/salvage compatibility;
+        set-wide operations such as inserts compare :meth:`_weapon_match_rank`
+        across all candidates so exact-match priority and ambiguity are safe.
+        """
+        return cls._weapon_match_rank(weapon, token) > 0
 
     def _salvage_cost_multiplier(self, player: Any) -> float:
         """Resolve *player*'s economy cost-mult tech (R11.2, task 5.4).
@@ -2779,6 +2822,33 @@ class EquipmentSystem(CarryWeightMixin, StorageMixin, BaseSystem):
         hp = int(getattr(db, "hp", 0) or 0)
         hp_max = int(getattr(db, "hp_max", 0) or 0)
         return hp, hp_max
+
+    @classmethod
+    def _item_matches_slot(cls, item: Any, slot: str) -> bool:
+        """Return whether runtime item metadata is valid for *slot*.
+
+        Live content mirrors ``SchemaValidator``: weapon-category items need a
+        supported ``weapon_type`` and its matching split slot. Explicitly
+        non-weapon items may neither declare ``weapon_type`` nor occupy either
+        canonical weapon slot. Lightweight test doubles that omit ``category``
+        remain supported, but a type they do declare must still agree with the
+        slot.
+        """
+        category = cls._item_attr(item, "category", None)
+        raw_weapon_type = cls._item_attr(item, "weapon_type", None)
+        weapon_type = str(raw_weapon_type or "").strip().lower()
+        expected_slot = WEAPON_SLOT_BY_TYPE.get(weapon_type)
+        weapon_slots = frozenset(WEAPON_SLOT_BY_TYPE.values())
+
+        if slot in weapon_slots and category is not None and category != "weapon":
+            return False
+        if category == "weapon":
+            return expected_slot == slot
+        if category is not None and raw_weapon_type is not None:
+            return False
+        if expected_slot is not None:
+            return expected_slot == slot
+        return True
 
     @staticmethod
     def _item_attr(item: Any, name: str, default: Any = None) -> Any:

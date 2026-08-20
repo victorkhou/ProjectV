@@ -80,8 +80,10 @@ def _roll_spec(draw, with_craft=False):
 
 
 def _item(spec):
-    return ItemDef(key="test_item", name="Test Item", slot="weapon",
-                   category="weapon", roll_spec=spec)
+    return ItemDef(
+        key="test_item", name="Test Item", slot="weapon_ranged",
+        category="weapon", weapon_type="ranged", roll_spec=spec,
+    )
 
 
 # ------------------------------------------------------------------ #

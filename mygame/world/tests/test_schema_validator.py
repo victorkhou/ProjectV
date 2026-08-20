@@ -290,6 +290,18 @@ class TestValidateItems:
         errs = self.v.validate_items(data)
         assert any("melee weapon items must use slot 'weapon_melee'" in e for e in errs)
 
+    def test_nonweapon_categories_rejected_from_weapon_slots(self):
+        for category in (None, "armor", "accessory"):
+            for slot in ("weapon_melee", "weapon_ranged"):
+                label = category if category is not None else "default armor"
+                data = {
+                    "items": [make_valid_item(category=category, slot=slot)]
+                }
+                errs = self.v.validate_items(data)
+                assert any("reserved for weapon-category items" in e for e in errs), (
+                    f"{label} unexpectedly accepted in {slot}: {errs}"
+                )
+
     def test_accessory_in_body_slot_allowed(self):
         # Accessory/armor gear may occupy any body slot (e.g. scope in eyes).
         data = {

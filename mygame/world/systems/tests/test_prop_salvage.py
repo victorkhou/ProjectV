@@ -128,9 +128,10 @@ def _make_system(balance):
     registry = DataRegistry()
     registry.items = {
         "assault_rifle": ItemDef(
-            key="assault_rifle", name="Assault Rifle", slot="weapon",
-            category="weapon", stat_modifiers={"damage": 25, "range": 5},
-            weight=8.0),
+            key="assault_rifle", name="Assault Rifle", slot="weapon_ranged",
+            category="weapon", weapon_type="ranged",
+            stat_modifiers={"damage": 25, "range": 5}, weight=8.0,
+        ),
     }
     registry.buildings = {
         "BS": BuildingDef(

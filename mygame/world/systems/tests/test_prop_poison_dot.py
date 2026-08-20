@@ -86,7 +86,7 @@ class FakeEquipmentHandler:
         self._slots = {}
 
     def equip(self, item):
-        self._slots[getattr(item, "slot", "weapon")] = item
+        self._slots[getattr(item, "slot", "weapon_ranged")] = item
 
     def get_equipped(self, slot):
         return self._slots.get(slot)
@@ -100,7 +100,9 @@ class FakeEquipmentHandler:
 class FakeWeapon:
     def __init__(self, damage=25, damage_type="poison", key="venom_rifle"):
         self.key = key
-        self.slot = "weapon"
+        self.slot = "weapon_ranged"
+        self.category = "weapon"
+        self.weapon_type = "ranged"
         self.damage_type = damage_type
         self.stat_modifiers = {"damage": damage, "range": 3}
         self.ammo_cost = None

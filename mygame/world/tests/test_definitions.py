@@ -58,12 +58,13 @@ class TestBuildingDef:
 class TestItemDef:
     def test_weapon_item(self):
         i = ItemDef(
-            key="assault_rifle", name="Assault Rifle", slot="weapon",
+            key="assault_rifle", name="Assault Rifle", slot="weapon_ranged",
+            category="weapon", weapon_type="ranged",
             stat_modifiers={"damage": 25.0, "range": 3.0},
             ammo_cost={"iron": 1}, classification="modern",
             required_rank="Private",
         )
-        assert i.slot == "weapon"
+        assert i.slot == "weapon_ranged"
         assert i.stat_modifiers["damage"] == 25.0
         assert i.ammo_cost == {"iron": 1}
         assert i.required_rank == "Private"
@@ -83,7 +84,10 @@ class TestItemDef:
 
     def test_roll_spec_accepts_dict(self):
         spec = {"stats": {"damage": {"min": 18, "max": 30, "weight": 3}}}
-        i = ItemDef(key="rifle", name="Rifle", slot="weapon", roll_spec=spec)
+        i = ItemDef(
+            key="rifle", name="Rifle", slot="weapon_ranged",
+            category="weapon", weapon_type="ranged", roll_spec=spec,
+        )
         assert i.roll_spec == spec
 
     def test_insert_effect_defaults_to_none(self):
@@ -395,7 +399,10 @@ class TestDataclassContracts:
         b = BuildingDef("HQ", "HQ", {}, 500, False, None, "hq", None)
         assert isinstance(asdict(b), dict)
 
-        i = ItemDef("k", "n", "weapon")
+        i = ItemDef(
+            "k", "n", "weapon_ranged", category="weapon",
+            weapon_type="ranged",
+        )
         assert isinstance(asdict(i), dict)
 
         bc = BalanceConfig()

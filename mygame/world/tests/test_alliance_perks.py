@@ -191,7 +191,7 @@ class TestShallowIntegration(unittest.TestCase):
         forbidden = {"owner_has_active_hq", "active_hq_owner_ids"}
         for rel in _ALLIANCE_MODULES:
             path = os.path.join(root, rel)
-            with open(path) as f:
+            with open(path, encoding="utf-8") as f:
                 src = f.read()
             # Only NAME tokens count as real code references — comments/docstrings
             # (which legitimately mention these in the "stays shallow" prose) are

@@ -634,10 +634,11 @@ class BalanceConfig:
     #: weapon's ``accuracy`` stat modifier is added. Clamped to [0, 1].
     accuracy_directional: float = 0.7
     #: Default cooldown (WALL-CLOCK seconds) between a player's own instant
-    #: attacks — direct ``attack`` and directional ``shoot`` resolve immediately
-    #: (not tick-queued) and are throttled by this instead of the 1-second tick.
-    #: A weapon may override it with an ``attack_cooldown`` stat modifier. Does
-    #: NOT apply to turrets/guards/locked-tracking shots (those stay tick-queued).
+    #: attacks — direct ``attack``, directional ``shoot``, and locked-target
+    #: ``shoot`` resolve immediately (not tick-queued) and are throttled by this
+    #: instead of the 1-second tick. A weapon may override it with an
+    #: ``attack_cooldown`` stat modifier. Automated turret/guard attacks remain
+    #: tick-queued and do not use this wall-clock cooldown.
     attack_cooldown_seconds: float = 1.0
     #: Linkdead grace window (WALL-CLOCK seconds): when a PLAYING player drops
     #: their connection without ``quit``, their character stays a live combat

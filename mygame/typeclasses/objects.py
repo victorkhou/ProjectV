@@ -264,8 +264,13 @@ class GameItem(GameEntity):
 
     @property
     def slot(self) -> str:
-        """Return the equipment slot for this item."""
-        return self.attributes.get("slot", default="")
+        """Return the canonical equipment slot, lazily migrating old weapons."""
+        stored = self.attributes.get("slot", default="")
+        if stored == "weapon":
+            from world.equipment_slots import weapon_slot_for_item
+
+            return weapon_slot_for_item(self, stored_slot=stored)
+        return stored
 
     @property
     def stat_modifiers(self) -> dict[str, float]:

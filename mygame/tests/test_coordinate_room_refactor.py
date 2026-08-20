@@ -888,7 +888,7 @@ class TestCodeRemovalSmoke(unittest.TestCase):
                 if not fname.endswith(".py"):
                     continue
                 fpath = os.path.join(dir_path, fname)
-                with open(fpath, "r") as f:
+                with open(fpath, "r", encoding="utf-8") as f:
                     source = f.read()
                 # Allow docstring mentions but not actual imports
                 for line in source.splitlines():
@@ -914,7 +914,7 @@ class TestCodeRemovalSmoke(unittest.TestCase):
                 if not fname.endswith(".py"):
                     continue
                 fpath = os.path.join(dir_path, fname)
-                with open(fpath, "r") as f:
+                with open(fpath, "r", encoding="utf-8") as f:
                     source = f.read()
                 for line in source.splitlines():
                     stripped = line.strip()

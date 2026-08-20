@@ -85,6 +85,16 @@ EQUIPMENT_SLOTS = ("head", "eyes", "face", "torso", "arms", "hands",
                    "legs", "feet", "back", "weapon_melee", "weapon_ranged",
                    "accessory")
 
+#: Compatibility vocabulary for the pre-split equipment model. Persisted
+#: ``GameItem.slot`` attributes and character ``equipment_slots`` mappings may
+#: still contain ``weapon`` after an upgrade; runtime migration maps that key
+#: through this table without replacing the item object.
+LEGACY_WEAPON_SLOT = "weapon"
+WEAPON_SLOT_BY_TYPE = {
+    "melee": "weapon_melee",
+    "ranged": "weapon_ranged",
+}
+
 #: Item categories stored as unique Game_Item objects in ``db.equipment_slots``
 #: (one per slot).
 GEAR_CATEGORIES = ("armor", "weapon", "accessory")
@@ -376,9 +386,11 @@ PLAYER_STATE_TRANSITIONS = {
     # In spawning you pick class + location, then advance to the lobby; a
     # disconnect keeps you spawning (re-login resumes selection).
     PLAYER_STATE_SPAWNING: {PLAYER_STATE_LOBBY, PLAYER_STATE_SPAWNING},
-    # From the lobby you Enter (→ playing) or Quit (stay lobby); linger on
-    # disconnect.
-    PLAYER_STATE_LOBBY: {PLAYER_STATE_PLAYING, PLAYER_STATE_LOBBY},
+    # From the lobby you Enter (→ playing), return to spawning when a selected
+    # deployment target disappears, or Quit (stay lobby); linger on disconnect.
+    PLAYER_STATE_LOBBY: {
+        PLAYER_STATE_PLAYING, PLAYER_STATE_SPAWNING, PLAYER_STATE_LOBBY,
+    },
     # In game: quit → lobby, death → spawning, unclean drop → linkdead.
     PLAYER_STATE_PLAYING: {
         PLAYER_STATE_LOBBY, PLAYER_STATE_SPAWNING, PLAYER_STATE_LINKDEAD,

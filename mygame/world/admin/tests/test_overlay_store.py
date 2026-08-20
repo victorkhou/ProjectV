@@ -65,6 +65,19 @@ class TestSetResetDiffRoundTrips(OverlayStoreTestBase):
         fresh = OverlayStore(base_path=self.base_path)
         self.assertEqual(fresh.get("items", "rifle"), {"damage_max": 42})
 
+    def test_non_ascii_round_trip_uses_utf8(self):
+        key = "café_blaster"
+        value = "Crème brûlée — 火星"
+        self.store.set("items", key, "display_name", value)
+
+        with open(self.path, "rb") as f:
+            decoded = f.read().decode("utf-8")
+        self.assertIn(key, decoded)
+        self.assertIn(value, decoded)
+
+        fresh = OverlayStore(base_path=self.base_path)
+        self.assertEqual(fresh.get("items", key), {"display_name": value})
+
     def test_reset_field_removes_only_that_field(self):
         self.store.set("items", "rifle", "damage_max", 42)
         self.store.set("items", "rifle", "range", 7)

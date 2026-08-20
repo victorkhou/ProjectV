@@ -721,7 +721,9 @@ class _FakeRangedWeapon:
 
     def __init__(self, weapon_range=5):
         self.key = "test_rifle"
-        self.slot = "weapon"
+        self.slot = "weapon_ranged"
+        self.category = "weapon"
+        self.weapon_type = "ranged"
         self.stat_modifiers = {"damage": 20, "range": weapon_range}
 
 

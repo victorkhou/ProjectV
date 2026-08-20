@@ -120,7 +120,7 @@ class _Entity:
 class FakeWeapon:
     def __init__(self, damage, weapon_range, weapon_type="ranged", key="rifle"):
         self.key = key
-        self.slot = "weapon_melee"
+        self.slot = "weapon_ranged"
         self.weapon_type = weapon_type
         self.ammo_type = None
         self.ammo_cost = None
@@ -135,7 +135,10 @@ class FakeEquipment:
         self._weapon = weapon
 
     def get_equipped(self, slot):
-        return self._weapon if slot == "weapon_melee" else None
+        # A ranged weapon lives in weapon_ranged, so it is NOT returned for the
+        # melee slot — the ranged commands pass the weapon explicitly, exactly
+        # as CmdShoot does.
+        return self._weapon if slot == getattr(self._weapon, "slot", None) else None
 
     def get_stat_total(self, stat):
         return 0.0
@@ -399,7 +402,9 @@ class TestPvERaidLoop(unittest.TestCase):
         self.bus.subscribe(BASE_ELIMINATED, lambda **kw: eliminated.append(kw))
         xp_before = player.db.combat_xp
 
-        ok, msg = self.engine.queue_attack(player, hq)
+        # The ranged weapon is supplied explicitly, mirroring CmdShoot: the
+        # implicit engine lookup only ever resolves the melee slot.
+        ok, msg = self.engine.queue_attack(player, hq, weapon=weapon)
         self.assertTrue(ok, msg)
         self.engine.resolve_tick()
 

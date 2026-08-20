@@ -1045,9 +1045,9 @@ stored* and *which actions apply*:
 | `armor`, `weapon`, `accessory` | **Gear** | `db.equipment_slots` — one Game_Item per slot | `equip` / `unequip` |
 | `ammo`, `consumable`, `throwable` | **Supply** | `db.supplies: {item_key: count}` — fungible counted stacks | `reload` / `use` / `throw` |
 
-**Eleven canonical slots** (`EQUIPMENT_SLOTS` in `world/constants.py`):
+**Twelve canonical slots** (`EQUIPMENT_SLOTS` in `world/constants.py`):
 `head`, `eyes`, `face`, `torso`, `arms`, `hands`, `legs`, `feet`, `back`,
-`weapon`, `accessory`. Every slot can carry stat modifiers; `EquipmentHandler.get_stat_total(stat)`
+`weapon_melee`, `weapon_ranged`, `accessory`. Every slot can carry stat modifiers; `EquipmentHandler.get_stat_total(stat)`
 sums a stat across **all** equipped Gear. The combat engine already read target
 armor as `get_stat_total("damage_reduction")`, so the multi‑slot model needed
 **zero** damage‑formula change — the two additive combat touches are attacker

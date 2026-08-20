@@ -29,11 +29,11 @@ This document defines the requirements for an RTS-inspired combat overworld game
 - **Powerup**: A temporary combat buff unlocked at a specific Rank and activated by the Player_Character during combat.
 - **Combat_Engine**: The Evennia Script responsible for resolving real-time combat between Player_Characters and/or Buildings. It runs on a tick-based loop.
 - **Attack_Action**: A combat command issued by a Player_Character targeting another Player_Character or Building within range on the Overworld.
-- **GameItem**: A single unified typeclass extending Evennia's DefaultObject that represents any equippable or usable item. GameItems are differentiated entirely by their YAML-defined properties: slot (weapon, armor, gadget, consumable, etc.), stat_modifiers (damage, damage_reduction, sight_range, move_speed, etc.), ammo_cost (optional), classification, and required_rank. Adding a new item category requires only a new slot value and stat keys in YAML — no code changes.
-- **Equipment_Slot**: A named slot on a Player_Character's EquipmentHandler where a GameItem can be equipped (e.g., weapon, armor, gadget). Each slot holds at most one GameItem. The set of valid slots is defined in the item definitions YAML.
+- **GameItem**: A single unified typeclass extending Evennia's DefaultObject that represents any equippable or usable item. GameItems are differentiated by YAML-defined properties including category, canonical Gear slot (such as `weapon_melee`, `weapon_ranged`, or `torso`), stat modifiers, ammo fields, classification, and required rank. New definitions within the supported categories are data-driven; extending the category or slot vocabulary requires updating its validated constants.
+- **Equipment_Slot**: A canonical slot on a Player_Character's EquipmentHandler where a Gear GameItem can be equipped (for example, `weapon_melee`, `weapon_ranged`, `torso`, or `accessory`). Each slot holds at most one GameItem, and the valid set is defined by `EQUIPMENT_SLOTS`.
 - **EquipmentHandler**: A handler on the Player_Character that manages Equipment_Slots. Adapted from EvAdventure's pattern, it provides generic equip/unequip operations that work with any slot type.
 - **Health_Points (HP)**: A gauge trait representing the durability of a Player_Character or Building. When HP reaches zero, the entity is destroyed or defeated.
-- **Damage**: A numeric value subtracted from a target's HP when an Attack_Action resolves. Determined by the attacker's equipped GameItem in the weapon slot (via its stat_modifiers).
+- **Damage**: A numeric value subtracted from a target's HP when an Attack_Action resolves. Base damage comes from the equipped GameItem selected by the attack mode (`weapon_melee` for melee, `weapon_ranged` for ranged), plus shared non-weapon bonuses and that active weapon's modifiers.
 - **Range**: The maximum Tile distance (measured in coordinate units) at which an Attack_Action or Turret can engage a target.
 - **Game_Tick**: A recurring server-side interval (managed by an Evennia Script) during which the Combat_Engine resolves pending actions, Resource_Nodes produce resources, Equipment_Buildings generate equipment, and Building effects apply.
 - **Fog_of_War**: A visibility system that limits a Player_Character's view of the Overworld to Tiles within a defined sight range, hiding distant enemy positions and activities.
@@ -306,17 +306,17 @@ This document defines the requirements for an RTS-inspired combat overworld game
 
 ### Requirement 18: Data-Driven Item Definitions
 
-**User Story:** As a game designer, I want all item types (weapons, armor, gadgets, consumables) defined in a single external YAML file, so that I can add new item categories, adjust stats, or expand equipment options without changing code.
+**User Story:** As a game designer, I want all supported item types defined in a single external YAML file, so that I can add item definitions, adjust stats, or expand equipment options without changing code.
 
 #### Acceptance Criteria
 
 1. THE Data_Registry SHALL load item definitions from a YAML Definition_File at a configurable path (defaulting to `data/definitions/items.yaml`).
-2. EACH item definition SHALL specify: name (string), key (string identifier), slot (string identifying the Equipment_Slot, e.g., "weapon", "armor", "gadget", "consumable"), stat_modifiers (mapping of stat name to numeric value, e.g., damage, damage_reduction, sight_range, move_speed), ammo_cost (mapping of resource name to integer, or null), classification (string: "modern" or "futuristic"), required_rank (rank name string or null), and range (positive integer, for weapon-slot items).
+2. EACH item definition SHALL specify a name, key, and supported category. Gear (`armor`, `weapon`, or `accessory`) SHALL use a canonical `EQUIPMENT_SLOTS` value such as `weapon_melee`, `weapon_ranged`, or `torso`; Supplies SHALL not require a slot. Definitions MAY include numeric stat modifiers, ammo cost, classification, required rank, and range as appropriate to their category; weapon definitions SHALL also declare the matching melee/ranged `weapon_type`.
 3. THE item definitions SHALL be organized into two sections: a top-level list of all item definitions, and a production_map that maps producing building abbreviations (e.g., "AA", "AR") to lists of item keys that building can produce.
 4. WHEN the items Definition_File is loaded, THE Schema_Validator SHALL verify that each item definition conforms to the expected schema, that any required_rank references a valid rank name, that all item keys in production_map reference valid item definitions, and that all producing building abbreviations reference valid building definitions with category "equipment".
 5. WHEN the items Definition_File is missing, THE Data_Registry SHALL raise an error at startup.
 6. ALL game systems that reference item types SHALL read from the Data_Registry rather than hardcoded constants.
-7. ADDING a new item category SHALL require only a new slot value and corresponding stat_modifier keys in the YAML file, with no code changes to the GameItem typeclass or EquipmentHandler.
+7. ADDING an item definition within the supported category and slot vocabularies SHALL require only YAML data, with no code changes to the GameItem typeclass or EquipmentHandler.
 
 ### Requirement 19: Data-Driven Rank Definitions
 

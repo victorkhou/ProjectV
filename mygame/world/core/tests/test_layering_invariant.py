@@ -41,7 +41,7 @@ def _imported_modules(path: pathlib.Path):
     (module-level or inside a function), since even a lazy in-method import of
     Evennia into the core would violate the rule.
     """
-    tree = ast.parse(path.read_text(), filename=str(path))
+    tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
     for node in ast.walk(tree):
         yield from _import_targets(node)
 
@@ -99,7 +99,7 @@ class TestSystemsHaveNoModuleLevelEvennia:
     def test_no_module_level_evennia_import(self):
         violations = []
         for path in _iter_py_files(_SYSTEMS_DIR):
-            tree = ast.parse(path.read_text(), filename=str(path))
+            tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
             for node in tree.body:  # module-level statements only
                 for module, lineno in _import_targets(node):
                     if _matches_forbidden(module, ("evennia",)):

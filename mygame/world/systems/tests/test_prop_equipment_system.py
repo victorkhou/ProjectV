@@ -162,12 +162,12 @@ class FakeBuilding:
 SAMPLE_ITEMS = {
     # Gear
     "combat_knife": ItemDef(
-        key="combat_knife", name="Combat Knife", slot="weapon",
+        key="combat_knife", name="Combat Knife", slot="weapon_melee",
         category="weapon", weapon_type="melee",
         stat_modifiers={"damage": 10, "range": 1}, craft_cost={"Iron": 5},
     ),
     "assault_rifle": ItemDef(
-        key="assault_rifle", name="Assault Rifle", slot="weapon",
+        key="assault_rifle", name="Assault Rifle", slot="weapon_ranged",
         category="weapon", weapon_type="ranged", ammo_type="rifle_rounds",
         magazine_size=30, stat_modifiers={"damage": 25, "range": 3},
         craft_cost={"Iron": 25},
@@ -455,7 +455,9 @@ class _RolledGearStub:
     def __init__(self, key, state):
         self.key = key
         self.name = key
-        self.slot = "weapon"
+        self.slot = "weapon_ranged"
+        self.category = "weapon"
+        self.weapon_type = "ranged"
         self.stat_modifiers = {}
         self.required_rank = None
         for name, value in state.items():

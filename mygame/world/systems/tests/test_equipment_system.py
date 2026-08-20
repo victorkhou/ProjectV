@@ -89,12 +89,24 @@ class DB:
 class FakeItem:
     """Lightweight stand-in for an equippable GameItem (Gear)."""
 
-    def __init__(self, key, slot, stat_modifiers=None, required_rank=None):
+    def __init__(
+        self,
+        key,
+        slot,
+        stat_modifiers=None,
+        required_rank=None,
+        category=None,
+        weapon_type=None,
+    ):
         self.key = key
         self.name = key
         self.slot = slot
         self.stat_modifiers = stat_modifiers or {}
         self.required_rank = required_rank
+        if category is not None:
+            self.category = category
+        if weapon_type is not None:
+            self.weapon_type = weapon_type
 
     def get_stat(self, stat_name, default=0):
         return float(self.stat_modifiers.get(stat_name, default))
@@ -263,7 +275,8 @@ ITEMS = {
     # drop. TestDeathLoss equips these by key and only checked the stash before.
     "assault_rifle": ItemDef(
         key="assault_rifle", name="Assault Rifle", slot="weapon_ranged",
-        category="weapon", stat_modifiers={"damage": 25}, weight=8.0,
+        category="weapon", weapon_type="ranged",
+        stat_modifiers={"damage": 25}, weight=8.0,
     ),
     "kevlar_vest": ItemDef(
         key="kevlar_vest", name="Kevlar Vest", slot="torso", category="armor",
@@ -366,6 +379,75 @@ class TestEquip(unittest.TestCase):
         player = FakePlayer(level=60)
         item = FakeItem("junk", "pocket", {})
         self.assertFalse(system.equip(player, item))
+
+    def test_equip_migrates_legacy_weapon_before_slot_gate(self):
+        system, _, _ = _make_system()
+        player = FakePlayer(level=60)
+        item = FakeItem(
+            "old_rifle",
+            "weapon",
+            {"damage": 20},
+            category="weapon",
+            weapon_type="ranged",
+        )
+
+        self.assertTrue(system.equip(player, item))
+        self.assertEqual(item.slot, "weapon_ranged")
+        self.assertIs(player.equipment.get_equipped("weapon_ranged"), item)
+
+    def test_equip_rejects_weapon_type_slot_mismatch(self):
+        system, _, _ = _make_system()
+        player = FakePlayer(level=60)
+        item = FakeItem(
+            "rifle",
+            "weapon_melee",
+            category="weapon",
+            weapon_type="ranged",
+        )
+
+        self.assertFalse(system.equip(player, item))
+        self.assertEqual(player.equipment.get_all_equipped(), {})
+
+    def test_equip_rejects_weapon_category_without_type(self):
+        system, _, _ = _make_system()
+        player = FakePlayer(level=60)
+        item = FakeItem("mystery", "weapon_melee", category="weapon")
+
+        self.assertFalse(system.equip(player, item))
+
+    def test_equip_rejects_weapon_type_on_nonweapon_category(self):
+        system, _, _ = _make_system()
+        player = FakePlayer(level=60)
+        item = FakeItem(
+            "bad_vest", "weapon_ranged", category="armor", weapon_type="ranged"
+        )
+
+        self.assertFalse(system.equip(player, item))
+
+    def test_equip_rejects_untyped_nonweapons_from_weapon_slots(self):
+        for category in ("armor", "accessory"):
+            for slot in ("weapon_melee", "weapon_ranged"):
+                with self.subTest(category=category, slot=slot):
+                    system, _, _ = _make_system()
+                    player = FakePlayer(level=60)
+                    item = FakeItem("not_a_weapon", slot, category=category)
+
+                    self.assertFalse(system.equip(player, item))
+                    self.assertEqual(player.equipment.get_all_equipped(), {})
+
+    def test_categoryless_weapon_double_must_match_declared_type(self):
+        for slot, weapon_type, expected in (
+            ("weapon_melee", "melee", True),
+            ("weapon_ranged", "ranged", True),
+            ("weapon_melee", "ranged", False),
+            ("weapon_ranged", "melee", False),
+        ):
+            with self.subTest(slot=slot, weapon_type=weapon_type):
+                system, _, _ = _make_system()
+                player = FakePlayer(level=60)
+                item = FakeItem("test_double", slot, weapon_type=weapon_type)
+
+                self.assertEqual(system.equip(player, item), expected)
 
     def test_reequip_replaces_item_in_occupied_slot(self):
         """Slot cardinality: re-equip replaces the occupant (Req 1.2, 1.3)."""
@@ -2786,6 +2868,25 @@ class TestApplyInsert(unittest.TestCase):
             player.equipment.add_supply(key, 1, max_stack=10)
         return player, weapon
 
+    def _player_with_dual_weapons(
+        self,
+        melee_key="plasma_blade",
+        melee_name="Plasma Blade",
+        ranged_key="plasma_rifle",
+        ranged_name="Plasma Rifle",
+    ):
+        player = FakePlayer(level=10)
+        melee = InsertableWeapon(key=melee_key, weapon_type="melee")
+        melee.slot = "weapon_melee"
+        melee.name = melee_name
+        ranged = InsertableWeapon(key=ranged_key, weapon_type="ranged")
+        ranged.slot = "weapon_ranged"
+        ranged.name = ranged_name
+        player.equipment.equip(melee)
+        player.equipment.equip(ranged)
+        player.equipment.add_supply("extended_barrel", 1, max_stack=10)
+        return player, melee, ranged
+
     # ---------------- effect types mutate + combat reads ---------------- #
 
     def test_damage_type_insert_converts_weapon(self):
@@ -2989,6 +3090,60 @@ class TestApplyInsert(unittest.TestCase):
         self.assertTrue(system.apply_insert(player, "extended_barrel", bs,
                                             "Assault_Rifle"))
         self.assertEqual(weapon.db.rolled_stats["range"], 7)
+
+    def test_exact_ranged_match_beats_earlier_melee_prefix(self):
+        system, _r, _s = self._make()
+        player, melee, ranged = self._player_with_dual_weapons(
+            melee_key="plasma_rifle_blade",
+            melee_name="Plasma Rifle Blade",
+            ranged_key="plasma_rifle",
+            ranged_name="Plasma Rifle",
+        )
+        bs = FakeBlacksmith(owner=player)
+
+        self.assertTrue(
+            system.apply_insert(
+                player, "extended_barrel", bs, "plasma_rifle"
+            )
+        )
+
+        self.assertIs(player.equipment.get_equipped("weapon_melee"), melee)
+        self.assertIs(player.equipment.get_equipped("weapon_ranged"), ranged)
+        self.assertIsNone(getattr(melee.db, "rolled_stats", None))
+        self.assertEqual(ranged.db.rolled_stats["range"], 7)
+        self.assertEqual(player.equipment.get_supply("extended_barrel"), 0)
+
+    def test_prefix_matching_both_weapons_is_ambiguous_without_mutation(self):
+        system, _r, sink = self._make()
+        player, melee, ranged = self._player_with_dual_weapons()
+        bs = FakeBlacksmith(owner=player)
+
+        self.assertFalse(
+            system.apply_insert(player, "extended_barrel", bs, "plasma")
+        )
+
+        self.assertEqual(sink.last()[1].get("reason"), "ambiguous_weapon")
+        self.assertEqual(player.equipment.get_supply("extended_barrel"), 1)
+        self.assertIs(player.equipment.get_equipped("weapon_melee"), melee)
+        self.assertIs(player.equipment.get_equipped("weapon_ranged"), ranged)
+        for weapon in (melee, ranged):
+            self.assertIsNone(getattr(weapon.db, "rolled_stats", None))
+            self.assertIsNone(getattr(weapon.db, "inserts", None))
+
+    def test_two_weapons_without_token_is_ambiguous_without_mutation(self):
+        system, _r, sink = self._make()
+        player, melee, ranged = self._player_with_dual_weapons()
+        bs = FakeBlacksmith(owner=player)
+
+        self.assertFalse(system.apply_insert(player, "extended_barrel", bs))
+
+        self.assertEqual(sink.last()[1].get("reason"), "ambiguous_weapon")
+        self.assertEqual(player.equipment.get_supply("extended_barrel"), 1)
+        self.assertIs(player.equipment.get_equipped("weapon_melee"), melee)
+        self.assertIs(player.equipment.get_equipped("weapon_ranged"), ranged)
+        for weapon in (melee, ranged):
+            self.assertIsNone(getattr(weapon.db, "rolled_stats", None))
+            self.assertIsNone(getattr(weapon.db, "inserts", None))
 
     def test_insufficient_supply(self):
         """The cost gate: the insert must be carried in the Supply_Bag."""

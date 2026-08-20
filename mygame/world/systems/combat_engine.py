@@ -227,10 +227,10 @@ class CombatEngine(BaseSystem):
         resolves the hit/miss inline in this same call instead of on the next
         tick — so combat feels responsive rather than lagging up to one second.
 
-        Turrets, guards, and locked-on tracking shots still go through
+        Player attacks—plain melee, directional fire, and locked-target fire—
+        all use ``resolve_now``. Turrets and guards still go through
         ``queue_attack``/``resolve_tick``: the tick delay is their dodge window
-        (a target can take cover between lock-on and fire) and their
-        within-tick ordering guarantee. Because ``resolve_now`` validates and
+        and within-tick ordering guarantee. Because ``resolve_now`` validates and
         resolves in the same synchronous call there is NO queue→resolve gap, so
         no between-queue-and-resolve re-check and no ammo refund are needed (a
         resolved shot always fired).
@@ -1266,8 +1266,9 @@ class CombatEngine(BaseSystem):
             attacker: The attacking entity.
             target: The target entity.
             weapon_item: The weapon GameItem used.
-            include_attacker_bonus: Whether to add the attacker's aggregated
-                ``damage_bonus`` (equipment + powerups). True for wielded-weapon
+            include_attacker_bonus: Whether to add attack-scoped bonuses:
+                non-weapon equipment, the weapon being used (but not the other
+                equipped weapon), class, and powerups. True for wielded-weapon
                 attacks; thrown-explosive AoE passes False so the blast deals
                 its flat ``amount − armor`` (spec Property 12), independent of
                 what the thrower happens to be wearing.
@@ -1279,7 +1280,10 @@ class CombatEngine(BaseSystem):
         base_damage = self._get_stat(weapon_item, "damage", 0)
 
         # Tech/powerup modifiers from attacker (additive bonus)
-        bonus = self._get_attacker_bonus(attacker) if include_attacker_bonus else 0
+        bonus = (
+            self._get_attacker_bonus(attacker, weapon_item)
+            if include_attacker_bonus else 0
+        )
 
         # --- Damage-type dispatch (Phase 3) ---
         # The weapon's damage_type determines which resist axis the target uses.
@@ -2094,16 +2098,21 @@ class CombatEngine(BaseSystem):
             from world.systems.agent_constants import logger
             logger.exception("Ammo refund failed for dropped shot")
 
-    def _get_attacker_bonus(self, attacker: Any) -> float:
-        """Get tech/powerup/equipment damage bonus for the attacker."""
-        # Flat gear damage_bonus (gloves, accessory) aggregates across all
-        # equipped items here; active powerups add a further timed bonus.
+    def _get_attacker_bonus(self, attacker: Any, weapon_item: Any = None) -> float:
+        """Get attack-scoped gear, class, powerup, alliance, and tech bonus."""
+        # Non-weapon gear is shared; only the weapon used for this attack may
+        # contribute its damage_bonus affixes. The other equipped weapon is
+        # holstered for this action and must not buff it.
         bonus = 0.0
 
-        # Aggregate flat damage_bonus across equipped gear (guard for a
-        # missing equipment handler, e.g. synthetic/turret attackers).
         equipment = getattr(attacker, "equipment", None)
-        if equipment and hasattr(equipment, "get_stat_total"):
+        if equipment and hasattr(equipment, "get_attack_stat_total"):
+            bonus += equipment.get_attack_stat_total(
+                "damage_bonus", active_weapon=weapon_item
+            )
+        elif equipment and hasattr(equipment, "get_stat_total"):
+            # Compatibility for synthetic/minimal handlers predating the scoped
+            # API. Real player handlers always use the branch above.
             bonus += equipment.get_stat_total("damage_bonus")
 
         # Class sidegrade modifier (Phase 5): flat bonus/penalty from the

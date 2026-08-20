@@ -56,7 +56,7 @@ VEST_SPEC = {
 
 def _rifle_def():
     return ItemDef(
-        key="rifle", name="Rifle", slot="weapon", category="weapon",
+        key="rifle", name="Rifle", slot="weapon_ranged", category="weapon",
         weapon_type="ranged", weight=3.0, roll_spec=RIFLE_SPEC,
     )
 

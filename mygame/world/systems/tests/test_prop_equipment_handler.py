@@ -51,7 +51,15 @@ def _ensure_evennia_stubs():
 
 _ensure_evennia_stubs()
 
+from mygame.world.constants import (  # noqa: E402
+    EQUIPMENT_SLOTS,
+    WEAPON_SLOT_BY_TYPE,
+)
 from mygame.world.systems.equipment_handler import EquipmentHandler  # noqa: E402
+
+WEAPON_TYPE_BY_SLOT = {
+    slot: weapon_type for weapon_type, slot in WEAPON_SLOT_BY_TYPE.items()
+}
 
 # -------------------------------------------------------------- #
 #  Helpers
@@ -63,6 +71,12 @@ class FakeItem:
     def __init__(self, key: str, slot: str, stat_modifiers: dict | None = None):
         self.key = key
         self.slot = slot
+        self.weapon_type = WEAPON_TYPE_BY_SLOT.get(slot)
+        self.category = (
+            "weapon" if self.weapon_type
+            else "accessory" if slot == "accessory"
+            else "armor"
+        )
         self.stat_modifiers = stat_modifiers or {}
 
     def get_stat(self, stat_name: str, default: float = 0) -> float:
@@ -81,7 +95,7 @@ class FakeCharacter:
 #  Hypothesis strategies
 # -------------------------------------------------------------- #
 
-VALID_SLOTS = ["weapon", "armor", "gadget", "consumable", "accessory"]
+VALID_SLOTS = list(EQUIPMENT_SLOTS)
 
 STAT_NAMES = ["damage", "damage_reduction", "range", "sight_range", "move_speed"]
 

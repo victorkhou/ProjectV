@@ -59,6 +59,7 @@ def _ensure_evennia_stubs():
 _ensure_evennia_stubs()
 
 from mygame.world.systems.combat_engine import CombatEngine  # noqa: E402
+from mygame.world.constants import WEAPON_SLOT_BY_TYPE  # noqa: E402
 from mygame.world.data_registry import DataRegistry  # noqa: E402
 from mygame.world.definitions import BalanceConfig  # noqa: E402
 from mygame.world.event_bus import EventBus  # noqa: E402
@@ -76,7 +77,8 @@ class FakeWeapon:
     def __init__(self, base_range=3, rolled_range=None, range_affix=0,
                  weapon_type="ranged", key="test_weapon"):
         self.key = key
-        self.slot = "weapon"
+        self.slot = WEAPON_SLOT_BY_TYPE[weapon_type]
+        self.category = "weapon"
         self.weapon_type = weapon_type
         self.stat_modifiers = {"damage": 10, "range": base_range}
         self.rolled_stats = (
@@ -116,7 +118,7 @@ class FakeEquipmentHandler:
         self._slots = {}
 
     def equip(self, item):
-        self._slots[getattr(item, "slot", "weapon")] = item
+        self._slots[getattr(item, "slot", "weapon_ranged")] = item
 
     def get_equipped(self, slot):
         return self._slots.get(slot)

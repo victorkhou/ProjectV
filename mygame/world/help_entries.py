@@ -404,7 +404,7 @@ HELP_ENTRY_DICTS = [
         "text": """
             |wEquipment|n
 
-            Gear makes you tougher and deadlier. You have twelve equipment |cslots|n covering you head to toe, plus a melee weapon slot, a ranged weapon slot, and an accessory slot. Every equipped piece adds armor and other bonuses.
+            Gear makes you tougher and deadlier. You have twelve equipment |cslots|n total: armor and utility slots, one melee weapon slot, one ranged weapon slot, and one accessory slot.
 
             # Getting Gear
 
@@ -416,7 +416,7 @@ HELP_ENTRY_DICTS = [
 
             # Stat Bonuses
 
-            Beyond |carmor|n (less incoming damage) and |cdamage|n, gear can grant utility: |cmove speed|n, |csight range|n, |ccarry capacity|n, and |cmax HP|n. Stats from every worn piece stack, and |wequipment|n shows your combined totals. Max-HP gear raises your health ceiling — equipping it adds headroom (it doesn't heal you on the spot), and taking it off lowers the ceiling, trimming any HP above the new max.
+            Beyond |carmor|n (less incoming damage), gear can grant |cdamage bonuses|n, |cmove speed|n, |csight range|n, |ccarry capacity|n, and |cmax HP|n. Passive bonuses from worn armor and accessories stack. Weapon damage is different: each attack uses only the weapon for that action — |cweapon_melee|n for |wattack|n or |cweapon_ranged|n for |wshoot|n — plus shared non-weapon bonuses and that weapon's own affixes. Your other equipped weapon never adds its damage or affixes. |wequipment|n shows shared bonuses and separate effective melee/ranged damage instead of an impossible combined number. Max-HP gear raises your health ceiling — equipping it adds headroom (it doesn't heal you on the spot), and taking it off lowers the ceiling, trimming any HP above the new max.
 
             Looted and crafted gear is |crolled|n — a quality tag like |c[Rare · 73%]|n on the name tells you how good this copy is, and |wlook <item>|n shows each stat's roll. See |whelp loot|n and |whelp rarity|n.
 
@@ -426,7 +426,7 @@ HELP_ENTRY_DICTS = [
             |wequip all|n — wear every piece of carried gear at once
             |wunequip <item>|n — take off gear by name (|wunequip assault|n) or by slot (|wunequip head|n). Alias: |wremove|n.
             |wunequip all|n — take off everything
-            |wequipment|n (|weq|n) — full paperdoll: every slot, its item, stat bonuses, your loaded weapon's ammo, and combined totals
+            |wequipment|n (|weq|n) — full paperdoll: every slot, its item, stat bonuses, ranged ammo, passive totals, and separate melee/ranged damage
 
             Powerful gear may require a |crank|n — |wequip|n tells you if you're not high enough.
 
@@ -456,7 +456,7 @@ HELP_ENTRY_DICTS = [
         "text": """
             |wCombat|n
 
-            Combat is real-time and resolves on the game tick. Damage is your weapon's power plus bonuses, minus the target's armor.
+            Combat is real-time. A hit uses the selected weapon's power, shared non-weapon bonuses, and that weapon's own affixes, minus the target's armor. Your other equipped weapon contributes nothing to that attack.
 
             # Attacking
 
@@ -470,7 +470,7 @@ HELP_ENTRY_DICTS = [
 
             # Timing: Instant vs. Ticked
 
-            Your own |wattack|n and directional |wshoot|n resolve |cinstantly|n — the hit lands the moment you act, throttled by a short per-weapon |ccooldown|n (you'll be told if you fire again too soon). |cTurrets|n, |cguards|n, and a |clocked|n tracking shot resolve on the world |ctick|n instead: that tiny delay is their dodge window (you can duck into cover between a turret locking on and firing).
+            Your own |wattack|n, directional |wshoot|n, and locked-target |wshoot|n resolve |cinstantly|n — the hit lands the moment you act, throttled by a short per-weapon |ccooldown|n (you'll be told if you fire again too soon). |cTurrets|n and |cguards|n resolve on the world |ctick|n instead: that tiny delay is their dodge window and preserves automated-combat ordering.
 
             # The Combat State
 
@@ -535,11 +535,12 @@ HELP_ENTRY_DICTS = [
 
             # Step 2 — Choose a Spawn Point
 
-            Next, a numbered list of spawn points appears; type its |wnumber|n to pick:
-            |cHeadquarters|n — deploy at your HQ.
-            |cPlace of death|n — deploy where you last died.
-            |cRandom location|n — deploy at a random tile in |wopen ground|n, well clear of any building.
-            If your choice isn't available (no HQ yet, or you've never died), you deploy at your planet's default spawn instead. (|wspawn <where>|n also works.)
+            Next, the currently available spawn points appear under fixed numbers. Hidden choices leave gaps, so a number never changes meaning:
+            |w1|n. |cRespawn Beacon|n — deploy at your owned beacon, where recovered gear waits.
+            |w2|n. |cHeadquarters|n — deploy at your live HQ.
+            |w3|n. |cPlace of death|n — deploy where you last died.
+            |w4|n. |cRandom location|n — deploy at a random tile in |wopen ground|n, well clear of any building.
+            Unavailable choices are omitted. If a selected HQ, beacon, or death tile disappears before you enter, deployment is cancelled and you are asked to choose again — it never silently changes to random. (|wspawn <where>|n also works.)
 
             # Enter the Game
 
@@ -551,7 +552,7 @@ HELP_ENTRY_DICTS = [
 
             # Dying
 
-            When you're defeated you return here and re-run the whole wizard — |wpick a class again|n, then a spawn point (|cHQ|n / |cplace of death|n / |crandom|n). You re-enter at full health with a |wcleared combat timer|n.
+            When you're defeated you return here and re-run the whole wizard — |wpick a class again|n, then an available spawn point (|cRespawn Beacon|n / |cHQ|n / |cplace of death|n / |crandom|n). You re-enter at full health with a |wcleared combat timer|n.
 
             # See Also
 

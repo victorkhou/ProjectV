@@ -349,8 +349,8 @@ cosmetic. **Key lessons that must shape implementation:**
   `_get_target_resist`. **Corrected mechanism:** `get_stat_total`
   ([equipment_handler.py:209](../../../mygame/world/systems/equipment_handler.py),
   NOT equipment_system) already sums **any** stat key it's passed across **all
-  equipped gear** (the 9 armor-bearing body slots + weapon + accessory = 11
-  slots, not "5 armor slots"), and the schema applies **no key allowlist** — so a
+  equipped gear** (the 9 armor-bearing body slots + `weapon_melee` +
+  `weapon_ranged` + accessory = 12 slots, not "5 armor slots"), and the schema applies **no key allowlist** — so a
   typed resist works with **no `AGGREGATED_STATS` edit**. ⚠ `AGGREGATED_STATS`
   ([constants.py:110](../../../mygame/world/constants.py)) is **inert
   documentation** (only a property test reads it) — editing it does nothing

@@ -85,28 +85,41 @@ class FakeEquipmentHandler:
         self._slots = {}
 
     def equip(self, item):
-        slot = getattr(item, "slot", "weapon")
+        slot = getattr(item, "slot", "weapon_melee")
         self._slots[slot] = item
         return True, f"Equipped to {slot}."
 
     def get_equipped(self, slot):
         return self._slots.get(slot)
 
+    @staticmethod
+    def _item_stat(item, stat_name):
+        if hasattr(item, "get_stat"):
+            return float(item.get_stat(stat_name, 0))
+        if hasattr(item, "stat_modifiers"):
+            return float(item.stat_modifiers.get(stat_name, 0))
+        return 0.0
+
     def get_stat_total(self, stat_name):
-        total = 0.0
-        for item in self._slots.values():
-            if hasattr(item, "get_stat"):
-                total += item.get_stat(stat_name, 0)
-            elif hasattr(item, "stat_modifiers"):
-                total += float(item.stat_modifiers.get(stat_name, 0))
-        return total
+        return sum(
+            self._item_stat(item, stat_name)
+            for item in self._slots.values()
+        )
+
+    def get_attack_stat_total(self, stat_name, active_weapon=None):
+        weapon_slots = {"weapon_melee", "weapon_ranged"}
+        return sum(
+            self._item_stat(item, stat_name)
+            for slot, item in self._slots.items()
+            if slot not in weapon_slots or item is active_weapon
+        )
 
 class FakeWeapon:
     """Lightweight stand-in for a weapon GameItem."""
     def __init__(self, damage=25, weapon_range=3, ammo_cost=None,
                  key="test_weapon"):
         self.key = key
-        self.slot = "weapon"
+        self.slot = "weapon_melee"
         self.stat_modifiers = {"damage": damage, "range": weapon_range}
         self.ammo_cost = ammo_cost
 
@@ -837,7 +850,9 @@ class FakeTypedWeapon:
                  ammo_type=None, ammo_per_shot=1, magazine_size=None,
                  loaded=None, ammo_cost=None, key="typed_weapon"):
         self.key = key
-        self.slot = "weapon"
+        self.slot = (
+            "weapon_ranged" if weapon_type == "ranged" else "weapon_melee"
+        )
         self.weapon_type = weapon_type
         self.ammo_type = ammo_type
         self.ammo_per_shot = ammo_per_shot
@@ -957,7 +972,7 @@ class TestProperty7MagazineDraw(unittest.TestCase):
         target = FakePlayer(name="Target",
                             location=FakeTile(xyz=(1, 0, "earth")))
 
-        ok, _ = engine.queue_attack(attacker, target)
+        ok, _ = engine.queue_attack(attacker, target, weapon=weapon)
 
         if loaded >= ammo_per_shot:
             self.assertTrue(ok)
@@ -978,48 +993,69 @@ class TestProperty7MagazineDraw(unittest.TestCase):
 # -------------------------------------------------------------- #
 
 class TestProperty3DamageBonusAggregation(unittest.TestCase):
-    """Property 3: Damage-bonus aggregation.
+    """Property 3: attack-scoped damage-bonus aggregation.
 
-    Attacker damage includes the sum of ``damage_bonus`` across all equipped
-    gear (plus active powerups).
+    Shared non-weapon gear, the active weapon, and powerups contribute to an
+    attack. A simultaneously equipped weapon in the other canonical slot does
+    not contribute.
 
     **Validates: Requirements 2.3**
     """
 
     @given(
         weapon_damage=st.integers(min_value=1, max_value=200),
+        active_weapon_bonus=st.integers(min_value=0, max_value=20),
+        inactive_weapon_bonus=st.integers(min_value=0, max_value=20),
         bonuses=st.lists(st.integers(min_value=0, max_value=20),
                          min_size=0, max_size=len(_GEAR_SLOTS)),
         powerup_bonus=st.integers(min_value=0, max_value=30),
     )
     @settings(max_examples=200)
-    def test_damage_includes_sum_of_gear_damage_bonus(
-        self, weapon_damage, bonuses, powerup_bonus
+    def test_damage_excludes_inactive_weapon_bonus(
+        self,
+        weapon_damage,
+        active_weapon_bonus,
+        inactive_weapon_bonus,
+        bonuses,
+        powerup_bonus,
     ):
-        weapon = FakeTypedWeapon(
+        active_weapon = FakeTypedWeapon(
             weapon_type="ranged", damage=weapon_damage, weapon_range=10,
             ammo_type=None, key="rifle",
         )
+        active_weapon.stat_modifiers["damage_bonus"] = active_weapon_bonus
+        inactive_weapon = FakeTypedWeapon(
+            weapon_type="melee", damage=999, weapon_range=1,
+            ammo_type=None, key="blade",
+        )
+        inactive_weapon.stat_modifiers["damage_bonus"] = inactive_weapon_bonus
         engine, _ = _make_engine()
-        attacker = FakePlayer(name="Attacker", weapon=weapon,
-                              location=FakeTile(xyz=(0, 0, "earth")))
+        attacker = FakePlayer(
+            name="Attacker", weapon=active_weapon,
+            location=FakeTile(xyz=(0, 0, "earth")),
+        )
+        attacker.equipment.equip(inactive_weapon)
         for slot, value in zip(_GEAR_SLOTS, bonuses):
             attacker.equipment.equip(FakeGear(slot, "damage_bonus", value))
         if powerup_bonus:
             attacker.db.active_powerups = {
                 "buff": {"effect": {"effect_type": "damage_bonus",
-                                    "effect_value": powerup_bonus}},
+                                      "effect_value": powerup_bonus}},
             }
 
         target_hp = 1_000_000  # never defeated, so no respawn masking
         target = FakePlayer(name="Target", hp=target_hp, hp_max=target_hp,
                             location=FakeTile(xyz=(1, 0, "earth")))
 
-        engine.queue_attack(attacker, target)
+        engine.queue_attack(
+            attacker, target, weapon=active_weapon
+        )
         engine.resolve_tick()
 
         expected_damage = max(
-            0, weapon_damage + sum(bonuses) + powerup_bonus
+            0,
+            weapon_damage + active_weapon_bonus + sum(bonuses)
+            + powerup_bonus,
         )
         self.assertEqual(target.db.hp, target_hp - expected_damage)
 
@@ -1060,7 +1096,7 @@ class TestProperty2ArmorAggregation(unittest.TestCase):
             target.equipment.equip(FakeGear(slot, "damage_reduction", value))
 
         frac = engine.registry.balance.chip_damage_min_fraction
-        engine.queue_attack(attacker, target)
+        engine.queue_attack(attacker, target, weapon=weapon)
         engine.resolve_tick()
 
         import math

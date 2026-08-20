@@ -26,7 +26,7 @@ equipping; and richer display — with combat receiving only two additive touche
 
 Nine decisions are locked (see requirements D1–D9):
 
-1. **Eleven-slot balanced body model** (`head, eyes, face, torso, arms, hands, legs, feet, back, weapon, accessory`).
+1. **Twelve-slot balanced body model** (`head, eyes, face, torso, arms, hands, legs, feet, back, weapon_melee, weapon_ranged, accessory`).
 2. **Ammo as counted Supplies** in `db.supplies`, coexisting with the existing resource-pool `ammo_cost`.
 3. **use/throw ship in this feature**, AoE via synthetic weapon.
 4. **`required_rank` enforced on equip/use/throw** (the field already load-validates as a real rank).
@@ -124,7 +124,8 @@ the new fields with these defaults — the same populator pattern already used.
 
 ```python
 EQUIPMENT_SLOTS = ("head", "eyes", "face", "torso", "arms", "hands",
-                   "legs", "feet", "back", "weapon", "accessory")
+                   "legs", "feet", "back", "weapon_melee", "weapon_ranged",
+                   "accessory")
 GEAR_CATEGORIES = ("armor", "weapon", "accessory")
 SUPPLY_CATEGORIES = ("ammo", "consumable", "throwable")
 ITEM_CATEGORIES = GEAR_CATEGORIES + SUPPLY_CATEGORIES
@@ -239,7 +240,7 @@ def add_resource_capped(self, holder, resource, amount) -> int  # inflow choke p
   `_TurretWeapon`), find targets within `radius` of `(tx,ty)` on the player's planet via the
   coordinate index, and route each through the existing `CombatEngine._calculate_damage` +
   application path so armor and clamping apply for free. `notify(thrower, "bombed", …)`.
-- **`reload`**: read the equipped `weapon`-slot Game_Item; reject if it has no `ammo_type`
+- **`reload`**: read the Game_Item equipped in `weapon_ranged`; reject if it has no `ammo_type`
   (`notify "reload_no_ammo_weapon"`) or is already full (`notify "already_loaded"`); else transfer
   `min(magazine_size − db.loaded, bag[ammo_type])` from the Supply_Bag into `db.loaded`, decrement the
   bag by exactly that, and `notify(player, "reloaded", loaded=…, magazine_size=…, remaining=…)`. Fresh
@@ -320,8 +321,10 @@ weight. Storage is *additive*, not a replacement:
      magazine → reject + `notify(attacker, "out_of_ammo", …)` prompting reload.
    - Reload is an `EquipmentSystem.reload` action (design §4), not a combat concern.
 
-Weapon determination (`_get_weapon_item`, `:424`) and the `attacked` notification (`:406`) are
-unchanged. Turrets are unaffected (they already use a synthetic weapon with no ammo).
+Weapon determination (`_get_weapon_item`, `:424`) selects the slot matching the active attack mode:
+`weapon_melee` for a melee attack or `weapon_ranged` for a ranged attack. The `attacked`
+notification (`:406`) is unchanged. Turrets are unaffected (they already use a synthetic weapon
+with no ammo).
 
 ### 6. Presenter — new notification kinds (`world/presenters/notification_presenter.py`)
 
@@ -392,7 +395,7 @@ or ∞ for admins.
 **Storage_Building pool** (new `db.stored_resources: dict[str,int]` on `storage`-capability buildings):
 `{"Wood": 500, …}` bounded by `storage_capacity`; separate from any Spend_Pool.
 
-**Equipment_Slots** (`db.equipment_slots`, unchanged shape): `{"weapon": <GameItem>, "torso": <GameItem>, …}`.
+**Equipment_Slots** (`db.equipment_slots`, unchanged shape): `{"weapon_melee": <GameItem>, "weapon_ranged": <GameItem>, "torso": <GameItem>, …}`.
 
 **Buff entry** (the *real* `db.active_powerups` shape from `powerup_system.py` `activate`):
 `{"<key>": {"expires_tick": current_tick + duration_ticks, "effect": {"effect_type": "damage_bonus", "effect_value": 10}}}`.

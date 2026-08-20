@@ -54,8 +54,10 @@ class FixedRNG:
 
 
 def _item(roll_spec=None, **kwargs):
-    defaults = dict(key="rifle", name="Rifle", slot="weapon",
-                    category="weapon")
+    defaults = dict(
+        key="rifle", name="Rifle", slot="weapon_ranged",
+        category="weapon", weapon_type="ranged",
+    )
     defaults.update(kwargs)
     return ItemDef(roll_spec=roll_spec, **defaults)
 

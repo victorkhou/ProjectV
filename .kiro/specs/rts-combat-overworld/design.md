@@ -2,7 +2,7 @@
 
 ## Overview
 
-This design describes an RTS-inspired combat overworld game built on the Evennia MU* framework. Players explore coordinate-based maps across multiple planet types, gather terrain-specific resources, construct buildings following a technology tree, engage in real-time PvP combat, and progress through a 22-tier military rank system. The system is data-driven: all entity definitions live in YAML files loaded by a centralized Data Registry with schema validation and hot-reload support. All equippable items (weapons, armor, gadgets, consumables) use a single `GameItem` typeclass differentiated entirely by YAML-defined slot types and stat modifiers, managed by an `EquipmentHandler` on each character.
+This design describes an RTS-inspired combat overworld game built on the Evennia MU* framework. Players explore coordinate-based maps across multiple planet types, gather terrain-specific resources, construct buildings following a technology tree, engage in real-time PvP combat, and progress through a 22-tier military rank system. The system is data-driven: all entity definitions live in YAML files loaded by a centralized Data Registry with schema validation and hot-reload support. All Gear items (weapons, armor, and accessories) use a single `GameItem` typeclass differentiated by YAML-defined categories, one of twelve canonical equipment slots (`weapon_melee` and `weapon_ranged` included), and stat modifiers, managed by an `EquipmentHandler` on each character.
 
 The architecture leverages four key Evennia subsystems:
 
@@ -248,7 +248,8 @@ class CombatCharacter(DefaultCharacter):
     # CounterTrait: combat_xp (min=0)
     # StaticTrait: rank_level
     # CounterTrait per resource: straw, clay, wood, stone, iron, energy, metals, circuits
-    # EquipmentHandler: manages Equipment_Slots (weapon, armor, gadget, etc.)
+    # EquipmentHandler: manages the 12 canonical Equipment_Slots
+    #   (9 body slots, weapon_melee, weapon_ranged, accessory)
     # Attribute: active_powerups (dict of key -> {expires_tick, effect})
     # Attribute: powerup_cooldowns (dict of key -> ready_tick)
     # Attribute: researched_techs (set of tech keys)
@@ -305,7 +306,10 @@ class GameItem(DefaultObject):
 
     # Attributes set at creation from ItemDef:
     #   item_key (str) — references the ItemDef in DataRegistry
-    #   slot (str) — "weapon", "armor", "gadget", "consumable", etc.
+    #   slot (str) — one of the 12 canonical Equipment_Slots, including
+    #     "weapon_melee" and "weapon_ranged"
+    #   category (str) — "armor", "weapon", or "accessory" for Gear
+    #   weapon_type (str | None) — "melee" or "ranged" for weapon Gear
     #   stat_modifiers (dict) — {"damage": 25, "range": 3} etc.
     #   ammo_cost (dict | None) — {"iron": 1} or None
     #   classification (str) — "modern" or "futuristic"
@@ -324,7 +328,7 @@ class GameItem(DefaultObject):
     def get_structured_state(self) -> dict: ...
 ```
 
-**Key design decision**: There is no `Weapon` or `Armor` subclass. A weapon is simply a `GameItem` with `slot="weapon"` and a `damage` key in `stat_modifiers`. An armor piece is a `GameItem` with `slot="armor"` and a `damage_reduction` key. Adding a new item category (e.g., "gadget" with "sight_range" bonus) requires only a new entry in `items.yaml` — zero code changes.
+**Key design decision**: There is no `Weapon` or `Armor` subclass. A weapon is a `GameItem` with `category="weapon"`, a `weapon_type` of `melee` or `ranged`, the matching `weapon_melee` or `weapon_ranged` slot, and a `damage` key in `stat_modifiers`. An armor piece is a `GameItem` with `category="armor"`, a canonical body slot, and a `damage_reduction` key. Adding item content within the validated category and slot vocabulary requires only a new entry in `items.yaml` — zero code changes.
 
 ### 6b. EquipmentHandler (`world/equipment_handler.py`)
 
@@ -346,7 +350,7 @@ class EquipmentHandler:
 
 **Slot management**: Valid slot names are derived from the loaded item definitions (all unique `slot` values). Each slot holds at most one `GameItem`. Equipping to an occupied slot auto-unequips the existing item back to inventory.
 
-**Stat aggregation**: `get_stat_total(stat_name)` sums the given stat across all equipped items. The CombatEngine uses `get_stat_total("damage")` for attack damage and `get_stat_total("damage_reduction")` for defense.
+**Stat aggregation**: `get_stat_total(stat_name)` sums the given stat across all equipped items. The CombatEngine selects the item in `weapon_melee` or `weapon_ranged` according to the active attack mode for base weapon damage, and uses `get_stat_total("damage_reduction")` for defense.
 
 **Persistence**: Equipped items are stored as an Attribute on the character: `equipment_slots` → `dict[str, GameItem_dbref]`. On character load, dbrefs are resolved to live objects.
 
@@ -395,7 +399,7 @@ class BuildingSystem:
 
 ### 8. Combat Engine (`world/combat_engine.py`)
 
-Resolves attack actions and manages combat state. Reads damage from the attacker's equipped weapon-slot GameItem and damage_reduction from the target's equipped armor-slot GameItem.
+Resolves attack actions and manages combat state. Reads damage from the attacker's equipped `weapon_melee` or `weapon_ranged` GameItem according to the active attack mode, and reads target mitigation by aggregating `damage_reduction` across equipped Gear.
 
 ```python
 class CombatEngine:
@@ -419,7 +423,7 @@ class CombatEngine:
 ```
 
 **Attack resolution** (Requirement 6):
-1. Get attacker's weapon-slot GameItem via `attacker.equipment.get_equipped("weapon")`
+1. Determine the active attack mode, then get the matching equipped GameItem: `attacker.equipment.get_equipped("weapon_melee")` for melee or `get_equipped("weapon_ranged")` for ranged
 2. Read range from `weapon_item.get_stat("range")`
 3. Validate target in range
 4. Read ammo_cost from `weapon_item.ammo_cost`; validate and deduct ammo resources
@@ -527,7 +531,7 @@ class EquipmentSystem:
     def _create_game_item(self, item_def: ItemDef, owner: CombatCharacter) -> GameItem: ...
 ```
 
-Each tick, active equipment buildings look up their producible items via `registry.get_items_for_building(building_abbr)`, select one, create a `GameItem` instance with the definition's attributes, and add it to the owner's inventory. The Armory produces weapon-slot items; the Armorer produces armor-slot items — but this is determined entirely by the item definitions in `items.yaml`, not by code.
+Each tick, active equipment buildings look up their producible items via `registry.get_items_for_building(building_abbr)`, select one, create a `GameItem` instance with the definition's attributes, and add it to the owner's inventory. The Armory produces `weapon`-category items occupying `weapon_melee` or `weapon_ranged`; the Armorer produces `armor`-category items occupying canonical body slots — but this is determined entirely by the item definitions in `items.yaml`, not by code.
 
 ### 14. Game Tick Script (`typeclasses/scripts.py` — `GameTickScript`)
 
@@ -805,7 +809,9 @@ All definition files are YAML. Below are the schemas for each.
 items:
   - name: "Assault Rifle"
     key: "assault_rifle"
-    slot: "weapon"
+    slot: "weapon_ranged"
+    category: "weapon"
+    weapon_type: "ranged"
     stat_modifiers:
       damage: 25
       range: 3
@@ -816,7 +822,9 @@ items:
 
   - name: "Plasma Cannon"
     key: "plasma_cannon"
-    slot: "weapon"
+    slot: "weapon_ranged"
+    category: "weapon"
+    weapon_type: "ranged"
     stat_modifiers:
       damage: 60
       range: 5
@@ -828,7 +836,9 @@ items:
 
   - name: "Combat Knife"
     key: "combat_knife"
-    slot: "weapon"
+    slot: "weapon_melee"
+    category: "weapon"
+    weapon_type: "melee"
     stat_modifiers:
       damage: 10
       range: 1
@@ -838,7 +848,8 @@ items:
 
   - name: "Kevlar Vest"
     key: "kevlar_vest"
-    slot: "armor"
+    slot: "torso"
+    category: "armor"
     stat_modifiers:
       damage_reduction: 5
     ammo_cost: null
@@ -847,7 +858,8 @@ items:
 
   - name: "Tactical Scope"
     key: "tactical_scope"
-    slot: "gadget"
+    slot: "eyes"
+    category: "accessory"
     stat_modifiers:
       sight_range: 3
     ammo_cost: null
@@ -856,8 +868,8 @@ items:
 
 # Maps building abbreviations to the item keys they can produce
 production_map:
-  AA: ["combat_knife", "assault_rifle"]     # Armory produces weapon-slot items
-  AR: ["kevlar_vest"]                        # Armorer produces armor-slot items
+  AA: ["combat_knife", "assault_rifle"]     # Armory produces typed weapon-slot items
+  AR: ["kevlar_vest"]                        # Armorer produces canonical body-slot items
 ```
 
 #### `data/definitions/ranks.yaml`
@@ -1086,7 +1098,7 @@ stateDiagram-v2
 
 ### Property 12: Attack damage application
 
-*For any* attack action where the attacker has a weapon-slot GameItem equipped and is within the item's range stat_modifier of the target and has sufficient ammo (if the item defines ammo_cost), the target's HP SHALL decrease by the weapon GameItem's damage stat_modifier (plus any tech/powerup modifiers, minus the target's armor-slot GameItem damage_reduction stat_modifier if any, minimum 0), and ammo resources SHALL be deducted from the attacker before damage is applied.
+*For any* attack action where the attacker has a GameItem equipped in the slot matching the active attack mode (`weapon_melee` for melee or `weapon_ranged` for ranged), is within the item's effective range, and has sufficient ammo (if the item defines ammo costs), the target's HP SHALL decrease by the weapon GameItem's damage stat_modifier (plus any tech/powerup modifiers, minus the target's aggregated `damage_reduction` across equipped Gear, minimum 0), and ammo SHALL be deducted from the attacker before damage is applied.
 
 **Validates: Requirements 6.1, 6.3, 6.4, 6.11, 6.16**
 

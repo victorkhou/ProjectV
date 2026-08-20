@@ -20,6 +20,7 @@ from world.constants import (
     ITEM_CATEGORIES,
     MAX_LEVEL,
     RESOURCE_TYPES,
+    WEAPON_SLOT_BY_TYPE,
     WEAPON_TYPES,
 )
 from world.definitions import BalanceConfig
@@ -272,6 +273,19 @@ class SchemaValidator:
             # ---- slot: required for Gear, not for Supply (Req 3.5, 3.6) -- #
             slot = entry.get("slot")
             weapon_type = entry.get("weapon_type")
+            # Weapon slots are reserved in both directions: a weapon must use
+            # the slot matching its type, and a non-weapon may never occupy a
+            # canonical weapon slot. Combat trusts these slot boundaries when
+            # selecting the active melee/ranged item.
+            if (
+                slot in WEAPON_SLOT_BY_TYPE.values()
+                and effective_category != "weapon"
+            ):
+                errors.append(
+                    f"{prefix}: slot '{slot}' is reserved for weapon-category "
+                    f"items, got category '{effective_category}'"
+                )
+
             if effective_category in GEAR_CATEGORIES:
                 if slot is None:
                     errors.append(
@@ -289,12 +303,9 @@ class SchemaValidator:
                 # via `weapon_ranged` specifically, so a weapon parked in the
                 # wrong slot (or a body slot) would never be found by the
                 # command that's supposed to use it. (`armor`/`accessory` gear
-                # may occupy any body slot — e.g. a scope in `eyes`, a jetpack
-                # in `back`.)
+                # may occupy any non-weapon body/accessory slot.)
                 elif effective_category == "weapon" and weapon_type in WEAPON_TYPES:
-                    expected_slot = (
-                        "weapon_melee" if weapon_type == "melee" else "weapon_ranged"
-                    )
+                    expected_slot = WEAPON_SLOT_BY_TYPE[weapon_type]
                     if slot != expected_slot:
                         errors.append(
                             f"{prefix}: {weapon_type} weapon items must use slot "

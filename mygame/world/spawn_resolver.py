@@ -1,27 +1,23 @@
 """
 Spawn-location resolution (state 3.1) — headquarters / place of death / random.
 
-Turns a player's chosen spawn option into a concrete ``(planet, x, y)`` target,
-with the fallback chain the spec requires. Shared by the chargen/respawn menu
-(the player picks) and could back an automatic-respawn rule later.
+Turns a player's chosen spawn option into a concrete ``(planet, x, y)`` target.
+Named options resolve only their requested target: an HQ, beacon, or death tile
+that disappears returns ``None`` so the lifecycle flow can re-prompt instead of
+silently changing the player's choice. ``SPAWN_RANDOM`` alone uses random open
+ground and falls back to the planet's fixed spawn point when random sampling
+cannot find a tile.
 
 Framework-free: all Evennia I/O (finding the player's HQ tile, reading a
 planet's fixed spawn point / bounds, the random source) is injected as callables
-so the resolver is pure logic and unit-testable with plain fakes. The three
-spawn options and their fallbacks:
+so the resolver is pure logic and unit-testable with plain fakes.
 
-* ``SPAWN_HQ`` — the player's live HQ tile. Falls back to the planet's fixed
-  spawn point when the player has no HQ, or (PvP) their HQ was destroyed / the
-  base is inert.
-* ``SPAWN_DEATH`` — the recorded place of death (``db.death_*``). Falls back to
-  the planet spawn when the player has never died (no recorded tile) or the
-  tile is no longer in bounds.
+* ``SPAWN_RESPAWN`` — the player's owned live Respawn Beacon tile, or ``None``.
+* ``SPAWN_HQ`` — the player's live HQ tile, or ``None``.
+* ``SPAWN_DEATH`` — the recorded in-bounds place of death, or ``None``.
 * ``SPAWN_RANDOM`` — a random valid, in-bounds tile on the planet (rejection
   sampling via the injected bounds check). Falls back to the planet spawn if no
   valid tile is found within a bounded number of attempts.
-
-Every option ultimately falls back to the planet's fixed spawn point, so a
-spawn choice never dead-ends without a target.
 """
 
 from __future__ import annotations
@@ -60,8 +56,8 @@ class SpawnResolver:
     is testable in isolation):
 
     * ``planet_spawn_func(planet_key) -> (x, y) | None`` — the planet's fixed
-      spawn point (from ``CoordinateSpaceDef.spawn_x/spawn_y``). The ultimate
-      fallback for every option.
+      spawn point (from ``CoordinateSpaceDef.spawn_x/spawn_y``). Used only when
+      a RANDOM spawn exhausts its bounded tile search.
     * ``hq_locator_func(player, planet_key) -> (x, y) | None`` — the player's
       live HQ tile on *planet_key*, or None (no HQ / inert base).
     * ``in_bounds_func(x, y, planet_key) -> bool`` — whether a tile is on the
@@ -146,7 +142,7 @@ class SpawnResolver:
             return self._hq_tile(player, planet_key) is not None
         if choice == SPAWN_DEATH:
             return self._death_tile(player, planet_key) is not None
-        return True
+        return choice == SPAWN_RANDOM
 
     # ------------------------------------------------------------------ #
     #  Resolution
@@ -157,35 +153,31 @@ class SpawnResolver:
     ) -> tuple[str, int, int] | None:
         """Resolve *choice* to a concrete ``(planet, x, y)`` spawn target.
 
-        Applies the per-option fallback chain. When the chosen option is
-        unavailable (no HQ, never died), the player falls back to a RANDOM open
-        tile — NOT the fixed planet spawn, which is a single crowded chokepoint
-        that would drop an HQ-less player onto (or beside) whatever sits there.
-        The fixed planet spawn is only the last resort when even random sampling
-        fails. Returns ``None`` only when nothing at all resolves (misconfigured
-        planet) — the caller then leaves the player where they are.
+        Named choices are strict: a missing HQ, Respawn Beacon, or valid death
+        tile returns ``None`` and never substitutes random coordinates. This
+        lets the lifecycle layer preserve player intent and re-prompt when a
+        selected target disappears between selection and deployment.
+
+        ``SPAWN_RANDOM`` samples an open tile and uses the planet's fixed spawn
+        only when sampling fails. Unknown choices return ``None``.
         """
         if choice == SPAWN_RESPAWN:
             beacon = self._respawn_tile(player, planet_key)
-            if beacon is not None:
-                return (planet_key, beacon[0], beacon[1])
-            # No respawn beacon on this planet → fall through to a random tile.
-        elif choice == SPAWN_HQ:
+            return (
+                (planet_key, beacon[0], beacon[1])
+                if beacon is not None else None
+            )
+        if choice == SPAWN_HQ:
             hq = self._hq_tile(player, planet_key)
-            if hq is not None:
-                return (planet_key, hq[0], hq[1])
-            # No HQ → a random open location, not the fixed planet spawn.
-        elif choice == SPAWN_DEATH:
-            death = self._death_tile(player, planet_key)
-            if death is not None:
-                return death  # already a (planet, x, y) — death may be off-planet
-            # Never died → a random open location.
-        # RANDOM, or an HQ/death miss: a random open tile (>= min distance from
-        # buildings). Falls through to the fixed planet spawn only if that fails.
+            return (planet_key, hq[0], hq[1]) if hq is not None else None
+        if choice == SPAWN_DEATH:
+            return self._death_tile(player, planet_key)
+        if choice != SPAWN_RANDOM:
+            return None
+
         rand = self._random_tile(planet_key)
         if rand is not None:
             return (planet_key, rand[0], rand[1])
-        # Last resort: the planet's fixed spawn point.
         return self._planet_spawn(planet_key)
 
     # ------------------------------------------------------------------ #

@@ -20,12 +20,18 @@ from mygame.world.constants import (
     GEAR_CATEGORIES,
     ITEM_CATEGORIES,
     WEAPON_TYPES,
+    WEAPON_SLOT_BY_TYPE,
     EFFECT_TYPES,
     RESOURCE_TYPES,
 )
 from mygame.world.definitions import ItemDef
 
 validator = SchemaValidator()
+_NON_WEAPON_EQUIPMENT_SLOTS = tuple(
+    slot
+    for slot in EQUIPMENT_SLOTS
+    if slot not in frozenset(WEAPON_SLOT_BY_TYPE.values())
+)
 
 # ------------------------------------------------------------------ #
 #  Shared strategies
@@ -73,7 +79,7 @@ def valid_item_dict():
     return st.fixed_dictionaries({
         "key": st.text(min_size=1, max_size=20, alphabet=st.characters(whitelist_categories=("L", "N"))),
         "name": st.text(min_size=1, max_size=20),
-        "slot": st.sampled_from(list(EQUIPMENT_SLOTS)),
+        "slot": st.sampled_from(_NON_WEAPON_EQUIPMENT_SLOTS),
     })
 
 
@@ -525,21 +531,17 @@ def clean_item_dict(draw):
         "name": draw(_ITEM_NAME),
         "category": category,
     }
-    if category in GEAR_CATEGORIES:
-        # A weapon must occupy the `weapon` slot (combat resolves it there);
-        # armor/accessory gear may occupy any body slot.
-        if category == "weapon":
-            item["slot"] = "weapon"
-        else:
-            item["slot"] = draw(st.sampled_from(list(EQUIPMENT_SLOTS)))
     if category == "weapon":
-        wt = draw(st.sampled_from(list(WEAPON_TYPES)))
-        item["weapon_type"] = wt
-        if wt == "ranged":
+        weapon_type = draw(st.sampled_from(list(WEAPON_TYPES)))
+        item["weapon_type"] = weapon_type
+        item["slot"] = WEAPON_SLOT_BY_TYPE[weapon_type]
+        if weapon_type == "ranged":
             if draw(st.booleans()):
                 item["magazine_size"] = draw(st.integers(min_value=1, max_value=100))
             if draw(st.booleans()):
                 item["ammo_per_shot"] = draw(st.integers(min_value=1, max_value=10))
+    elif category in GEAR_CATEGORIES:
+        item["slot"] = draw(st.sampled_from(_NON_WEAPON_EQUIPMENT_SLOTS))
     if category in ("consumable", "throwable") and draw(st.booleans()):
         item["effect"] = {"type": draw(st.sampled_from(list(EFFECT_TYPES)))}
     if category == "insert":
@@ -590,7 +592,10 @@ def item_and_validity(draw):
     if category == "weapon":
         defects.append("bad_weapon_type")
     else:
-        defects.append("weapon_type_on_nonweapon")
+        defects.extend([
+            "weapon_type_on_nonweapon",
+            "weapon_slot_on_nonweapon",
+        ])
     if category in ("consumable", "throwable"):
         defects.append("bad_effect_type")
     if category == "insert":
@@ -611,6 +616,10 @@ def item_and_validity(draw):
         item["weapon_type"] = draw(st.sampled_from(["gun", "sword", "laser", ""]))
     elif defect == "weapon_type_on_nonweapon":
         item["weapon_type"] = draw(st.sampled_from(list(WEAPON_TYPES)))
+    elif defect == "weapon_slot_on_nonweapon":
+        item["slot"] = draw(
+            st.sampled_from(tuple(WEAPON_SLOT_BY_TYPE.values()))
+        )
     elif defect == "bad_effect_type":
         item["effect"] = {"type": draw(st.sampled_from(["explode", "freeze", "", "damage"]))}
     elif defect == "missing_insert_effect":
@@ -660,7 +669,7 @@ def ammo_fk_case(draw):
             ammo_key: ItemDef(key=ammo_key, name="ammo", category="ammo", slot=""),
             weapon_key: ItemDef(
                 key=weapon_key, name="rifle", category="weapon",
-                weapon_type="ranged", slot="weapon",
+                weapon_type="ranged", slot="weapon_ranged",
                 ammo_type=ammo_key, magazine_size=10,
             ),
         }
@@ -671,7 +680,7 @@ def ammo_fk_case(draw):
     items = {
         weapon_key: ItemDef(
             key=weapon_key, name="rifle", category="weapon",
-            weapon_type="ranged", slot="weapon",
+            weapon_type="ranged", slot="weapon_ranged",
             ammo_type=ammo_key, magazine_size=10,
         ),
     }
@@ -692,7 +701,7 @@ def melee_ammo_case(draw):
         items = {
             weapon_key: ItemDef(
                 key=weapon_key, name="knife", category="weapon",
-                weapon_type="melee", slot="weapon",
+                weapon_type="melee", slot="weapon_melee",
             ),
         }
         return items, False
@@ -701,7 +710,7 @@ def melee_ammo_case(draw):
     defect = draw(st.sampled_from(["ammo_type", "magazine_size", "ammo_per_shot"]))
     weapon = ItemDef(
         key=weapon_key, name="knife", category="weapon",
-        weapon_type="melee", slot="weapon",
+        weapon_type="melee", slot="weapon_melee",
     )
     items = {weapon_key: weapon}
     if defect == "ammo_type":

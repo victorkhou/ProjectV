@@ -86,14 +86,27 @@ class FakeEquipmentHandler:
     def get_equipped(self, slot):
         return self._slots.get(slot)
 
+    @staticmethod
+    def _item_stat(item, stat_name):
+        if hasattr(item, "get_stat"):
+            return float(item.get_stat(stat_name, 0))
+        if hasattr(item, "stat_modifiers"):
+            return float(item.stat_modifiers.get(stat_name, 0))
+        return 0.0
+
     def get_stat_total(self, stat_name):
-        total = 0.0
-        for item in self._slots.values():
-            if hasattr(item, "get_stat"):
-                total += item.get_stat(stat_name, 0)
-            elif hasattr(item, "stat_modifiers"):
-                total += float(item.stat_modifiers.get(stat_name, 0))
-        return total
+        return sum(
+            self._item_stat(item, stat_name)
+            for item in self._slots.values()
+        )
+
+    def get_attack_stat_total(self, stat_name, active_weapon=None):
+        weapon_slots = {"weapon_melee", "weapon_ranged"}
+        return sum(
+            self._item_stat(item, stat_name)
+            for slot, item in self._slots.items()
+            if slot not in weapon_slots or item is active_weapon
+        )
 
 class FakeWeapon:
     """Lightweight stand-in for a weapon GameItem."""
@@ -1671,7 +1684,9 @@ class FakeTypedWeapon:
                  ammo_type=None, ammo_per_shot=1, magazine_size=None,
                  loaded=None, ammo_cost=None, key="typed_weapon"):
         self.key = key
-        self.slot = "weapon_melee"
+        self.slot = (
+            "weapon_ranged" if weapon_type == "ranged" else "weapon_melee"
+        )
         self.weapon_type = weapon_type
         self.ammo_type = ammo_type
         self.ammo_per_shot = ammo_per_shot
@@ -1729,7 +1744,7 @@ class TestMagazineDraw(unittest.TestCase):
         attacker = FakePlayer(name="Attacker", weapon=weapon, location=atk_tile)
         target = FakePlayer(name="Target", location=tgt_tile)
 
-        ok, _ = engine.queue_attack(attacker, target)
+        ok, _ = engine.queue_attack(attacker, target, weapon=weapon)
         self.assertTrue(ok)
         # A single shot draws exactly ammo_per_shot from the magazine.
         self.assertEqual(weapon.db.loaded, 7)
@@ -1746,7 +1761,7 @@ class TestMagazineDraw(unittest.TestCase):
         attacker = FakePlayer(name="Attacker", weapon=weapon, location=atk_tile)
         target = FakePlayer(name="Target", location=tgt_tile)
 
-        ok, msg = engine.queue_attack(attacker, target)
+        ok, msg = engine.queue_attack(attacker, target, weapon=weapon)
         self.assertFalse(ok)
         # The empty-magazine feedback is delivered via the out_of_ammo
         # notification (below), so the returned message is empty — the command
@@ -1771,7 +1786,7 @@ class TestMagazineDraw(unittest.TestCase):
         attacker = FakePlayer(name="Attacker", weapon=weapon, location=atk_tile)
         target = FakePlayer(name="Target", location=tgt_tile)
 
-        ok, _ = engine.queue_attack(attacker, target)
+        ok, _ = engine.queue_attack(attacker, target, weapon=weapon)
         self.assertTrue(ok)
         self.assertEqual(weapon.db.loaded, 0)
 
@@ -1807,7 +1822,7 @@ class TestMeleeGating(unittest.TestCase):
                               location=FakeTile(xyz=(0, 0, "earth")))
         target = FakePlayer(name="Target",
                             location=FakeTile(xyz=(0, 0, "earth")))  # same tile
-        ok, _ = engine.queue_attack(attacker, target)
+        ok, _ = engine.queue_attack(attacker, target, weapon=weapon)
         self.assertTrue(ok)
 
     def test_melee_never_touches_ammo(self):
@@ -1823,7 +1838,7 @@ class TestMeleeGating(unittest.TestCase):
                               location=FakeTile(xyz=(0, 0, "earth")))
         target = FakePlayer(name="Target",
                             location=FakeTile(xyz=(0, 0, "earth")))  # same tile
-        ok, _ = engine.queue_attack(attacker, target)
+        ok, _ = engine.queue_attack(attacker, target, weapon=weapon)
         self.assertTrue(ok)
         self.assertEqual(weapon.db.loaded, 5)  # untouched
 
@@ -1948,7 +1963,7 @@ class TestRankGapPenalty(unittest.TestCase):
 # -------------------------------------------------------------- #
 
 class TestDamageBonusAggregation(unittest.TestCase):
-    """Attacker damage includes the sum of gear damage_bonus (+ powerups)."""
+    """Damage includes shared gear and only the weapon used by the attack."""
 
     def test_gear_damage_bonus_added_to_damage(self):
         weapon = FakeTypedWeapon(weapon_type="ranged", damage=20,
@@ -1963,7 +1978,7 @@ class TestDamageBonusAggregation(unittest.TestCase):
         attacker.equipment.equip(FakeGear("accessory", "damage_bonus", 3))
         target = FakePlayer(name="Target", hp=100,
                             location=FakeTile(xyz=(1, 0, "earth")))
-        engine.queue_attack(attacker, target)
+        engine.queue_attack(attacker, target, weapon=weapon)
         engine.resolve_tick()
         # 20 base + (5 + 3) gear bonus = 28 damage.
         self.assertEqual(target.db.hp, 72)
@@ -1981,10 +1996,36 @@ class TestDamageBonusAggregation(unittest.TestCase):
         }
         target = FakePlayer(name="Target", hp=100,
                             location=FakeTile(xyz=(1, 0, "earth")))
-        engine.queue_attack(attacker, target)
+        engine.queue_attack(attacker, target, weapon=weapon)
         engine.resolve_tick()
         # 20 base + 4 gear + 6 powerup = 30 damage.
         self.assertEqual(target.db.hp, 70)
+
+    def test_dual_loadout_excludes_holstered_weapon_bonus(self):
+        melee = FakeTypedWeapon(
+            weapon_type="melee", damage=10, weapon_range=1, key="blade"
+        )
+        melee.stat_modifiers["damage_bonus"] = 2
+        ranged = FakeTypedWeapon(
+            weapon_type="ranged", damage=20, weapon_range=5,
+            ammo_type=None, key="rifle",
+        )
+        ranged.stat_modifiers["damage_bonus"] = 7
+        engine, _ = _make_engine()
+        attacker = FakePlayer(name="Attacker", weapon=melee)
+        attacker.equipment.equip(ranged)
+        attacker.equipment.equip(
+            FakeGear("gloves", "damage_bonus", 3)
+        )
+        target = FakePlayer(name="Target", hp=1_000, hp_max=1_000)
+
+        # Shared +3 applies to both attacks. Each weapon contributes its own
+        # affix only: melee = 10 + 2 + 3; ranged = 20 + 7 + 3.
+        self.assertEqual(engine._calculate_damage(attacker, target, melee), 15)
+        self.assertEqual(engine._calculate_damage(attacker, target, ranged), 30)
+        self.assertEqual(
+            attacker.equipment.get_stat_total("damage_bonus"), 12
+        )  # the old all-slot path would leak both weapon bonuses
 
 
 # -------------------------------------------------------------- #
@@ -2004,7 +2045,7 @@ class TestArmorAggregation(unittest.TestCase):
                             location=FakeTile(xyz=(1, 0, "earth")))
         target.equipment.equip(FakeGear("torso", "damage_reduction", 6))
         target.equipment.equip(FakeGear("legs", "damage_reduction", 4))
-        engine.queue_attack(attacker, target)
+        engine.queue_attack(attacker, target, weapon=weapon)
         engine.resolve_tick()
         # 40 - (6 + 4) = 30 damage.
         self.assertEqual(target.db.hp, 70)

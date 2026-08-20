@@ -61,19 +61,32 @@ from mygame.world.systems.equipment_handler import EquipmentHandler  # noqa: E40
 class FakeItem:
     """Lightweight stand-in for a GameItem."""
 
-    def __init__(self, key: str, slot: str, stat_modifiers: dict | None = None):
+    def __init__(
+        self,
+        key: str,
+        slot: str,
+        stat_modifiers: dict | None = None,
+        weapon_type: str | None = None,
+        **state,
+    ):
         self.key = key
         self.slot = slot
         self.stat_modifiers = stat_modifiers or {}
+        if weapon_type is not None:
+            self.weapon_type = weapon_type
+        for name, value in state.items():
+            setattr(self, name, value)
 
     def get_stat(self, stat_name: str, default: float = 0) -> float:
         return float(self.stat_modifiers.get(stat_name, default))
+
 
 class FakeCharacter:
     """Lightweight stand-in for a CombatCharacter (no Evennia DB)."""
 
     def __init__(self):
         self._equipment_slots = {}
+
 
 # -------------------------------------------------------------- #
 #  Tests
@@ -83,11 +96,13 @@ class TestEquipBasic(unittest.TestCase):
     def test_equip_item_to_empty_slot(self):
         char = FakeCharacter()
         handler = EquipmentHandler(char)
-        item = FakeItem("assault_rifle", "weapon", {"damage": 25})
+        item = FakeItem(
+            "assault_rifle", "weapon_ranged", {"damage": 25}, "ranged"
+        )
         ok, msg = handler.equip(item)
         self.assertTrue(ok)
-        self.assertIn("weapon", msg)
-        self.assertIs(handler.get_equipped("weapon"), item)
+        self.assertIn("weapon_ranged", msg)
+        self.assertIs(handler.get_equipped("weapon_ranged"), item)
 
     def test_equip_returns_false_for_no_slot(self):
         char = FakeCharacter()
@@ -99,31 +114,275 @@ class TestEquipBasic(unittest.TestCase):
     def test_equip_multiple_slots(self):
         char = FakeCharacter()
         handler = EquipmentHandler(char)
-        weapon = FakeItem("rifle", "weapon", {"damage": 20})
+        weapon = FakeItem("rifle", "weapon_ranged", {"damage": 20}, "ranged")
         armor = FakeItem("vest", "armor", {"damage_reduction": 5})
         handler.equip(weapon)
         handler.equip(armor)
-        self.assertIs(handler.get_equipped("weapon"), weapon)
+        self.assertIs(handler.get_equipped("weapon_ranged"), weapon)
         self.assertIs(handler.get_equipped("armor"), armor)
+
 
 class TestAutoUnequip(unittest.TestCase):
     def test_equip_occupied_slot_replaces_item(self):
         char = FakeCharacter()
         handler = EquipmentHandler(char)
-        old = FakeItem("knife", "weapon", {"damage": 10})
-        new = FakeItem("rifle", "weapon", {"damage": 25})
+        old = FakeItem("knife", "weapon_melee", {"damage": 10}, "melee")
+        new = FakeItem("sword", "weapon_melee", {"damage": 25}, "melee")
         handler.equip(old)
         handler.equip(new)
-        self.assertIs(handler.get_equipped("weapon"), new)
+        self.assertIs(handler.get_equipped("weapon_melee"), new)
 
     def test_equip_occupied_slot_returns_success(self):
         char = FakeCharacter()
         handler = EquipmentHandler(char)
-        old = FakeItem("knife", "weapon", {"damage": 10})
-        new = FakeItem("rifle", "weapon", {"damage": 25})
+        old = FakeItem("knife", "weapon_melee", {"damage": 10}, "melee")
+        new = FakeItem("sword", "weapon_melee", {"damage": 25}, "melee")
         handler.equip(old)
         ok, msg = handler.equip(new)
         self.assertTrue(ok)
+
+
+class TestLegacyWeaponMigration(unittest.TestCase):
+    def test_equipped_ranged_weapon_is_rekeyed_without_losing_state(self):
+        char = FakeCharacter()
+        item = FakeItem(
+            "rifle",
+            "weapon",
+            {"damage": 25},
+            "ranged",
+            loaded=17,
+            rolled_stats={"damage": 31.5},
+            rarity="epic",
+            affixes=[{"stat": "damage_bonus", "magnitude": 4}],
+            inserts=[{"type": "damage_type", "value": "fire"}],
+            damage_type="fire",
+        )
+        char._equipment_slots = {"weapon": item}
+        handler = EquipmentHandler(char)
+
+        equipped = handler.get_all_equipped()
+
+        self.assertEqual(set(equipped), {"weapon_ranged"})
+        self.assertIs(equipped["weapon_ranged"], item)
+        self.assertEqual(item.slot, "weapon_ranged")
+        self.assertEqual(item.loaded, 17)
+        self.assertEqual(item.rolled_stats, {"damage": 31.5})
+        self.assertEqual(item.rarity, "epic")
+        self.assertEqual(
+            item.affixes, [{"stat": "damage_bonus", "magnitude": 4}]
+        )
+        self.assertEqual(
+            item.inserts, [{"type": "damage_type", "value": "fire"}]
+        )
+        self.assertEqual(item.damage_type, "fire")
+
+    def test_equipped_melee_weapon_is_rekeyed(self):
+        char = FakeCharacter()
+        item = FakeItem("knife", "weapon", {"damage": 10}, "melee")
+        char._equipment_slots = {"weapon": item}
+
+        equipped = EquipmentHandler(char).get_all_equipped()
+
+        self.assertEqual(equipped, {"weapon_melee": item})
+        self.assertEqual(item.slot, "weapon_melee")
+
+    def test_migration_is_idempotent(self):
+        char = FakeCharacter()
+        item = FakeItem("rifle", "weapon", weapon_type="ranged", loaded=9)
+        char._equipment_slots = {"weapon": item}
+        handler = EquipmentHandler(char)
+
+        first = handler.get_all_equipped()
+        persisted_after_first = dict(char._equipment_slots)
+        second = handler.get_all_equipped()
+
+        self.assertEqual(first, second)
+        self.assertEqual(char._equipment_slots, persisted_after_first)
+        self.assertIs(second["weapon_ranged"], item)
+        self.assertEqual(item.loaded, 9)
+
+    def test_canonical_destination_wins_conflict(self):
+        char = FakeCharacter()
+        canonical = FakeItem("new_rifle", "weapon_ranged", weapon_type="ranged")
+        legacy = FakeItem("old_rifle", "weapon", weapon_type="ranged", loaded=4)
+        char._equipment_slots = {
+            "weapon_ranged": canonical,
+            "weapon": legacy,
+        }
+
+        equipped = EquipmentHandler(char).get_all_equipped()
+
+        self.assertEqual(equipped, {"weapon_ranged": canonical})
+        self.assertEqual(legacy.slot, "weapon_ranged")
+        self.assertEqual(legacy.loaded, 4)
+        self.assertNotIn(legacy, equipped.values())
+
+    def test_mismatched_canonical_key_moves_to_inferred_destination(self):
+        char = FakeCharacter()
+        item = FakeItem("old_rifle", "weapon", weapon_type="ranged", loaded=6)
+        char._equipment_slots = {"weapon_melee": item}
+        handler = EquipmentHandler(char)
+
+        first = handler.get_all_equipped()
+        persisted_after_first = dict(char._equipment_slots)
+        second = handler.get_all_equipped()
+
+        self.assertEqual(first, {"weapon_ranged": item})
+        self.assertIs(first["weapon_ranged"], item)
+        self.assertEqual(item.slot, "weapon_ranged")
+        self.assertEqual(item.loaded, 6)
+        self.assertEqual(second, first)
+        self.assertEqual(char._equipment_slots, persisted_after_first)
+
+    def test_mismatched_canonical_key_loses_destination_collision(self):
+        char = FakeCharacter()
+        canonical = FakeItem("new_rifle", "weapon_ranged", weapon_type="ranged")
+        mismatched = FakeItem(
+            "old_rifle", "weapon", weapon_type="ranged", loaded=4
+        )
+        char._equipment_slots = {
+            "weapon_melee": mismatched,
+            "weapon_ranged": canonical,
+        }
+
+        equipped = EquipmentHandler(char).get_all_equipped()
+
+        self.assertEqual(equipped, {"weapon_ranged": canonical})
+        self.assertIs(equipped["weapon_ranged"], canonical)
+        self.assertEqual(mismatched.slot, "weapon_ranged")
+        self.assertEqual(mismatched.loaded, 4)
+        self.assertNotIn(mismatched, equipped.values())
+
+    def test_reciprocal_mismatches_swap_losslessly_in_either_map_order(self):
+        for reverse in (False, True):
+            with self.subTest(reverse=reverse):
+                char = FakeCharacter()
+                melee = FakeItem(
+                    "old_blade", "weapon", weapon_type="melee", rarity="rare"
+                )
+                ranged = FakeItem(
+                    "old_rifle", "weapon", weapon_type="ranged", loaded=8
+                )
+                entries = [
+                    ("weapon_melee", ranged),
+                    ("weapon_ranged", melee),
+                ]
+                if reverse:
+                    entries.reverse()
+                char._equipment_slots = dict(entries)
+                handler = EquipmentHandler(char)
+
+                first = handler.get_all_equipped()
+                persisted_after_first = dict(char._equipment_slots)
+                second = handler.get_all_equipped()
+
+                self.assertEqual(
+                    set(first), {"weapon_melee", "weapon_ranged"}
+                )
+                self.assertIs(first["weapon_melee"], melee)
+                self.assertIs(first["weapon_ranged"], ranged)
+                self.assertEqual(melee.slot, "weapon_melee")
+                self.assertEqual(melee.rarity, "rare")
+                self.assertEqual(ranged.slot, "weapon_ranged")
+                self.assertEqual(ranged.loaded, 8)
+                self.assertEqual(second, first)
+                self.assertEqual(char._equipment_slots, persisted_after_first)
+
+    def test_missing_type_uses_ranged_hints_and_persists_type(self):
+        char = FakeCharacter()
+        item = FakeItem("old_rifle", "weapon", magazine_size=30, loaded=12)
+        char._equipment_slots = {"weapon": item}
+
+        equipped = EquipmentHandler(char).get_all_equipped()
+
+        self.assertIs(equipped["weapon_ranged"], item)
+        self.assertEqual(item.slot, "weapon_ranged")
+        self.assertEqual(item.weapon_type, "ranged")
+
+    def test_invalid_untyped_legacy_weapon_defaults_to_melee(self):
+        char = FakeCharacter()
+        item = FakeItem("old_weapon", "weapon", weapon_type="unknown")
+        char._equipment_slots = {"weapon": item}
+
+        equipped = EquipmentHandler(char).get_all_equipped()
+
+        self.assertIs(equipped["weapon_melee"], item)
+        self.assertEqual(item.slot, "weapon_melee")
+        self.assertEqual(item.weapon_type, "melee")
+
+    def test_legacy_map_key_repairs_item_with_missing_slot(self):
+        char = FakeCharacter()
+        item = FakeItem("old_rifle", "", weapon_type="ranged")
+        char._equipment_slots = {"weapon": item}
+
+        equipped = EquipmentHandler(char).get_all_equipped()
+
+        self.assertEqual(equipped, {"weapon_ranged": item})
+        self.assertEqual(item.slot, "weapon_ranged")
+
+    def test_untyped_legacy_weapon_with_reach_is_ranged(self):
+        """A legacy weapon that struck from a distance must not become melee:
+        melee reach is hard-forced to 1, which would silently gut its range."""
+        char = FakeCharacter()
+        item = FakeItem("old_launcher", "weapon", {"damage": 30, "range": 8})
+        char._equipment_slots = {"weapon": item}
+
+        equipped = EquipmentHandler(char).get_all_equipped()
+
+        self.assertIs(equipped["weapon_ranged"], item)
+        self.assertEqual(item.slot, "weapon_ranged")
+        self.assertEqual(item.weapon_type, "ranged")
+
+    def test_untyped_legacy_weapon_with_melee_reach_stays_melee(self):
+        char = FakeCharacter()
+        item = FakeItem("old_baton", "weapon", {"damage": 10, "range": 1})
+        char._equipment_slots = {"weapon": item}
+
+        equipped = EquipmentHandler(char).get_all_equipped()
+
+        self.assertIs(equipped["weapon_melee"], item)
+        self.assertEqual(item.weapon_type, "melee")
+
+    def test_non_weapon_slots_are_left_untouched(self):
+        """Only weapon keys can be re-keyed by the split, so an item under an
+        armor key is never half-repaired (slot rewritten but key left behind)
+        and the read path does not scan it."""
+        char = FakeCharacter()
+        armor = FakeItem("plate", "torso", {"armor": 5})
+        stray = FakeItem("odd", "weapon", {"damage": 3})
+        char._equipment_slots = {"torso": armor, "head": stray}
+
+        equipped = EquipmentHandler(char).get_all_equipped()
+
+        self.assertEqual(equipped, {"torso": armor, "head": stray})
+        self.assertEqual(armor.slot, "torso")
+        self.assertEqual(stray.slot, "weapon")
+        self.assertFalse(hasattr(stray, "weapon_type"))
+
+    def test_stale_item_reference_does_not_break_equipment_reads(self):
+        """A reference to a deleted object must not raise out of a read that
+        runs on every attack and every damage calculation."""
+        class _RaisingAttributes:
+            def get(self, *args, **kwargs):
+                raise RuntimeError("object was deleted")
+
+        class _Ghost:
+            key = "ghost"
+
+            def __init__(self, pk):
+                self.pk = pk
+                self.attributes = _RaisingAttributes()
+
+        for label, pk in (("deleted_row", None), ("raising_handler", 7)):
+            with self.subTest(case=label):
+                char = FakeCharacter()
+                ghost = _Ghost(pk)
+                char._equipment_slots = {"weapon_melee": ghost}
+
+                equipped = EquipmentHandler(char).get_all_equipped()
+
+                self.assertIs(equipped["weapon_melee"], ghost)
+
 
 class TestUnequip(unittest.TestCase):
     def test_unequip_returns_item(self):
@@ -145,19 +404,20 @@ class TestUnequip(unittest.TestCase):
     def test_unequip_empty_slot_returns_none(self):
         char = FakeCharacter()
         handler = EquipmentHandler(char)
-        self.assertIsNone(handler.unequip("weapon"))
+        self.assertIsNone(handler.unequip("weapon_melee"))
+
 
 class TestGetAllEquipped(unittest.TestCase):
     def test_returns_all_equipped(self):
         char = FakeCharacter()
         handler = EquipmentHandler(char)
-        w = FakeItem("rifle", "weapon", {"damage": 25})
+        w = FakeItem("rifle", "weapon_ranged", {"damage": 25}, "ranged")
         a = FakeItem("vest", "armor", {"damage_reduction": 5})
         handler.equip(w)
         handler.equip(a)
         all_eq = handler.get_all_equipped()
         self.assertEqual(len(all_eq), 2)
-        self.assertIs(all_eq["weapon"], w)
+        self.assertIs(all_eq["weapon_ranged"], w)
         self.assertIs(all_eq["armor"], a)
 
     def test_empty_when_nothing_equipped(self):
@@ -165,11 +425,14 @@ class TestGetAllEquipped(unittest.TestCase):
         handler = EquipmentHandler(char)
         self.assertEqual(handler.get_all_equipped(), {})
 
+
 class TestGetStatTotal(unittest.TestCase):
     def test_sums_stat_across_items(self):
         char = FakeCharacter()
         handler = EquipmentHandler(char)
-        w = FakeItem("rifle", "weapon", {"damage": 25, "range": 5})
+        w = FakeItem(
+            "rifle", "weapon_ranged", {"damage": 25, "range": 5}, "ranged"
+        )
         g = FakeItem("scope", "gadget", {"sight_range": 3, "damage": 2})
         handler.equip(w)
         handler.equip(g)
@@ -178,7 +441,7 @@ class TestGetStatTotal(unittest.TestCase):
     def test_returns_zero_for_missing_stat(self):
         char = FakeCharacter()
         handler = EquipmentHandler(char)
-        w = FakeItem("rifle", "weapon", {"damage": 25})
+        w = FakeItem("rifle", "weapon_ranged", {"damage": 25}, "ranged")
         handler.equip(w)
         self.assertAlmostEqual(handler.get_stat_total("sight_range"), 0.0)
 
@@ -187,14 +450,59 @@ class TestGetStatTotal(unittest.TestCase):
         handler = EquipmentHandler(char)
         self.assertAlmostEqual(handler.get_stat_total("damage"), 0.0)
 
+
+class TestGetAttackStatTotal(unittest.TestCase):
+    def setUp(self):
+        char = FakeCharacter()
+        self.handler = EquipmentHandler(char)
+        self.melee = FakeItem(
+            "blade", "weapon_melee", {"damage_bonus": 2}, "melee"
+        )
+        self.ranged = FakeItem(
+            "rifle", "weapon_ranged", {"damage_bonus": 7}, "ranged"
+        )
+        self.shared = FakeItem("gloves", "hands", {"damage_bonus": 3})
+        for item in (self.melee, self.ranged, self.shared):
+            self.handler.equip(item)
+
+    def test_non_weapon_bonus_is_shared(self):
+        self.assertAlmostEqual(
+            self.handler.get_attack_stat_total("damage_bonus"), 3.0
+        )
+
+    def test_active_melee_excludes_ranged_bonus(self):
+        self.assertAlmostEqual(
+            self.handler.get_attack_stat_total(
+                "damage_bonus", active_weapon=self.melee
+            ),
+            5.0,
+        )
+
+    def test_active_ranged_excludes_melee_bonus(self):
+        self.assertAlmostEqual(
+            self.handler.get_attack_stat_total(
+                "damage_bonus", active_weapon=self.ranged
+            ),
+            10.0,
+        )
+
+    def test_none_excludes_both_weapon_slots(self):
+        self.assertAlmostEqual(
+            self.handler.get_attack_stat_total(
+                "damage_bonus", active_weapon=None
+            ),
+            3.0,
+        )
+
+
 class TestGetSlotNames(unittest.TestCase):
     def test_returns_occupied_slots(self):
         char = FakeCharacter()
         handler = EquipmentHandler(char)
-        handler.equip(FakeItem("rifle", "weapon"))
+        handler.equip(FakeItem("rifle", "weapon_ranged", weapon_type="ranged"))
         handler.equip(FakeItem("vest", "armor"))
         names = sorted(handler.get_slot_names())
-        self.assertEqual(names, ["armor", "weapon"])
+        self.assertEqual(names, ["armor", "weapon_ranged"])
 
     def test_empty_when_nothing_equipped(self):
         char = FakeCharacter()
@@ -451,19 +759,25 @@ class TestProperty15ApiPreservation(unittest.TestCase):
 
     def test_equip_unequip_behavior_unchanged(self):
         handler = EquipmentHandler(FakeCharacter())
-        item = FakeItem("rifle", "weapon", {"damage": 25})
+        item = FakeItem(
+            "rifle", "weapon_ranged", {"damage": 25}, weapon_type="ranged"
+        )
         ok, msg = handler.equip(item)
         self.assertTrue(ok)
-        self.assertIn("weapon", msg)
-        self.assertIs(handler.get_equipped("weapon"), item)
-        self.assertEqual(handler.get_slot_names(), ["weapon"])
-        self.assertEqual(handler.get_all_equipped(), {"weapon": item})
-        self.assertIs(handler.unequip("weapon"), item)
-        self.assertIsNone(handler.get_equipped("weapon"))
+        self.assertIn("weapon_ranged", msg)
+        self.assertIs(handler.get_equipped("weapon_ranged"), item)
+        self.assertEqual(handler.get_slot_names(), ["weapon_ranged"])
+        self.assertEqual(handler.get_all_equipped(), {"weapon_ranged": item})
+        self.assertIs(handler.unequip("weapon_ranged"), item)
+        self.assertIsNone(handler.get_equipped("weapon_ranged"))
 
     def test_get_stat_total_behavior_unchanged(self):
         handler = EquipmentHandler(FakeCharacter())
-        handler.equip(FakeItem("rifle", "weapon", {"damage": 25}))
+        handler.equip(
+            FakeItem(
+                "rifle", "weapon_ranged", {"damage": 25}, weapon_type="ranged"
+            )
+        )
         handler.equip(FakeItem("scope", "gadget", {"damage": 2}))
         self.assertAlmostEqual(handler.get_stat_total("damage"), 27.0)
 

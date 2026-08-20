@@ -4,7 +4,7 @@
 
 This feature deepens the existing item system into a full **equipment, weapons, and special-items** layer: anatomical armor slots, typed weapons (melee/ranged), counted ammunition, usable/throwable consumables (medkits, stims, bombs), and a **weight-based carry-capacity** limit on everything a player holds (with real Vault/HQ overflow storage so surplus has somewhere to go; the cap is written holder-generically but binds only on players in this feature — see D7). It builds directly on the seam that already exists — a single `GameItem` typeclass differentiated by validated `ItemDef` data (`world/definitions.py`), an `EquipmentHandler` storage mechanism on `CombatEntity` (`world/systems/equipment_handler.py`), an `EquipmentSystem` production service (`world/systems/equipment_system.py`), and a `CombatEngine` that already reads weapon `damage`/`range`/`ammo_cost` and target `damage_reduction` (`world/systems/combat_engine.py`).
 
-The central architectural observation shaping this feature: **the combat engine is already built for multi-slot equipment.** Target armor is computed as `target.equipment.get_stat_total("damage_reduction")` — a sum across *every* equipped item, not a single "armor" slot (`combat_engine.py` `_get_target_armor_reduction`, the `return` ~`:520`). Going from today's ad-hoc slot strings (`weapon`/`armor`/`gadget`/`consumable`) to a canonical eleven-slot body model therefore requires **zero** changes to the damage formula; the pieces simply aggregate. Weapon `range` is already enforced by Manhattan distance, and ammo is already deducted on the attack-queue step. This feature spends its effort on the parts that are genuinely new — a canonical slot vocabulary, weapon typing, counted ammunition, use/throw actions, and rank-gated equipping — rather than on re-plumbing combat.
+The central architectural observation shaping this feature: **the combat engine is already built for multi-slot equipment.** Target armor is computed as `target.equipment.get_stat_total("damage_reduction")` — a sum across *every* equipped item, not a single "armor" slot (`combat_engine.py` `_get_target_armor_reduction`, the `return` ~`:520`). Going from today's ad-hoc slot strings (`weapon`/`armor`/`gadget`/`consumable`) to a canonical twelve-slot body model therefore requires **zero** changes to the damage formula; the pieces simply aggregate. Weapon `range` is already enforced by Manhattan distance, and ammo is already deducted on the attack-queue step. This feature spends its effort on the parts that are genuinely new — a canonical slot vocabulary, weapon typing, counted ammunition, use/throw actions, and rank-gated equipping — rather than on re-plumbing combat.
 
 Two storage kinds are introduced, each mirroring a pattern already present in the codebase:
 
@@ -28,7 +28,7 @@ All mutating actions (equip, unequip, use, throw, reload) are routed through the
 
 These decisions were confirmed and drive this draft; they can be revisited during review:
 
-- **D1 — Balanced body slot set (confirmed).** Eleven slots: nine armor-bearing body slots (`head`, `eyes`, `face`, `torso`, `arms`, `hands`, `legs`, `feet`, `back`), one `weapon` slot, and one `accessory` slot. Every slot can contribute `damage_reduction` and other aggregated stats. This gives a broad stat surface without the fiddliness of ring/offhand/neck micro-slots, and remains extensible (adding a slot is a constant + data change).
+- **D1 — Balanced body slot set (confirmed).** Twelve slots: nine armor-bearing body slots (`head`, `eyes`, `face`, `torso`, `arms`, `hands`, `legs`, `feet`, `back`), two typed weapon slots (`weapon_melee`, `weapon_ranged`), and one `accessory` slot. Every slot can contribute `damage_reduction` and other aggregated stats. This gives a broad stat surface without the fiddliness of ring/offhand/neck micro-slots, and remains extensible (adding a slot is a constant + data change).
 - **D2 — Ammunition as counted items (confirmed).** Ranged ballistic weapons consume counted ammo from `db.supplies` (e.g. `rifle_rounds`, `frag_grenade`), not solely from the resource pool. Energy weapons may still draw from the `Energy` resource via the existing `ammo_cost` field; both checks coexist. Ammo is produced by buildings and picked up as drops.
 - **D3 — Include basic use/throw in this feature (confirmed).** `use <item>` (consumables: medkit heals HP, stim applies a temporary buff) and `throw <item> [target|x y]` (throwables: bombs deal area damage at coordinates) ship in this feature, not a follow-up. Area damage routes through the existing combat damage pipeline via a synthetic weapon.
 - **D4 — Enforce `required_rank` on equip (confirmed).** The `ItemDef.required_rank` field already exists and is already cross-validated against real ranks at load, but is not checked when equipping. This feature enforces it: a player may not equip an item whose `required_rank` exceeds the player's current rank/level, and is told the requirement. Rank gating also applies to `use`/`throw` where a supply declares a `required_rank`.
@@ -43,7 +43,7 @@ These decisions were confirmed and drive this draft; they can be revisited durin
 - **Game_Item**: The `GameItem` typeclass (`typeclasses/objects.py`), one Evennia object per unique gear item, reading `slot`, `stat_modifiers`, `ammo_cost`, `category`, `weapon_type`, `required_rank`, etc. from attributes resolved against its `Item_Def`.
 - **Item_Def**: The `ItemDef` dataclass (`world/definitions.py`), the validated static definition of an item keyed by `key`, loaded into `Data_Registry.items`.
 - **Item_Category**: A required classification of an item, one of `armor`, `weapon`, `accessory`, `ammo`, `consumable`, `throwable`. Determines storage kind (Gear vs Supply) and which actions apply.
-- **Equipment_Slot**: One of the eleven canonical body/equipment slots (`head`, `eyes`, `face`, `torso`, `arms`, `hands`, `legs`, `feet`, `back`, `weapon`, `accessory`), defined once in `world/constants.py` as `EQUIPMENT_SLOTS`. Each slot holds at most one Game_Item.
+- **Equipment_Slot**: One of the twelve canonical body/equipment slots (`head`, `eyes`, `face`, `torso`, `arms`, `hands`, `legs`, `feet`, `back`, `weapon_melee`, `weapon_ranged`, `accessory`), defined once in `world/constants.py` as `EQUIPMENT_SLOTS`. Each slot holds at most one Game_Item.
 - **Gear**: An item of category `armor`, `weapon`, or `accessory` — a unique Game_Item that occupies exactly one Equipment_Slot, stored in `db.equipment_slots`.
 - **Supply**: An item of category `ammo`, `consumable`, or `throwable` — a fungible, counted item stored as a count in the Supply_Bag; not equipped to a slot.
 - **Supply_Bag**: The per-entity attribute `db.supplies: dict[item_key, int]` holding counts of Supply items, mirroring `db.resources`.
@@ -75,7 +75,7 @@ These decisions were confirmed and drive this draft; they can be revisited durin
 
 #### Acceptance Criteria
 
-1. THE Equipment_System SHALL define exactly eleven canonical Equipment_Slots in `world/constants.py` as `EQUIPMENT_SLOTS`: `head`, `eyes`, `face`, `torso`, `arms`, `hands`, `legs`, `feet`, `back`, `weapon`, `accessory`.
+1. THE Equipment_System SHALL define exactly twelve canonical Equipment_Slots in `world/constants.py` as `EQUIPMENT_SLOTS`: `head`, `eyes`, `face`, `torso`, `arms`, `hands`, `legs`, `feet`, `back`, `weapon_melee`, `weapon_ranged`, `accessory`.
 2. THE Equipment_Handler SHALL store at most one Game_Item per Equipment_Slot.
 3. WHEN a player equips a Game_Item whose slot already holds another Game_Item, THE Equipment_Handler SHALL unequip the previously equipped item and equip the new one.
 4. THE Equipment_System SHALL treat a Game_Item's slot as authoritative from its `Item_Def.slot`, and SHALL reject equipping an item whose slot is not in `EQUIPMENT_SLOTS`.
@@ -117,7 +117,7 @@ These decisions were confirmed and drive this draft; they can be revisited durin
 3. THE Combat_Engine SHALL enforce a ranged weapon's attack range as the weapon's `range` stat via Manhattan distance, unchanged from current behavior.
 4. THE Combat_Engine SHALL never consume ammo for a melee weapon.
 5. THE Schema_Validator SHALL require `weapon_type` to be `melee` or `ranged` for every `weapon`-category item, and SHALL reject `weapon_type` on non-weapon items.
-6. THE Combat_Engine SHALL determine base attack damage from the equipped `weapon`-slot item's `damage` stat, unchanged from current behavior.
+6. THE Combat_Engine SHALL determine base attack damage from the equipped item in the slot matching the active attack mode: `weapon_melee` for a melee attack and `weapon_ranged` for a ranged attack.
 
 ### Requirement 5: Counted ammunition and the loaded magazine
 
@@ -203,7 +203,7 @@ These decisions were confirmed and drive this draft; they can be revisited durin
 
 #### Acceptance Criteria
 
-1. THE Equipment_System SHALL provide a `reload` action that, for the player's equipped ranged weapon, transfers Ammo_Type units from the Supply_Bag into the weapon's `db.loaded`.
+1. THE Equipment_System SHALL provide a `reload` action that transfers Ammo_Type units from the Supply_Bag into `db.loaded` on the player's equipped ranged weapon in `weapon_ranged`.
 2. THE `reload` action SHALL transfer at most `magazine_size − db.loaded` rounds, and at most the amount of that Ammo_Type available in the Supply_Bag, decrementing the Supply_Bag by exactly the amount transferred.
 3. WHEN the equipped weapon is already full (`db.loaded == magazine_size`), THE Equipment_System SHALL take no ammo from the Supply_Bag and SHALL notify the player the weapon is already loaded.
 4. WHEN the Supply_Bag holds no matching Ammo_Type, THE Equipment_System SHALL reject the reload and notify the player they have no ammunition of that type.
@@ -219,7 +219,7 @@ These decisions were confirmed and drive this draft; they can be revisited durin
 
 1. THE `equip <item>` command SHALL equip a resolved Game_Item via the Equipment_System, applying rank gating, and report success or the reason for failure.
 2. THE `unequip <slot>` command SHALL unequip the item in a named Equipment_Slot, rejecting any slot name not in `EQUIPMENT_SLOTS`.
-3. THE `equipment` command (aliases `eq`, `gear`) SHALL display all eleven Equipment_Slots including empty ones, each slot's occupying item and its stats, and totals for armor (`damage_reduction`), damage (`damage_bonus`), move speed, and sight range.
+3. THE `equipment` command (aliases `eq`, `gear`) SHALL display all twelve Equipment_Slots including empty ones, each slot's occupying item and its stats, and totals for armor (`damage_reduction`), shared non-weapon `damage_bonus`, effective melee damage, effective ranged damage, move speed, and sight range.
 4. THE `inventory` command (aliases `inv`, `i`) SHALL display carried resources, equipped Gear, and the Supply_Bag contents with their counts.
 5. THE `use <item>` command SHALL invoke the Equipment_System `use` action on a resolved consumable.
 6. THE `throw <item> [<target>|<x> <y>]` command SHALL invoke the Equipment_System `throw` action on a resolved throwable at the given location.

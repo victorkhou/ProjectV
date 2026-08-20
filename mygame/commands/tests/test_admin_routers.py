@@ -547,7 +547,7 @@ class ItemTarget:
 # spawn/set branch (mirrors the pre-migration fixtures).
 _ITEM_RIFLE = ItemDef(
     key="assault_rifle", name="Assault Rifle", category="weapon",
-    slot="weapon", weight=10.0,
+    slot="weapon_ranged", weapon_type="ranged", weight=10.0,
 )
 _ITEM_GRENADE = ItemDef(
     key="frag_grenade", name="Frag Grenade", category="throwable",
@@ -561,7 +561,8 @@ _ITEM_SNIPER_SPEC = {
 }
 _ITEM_SNIPER = ItemDef(
     key="sniper_rifle", name="Sniper Rifle", category="weapon",
-    slot="weapon", weight=12.0, roll_spec=_ITEM_SNIPER_SPEC,
+    slot="weapon_ranged", weapon_type="ranged", weight=12.0,
+    roll_spec=_ITEM_SNIPER_SPEC,
 )
 
 
@@ -1181,7 +1182,7 @@ class ItemRouterTestCase(RouterTestCase):
     def setUp(self):
         super().setUp()
         self.data_registry = FakeItemRegistry([
-            ItemDef(key="rifle", name="Rifle", slot="weapon",
+            ItemDef(key="rifle", name="Rifle", slot="weapon_ranged",
                     category="weapon", weapon_type="ranged", weight=3.0,
                     roll_spec=RIFLE_SPEC),
             ItemDef(key="medkit", name="Medkit", category="consumable"),

@@ -94,6 +94,11 @@ class FakeItem:
         self.key = key
         self.name = key
         self.slot = slot
+        self.weapon_type = {
+            "weapon_melee": "melee",
+            "weapon_ranged": "ranged",
+        }.get(slot)
+        self.category = "weapon" if self.weapon_type else "armor"
         self.stat_modifiers = stat_modifiers or {}
         self.required_rank = required_rank
 
@@ -105,7 +110,9 @@ class FakeWeapon:
     def __init__(self, ammo_type, magazine_size, loaded):
         self.key = "rifle"
         self.name = "rifle"
-        self.slot = "weapon"
+        self.slot = "weapon_ranged"
+        self.category = "weapon"
+        self.weapon_type = "ranged"
         self.ammo_type = ammo_type
         self.magazine_size = magazine_size
         self.stat_modifiers = {}
@@ -293,10 +300,12 @@ class TestProperty9RankGate(unittest.TestCase):
         req_level = next(r.level for r in RANKS if r.name == required)
         expected = rank_from_level(level) >= req_level
 
-        item = FakeItem("gun", "weapon", {"damage": 5}, required_rank=required)
+        item = FakeItem(
+            "gun", "weapon_ranged", {"damage": 5}, required_rank=required,
+        )
         self.assertEqual(system.equip(player, item), expected)
         self.assertEqual(
-            player.equipment.get_equipped("weapon") is item, expected
+            player.equipment.get_equipped("weapon_ranged") is item, expected
         )
 
     @given(
@@ -700,7 +709,7 @@ class TestProperty4ZeroEquipmentIdentity(unittest.TestCase):
         )
 
         # Attacker holds only a weapon; no other gear, no powerups.
-        weapon = FakeItem("gun", "weapon", {"damage": weapon_damage})
+        weapon = FakeItem("gun", "weapon_ranged", {"damage": weapon_damage})
         attacker = FakePlayer(level=1)
         attacker.equipment.equip(weapon)
 

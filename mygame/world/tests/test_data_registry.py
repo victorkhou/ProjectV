@@ -76,6 +76,8 @@ VALID_ITEMS = {
         {
             "key": "combat_knife",
             "name": "Combat Knife",
+            "category": "weapon",
+            "weapon_type": "melee",
             "slot": "weapon_melee",
             "stat_modifiers": {"damage": 10, "range": 1},
             "ammo_cost": None,

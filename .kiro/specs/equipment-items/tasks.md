@@ -31,7 +31,7 @@ left unchecked for a later prioritized pass.
     - Keep existing fields (`ammo_cost`, `required_rank`, `classification`) unchanged
     - _Requirements: 3.1, 4.1, 5.1, 8.1, 9.1, 10.4, 14.4, 15.1_
   - [x] 1.2 Add equipment constants to `world/constants.py`
-    - `EQUIPMENT_SLOTS` (11), `GEAR_CATEGORIES`, `SUPPLY_CATEGORIES`, `ITEM_CATEGORIES`, `WEAPON_TYPES`, `AGGREGATED_STATS`, `EFFECT_TYPES`, `BASE_CARRY_WEIGHT` (1000), `DEFAULT_RESOURCE_WEIGHT`, `DEFAULT_THROW_RANGE`
+    - `EQUIPMENT_SLOTS` (12), `GEAR_CATEGORIES`, `SUPPLY_CATEGORIES`, `ITEM_CATEGORIES`, `WEAPON_TYPES`, `AGGREGATED_STATS`, `EFFECT_TYPES`, `BASE_CARRY_WEIGHT` (1000), `DEFAULT_RESOURCE_WEIGHT`, `DEFAULT_THROW_RANGE`
     - _Requirements: 1.1, 2.4, 3.1, 4.1, 6.3, 9.3, 15.3_
   - [x] 1.3 Extend the item populator in `world/data_registry.py`
     - Read the new fields via `entry.get(...)` with the defaults in `_populate_items` (incl. `weight`)
@@ -81,7 +81,7 @@ left unchecked for a later prioritized pass.
     - Verify held and category `throwable`; enforce throw range (Manhattan ≤ `effect.range`|`DEFAULT_THROW_RANGE`); resolve targets within `radius` on the player's planet via the coordinate index; apply `aoe_damage` through the injected area-damage applier; decrement supply; rank gate; `notify` `bombed`
     - _Requirements: 7.3, 9.1–9.7, 12.6, 12.8_
   - [x] 3.5 Add `reload(player)` for the equipped ranged weapon
-    - Read the `weapon`-slot Game_Item; reject non-ranged (`notify reload_failed` reason `no_ammo_weapon`) or already-full (`already_loaded`); else transfer `min(magazine_size − db.loaded, bag[ammo_type])` from Supply_Bag into `db.loaded`, decrement bag by exactly that; `notify` `reloaded`/`reload_failed` (`no_ammo`)
+    - Read the Game_Item in `weapon_ranged`; reject a missing/non-ranged item (`notify reload_failed` reason `no_ammo_weapon`) or an already-full magazine (`already_loaded`); else transfer `min(magazine_size − db.loaded, bag[ammo_type])` from Supply_Bag into `db.loaded`, decrement bag by exactly that; `notify` `reloaded`/`reload_failed` (`no_ammo`)
     - _Requirements: 11.1–11.6_
   - [x] 3.6 Add `add_supply_drop(player, item_key, count)` (weight- and stack-aware pickup)
     - Add `min(count, max_stack_room, floor(weight_room / item.weight))` where `weight_room = carry_limit − carried_weight` (helpers land in task 9); spill remainder to a drop; `notify` `carry_full` on partial
@@ -100,7 +100,7 @@ left unchecked for a later prioritized pass.
     - In `_get_attacker_bonus`, add `attacker.equipment.get_stat_total("damage_bonus")` to the powerup bonus; update the stale "folded into weapon damage" comment; keep formula shape
     - _Requirements: 2.3, 14.1_
   - [x] 4.2 Melee gating + magazine draw in attack-queue validation
-    - `weapon_type == "melee"` ⇒ effective range 1, skip all ammo; `ranged` + `ammo_type` ⇒ require `weapon.db.loaded >= ammo_per_shot`, decrement `db.loaded` by `ammo_per_shot` on a shot (never touch the Supply_Bag on a shot), apply any resource `ammo_cost` per shot; empty magazine ⇒ reject + `notify` `out_of_ammo` (prompt reload)
+    - Select the item in the slot matching the active attack mode (`weapon_melee` for melee, `weapon_ranged` for ranged); `weapon_type == "melee"` ⇒ effective range 1, skip all ammo; `ranged` + `ammo_type` ⇒ require `weapon.db.loaded >= ammo_per_shot`, decrement `db.loaded` by `ammo_per_shot` on a shot (never touch the Supply_Bag on a shot), apply any resource `ammo_cost` per shot; empty magazine ⇒ reject + `notify` `out_of_ammo` (prompt reload)
     - _Requirements: 4.2, 4.3, 4.4, 5.3, 5.4, 5.5, 5.6_
   - [x] 4.3 Initialize fresh ranged weapons full
     - When a ranged weapon Game_Item is created (production/pickup factory), set `db.loaded = magazine_size`
@@ -139,7 +139,7 @@ left unchecked for a later prioritized pass.
     - Use `require_system("equipment_system")`; preserve message shape
     - _Requirements: 12.1, 12.2_
   - [x] 7.2 Paperdoll `equipment` command
-    - Iterate all 11 `EQUIPMENT_SLOTS` incl. empties; per-slot item + stats; totals for armor/damage/move/sight; show the equipped ranged weapon's `loaded`/`magazine_size`
+    - Iterate all 12 `EQUIPMENT_SLOTS` incl. empties; per-slot item + stats; totals for armor/damage/move/sight; show the equipped ranged weapon's `loaded`/`magazine_size`
     - _Requirements: 12.3, 12.9_
   - [x] 7.3 `inventory`/`score` Supplies + carried-weight section
     - Add resources + gear + Supply_Bag counts; show carried weight vs carry limit (`carried_weight`/`carry_limit` from task 9)

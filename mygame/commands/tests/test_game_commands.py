@@ -1085,6 +1085,12 @@ class TestCmdAttack(unittest.TestCase):
         cmd.func()
         self.assertTrue(any("Usage" in m for m in caller._messages))
 
+    def test_help_names_canonical_melee_and_ranged_slots(self):
+        help_text = CmdAttack.__doc__ or ""
+        self.assertIn("weapon_melee", help_text)
+        self.assertIn("weapon_ranged", help_text)
+        self.assertIn("ranged weapon does not add", help_text)
+
     def test_nothing_in_view_to_attack(self):
         """With no attackables in view, the command says so (it no longer
         searches the whole planet)."""
@@ -1916,6 +1922,11 @@ class TestCmdUnequip(unittest.TestCase):
 
     def test_remove_alias_registered(self):
         self.assertIn("remove", CmdUnequip.aliases)
+
+    def test_help_lists_both_canonical_weapon_slots(self):
+        help_text = CmdUnequip.__doc__ or ""
+        self.assertIn("weapon_melee", help_text)
+        self.assertIn("weapon_ranged", help_text)
 
 
 class _FakeItemDef:
@@ -3030,9 +3041,32 @@ class TestCmdEquipment(unittest.TestCase):
         cmd.func()
         out = "\n".join(caller._messages)
         self.assertIn("Armor (damage_reduction): +3", out)
-        self.assertIn("Damage: +2", out)
+        self.assertIn("Shared damage bonus: +2", out)
         self.assertIn("Move speed: +1", out)
         self.assertIn("Sight range: +1", out)
+
+    def test_dual_weapon_damage_is_reported_per_attack_not_combined(self):
+        caller = FakeCaller()
+        caller._equipment_slots = {
+            "weapon_melee": self._FakeItem(
+                "blade", {"damage": 10, "damage_bonus": 2},
+                weapon_type="melee",
+            ),
+            "weapon_ranged": self._FakeItem(
+                "rifle", {"damage": 20, "damage_bonus": 7},
+                weapon_type="ranged",
+            ),
+            "hands": self._FakeItem("gloves", {"damage_bonus": 3}),
+        }
+
+        _make_cmd(CmdEquipment, caller, "").func()
+        out = "\n".join(caller._messages)
+
+        self.assertIn("Shared damage bonus: +3", out)
+        self.assertIn("Melee damage: 15", out)
+        self.assertIn("Ranged damage: 30", out)
+        self.assertNotIn("\n  Damage:", out)
+        self.assertNotIn("Damage: 42", out)
 
     def test_max_hp_total_shown_when_gear_grants_it(self):
         caller = FakeCaller()
@@ -3150,6 +3184,30 @@ class TestCmdScore(unittest.TestCase):
         self.assertIn("Armor - +5", output)
         self.assertIn("Move speed - +2", output)
         self.assertIn("Max HP - +40", output)
+
+    def test_dual_weapon_damage_is_reported_per_attack_not_combined(self):
+        caller = FakeCaller()
+        for item in (
+            _FakeEquipItem(
+                "blade", "weapon_melee",
+                {"damage": 10, "damage_bonus": 2},
+            ),
+            _FakeEquipItem(
+                "rifle", "weapon_ranged",
+                {"damage": 20, "damage_bonus": 7},
+            ),
+            _FakeEquipItem("gloves", "hands", {"damage_bonus": 3}),
+        ):
+            caller.equipment.equip(item)
+
+        _make_cmd(CmdScore, caller).func()
+        output = "\n".join(caller._messages)
+
+        self.assertIn("Shared damage bonus - +3", output)
+        self.assertIn("Melee damage - 15", output)
+        self.assertIn("Ranged damage - 30", output)
+        self.assertNotIn("Damage - +42", output)
+        self.assertNotIn("Damage - 42", output)
 
     def test_hides_totals_when_no_equipment(self):
         caller = FakeCaller()

@@ -172,7 +172,8 @@ class LiveBootSmokeTest(EvenniaTest):
         )
         item.db.item_key = "combat_knife"
         item.db.category = "weapon"
-        item.db.slot = "weapon"
+        item.db.slot = "weapon_melee"
+        item.db.weapon_type = "melee"
         return item
 
     def _make_agent(self, x=0, y=0, planet="earth", location=None):
@@ -1197,8 +1198,9 @@ class LiveBootSmokeTest(EvenniaTest):
 
         room = self._make_planet_room("earth")
         item_def = ItemDef(
-            key="combat_knife", name="Combat Knife", slot="weapon",
-            category="weapon", stat_modifiers={"damage": 8},
+            key="combat_knife", name="Combat Knife", slot="weapon_melee",
+            category="weapon", weapon_type="melee",
+            stat_modifiers={"damage": 8},
         )
 
         first = spawn_gear_drop(room, item_def, x=3, y=3)
@@ -1229,9 +1231,11 @@ class LiveBootSmokeTest(EvenniaTest):
             room = self._make_planet_room("earth")
             player = self._make_player(x=5, y=5, planet="earth",
                                        combat_xp=100000, location=room)
-            idef = ItemDef(key="combat_knife", name="Combat Knife",
-                           slot="weapon", category="weapon",
-                           stat_modifiers={"damage": 8})
+            idef = ItemDef(
+                key="combat_knife", name="Combat Knife",
+                slot="weapon_melee", category="weapon", weapon_type="melee",
+                stat_modifiers={"damage": 8},
+            )
             knife = spawn_gear_drop(room, idef, x=5, y=5)
             self.assertIn(knife, room.get_objects_at(5, 5))
 
@@ -1242,18 +1246,18 @@ class LiveBootSmokeTest(EvenniaTest):
                 knife, room.get_objects_at(5, 5),
                 "equipped item must NOT linger on the tile (map ghost)",
             )
-            self.assertIs(player.equipment.get_equipped("weapon"), knife)
+            self.assertIs(player.equipment.get_equipped("weapon_melee"), knife)
 
             # Unequip → stays in inventory (location is the player).
-            eq.unequip(player, "weapon")
+            eq.unequip(player, "weapon_melee")
             self.assertIn(knife, player.contents,
                           "unequipped item must be in the player's inventory")
-            self.assertIsNone(player.equipment.get_equipped("weapon"))
+            self.assertIsNone(player.equipment.get_equipped("weapon_melee"))
             self.assertNotIn(knife, room.get_objects_at(5, 5))
 
             # Re-equip from inventory works.
             self.assertTrue(eq.equip(player, knife))
-            self.assertIs(player.equipment.get_equipped("weapon"), knife)
+            self.assertIs(player.equipment.get_equipped("weapon_melee"), knife)
         finally:
             _teardown_game(systems)
 
@@ -1560,14 +1564,15 @@ class LiveBootSmokeTest(EvenniaTest):
             # Symmetric cover: while sheltered (closed), the player also can't
             # fire ranged OUT. Give them a ranged weapon and confirm rejection.
             from world.definitions import ItemDef
-            rifle_def = ItemDef(key="rifle", name="Rifle", slot="weapon",
+            rifle_def = ItemDef(key="rifle", name="Rifle", slot="weapon_ranged",
                                 category="weapon", stat_modifiers={"damage": 20},
                                 weapon_type="ranged")
             from typeclasses.objects import spawn_gear_drop
             rifle = spawn_gear_drop(room, rifle_def, x=6, y=5)
-            systems["equipment_system"].equip(player, rifle)
+            self.assertIsNotNone(rifle)
+            self.assertTrue(systems["equipment_system"].equip(player, rifle))
             bystander = self._make_player(x=7, y=5, planet="earth", location=room)
-            ok, msg = engine.queue_attack(player, bystander)
+            ok, msg = engine.queue_attack(player, bystander, weapon=rifle)
             self.assertFalse(ok, "sheltered player must not fire ranged out")
             self.assertIn("inside", msg.lower())
 
@@ -1625,7 +1630,7 @@ class LiveBootSmokeTest(EvenniaTest):
     def test_targeting_lock_and_shoot_on_real_objects(self):
         """On real objects: TargetingSystem is wired at the composition root; a
         ranged lock completes over the balance-configured ticks and then a
-        locked shot queues an accuracy-bearing attack through the engine."""
+        locked shot resolves immediately with targeted accuracy."""
         from server.conf.game_init import initialize_game
         from world.definitions import ItemDef
         from typeclasses.objects import spawn_gear_drop
@@ -1641,7 +1646,7 @@ class LiveBootSmokeTest(EvenniaTest):
             shooter.db.combat_xp = 100000  # high rank so no equip gate blocks
 
             # A real ranged weapon, equipped via the real equipment system.
-            rifle_def = ItemDef(key="rifle", name="Rifle", slot="weapon",
+            rifle_def = ItemDef(key="rifle", name="Rifle", slot="weapon_ranged",
                                 category="weapon",
                                 stat_modifiers={"damage": 20, "range": 8},
                                 weapon_type="ranged")
@@ -1662,13 +1667,32 @@ class LiveBootSmokeTest(EvenniaTest):
                     break
             self.assertTrue(targeting.is_locked(shooter), "lock should complete")
 
-            # A locked shot queues an attack carrying the targeted accuracy.
+            # A locked player shot resolves now rather than entering the tick
+            # queue. The command layer supplies this targeted accuracy value.
             engine.pending_actions.clear()
             acc = targeting.targeted_accuracy(rifle)
-            ok, _ = engine.queue_attack(shooter, enemy, weapon=rifle, accuracy=acc)
+            self.assertGreater(acc, 0.0)
+            self.assertLessEqual(acc, 1.0)
+            # accuracy=1.0/0.0 make the roll deterministic, so these assert the
+            # supplied accuracy actually reaches it on real objects rather than
+            # only that nothing queued.
+            hp_before = enemy.db.hp
+            ok, _ = engine.resolve_now(
+                shooter, enemy, weapon=rifle, accuracy=1.0
+            )
             self.assertTrue(ok)
-            self.assertEqual(len(engine.pending_actions), 1)
-            self.assertEqual(engine.pending_actions[0]["accuracy"], acc)
+            self.assertEqual(engine.pending_actions, [])
+            self.assertLess(enemy.db.hp, hp_before,
+                            "a certain locked shot resolves damage inline")
+
+            hp_after_hit = enemy.db.hp
+            ok, _ = engine.resolve_now(
+                shooter, enemy, weapon=rifle, accuracy=0.0
+            )
+            self.assertTrue(ok, "a missed shot still resolves")
+            self.assertEqual(enemy.db.hp, hp_after_hit,
+                             "a missed shot deals no damage")
+            self.assertEqual(engine.pending_actions, [])
 
             # The SHOOTER moving breaks the lock immediately (at_coord_change),
             # not on the next tick — a real move_entity fires the hook.
@@ -1710,7 +1734,7 @@ class LiveBootSmokeTest(EvenniaTest):
 
             shooter = self._make_player(x=0, y=0, planet="earth", location=room)
             shooter.db.combat_xp = 100000
-            rifle_def = ItemDef(key="rifle", name="Rifle", slot="weapon",
+            rifle_def = ItemDef(key="rifle", name="Rifle", slot="weapon_ranged",
                                 category="weapon",
                                 stat_modifiers={"damage": 20, "range": 8},
                                 weapon_type="ranged")
@@ -1747,7 +1771,7 @@ class LiveBootSmokeTest(EvenniaTest):
             room = self._make_planet_room("earth")
             shooter = self._make_player(x=0, y=0, planet="earth", location=room)
             shooter.db.combat_xp = 100000
-            rifle_def = ItemDef(key="rifle", name="Rifle", slot="weapon",
+            rifle_def = ItemDef(key="rifle", name="Rifle", slot="weapon_ranged",
                                 category="weapon",
                                 stat_modifiers={"damage": 20, "range": 8},
                                 weapon_type="ranged")
@@ -1783,7 +1807,7 @@ class LiveBootSmokeTest(EvenniaTest):
             room = self._make_planet_room("earth")
             shooter = self._make_player(x=0, y=0, planet="earth", location=room)
             shooter.db.combat_xp = 100000
-            rifle_def = ItemDef(key="rifle", name="Rifle", slot="weapon",
+            rifle_def = ItemDef(key="rifle", name="Rifle", slot="weapon_ranged",
                                 category="weapon",
                                 stat_modifiers={"damage": 20, "range": 8},
                                 weapon_type="ranged")
@@ -1823,7 +1847,7 @@ class LiveBootSmokeTest(EvenniaTest):
             room = self._make_planet_room("earth")
             attacker = self._make_player(x=0, y=0, planet="earth", location=room)
             attacker.db.combat_xp = 100000
-            knife_def = ItemDef(key="knife", name="Knife", slot="weapon",
+            knife_def = ItemDef(key="knife", name="Knife", slot="weapon_melee",
                                 category="weapon",
                                 stat_modifiers={"damage": 15, "range": 1},
                                 weapon_type="melee")
