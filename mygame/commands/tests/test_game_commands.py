@@ -2987,15 +2987,16 @@ class TestCmdEquipment(unittest.TestCase):
             return float(self.stat_modifiers.get(stat_name, default))
 
     def test_lists_all_slots_including_empties(self):
-        from world.constants import EQUIPMENT_SLOTS
+        from world.constants import EQUIPMENT_SLOT_LABELS, EQUIPMENT_SLOTS
 
         caller = FakeCaller()
         cmd = _make_cmd(CmdEquipment, caller, "")
         cmd.func()
         out = "\n".join(caller._messages)
-        # Every slot appears; empty ones are marked "(empty)".
+        # Every slot appears (by its display label); empty ones are marked
+        # "(empty)".
         for slot in EQUIPMENT_SLOTS:
-            self.assertIn(f"[{slot}]", out)
+            self.assertIn(f"[{EQUIPMENT_SLOT_LABELS[slot]}]", out)
         self.assertEqual(out.count("(empty)"), len(EQUIPMENT_SLOTS))
 
     def test_occupied_slot_shows_item_and_mods(self):
@@ -4848,7 +4849,7 @@ class TestSendMapUpdateAdminGate(unittest.TestCase):
             if "map_update" in kwargs:
                 self.map_updates.append(kwargs["map_update"])
 
-    def _run(self, *, admin):
+    def _run(self, *, admin, terrain_and_resource=("River", "Wood")):
         from commands import game_commands as gc
 
         provider = types.SimpleNamespace(
@@ -4862,7 +4863,7 @@ class TestSendMapUpdateAdminGate(unittest.TestCase):
             get_discovered_tile_set=lambda caller: [1, 2, 3, 4, 5]
         )
         gen = types.SimpleNamespace(
-            get_terrain_and_resource=lambda x, y: ("River", "Wood")
+            get_terrain_and_resource=lambda x, y: terrain_and_resource
         )
 
         def fake_get_system(caller, name):
@@ -4885,12 +4886,14 @@ class TestSendMapUpdateAdminGate(unittest.TestCase):
         self.assertEqual(len(caller.map_updates), 1)
         return caller.map_updates[0]
 
-    def test_non_admin_payload_omits_resource_and_discovered(self):
+    def test_non_admin_payload_blanks_resource_and_omits_discovered(self):
         data = self._run(admin=False)
         # Terrain is still shown to everyone…
         self.assertEqual(data["player"].get("terrain"), "River")
-        # …but the resource label and discovered count are withheld.
-        self.assertNotIn("resource", data["player"])
+        # …but the resource label is blanked (not withheld — see the
+        # move-clears-stale-resource test below for why the key must always
+        # be present) and the discovered count is withheld entirely.
+        self.assertEqual(data["player"].get("resource"), "")
         self.assertNotIn("discovered_count", data)
 
     def test_admin_payload_includes_resource_and_discovered(self):

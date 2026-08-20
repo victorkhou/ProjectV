@@ -158,8 +158,15 @@ def _send_map_update(caller):
                     if gen:
                         tt, res = gen.get_terrain_and_resource(int(x), int(y))
                         data["player"]["terrain"] = tt
-                        if res and caller_is_admin:
-                            data["player"]["resource"] = res
+                        # Always set explicitly (never omitted): the webclient
+                        # footer merges incoming fields into a persistent
+                        # status object (so per-command prompt updates don't
+                        # blank fields they don't know about — see
+                        # map_renderer.js updateInfoFooter). An omitted key
+                        # would leave the PREVIOUS tile's resource showing
+                        # after moving onto a resource-less tile; an explicit
+                        # "" clears it.
+                        data["player"]["resource"] = res if (res and caller_is_admin) else ""
                     system = _get_system(caller, "terrain_modifier_system")
                     if system is not None:
                         mods = system.resolve_for_player(
