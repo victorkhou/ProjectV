@@ -108,7 +108,7 @@ from mygame.commands.game_commands import (  # noqa: E402
     CmdMove, CmdHarvest, CmdBuild, CmdUpgrade, CmdRepair, CmdDemolish,
     CmdAttack, CmdTarget, CmdShoot,
     CmdEquip, CmdUnequip, CmdUse, CmdThrow, CmdReload, CmdCraft, CmdInsert,
-    CmdReroll, CmdSalvage, CmdRefine,
+    CmdReroll, CmdSalvage, CmdRefine, CmdSurvey,
     CmdSetFuse, CmdArm,
     CmdDeposit, CmdWithdraw,
     CmdResearch, CmdPowerup,
@@ -2540,6 +2540,106 @@ class TestCmdSalvage(unittest.TestCase):
         caller.db.coord_y = 5
         _make_cmd(CmdSalvage, caller, " assault_rifle").func()
         self.assertEqual(calls, [None])
+
+
+class TestCmdSurvey(unittest.TestCase):
+    """`survey` routes each verb to OutpostSurveySystem with the building
+    underfoot. Every gate and player-facing line lives in the system; the
+    command only parses the verb (or an <x> <y>ered probe pair)."""
+
+    class _FakeSurveySystem:
+        """Records which survey action the command dispatched."""
+
+        def __init__(self):
+            self.calls = []
+
+        def status(self, player, building):
+            self.calls.append(("status", player, building))
+            return True
+
+        def scan(self, player, building):
+            self.calls.append(("scan", player, building))
+            return True
+
+        def narrow(self, player, building):
+            self.calls.append(("narrow", player, building))
+            return True
+
+        def probe(self, player, building, x, y):
+            self.calls.append(("probe", player, building, x, y))
+            return True
+
+        def abandon(self, player, building):
+            self.calls.append(("abandon", player, building))
+            return True
+
+    def _caller_in_array(self, survey_system, building_type="SA"):
+        caller = FakeCaller(systems={"outpost_survey": survey_system})
+        caller.db.coord_x = 5
+        caller.db.coord_y = 5
+        building = types.SimpleNamespace(
+            key=building_type,
+            db=types.SimpleNamespace(building_type=building_type),
+        )
+        caller.location._buildings_by_coord[(5, 5)] = [building]
+        return caller, building
+
+    def test_system_unavailable(self):
+        caller = FakeCaller()
+        _make_cmd(CmdSurvey, caller, "").func()
+        self.assertTrue(any("unavailable" in m for m in caller._messages))
+
+    def test_bare_command_shows_status(self):
+        system = self._FakeSurveySystem()
+        caller, building = self._caller_in_array(system)
+        _make_cmd(CmdSurvey, caller, "").func()
+        self.assertEqual(system.calls, [("status", caller, building)])
+
+    def test_verbs_dispatch_to_their_actions(self):
+        for args, expected in (
+            (" scan", "scan"), (" start", "scan"),
+            (" narrow", "narrow"), (" sweep", "narrow"),
+            (" abandon", "abandon"), (" cancel", "abandon"),
+            (" stop", "abandon"),
+        ):
+            system = self._FakeSurveySystem()
+            caller, building = self._caller_in_array(system)
+            _make_cmd(CmdSurvey, caller, args).func()
+            self.assertEqual(
+                system.calls, [(expected, caller, building)],
+                f"'survey{args}' should dispatch {expected}",
+            )
+
+    def test_coordinate_pair_probes(self):
+        system = self._FakeSurveySystem()
+        caller, building = self._caller_in_array(system)
+        _make_cmd(CmdSurvey, caller, " 40 62").func()
+        self.assertEqual(system.calls, [("probe", caller, building, 40, 62)])
+
+    def test_garbage_shows_usage_without_calling_the_system(self):
+        for args in (" 40", " 40 sixty", " scan now", " 1 2 3"):
+            system = self._FakeSurveySystem()
+            caller, _b = self._caller_in_array(system)
+            _make_cmd(CmdSurvey, caller, args).func()
+            self.assertEqual(system.calls, [], f"'survey{args}' must not act")
+            self.assertTrue(
+                any("usage" in m.lower() for m in caller._messages),
+                f"'survey{args}' should show usage",
+            )
+
+    def test_passes_no_building_through_for_the_system_to_reject(self):
+        # The capability/ownership gates belong to the system, so a caller
+        # standing nowhere still delegates (with building=None).
+        system = self._FakeSurveySystem()
+        caller = FakeCaller(systems={"outpost_survey": system})
+        _make_cmd(CmdSurvey, caller, " scan").func()
+        self.assertEqual(system.calls, [("scan", caller, None)])
+
+    def test_help_documents_the_verbs(self):
+        doc = CmdSurvey.__doc__ or ""
+        for token in ("survey scan", "survey narrow", "survey <x> <y>",
+                      "survey abandon", "Usage"):
+            self.assertIn(token, doc)
 
 
 class TestCmdRefine(unittest.TestCase):

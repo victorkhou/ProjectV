@@ -36,17 +36,19 @@ from world.definitions import ItemDef
 from world.equipment_slots import weapon_slot_for_item
 from world.event_bus import EventBus
 from world.systems.base_system import BaseSystem
+from world.systems.bench_gate import BenchGateMixin
 from world.systems.equipment_carry import CarryWeightMixin
 from world.systems.equipment_storage import StorageMixin
 
 logger = logging.getLogger("mygame.equipment_system")
 
 # Building abbreviations that run item production each tick. Armorer (AR)
-# makes weapons/ammo/modern gear, Medbay (MB) makes consumables, and Lab (LB)
-# makes futuristic gear/throwables (see items.yaml ``production_map``). There
-# is no Armory ``AA`` building — the abbreviation is Armorer ``AR`` — so it is
-# intentionally excluded (task 8.4 / 8.3).
-EQUIPMENT_BUILDING_TYPES = ("AR", "MB", "LB")
+# makes weapons/ammo/modern gear, Medbay (MB) makes consumables, Lab (LB)
+# makes futuristic gear, and Munitions Plant (MP) makes every bomb — grenades
+# and mines (see items.yaml ``production_map``). There is no Armory ``AA``
+# building — the abbreviation is Armorer ``AR`` — so it is intentionally
+# excluded (task 8.4 / 8.3).
+EQUIPMENT_BUILDING_TYPES = ("AR", "MB", "LB", "MP")
 
 # Blacksmith reroll floor per level (item-loot-economy task 4.4, design §4.4
 # "reroll floor (U clamp rises with level)"). The DECIDED formula:
@@ -87,7 +89,7 @@ SALVAGE_COST_MULT_FLOOR = 0.5
 CRAFT_IQS_FLOOR_CAP = 0.5
 
 
-class EquipmentSystem(CarryWeightMixin, StorageMixin, BaseSystem):
+class EquipmentSystem(BenchGateMixin, CarryWeightMixin, StorageMixin, BaseSystem):
     """Mediates equipment production, item actions, carry weight, and storage.
 
     The single use-case for the equipment/weapons/special-items feature: it
@@ -1119,21 +1121,11 @@ class EquipmentSystem(CarryWeightMixin, StorageMixin, BaseSystem):
         if not self._rank_allows(player, item_def.required_rank, item_name):
             return False
 
-        # 7. Resource gate.
-        if not player.has_resources(craft_cost):
-            from world.utils import format_insufficient_resources
-            self.notify(player, "craft_failed", reason="insufficient_resources",
-                        item_name=item_name,
-                        breakdown=format_insufficient_resources(player, craft_cost))
-            return False
-
-        # Deduct and produce. Deduct FIRST; only route the item if the spend
-        # succeeded, so a failed deduction can never mint a free item.
-        if not player.deduct_resources(craft_cost):
-            from world.utils import format_insufficient_resources
-            self.notify(player, "craft_failed", reason="insufficient_resources",
-                        item_name=item_name,
-                        breakdown=format_insufficient_resources(player, craft_cost))
+        # 7. Resource gate — the shared bench spend (deduct BEFORE producing,
+        #    so a failed deduction can never mint a free item).
+        if not self.charge_resources(
+            player, craft_cost, "craft_failed", item_name=item_name
+        ):
             return False
 
         # Clear the stashed craft roll before routing so a supply craft (or
@@ -2267,31 +2259,15 @@ class EquipmentSystem(CarryWeightMixin, StorageMixin, BaseSystem):
     ) -> bool:
         """Shared bench gate: ownership + operational (offline/upgrading).
 
-        Returns ``True`` when *building* is owned by *player* and neither
-        offline nor mid-upgrade. On failure emits *fail_kind* with the
-        matching ``reason`` (``not_owner`` / ``building_offline`` /
-        ``building_upgrading``) plus the caller's *payload* (e.g.
-        ``item_name=...`` or ``resource=...``) and returns ``False``.
-
-        The building-capability/catalog gate is the caller's job and must
-        pass first (so *building* is non-``None`` here). Extracted from the
-        five identical tails in craft/insert/reroll/salvage/refine — there
-        is deliberately NO active-HQ usage gate (design §4.1).
+        Thin alias of :meth:`BenchGateMixin.check_owner_operational`, which owns
+        the single implementation shared by the five identical tails in
+        craft/insert/reroll/salvage/refine AND by the Survey Array's ``survey``.
+        Kept as a private name because those five call sites read better with it
+        and it documents the gate as part of this system's bench contract.
         """
-        from world.utils import is_owner, get_building_attr, get_obj_attr
-        owner = getattr(building, "owner", None)
-        if owner is None:
-            owner = get_building_attr(building, "owner")
-        if not is_owner(player, owner):
-            self.notify(player, fail_kind, reason="not_owner", **payload)
-            return False
-        if getattr(building, "is_offline", False):
-            self.notify(player, fail_kind, reason="building_offline", **payload)
-            return False
-        if get_obj_attr(building, "under_construction", False):
-            self.notify(player, fail_kind, reason="building_upgrading", **payload)
-            return False
-        return True
+        return self.check_owner_operational(
+            player, building, fail_kind, **payload
+        )
 
     def _rank_allows(
         self, player: Any, required_rank: str | None, item_name: str

@@ -472,6 +472,52 @@ class TestUpdateDiscovery:
 #  Tests: get_discovered_buildings
 # -------------------------------------------------------------- #
 
+class TestRememberBuildingWithoutVision:
+    """``remember_building`` records intel the player never SAW — the Survey
+    Array pinpointing an enemy base. Discovery memory is additive, so the mark
+    stays known after the intel source is gone."""
+
+    def test_marks_the_tile_discovered_so_the_snapshot_renders(self):
+        fow = FogOfWarSystem(_FakeBalance())
+        player = _FakePlayer()
+
+        assert fow.remember_building(player, 42, 17, "HQ", "Outpost #2") is True
+
+        # Discovered but not currently visible => renders through the fog path.
+        assert (42, 17) in fow.get_discovered_tile_set(player)
+        assert fow.get_tile_visibility(player, 42, 17, set()) == "fog"
+        seen = fow.get_discovered_buildings(player, 42, 17)
+        assert len(seen) == 1
+        assert seen[0].building_type == "HQ"
+        assert seen[0].owner_name == "Outpost #2"
+        assert (seen[0].x, seen[0].y) == (42, 17)
+
+    def test_repeating_an_identical_snapshot_is_a_no_op(self):
+        fow = FogOfWarSystem(_FakeBalance())
+        player = _FakePlayer()
+        fow.remember_building(player, 3, 4, "HQ", "Outpost #1")
+
+        assert fow.remember_building(player, 3, 4, "HQ", "Outpost #1") is False
+        assert fow.get_discovered_buildings(player, 3, 4)
+
+    def test_a_changed_snapshot_is_persisted(self):
+        fow = FogOfWarSystem(_FakeBalance())
+        player = _FakePlayer()
+        fow.remember_building(player, 3, 4, "HQ", "Outpost #1")
+
+        assert fow.remember_building(player, 3, 4, "TU", "Outpost #1") is True
+        assert fow.get_discovered_buildings(player, 3, 4)[0].building_type == "TU"
+
+    def test_marks_accumulate_across_tiles(self):
+        fow = FogOfWarSystem(_FakeBalance())
+        player = _FakePlayer()
+        fow.remember_building(player, 5, 6, "HQ", "Outpost #1")
+        fow.remember_building(player, 9, 9, "HQ", "Fortress #1")
+
+        assert fow.get_discovered_buildings(player, 5, 6)
+        assert fow.get_discovered_buildings(player, 9, 9)
+
+
 class TestGetDiscoveredBuildings:
     def test_returns_snapshot(self):
         fow = FogOfWarSystem(_FakeBalance())

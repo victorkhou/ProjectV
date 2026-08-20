@@ -596,7 +596,8 @@ def _fmt_crafted(d: dict) -> str:
 
 def _fmt_produced(d: dict) -> str:
     # Passive output from an agent-run equipment building.
-    labels = {"AR": "Armory", "LB": "Lab", "MB": "Medbay"}
+    labels = {"AR": "Armory", "LB": "Lab", "MB": "Medbay",
+              "MP": "Munitions Plant"}
     where = labels.get(d.get("building_type"), "building")
     return f"|g[{where}] Produced {d.get('item_name', 'item')}.|n"
 
@@ -720,7 +721,7 @@ def _fmt_craft_failed(d: dict) -> str:
         "not_craftable": f"{item} can't be crafted.",
         "wrong_building": (
             f"You can't craft {item} here. Stand in the building that "
-            f"makes it (Armory, Lab, or Medbay)."
+            f"makes it (Armory, Lab, Medbay, or Munitions Plant)."
         ),
         "not_owner": "You can only craft in your own building.",
         "building_offline": "This building is offline — repair it first.",
@@ -736,6 +737,126 @@ def _fmt_craft_failed(d: dict) -> str:
         ),
     }
     return f"|r[Craft] {messages.get(reason, f'Cannot craft {item}.')}|n"
+
+
+def _fmt_survey_box(d: dict) -> str:
+    """The search-box line every survey readout shares."""
+    return (
+        f"Search area: |c({d.get('x1', '?')}, {d.get('y1', '?')})|n to "
+        f"|c({d.get('x2', '?')}, {d.get('y2', '?')})|n "
+        f"— {d.get('tiles', '?')} tiles."
+    )
+
+
+def _fmt_survey_started(d: dict) -> str:
+    return (
+        f"|g[Survey] Signal acquired — a |c{d.get('name', 'base')}|g is "
+        f"somewhere in this area.|n\n{_fmt_survey_box(d)}\n"
+        f"|wnarrow|n it down, or |wsurvey <x> <y>|n from inside the area to "
+        f"take a bearing."
+    )
+
+
+def _fmt_survey_status(d: dict) -> str:
+    if not d.get("active"):
+        return (
+            "|y[Survey] No survey running. Type |wsurvey scan|n to start "
+            "one.|n"
+        )
+    return (
+        f"|w[Survey] Tracking a |c{d.get('name', 'base')}|w.|n\n"
+        f"{_fmt_survey_box(d)}"
+    )
+
+
+def _fmt_survey_narrowed(d: dict) -> str:
+    return (
+        f"|g[Survey] Sweep {d.get('narrows', '?')} complete — the signal "
+        f"tightened.|n\n{_fmt_survey_box(d)}"
+    )
+
+
+def _fmt_survey_probe(d: dict) -> str:
+    return (
+        f"|w[Survey] Reading from |c({d.get('x', '?')}, {d.get('y', '?')})|w: "
+        f"the |c{d.get('name', 'base')}|w lies to the "
+        f"|y{d.get('bearing', 'unknown')}|w — {d.get('band', 'unclear')}.|n"
+    )
+
+
+def _fmt_survey_found(d: dict) -> str:
+    tail = (" It is marked on your |wmap|n."
+            if d.get("marked") else "")
+    return (
+        f"|g[Survey] Pinpointed the |c{d.get('name', 'base')}|g at "
+        f"|c({d.get('x', '?')}, {d.get('y', '?')})|g!{tail}|n"
+    )
+
+
+def _fmt_survey_abandoned(d: dict) -> str:
+    return (
+        f"|y[Survey] Dropped the search for the "
+        f"{d.get('name', 'outpost')}.|n"
+    )
+
+
+def _fmt_survey_failed(d: dict) -> str:
+    reason = d.get("reason")
+    if reason == "insufficient_resources":
+        head = "|r[Survey] Not enough resources to run that.|n"
+        breakdown = d.get("breakdown")
+        return f"{head}\n{breakdown}" if breakdown else head
+    if reason == "already_active":
+        return (
+            f"|y[Survey] Already tracking a {d.get('name', 'base')}.|n\n"
+            f"{_fmt_survey_box(d)}\n"
+            f"Use |wsurvey narrow|n, |wsurvey <x> <y>|n, or "
+            f"|wsurvey abandon|n."
+        )
+    if reason == "outside_box":
+        return (
+            f"|r[Survey] That tile is outside the search area — probe from "
+            f"inside it.|n\n{_fmt_survey_box(d)}"
+        )
+    messages = {
+        "wrong_building": (
+            "You need to be standing in your |cSurvey Array|n to do that."
+        ),
+        "not_owner": "You can only use your own Survey Array.",
+        "building_offline": "This Survey Array is offline — repair it first.",
+        "building_upgrading": (
+            "This Survey Array is being upgraded — it can't be used until the "
+            "upgrade finishes (or you 'upgrade cancel')."
+        ),
+        "no_targets": (
+            "The array sweeps the planet and finds nothing new — every enemy "
+            "base here is already on your map."
+        ),
+        "lookup_failed": (
+            "The array can't reach the survey network right now — try again "
+            "shortly."
+        ),
+        "no_contract": (
+            "No survey running. Type |wsurvey scan|n to start one."
+        ),
+        "other_planet": (
+            f"Your open survey covers |c{d.get('planet', 'another planet')}|n "
+            f"— this array only reaches its own planet."
+        ),
+        "other_planet_active": (
+            f"You're already tracking a {d.get('name', 'base')} on "
+            f"|c{d.get('planet', 'another planet')}|n. Finish it there, or "
+            f"|wsurvey abandon|n to drop it and search here."
+        ),
+        "target_lost": (
+            f"The {d.get('name', 'base')} you were tracking is gone — razed by "
+            f"someone else, or it moved on. The search is closed; "
+            f"|wsurvey scan|n for a new target."
+        ),
+        "bad_coords": "Give the tile to probe as two numbers, e.g. |wsurvey 40 62|n.",
+        "no_position": "Cannot determine your position.",
+    }
+    return f"|r[Survey] {messages.get(reason, 'The array cannot do that.')}|n"
 
 
 def _fmt_insert_applied(d: dict) -> str:
@@ -1001,6 +1122,14 @@ class NotificationPresenter:
         "salvage_failed": _fmt_salvage_failed,
         "refined": _fmt_refined,
         "refine_failed": _fmt_refine_failed,
+        # Survey Array kinds (outpost triangulation).
+        "survey_started": _fmt_survey_started,
+        "survey_status": _fmt_survey_status,
+        "survey_narrowed": _fmt_survey_narrowed,
+        "survey_probe": _fmt_survey_probe,
+        "survey_found": _fmt_survey_found,
+        "survey_abandoned": _fmt_survey_abandoned,
+        "survey_failed": _fmt_survey_failed,
         "sold": _fmt_sold,
         "junked": _fmt_junked,
         "sell_failed": _fmt_sell_failed,

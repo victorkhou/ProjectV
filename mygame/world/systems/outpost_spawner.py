@@ -398,27 +398,56 @@ class OutpostSpawnerSystem(BaseSystem):
         """
         from world.utils import chebyshev_distance
         out = []
+        for entry, rec in self._iter_planet_bases(planet):
+            dist = chebyshev_distance(int(x), int(y), entry["x"], entry["y"])
+            if dist > radius:
+                continue
+            entry.update({
+                "dist": dist,
+                "disturbed": bool(rec.get("disturbed_at")),
+                "ticks_remaining": self.ticks_remaining(rec, tick_number),
+            })
+            out.append(entry)
+        out.sort(key=lambda b: b["dist"])
+        return out
+
+    def bases_on_planet(self, planet: Any) -> list[dict]:
+        """Return every tracked active base HQ on *planet*, nearest-agnostic.
+
+        The planet-scoped counterpart to :meth:`bases_near` for callers that
+        want the whole set rather than a proximity slice — the Survey Array's
+        triangulation search draws its target from this. Each entry is
+        ``{key, tier, name, x, y}``; records with unresolved coordinates are
+        skipped. Ordered by coordinate so a seeded RNG picking from the list is
+        reproducible regardless of dict insertion order. Pure read — never
+        mutates and never raises.
+        """
+        out = [entry for entry, _rec in self._iter_planet_bases(planet)]
+        out.sort(key=lambda b: (b["x"], b["y"]))
+        return out
+
+    def _iter_planet_bases(self, planet: Any):
+        """Yield ``(projection, record)`` for each tracked base on *planet*.
+
+        The single place the ``{key, tier, name, x, y}`` projection is built, so
+        :meth:`bases_on_planet` and the proximity readout in :meth:`bases_near`
+        cannot drift on how a base's coordinates or display name resolve.
+        Records with unresolved coordinates are skipped.
+        """
         for key, rec in self._active_bases.items():
             if rec.get("planet") != planet:
                 continue
             bx, by = rec.get("x"), rec.get("y")
             if bx is None or by is None:
                 continue
-            dist = chebyshev_distance(int(x), int(y), int(bx), int(by))
-            if dist > radius:
-                continue
             template = self.registry.get_base_template(rec.get("tier"))
             name = getattr(template, "display_name", None) or str(
                 rec.get("tier", "Base")
             ).title()
-            out.append({
+            yield {
                 "key": key, "tier": rec.get("tier"), "name": name,
-                "x": int(bx), "y": int(by), "dist": dist,
-                "disturbed": bool(rec.get("disturbed_at")),
-                "ticks_remaining": self.ticks_remaining(rec, tick_number),
-            })
-        out.sort(key=lambda b: b["dist"])
-        return out
+                "x": int(bx), "y": int(by),
+            }, rec
 
     def is_active(self, key: Any) -> bool:
         """Return True if *key* still identifies a tracked, live base.

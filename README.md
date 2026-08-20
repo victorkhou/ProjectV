@@ -201,6 +201,7 @@ automatically by `evennia --initmissing`.
 | `look` | `l` `ls` | Look at the tile / overworld map |
 | `map` | `m` | Show the overworld map |
 | `scan` | `sn` | Scan nearby tiles / buildings |
+| `survey` | | Triangulate an enemy outpost's location from your Survey Array |
 | `harvest` | `ha` | Harvest the resource node on your tile |
 | `build <type>` | `bu` | Construct a building at your tile |
 | `upgrade` | `up` | Upgrade the building you're in |

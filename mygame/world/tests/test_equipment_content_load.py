@@ -650,6 +650,122 @@ class TestRealTurretCapability:
         )
 
 
+#: Every bomb in the game — the Munitions Plant's exclusive catalog.
+BOMB_ITEM_KEYS = ("frag_grenade", "plasma_grenade", "land_mine",
+                  "proximity_mine")
+
+
+class TestMunitionsPlantIsTheBombWorks:
+    """The Munitions Plant (MP) is the sole producer of every bomb.
+
+    Same class of guard as the turret capability above: the routing lives
+    entirely in ``items.yaml``'s ``production_map`` plus
+    ``EQUIPMENT_BUILDING_TYPES``, so a data edit that stranded the bombs (or
+    left them producible at two buildings) would make explosives uncraftable —
+    or double-routed — while every unit test stayed green.
+    """
+
+    def test_mp_exists_as_a_production_building(self, real_registry):
+        from mygame.world.systems.equipment_system import (
+            EQUIPMENT_BUILDING_TYPES,
+        )
+        mp = real_registry.resolve_building("MP")
+        assert mp is not None, "Munitions Plant (MP) must exist in the real data"
+        assert "MP" in EQUIPMENT_BUILDING_TYPES, (
+            "MP must be an equipment building or `craft` refuses every bomb "
+            "with wrong_building and passive production never runs"
+        )
+
+    def test_mp_catalog_is_exactly_the_bombs(self, real_registry):
+        catalog = set(real_registry.item_production_map.get("MP", []))
+        assert catalog == set(BOMB_ITEM_KEYS), (
+            f"MP should produce exactly the bombs, got {sorted(catalog)}"
+        )
+
+    def test_each_bomb_is_produced_only_by_mp(self, real_registry):
+        for key in BOMB_ITEM_KEYS:
+            producers = [
+                abbr for abbr, keys in real_registry.item_production_map.items()
+                if key in keys
+            ]
+            assert producers == ["MP"], (
+                f"bomb '{key}' must be produced by MP alone, got {producers}"
+            )
+
+    def test_bombs_are_craftable_at_the_plant(self, real_registry):
+        """Gate 3 (wrong_building) must pass for a bomb at the MP."""
+        for key in BOMB_ITEM_KEYS:
+            idef = real_registry.items[key]
+            assert idef.craft_cost, f"bomb '{key}' needs a craft_cost"
+            catalog = {
+                d.key for d in real_registry.get_items_for_building("MP")
+            }
+            assert key in catalog
+
+    def test_ungated_bombs_reachable_before_the_lab(self, real_registry):
+        """The freely-craftable bombs must not sit behind a later gate.
+
+        ``frag_grenade`` and ``land_mine`` are authored as Terra-craftable
+        equalizers with no ``required_rank``; the building that makes them has
+        to unlock no later than they do, and with no deed gate.
+        """
+        mp = real_registry.resolve_building("MP")
+        lab = real_registry.resolve_building("LB")
+        assert mp.unlock_deed is None, (
+            "the bomb works must not be deed-gated — its two headline bombs "
+            "are rank-free starter equipment"
+        )
+        assert mp.rank_requirement < lab.rank_requirement, (
+            "MP should unlock before the Lab it took the bombs from"
+        )
+        for key in ("frag_grenade", "land_mine"):
+            assert real_registry.items[key].required_rank is None
+
+
+class TestSurveyArrayCapability:
+    """The Survey Array (SA) must carry the ``outpost_survey`` capability.
+
+    Same guard rationale as the turret above: ``survey`` locates its bench by
+    CAPABILITY, so a dropped ``capabilities:`` block in the real YAML would make
+    every survey action report ``wrong_building`` while unit tests using fake
+    definitions stayed green.
+    """
+
+    def test_sa_has_the_survey_capability(self, real_registry):
+        from mygame.world.constants import OUTPOST_SURVEY
+        sa = real_registry.resolve_building("SA")
+        assert sa is not None, "Survey Array (SA) must exist in the real data"
+        assert sa.has_capability(OUTPOST_SURVEY), (
+            "SA must carry 'outpost_survey' or the survey bench is unreachable"
+        )
+
+    def test_exactly_the_array_is_survey_capable(self, real_registry):
+        from mygame.world.constants import OUTPOST_SURVEY
+        capable = [
+            abbr for abbr, bdef in real_registry.buildings.items()
+            if bdef.has_capability(OUTPOST_SURVEY)
+        ]
+        assert capable == ["SA"], (
+            f"Exactly SA should be survey-capable, got {capable}"
+        )
+
+    def test_sa_is_upgradable_because_level_scales_precision(self, real_registry):
+        from mygame.world.constants import UPGRADABLE
+        sa = real_registry.resolve_building("SA")
+        assert sa.has_capability(UPGRADABLE), (
+            "the array's level tightens the opening search box, so it must be "
+            "upgradable or that scaling is unreachable"
+        )
+
+    def test_sa_is_not_a_production_building(self, real_registry):
+        """The array is a bench, not a producer — it must have no catalog."""
+        from mygame.world.systems.equipment_system import (
+            EQUIPMENT_BUILDING_TYPES,
+        )
+        assert "SA" not in EQUIPMENT_BUILDING_TYPES
+        assert "SA" not in real_registry.item_production_map
+
+
 # ================================================================== #
 #  Item-loot-economy task 0.3 — accessory gear on aggregating axes
 # ================================================================== #

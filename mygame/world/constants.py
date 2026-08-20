@@ -526,6 +526,20 @@ VISION_AURA = "vision_aura"
 #: not permanent; a radius aura is an explicit later extension, not shipped).
 HEAL_AURA = "heal_aura"
 
+#: The Survey Array outpost-triangulation bench. The capability exists so the
+#: ``survey`` command can LOCATE the building the player is standing in — like
+#: the Blacksmith and Refinery, the array is a player-operated station, not a
+#: producer. Standing in your own operational array, ``survey`` searches for one
+#: enemy NPC outpost on your CURRENT planet: it never hands over coordinates,
+#: it returns a randomly-placed search box known to contain the target, which
+#: ``survey narrow`` shrinks and ``survey <x> <y>`` probes for bearing and
+#: distance band until the tile is pinpointed and written into the player's
+#: fog-of-war discovery memory. Usage gates on ownership + operational status
+#: (offline / mid-upgrade), mirroring the other benches; there is no active-HQ
+#: usage gate. The building LEVEL tightens the opening box (see
+#: ``BalanceConfig.survey_initial_radius``), which is why it is ``upgradable``.
+OUTPOST_SURVEY = "outpost_survey"
+
 BUILDING_CAPABILITIES: frozenset[str] = frozenset({
     HARVESTABLE,
     UPGRADABLE,
@@ -543,6 +557,7 @@ BUILDING_CAPABILITIES: frozenset[str] = frozenset({
     RANGE_AURA,
     VISION_AURA,
     HEAL_AURA,
+    OUTPOST_SURVEY,
 })
 
 #: Fraction of carried items/resources a Respawn building recovers, by BUILDING

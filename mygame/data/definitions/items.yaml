@@ -734,11 +734,16 @@ production_map:
   MB:
     - medkit
     - combat_stim
-  # Lab: futuristic gear + throwables (grenades) + mines
+  # Lab: futuristic gear
   # The typed-damage weapons (incendiary_rifle, psi_blade, blast_launcher)
   # route here as futuristic-class gear (item-loot-economy R10.7 / design §7 —
   # they shipped with a craft_cost but were absent from every catalog, making
   # them uncraftable).
+  # Grenades and mines used to route here too; they now belong to the Munitions
+  # Plant (MP) below, which is the dedicated bomb works. The classification
+  # routing convention (futuristic -> LB) still governs GEAR and inserts; bombs
+  # are routed by PURPOSE instead, so a player who wants explosives builds the
+  # plant rather than the whole research chain.
   LB:
     - plasma_rifle
     - incendiary_rifle
@@ -748,11 +753,15 @@ production_map:
     - jetpack
     - raider_talisman
     - energy_cell
-    - frag_grenade
-    - plasma_grenade
-    - land_mine
-    - proximity_mine
     # Futuristic-classification inserts (item-loot-economy task 4.2):
     # futuristic -> LB.
     - venom_coating
     - incendiary_core
+  # Munitions Plant: every bomb — grenades (thrown) and mines (armed in place).
+  # One item, one producer: these keys appear in NO other catalog, so the plant
+  # is the only way to make explosives by hand or passively via an Engineer.
+  MP:
+    - frag_grenade
+    - plasma_grenade
+    - land_mine
+    - proximity_mine

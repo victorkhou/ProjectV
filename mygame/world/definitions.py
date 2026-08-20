@@ -482,6 +482,35 @@ class BalanceConfig:
     #: L5 1.5× at the 0.125 default, mirroring the Blacksmith salvage
     #: yield curve (monotonic in level).
     refine_level_bonus: float = 0.125
+    # --- Survey Array (outpost triangulation) -------------------------- #
+    #: Resource cost to OPEN a survey: picks one undiscovered enemy outpost on
+    #: the player's current planet and returns the first search box. The
+    #: priciest of the three actions — it is the one that hands over a target.
+    survey_scan_cost: dict[str, int] = field(
+        default_factory=lambda: {"Energy": 20, "Circuits": 5})
+    #: Resource cost per ``survey narrow`` sweep, which roughly quarters the
+    #: search area. Cheaper than opening a survey, so grinding an existing lead
+    #: always beats abandoning it for a fresh one.
+    survey_narrow_cost: dict[str, int] = field(
+        default_factory=lambda: {"Energy": 12, "Circuits": 3})
+    #: Resource cost per ``survey <x> <y>`` probe (bearing + distance band).
+    #: Deliberately the cheapest action: probing is the skill-expressing move,
+    #: so a player who reasons about the readings spends less than one who
+    #: brute-forces narrowing sweeps.
+    survey_probe_cost: dict[str, int] = field(
+        default_factory=lambda: {"Energy": 4})
+    #: Half-width (tiles) of the opening search box at a LEVEL 1 array. The box
+    #: is a square of side ``2 x radius + 1`` placed at a random offset that
+    #: still contains the target, so its centre is not a free answer.
+    survey_initial_radius: int = 12
+    #: Floor for the opening box half-width, so a maxed array still leaves a
+    #: real search: ``max(survey_min_radius, survey_initial_radius - 2 x
+    #: (level - 1))`` → L1 12, L3 8, L5 4 at the defaults.
+    survey_min_radius: int = 3
+    #: Chebyshev distance at which a probe PINPOINTS the outpost (revealing it
+    #: on the map) instead of only reporting a bearing and band. 1 means the
+    #: probe must land on or beside the tile.
+    survey_reveal_radius: int = 1
     tick_interval: float = 1.0
     # --- Passive HP regeneration (players and agents only) ------------ #
     #: HP regenerated per interval, as a PERCENT of the entity's hp_max.

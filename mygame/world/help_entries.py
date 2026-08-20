@@ -382,12 +382,14 @@ HELP_ENTRY_DICTS = [
             |wFH|n |cField Hospital|n — heals you over time while you stand on it. (L10)
             |wBS|n |cBlacksmith|n — the gear bench: insert, reroll, salvage. (L11, requires deed: destroy 3 outposts)
             |wRF|n |cRefinery|n — converts surplus resources into Salvage. (L13, requires deed: destroy a fortress)
+            |wMP|n |cMunitions Plant|n — the bomb works: crafts every grenade and mine. (L6)
+            |wSA|n |cSurvey Array|n — triangulates enemy outpost locations on this planet. (L8)
 
             Higher-tier buildings unlock as you gain |clevels|n; a few also require a |cdeed|n (Barracks needs one destroyed outpost, Lab needs three). Check |wscore|n for your current level, |wbuild|n to see what's available now, and |whelp level|n for the full progression picture.
 
             # Per-Building Guides
 
-            Every building has its own help topic with costs, level, dependencies, and examples: |whelp hq|n · |whelp extractor|n · |whelp academy|n · |whelp armory|n · |whelp wall|n · |whelp barracks|n · |whelp lab|n · |whelp radar|n · |whelp turret|n · |whelp vault|n · |whelp relay|n · |whelp shield|n · |whelp medbay|n · |whelp watchtower|n · |whelp sniper nest|n · |whelp field hospital|n · |whelp blacksmith|n · |whelp refinery|n.
+            Every building has its own help topic with costs, level, dependencies, and examples: |whelp hq|n · |whelp extractor|n · |whelp academy|n · |whelp armory|n · |whelp wall|n · |whelp barracks|n · |whelp lab|n · |whelp radar|n · |whelp turret|n · |whelp vault|n · |whelp relay|n · |whelp shield|n · |whelp medbay|n · |whelp watchtower|n · |whelp sniper nest|n · |whelp field hospital|n · |whelp blacksmith|n · |whelp refinery|n · |whelp munitions plant|n · |whelp survey array|n.
 
             # See Also
 
@@ -502,7 +504,7 @@ HELP_ENTRY_DICTS = [
 
             # Bombs: Grenades & Mines
 
-            Bombs are |cfused|n explosives — set a fuse first with |wset <bomb> <seconds>|n (or |wset all <seconds>|n for your whole inventory), then deploy. A |cgrenade|n is |wthrow|n-n in a direction (|wthrow frag_grenade n|n): it flies until it hits the first obstacle or its max range, |clands|n, and ticks down before exploding. A |cmine|n is |warm|n-ed in place (|warm land_mine|n): it ticks down where you stand. Anyone on a bomb's tile sees it |rtick|n. The blast hits everything in radius — enemies, your own units, and |ryou|n if you're too close — so mind the fuse and your distance. See |whelp bombs|n. Bombs come from a |cLab|n.
+            Bombs are |cfused|n explosives — set a fuse first with |wset <bomb> <seconds>|n (or |wset all <seconds>|n for your whole inventory), then deploy. A |cgrenade|n is |wthrow|n-n in a direction (|wthrow frag_grenade n|n): it flies until it hits the first obstacle or its max range, |clands|n, and ticks down before exploding. A |cmine|n is |warm|n-ed in place (|warm land_mine|n): it ticks down where you stand. Anyone on a bomb's tile sees it |rtick|n. The blast hits everything in radius — enemies, your own units, and |ryou|n if you're too close — so mind the fuse and your distance. See |whelp bombs|n. Bombs come from a |cMunitions Plant|n.
 
             # Death & Recovery
 
@@ -569,7 +571,7 @@ HELP_ENTRY_DICTS = [
         "text": """
             |wBombs: Grenades & Mines|n
 
-            Bombs are |cfused|n area explosives. There are two families: |cgrenades|n (thrown) and |cmines|n (placed) — with variants of each (e.g. |cFrag|n and |cPlasma|n grenades; |cLand|n and |cProximity|n mines). Both come from a |cLab|n (|wcraft|n one, or assign an Engineer).
+            Bombs are |cfused|n area explosives. There are two families: |cgrenades|n (thrown) and |cmines|n (placed) — with variants of each (e.g. |cFrag|n and |cPlasma|n grenades; |cLand|n and |cProximity|n mines). Both come from a |cMunitions Plant|n (|wbuild MP|n, then |wcraft|n one — or assign an Engineer to make them while you're away).
 
             # Set the Fuse First
 
@@ -618,6 +620,8 @@ HELP_ENTRY_DICTS = [
 
             Explore with |wmove|n and watch your |wmap|n — enemy structures and units show up in |rred|n (your own are cyan), so a cluster of red buildings is a base. Stand near one and |wscan|n to list what's on the tiles around you; enemy buildings and guards are tagged |R[Enemy]|n.
 
+            Wandering is the free way. The deliberate way is a |cSurvey Array|n (|wbuild SA|n): |wsurvey scan|n triangulates one outpost on your current planet that isn't on your map yet, then you close in on it with sweeps and bearings until its tile is marked permanently. See |whelp survey|n.
+
             # Raiding
 
             Clear the |cguards|n, dodge or destroy the |cTurrets|n, breach the |cWalls|n, and destroy the enemy |cHeadquarters|n. Guards fight back and turrets auto-fire, so bring armor, ammo, and medkits (|whelp equipment|n, |whelp combat|n). Guards you kill stay dead. Destroying the |cHQ|n eliminates the entire base at once: |g[Combat] Outpost eliminated! +X XP. Loot dropped at (x,y).|n Pick up the loot with |wget|n.
@@ -628,7 +632,48 @@ HELP_ENTRY_DICTS = [
 
             # See Also
 
-            |whelp combat|n · |whelp equipment|n · |whelp buildings|n · |whelp agents|n
+            |whelp survey|n · |whelp combat|n · |whelp equipment|n · |whelp buildings|n · |whelp agents|n
+        """,
+    },
+    # ----------------------------------------------------------------- #
+    #  Survey Array — outpost triangulation
+    # ----------------------------------------------------------------- #
+    {
+        "key": "survey",
+        "aliases": ["surveying", "triangulate", "triangulation", "recon"],
+        "category": "Game",
+        "text": """
+            |wSurveying: Finding Outposts|n
+
+            A |cSurvey Array|n turns base hunting from wandering into a search you actually run. It never simply hands over coordinates — it gives you a |csearch area|n and two ways to close in on what's inside it. Build one with |wbuild SA|n, then stand in it (it must be online and not mid-upgrade).
+
+            # Open a Search
+
+            |wsurvey scan|n locks onto |cone|n enemy base on your |ccurrent planet|n that isn't on your map yet, and reports a rectangular search area guaranteed to contain it. |cAny tier|n is fair game — the array names what it found, so an |cOutpost|n and a |cFortress|n read differently and you can decide whether you want that fight. The base sits at a |crandom|n spot inside the area — the centre is not the answer — and each scan picks its target at random, so no two searches play out the same way. If every base on the planet is already mapped, the array tells you the planet is swept and charges you nothing.
+
+            Only |cone search|n runs at a time, on any planet. Finish it, or |wsurvey abandon|n it — the array will never quietly throw away readings you paid for. If the base you're tracking is razed by someone else while you hunt it, the search closes and tells you so rather than charging for readings against nothing.
+
+            |wsurvey|n on its own re-shows the area you're tracking. That readout is |cfree|n; everything else costs resources.
+
+            # Close In
+
+            |wsurvey narrow|n buys a sweep that shrinks the area to roughly a quarter of its size, re-placed around the target. It's the blunt tool: reliable, and it always works.
+
+            |wsurvey <x> <y>|n takes a reading from a tile |cinside|n the area and reports a compass |cbearing|n toward the base plus a rough |cdistance|n — "very close", "far off", and so on. It's the cheapest action and the one that rewards thinking: a single bearing gives you a direction, and two readings from |cdifferent|n tiles cross to a much smaller pocket than either alone.
+
+            # Pinpoint It
+
+            Probe close enough to the base — or narrow the area down to a single tile — and it's |cpinpointed|n: you're given the |cexact coordinates|n and the tile is remembered permanently, in enemy red, even though you've never laid eyes on it. Your |wmap|n only draws the area around you, so the mark appears once you're within map range of it — the coordinates are what you travel by. Then go raid it (|whelp outposts|n).
+
+            |wsurvey abandon|n drops the search with no refund, freeing you to |wscan|n for a different target.
+
+            # Array Level
+
+            Upgrading the array |ctightens the opening area|n, so a maxed array starts you where a level 1 array would need several sweeps to reach. That's the whole benefit — the sweeps and probes themselves cost the same at every level.
+
+            # See Also
+
+            |whelp survey array|n · |whelp outposts|n · |whelp buildings|n · |whelp map|n
         """,
     },
     # ----------------------------------------------------------------- #
@@ -686,8 +731,9 @@ HELP_ENTRY_DICTS = [
             Each production building makes a different set of items. Stand on your own building (or |wenter|n it) to craft there:
 
             |cArmory|n (|wbuild AR|n) — modern weapons, armor, ammo
-            |cLab|n (|wbuild LB|n) — futuristic gear and grenades (also runs research)
+            |cLab|n (|wbuild LB|n) — futuristic gear (also runs research)
             |cMedbay|n (|wbuild MB|n) — medkits and combat stims
+            |cMunitions Plant|n (|wbuild MP|n) — every grenade and mine
 
             # Crafting by Hand
 
@@ -1437,6 +1483,84 @@ HELP_ENTRY_DICTS = [
             # See Also
 
             |whelp salvage currency|n · |whelp blacksmith|n · |whelp resources|n
+        """,
+    },
+    {
+        "key": "munitions plant",
+        "aliases": ["mp", "munitions", "munitions plant building",
+                    "bomb factory"],
+        "category": "Buildings",
+        "text": """
+            |wMunitions Plant (MP)|n
+
+            The bomb works. Every |cgrenade|n and |cmine|n in the game is made here and nowhere else — if you want explosives, you build this.
+
+            # Build Requirements
+
+            Cost:
+              Wood - |c20|n
+              Stone - |c15|n
+              Iron - |c20|n
+
+            Requirements:
+              Player - |clevel 6|n
+              HQ - |crequired|n
+
+            # What It Does
+
+            Crafts the full bomb catalog: |cFrag|n and |cPlasma|n grenades (thrown in a direction) and |cLand|n and |cProximity|n mines (armed where you stand). Bombs breach cover — they damage closed buildings and the people sheltering inside them — which makes them the answer to a walled outpost and to anyone turtling in a structure.
+
+            Like the Armory, Lab, and Medbay it is a |cproduction|n building, so an assigned |cEngineer|n crafts the same catalog passively while you're elsewhere, paying the same resource cost from your stockpile.
+
+            # Using It
+
+            |wbuild MP|n, stand in it, then |wcraft|n with no argument to list the bombs and their costs. |wcraft frag_grenade|n makes one. Bombs land in your |csupply bag|n — set a fuse with |wset frag_grenade 3|n before you |wthrow|n or |warm|n them.
+
+            The |cFrag Grenade|n and |cLand Mine|n cost only starter resources and carry no rank gate, so a plant pays off as soon as you can raise one. |cPlasma|n grenades and |cProximity|n mines need a rank on top.
+
+            # See Also
+
+            |whelp bombs|n · |whelp craft|n · |whelp combat|n · |whelp buildings|n
+        """,
+    },
+    {
+        "key": "survey array",
+        "aliases": ["sa", "survey array building", "array"],
+        "category": "Buildings",
+        "text": """
+            |wSurvey Array (SA)|n
+
+            A signals station that hunts down enemy |cbases|n on your planet — outposts and fortresses alike. It is how you stop wandering the map hoping to bump into one.
+
+            # Build Requirements
+
+            Cost:
+              Wood - |c15|n
+              Stone - |c15|n
+              Iron - |c20|n
+              Circuits - |c10|n
+
+            Requirements:
+              Player - |clevel 8|n
+              HQ - |crequired|n
+
+            # What It Does
+
+            Runs the |wsurvey|n search. |wsurvey scan|n picks one enemy base on your |ccurrent planet|n that isn't on your map yet — any tier, and it names which — and returns a |csearch area|n containing it, placed so the base sits at a random spot inside, never at the centre. |wsurvey narrow|n shrinks that area; |wsurvey <x> <y>|n reads a |cbearing|n and rough |cdistance|n from a tile inside it. Pinpoint the outpost and you're given its exact coordinates, and its tile is remembered on your |wmap|n for good.
+
+            Every action except the status readout costs resources, so a search is a real investment — and cheap probing beats expensive sweeping if you read the bearings well.
+
+            # Level Scaling
+
+            Upgrading |ctightens the opening search area|n (a maxed array starts roughly where a level 1 array needs several sweeps to get). Sweep and probe costs don't change with level.
+
+            # Using It
+
+            |wbuild SA|n, stand in it, then |wsurvey scan|n. Full walkthrough in |whelp survey|n.
+
+            # See Also
+
+            |whelp survey|n · |whelp outposts|n · |whelp radar|n · |whelp buildings|n
         """,
     },
     {

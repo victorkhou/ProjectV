@@ -482,3 +482,77 @@
     - heal_aura
     - upgradable
   map_symbol: FH
+
+# Munitions Plant — the dedicated bomb works. A PRODUCTION building like the
+# Armory/Lab/Medbay (it is in items.yaml ``production_map`` and in
+# ``equipment_system.EQUIPMENT_BUILDING_TYPES``), so `craft` makes bombs by hand
+# and an assigned Engineer produces the same catalog passively. It declares NO
+# capabilities for the same reason its production siblings don't: production
+# buildings are identified by their catalog, not by a capability flag, and
+# advertising a flag nothing reads would be dead data.
+#
+# It is the SOLE producer of every grenade and mine (moved off the Lab, which
+# keeps futuristic gear + inserts): one item, one producer. That move also
+# UNGATES the two freely-craftable bombs new players rely on — the frag grenade
+# and land mine were stranded behind the Lab's level 11 + 3-outpost deed gate
+# despite being authored as Terra-craftable equalizers. The plant sits at
+# level 6 with no deed so they land when they are actually needed, while the
+# rank-gated futuristic bombs stay gated by their own ``required_rank``.
+- name: Munitions Plant
+  abbreviation: MP
+  cost:
+    Wood: 20
+    Stone: 15
+    Iron: 20
+  build_time_seconds: 30
+  max_level: 5
+  rank_requirement: 6
+  max_health: 220
+  requires_hq: true
+  required_terrain: null
+  category: equipment
+  produces: null
+  requires_agent: true
+  storage_capacity: 0
+  map_symbol: MP
+
+# Survey Array — the outpost-finding station (the intelligence counterpart to
+# the Radar's passive vision). A player-operated bench like the Blacksmith and
+# Refinery, not a producer: standing in your own operational array, `survey`
+# runs a signal-triangulation search for ONE enemy NPC outpost on your CURRENT
+# planet. Each action costs resources (balance ``survey_*_cost``); the array
+# never reveals a target outright — it returns a randomly-placed search box
+# containing the outpost, which `survey narrow` shrinks and `survey <x> <y>`
+# probes for bearing + distance band until the tile is pinpointed and marked on
+# your map.
+#
+# `upgradable`: the array's LEVEL tightens the opening box
+# (``survey_initial_radius - 2 x (level - 1)``, floored at
+# ``survey_min_radius``), so a maxed array starts a search where an L1 array
+# would need several narrowing sweeps. Level 8 + no deed places it just before
+# the Radar (9) — you find bases before you can watch them.
+- name: Survey Array
+  abbreviation: SA
+  cost:
+    Wood: 15
+    Stone: 15
+    Iron: 20
+    Circuits: 10
+  build_time_seconds: 28
+  max_level: 5
+  rank_requirement: 8
+  max_health: 200
+  requires_hq: true
+  required_terrain: null
+  category: intelligence
+  produces: null
+  # Bench usage is gated on ownership + operational status only, mirroring the
+  # Blacksmith/Refinery rationale: nothing consumes requires_agent for a bench
+  # command, so declaring true would advertise an agent gate that is never
+  # enforced. Flip to true only when a consumer exists.
+  requires_agent: false
+  storage_capacity: 0
+  capabilities:
+    - outpost_survey
+    - upgradable
+  map_symbol: SA

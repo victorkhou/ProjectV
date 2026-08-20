@@ -2783,6 +2783,84 @@ class CmdSalvage(GameCommand):
         equipment_system.salvage(self.caller, token, building)
 
 
+class CmdSurvey(GameCommand):
+    """Hunt for an enemy outpost from your Survey Array.
+
+    Usage:
+      survey
+      survey scan
+      survey narrow
+      survey <x> <y>
+      survey abandon
+
+    Options:
+      (none)     show the search area you're currently tracking
+      scan       start a new search for an outpost on this planet
+      narrow     run a sweep that shrinks the search area
+      <x> <y>    take a bearing from a tile inside the search area
+      abandon    drop the current search
+
+    Examples:
+      survey scan
+      survey narrow
+      survey 40 62
+      survey abandon
+
+    Notes:
+      Stand in your own |cSurvey Array|n (it must be online and not
+      mid-upgrade). |wscan|n locks onto one enemy base on |cthis planet|n
+      that isn't on your map yet — any tier, and it tells you which — and gives
+      you a |csearch area|n containing it: never the tile itself, and never
+      centred on it. One search runs at a time. Close in two ways:
+      |wnarrow|n buys a sweep that shrinks the area, and |wsurvey <x> <y>|n
+      reads a |cbearing|n and a rough |cdistance|n from any tile inside the
+      area — cheapest, and two readings from different tiles tell you far more
+      than one. Probe close enough (or narrow to a single tile) and you get the
+      exact coordinates, |cmarked on your map|n for good. Every action but the
+      status readout costs resources. A higher-level array starts you with a
+      tighter area. See 'help survey' and 'help outposts'.
+    """
+
+    key = "survey"
+    help_category = "Game"
+
+    _USAGE = ("Usage: |wsurvey|n · |wsurvey scan|n · |wsurvey narrow|n · "
+              "|wsurvey <x> <y>|n · |wsurvey abandon|n — see 'help survey'.")
+
+    def func(self):
+        survey_system = self.require_system("outpost_survey", label="Survey array")
+        if survey_system is None:
+            return
+
+        building = self._building_at_caller(self.caller)
+        args = self.args.split()
+
+        # NOTE: deliberately NO base-active (HQ) gate here, matching the
+        # Blacksmith/Refinery benches (item-loot-economy design §4.1). The
+        # system validates the capability/ownership/operational/cost gates and
+        # emits every player-facing line (survey_* kinds) via the presenter, so
+        # this command composes no outcome text.
+        if not args:
+            survey_system.status(self.caller, building)
+            return
+
+        verb = args[0].lower()
+        if len(args) == 1 and verb in ("scan", "start"):
+            survey_system.scan(self.caller, building)
+            return
+        if len(args) == 1 and verb in ("narrow", "sweep"):
+            survey_system.narrow(self.caller, building)
+            return
+        if len(args) == 1 and verb in ("abandon", "cancel", "stop"):
+            survey_system.abandon(self.caller, building)
+            return
+        if len(args) == 2 and _is_int_token(args[0]) and _is_int_token(args[1]):
+            survey_system.probe(self.caller, building, int(args[0]), int(args[1]))
+            return
+
+        self.caller.msg(self._USAGE)
+
+
 class CmdRefine(GameCommand):
     """Convert surplus resources into Salvage at your Refinery.
 

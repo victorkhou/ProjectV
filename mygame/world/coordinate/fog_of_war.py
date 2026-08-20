@@ -325,6 +325,44 @@ class FogOfWarSystem:
         bitfield, _ = self._get_discovery_data(player)
         return bitfield
 
+    def remember_building(
+        self, player: Any, x: int, y: int, building_type: str, owner_name: str
+    ) -> bool:
+        """Record a known enemy building at ``(x, y)`` in fog memory.
+
+        The intel counterpart to :meth:`update_discovery`: that method records
+        what the player can currently SEE, while this records what they have
+        LEARNED some other way — today the Survey Array pinpointing an enemy
+        base. It writes the same snapshot shape, so the tile renders through the
+        existing fog path (the remembered abbreviation in enemy red) with no
+        renderer change, and it also marks the tile discovered, because a
+        snapshot on an undiscovered tile would never be drawn.
+
+        The snapshot is only authoritative while the tile is NOT currently
+        visible: :meth:`update_discovery` re-confirms it from the live tile the
+        moment the player can see it, and drops it if nothing is there — the
+        correct behavior for a base that has since been wiped.
+
+        Callers are responsible for only recording buildings the player should
+        see as ENEMY intel; unlike :meth:`update_discovery` this applies no
+        own/allied owner filter, because the caller already knows whose base it
+        is. Returns ``True`` if anything changed. Never raises.
+        """
+        x, y = int(x), int(y)
+        bitfield, buildings_mem = self._get_discovery_data(player)
+        snapshot = {
+            "building_type": str(building_type or "??"),
+            "owner_name": str(owner_name or "Unknown"),
+            "x": x, "y": y,
+        }
+        tiles_changed = bitfield.add_many({(x, y)})
+        building_changed = buildings_mem.get((x, y)) != snapshot
+        if not tiles_changed and not building_changed:
+            return False
+        buildings_mem[(x, y)] = snapshot
+        self._save_discovery_data(player, bitfield, buildings_mem)
+        return True
+
     def get_discovered_buildings_map(self, player: Any) -> dict:
         """Return the full buildings memory dict for the player."""
         _, buildings = self._get_discovery_data(player)

@@ -225,6 +225,7 @@ def initialize_game() -> dict:
     from world.systems.guard_combat_system import GuardCombatSystem
     from world.systems.targeting_system import TargetingSystem
     from world.systems.outpost_spawner import OutpostSpawnerSystem
+    from world.systems.outpost_survey import OutpostSurveySystem
     from world.systems.base_elimination import BaseEliminationHandler
     from world.systems.movement_system import MovementSystem
     from world.constants import MAX_PATHS_PER_TICK
@@ -701,6 +702,24 @@ def initialize_game() -> dict:
         # enumerate a base's buildings + guards when wiping a stale base.
         owned_entities_provider=_owned_entities_for,
     )
+    # Survey Array triangulation search. Reads the live base set through the
+    # spawner's planet-scoped pure read. The fog system is resolved late through
+    # game_systems because it is only PUBLISHED there in section 7, after this.
+    def _planet_bounds(planet):
+        """(width, height) tile extent of *planet*, or None if unknown."""
+        try:
+            space = planet_registry.get_space(planet)
+        except Exception:  # noqa: BLE001 - unknown planet: no clamping
+            return None
+        return space.width, space.height
+
+    outpost_survey = OutpostSurveySystem(
+        registry,
+        event_bus,
+        outposts_provider=outpost_spawner.bases_on_planet,
+        fog_provider=lambda: game_systems.get("fog_system"),
+        bounds_provider=_planet_bounds,
+    )
 
     # ---------------------------------------------------------- #
     #  5. Initialize ChatSystem — ensure Global channel
@@ -743,6 +762,7 @@ def initialize_game() -> dict:
         "spawn_resolver": spawn_resolver,
         "bomb_system": bomb_system,
         "outpost_spawner": outpost_spawner,
+        "outpost_survey": outpost_survey,
         "base_elimination": base_elimination,
         "movement_system": movement_system,
         "chunking": chunking,

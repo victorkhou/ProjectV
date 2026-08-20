@@ -387,8 +387,12 @@ class TestDataclassContracts:
         #    the "per N ticks" repair period (mirrors hp_regen_interval_ticks),
         #    gating BOTH repair drivers (owner active-presence + Engineer) so a
         #    building repairs one step every other tick instead of every tick.
+        #  + 6 Survey Array knobs — 3 per-action resource costs
+        #    (survey_scan_cost / survey_narrow_cost / survey_probe_cost) and 3
+        #    search-precision bounds (survey_initial_radius, survey_min_radius,
+        #    survey_reveal_radius) driving the outpost-triangulation minigame.
         # Bump this when adding a balance tunable.
-        assert len(fields(BalanceConfig)) == 152
+        assert len(fields(BalanceConfig)) == 158
 
     def test_coordinate_space_def_field_count(self):
         # 14 core + 2 graduation-economy scales (yield_scale, npc_scale).

@@ -376,7 +376,9 @@ building's `stored/capacity`. All follow the existing controller shape.
   and a `carry_capacity`-stat "hauler pack" (`back` slot) as the cap-raiser.
 - Add a `weight` to every item (reference: light gear 2–5; rifle/armor 8–15; heavy 25–40); set
   `resource_weights` in `balance.yaml` (light per D7).
-- Production map: `AR → weapons+ammo`, `AA → armor`, `MB → consumables`, `LB → futuristic+throwables`.
+- Production map: `AR → weapons+ammo`, `AA → armor`, `MB → consumables`, `LB → futuristic`.
+  (Superseded in part: `AA` was folded into `AR`, and throwables/mines later moved
+  off `LB` to the dedicated Munitions Plant `MP` — see `items.yaml production_map`.)
 - `EquipmentSystem.process_production` (`:55`) routes Supply-category produce into `add_supply`
   and Gear into a `GameItem` object, keyed off `item_def.category`.
 
