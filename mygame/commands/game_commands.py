@@ -3953,10 +3953,10 @@ class CmdInventory(GameCommand):
       inventory
 
     Notes:
-      Aliases: inv, i. Lists your resources, equipped gear by slot, any
-      carried-but-unequipped gear, your supplies (ammo, medkits, grenades),
-      and your current carry weight against your limit. See 'help storage' for
-      how carry weight works and 'equipment' for a full gear paperdoll.
+      Aliases: inv, i. Lists your resources, carried-but-unequipped gear,
+      your supplies (ammo, medkits, grenades), and your current carry weight
+      against your limit. See 'help storage' for how carry weight works and
+      'equipment' for your equipped gear (a full paperdoll).
     """
 
     key = "inventory"
@@ -3980,16 +3980,6 @@ class CmdInventory(GameCommand):
             for r, amt in resources.items():
                 if amt:
                     lines.append(f"    {r}: {amt}")
-
-        # Equipment
-        handler = getattr(caller, "equipment", None)
-        if handler:
-            equipped = handler.get_all_equipped()
-            if equipped:
-                lines.append("  Equipped:")
-                for slot, item in equipped.items():
-                    item_name = _gear_display_name(item, caller)
-                    lines.append(f"    [{slot}] {item_name}")
 
         # Loose (carried-but-unequipped) Gear, then Supply_Bag counts, then
         # carried weight vs carry limit.
