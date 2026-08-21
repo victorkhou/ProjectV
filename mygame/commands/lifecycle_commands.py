@@ -564,10 +564,51 @@ def deploy_from_lobby(caller) -> bool:
         db.combat_lockout_tick = 0
     if pl.enter_game(caller):
         caller.msg("|gYou deploy into the field.|n")
+        _announce_current_directive(caller)
         if hasattr(caller, "execute_cmd"):
             caller.execute_cmd("look")
         return True
     return False
+
+
+def _announce_current_directive(caller) -> None:
+    """Point a FIRST-TIME player at their opening objective.
+
+    A new player lands on an empty map with no idea what to do; the directive
+    chain otherwise only speaks up on the first completion. This surfaces the
+    opening objective on deploy — "Build your Headquarters" — turning a blank
+    map into a clear first move.
+
+    Deliberately limited to a player who has completed NOTHING yet
+    (``progress == 0``). ``deploy_from_lobby`` also runs on every death-respawn
+    and re-login, so announcing unconditionally would repeat the hint at every
+    death for the whole of a mid-chain player's early game. Also silent when the
+    chain is muted, complete, or the system is unavailable. Never raises.
+    """
+    try:
+        from world.utils import get_system
+        directive_system = get_system(caller, "directive_system")
+        if directive_system is None:
+            return
+        view = directive_system.get_progress_view(caller)
+        if view.get("muted"):
+            return
+        if int(view.get("progress", 0) or 0) != 0:
+            return  # already underway — don't re-announce on every respawn
+        current = next(
+            (s for s in view.get("steps", []) if s.get("current")), None
+        )
+        if current is None:
+            return  # chain complete — nothing to point at
+        description = current.get("description")
+        if not description:
+            return
+        caller.msg(
+            f"|c[Objective]|n {description}. "
+            f"Type |wdirectives|n to see your checklist."
+        )
+    except Exception:  # noqa: BLE001 - a deploy hint never blocks entering play
+        pass
 
 
 # ------------------------------------------------------------------ #
