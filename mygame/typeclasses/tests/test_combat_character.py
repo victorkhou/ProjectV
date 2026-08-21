@@ -572,6 +572,50 @@ class TestBaseHealthMigration(unittest.TestCase):
         self.assertEqual(char.db.hp_max, 777)  # non-legacy base left alone
 
 
+class TestFirstHarvestCritMigration(unittest.TestCase):
+    """_migrate_first_harvest_crit backfills established characters so the
+    guaranteed first-harvest crit stays a NEW-player perk."""
+
+    def test_fresh_char_keeps_the_freebie(self):
+        char = _make_char()  # combat_xp 0, level 1
+        char._migrate_first_harvest_crit()
+        self.assertIsNone(char.attributes.get("first_harvest_crit_used"))
+
+    def test_char_with_xp_is_backfilled_as_spent(self):
+        char = _make_char()
+        char.db.combat_xp = 250
+        char._migrate_first_harvest_crit()
+        self.assertIs(char.attributes.get("first_harvest_crit_used"), True)
+
+    def test_char_past_level_one_is_backfilled_as_spent(self):
+        # A character can be levelled with the XP curve reset to 0; level alone
+        # is enough evidence they are established.
+        char = _make_char()
+        char.db.combat_xp = 0
+        char.db.level = 4
+        char._migrate_first_harvest_crit()
+        self.assertIs(char.attributes.get("first_harvest_crit_used"), True)
+
+    def test_already_resolved_flag_is_not_overwritten(self):
+        char = _make_char()
+        char.db.combat_xp = 900
+        char.db.first_harvest_crit_used = False  # explicitly granted by staff
+        char._migrate_first_harvest_crit()
+        self.assertIs(char.attributes.get("first_harvest_crit_used"), False)
+
+    def test_migration_runs_during_ensure_attributes(self):
+        char = _make_char()
+        char.db.combat_xp = 120
+        char.ensure_attributes()
+        self.assertIs(char.attributes.get("first_harvest_crit_used"), True)
+
+    def test_corrupt_values_do_not_raise(self):
+        char = _make_char()
+        char.db.combat_xp = None
+        char.db.level = "not-a-level"
+        char._migrate_first_harvest_crit()  # must not raise (login path)
+
+
 class TestAdminHealthBump(unittest.TestCase):
     """_ensure_admin_health raises a staff character's ceiling to ADMIN_BASE_HEALTH."""
 
