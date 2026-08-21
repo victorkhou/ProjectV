@@ -293,6 +293,29 @@ class CombatCharacter(CombatEntity, DefaultCharacter):
         self._migrate_level_curve()
         self._migrate_tech_bonuses()
         self._migrate_base_health()
+        self._migrate_first_harvest_crit()
+
+    def _migrate_first_harvest_crit(self):
+        """Mark established characters as having spent the first-harvest crit.
+
+        The guaranteed first-harvest crit is a NEW-player opening spike. Without
+        this backfill every existing character — who has long since done their
+        first harvest — would be handed a retroactive freebie on their next one.
+        Any character carrying progress (non-zero ``combat_xp``, or already past
+        level 1) is treated as established. A genuinely fresh character keeps the
+        flag unset and gets the intended spike. Runs at most once meaningfully:
+        after the write the flag is set. Guarded — never blocks login.
+        """
+        try:
+            if self.attributes.get("first_harvest_crit_used") is not None:
+                return  # already resolved (spent, or explicitly backfilled)
+            established = bool(self.attributes.get("combat_xp") or 0) or (
+                int(self.attributes.get("level") or 1) > 1
+            )
+            if established:
+                self.attributes.add("first_harvest_crit_used", True)
+        except Exception:  # noqa: BLE001 - migration must never block login
+            logger.debug("First-harvest-crit migration skipped", exc_info=True)
 
     def _migrate_level_curve(self):
         """Remap stored XP onto the live curve, never demoting (R14.8).
