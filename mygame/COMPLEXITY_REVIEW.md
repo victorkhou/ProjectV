@@ -120,11 +120,11 @@ upgradable, HQ-like, or a combat barrier, add the capability to its YAML entry:
   capabilities: [harvestable, upgradable, requires_resource_terrain]
 ```
 
-The capability vocabulary is defined once in
-[`world/constants.py`](world/constants.py#L168) (`BUILDING_CAPABILITIES`), the
-schema validator rejects unknown flags at load, and `BuildingDef.has_capability()`
-([`definitions.py:34`](world/definitions.py#L34)) is the single query. Game code
-branches on the capability:
+The capability vocabulary is defined once as `BUILDING_CAPABILITIES` in
+[`world/constants.py`](world/constants.py), the schema validator rejects unknown
+flags at load, and `BuildingDef.has_capability()` in
+[`definitions.py`](world/definitions.py) is the single query. Game code branches
+on the capability:
 
 | Behavior | Was (hardcoded) | Now |
 |---|---|---|
@@ -135,13 +135,19 @@ branches on the capability:
 | Storage delivery target | `bld_type in ("VT","HQ")` | `has_capability(STORAGE)` |
 | Vault delivery preference | `bld_type == "VT"` | `has_capability(PRIMARY_STORAGE)` |
 | Wall combat block | `btype == "WL"` | `has_capability(COMBAT_BARRIER)` |
+| Research lab (one per planet, hosts a tech tree) | *n/a — new* | `has_capability(RESEARCH_LAB)` |
+
+`RESEARCH_LAB` is the newest member and shows the pattern working as intended:
+four buildings (LB/WX/DF/RX) declare it, and the one-per-planet gate, the
+research tree lookup, and `world.utils.owner_research_lab()` all key off the
+flag rather than the four abbreviations — so a fifth lab is a YAML edit.
 
 For a *new* capability that needs new code, add the flag to
 `BUILDING_CAPABILITIES` and one branch where the behavior lives — still far
 fewer touchpoints than the old scatter. Live-object checks go through
-`world.utils.building_has_capability()`
-([`utils.py:146`](world/utils.py#L146)), which resolves the definition via the
-`DataRegistry` singleton. This also **repurposed the previously-dead
+`world.utils.building_has_capability()` in [`utils.py`](world/utils.py), which
+resolves the definition via an injected `DefinitionsProvider` (falling back to
+the `DataRegistry` singleton). This also **repurposed the previously-dead
 `category` values** — behavior that used to be implicit is now explicit.
 
 ### 2c. Add a *field* to a definition — **3 edit sites** 🟡 *(unchanged)*
@@ -164,10 +170,11 @@ compatibility.
 ### 2e. Typo-tolerant lookups 🟢 *(was 🟡 #12)*
 
 `resolve_building` / `resolve_item` / `resolve_technology` / `resolve_powerup`
-([`data_registry.py:423`](world/data_registry.py#L423)) all share one generic
-`_resolve` (key **or** name, case/underscore-insensitive, `None` on miss), so
-player-facing commands accept either the abbreviation or the human name for any
-of these types.
+in [`data_registry.py`](world/data_registry.py) all share one generic `_resolve`
+(key **or** name, case/underscore-insensitive, `None` on miss), so player-facing
+commands accept either the abbreviation or the human name for any of these types.
+The same module also carries the derived lookups `get_technologies_for_rank`,
+`get_technologies_for_tree`, and `research_lab_for_tree`.
 
 ### 2f. Equipment / items touchpoints (from the equipment-items feature) 🟢/🟡
 
@@ -345,7 +352,10 @@ throughout.
    `BUILDING_CAPABILITIES` vocabulary in `constants.py`, `has_capability()` on
    `BuildingDef`, `building_has_capability()` in `utils.py`, schema validation.
    Replaced ~11 scattered abbreviation checks across 5 files; repurposed the dead
-   `category` values.
+   `category` values. Every capability added since (`shield_generator`,
+   `respawn_point`, `launch_pad`, `blacksmith`, `resource_converter`, the three
+   aura flags, `outpost_survey`, `research_lab`) has been data + one branch,
+   which is the payoff this pass was after.
 2. **Single `AGENT_ROLES` / `AGENT_ABILITIES` table** — `RoleSpec`/`AbilitySpec`
    in `agent_scripts.py`; all role lookups + the detach key-set derived from it.
    Eliminated the hand-synced hardcoded script-key list.

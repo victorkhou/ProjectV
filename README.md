@@ -149,11 +149,23 @@ automatically by `evennia --initmissing`.
   (Wood, Stone, Iron, Energy, Metals, Circuits, …). Players harvest by standing
   on a node, or place an **Extractor** with an assigned **harvester agent** to
   produce automatically.
-- **Buildings.** Twelve building types form a tech tree rooted at a
-  **Headquarters** (HQ): Extractor (EX), Academy (AC), Lab (LB), Armory (AR),
-  Turret (TU), Vault (VT), Radar (RD), Wall (WL), Barracks (BK), Medbay (MB),
-  Relay (RL). Buildings have HP and an owner, take ticks to construct/upgrade,
-  and enter an **offline-protection** state when their owner disconnects.
+- **Buildings.** Twenty-five building types form a tech tree rooted at a
+  **Headquarters** (HQ), unlocking by level:
+  - *Economy* — Extractor (EX), Vault (VT), Refinery (RF)
+  - *Military* — Wall (WL), Turret (TU), Barracks (BK), Relay (RL),
+    Shield Generator (SG), Sniper Nest (SN)
+  - *Production* — Armory (AR), Medbay (MB), Munitions Plant (MP),
+    Blacksmith (BS)
+  - *Research* — the four **labs**, each hosting one technology tree:
+    Research Lab (LB), Weapons Lab (WX), Defense Lab (DF), Resource Lab (RX)
+  - *Intelligence* — Radar (RD), Watchtower (WT), Survey Array (SA)
+  - *Support* — Academy (AC), Respawn Beacon (RB), Field Hospital (FH),
+    Launch Pad (LP)
+
+  Buildings have HP and an owner, take ticks to construct/upgrade, and enter an
+  **offline-protection** state when their owner disconnects. A few carry
+  per-planet caps (one HQ, one research lab, four Shield Generators) or require
+  a **deed** — proof of action such as clearing outposts — on top of the level.
 - **Combat.** Real-time, tick-resolved PvP using equippable items (all items
   share one `GameItem` typeclass, differentiated by YAML slot/stat data).
   Turrets auto-attack in range. Defeats award/deduct Combat XP.
@@ -184,10 +196,17 @@ automatically by `evennia --initmissing`.
   ([`mygame/data/definitions/ranks.yaml`](mygame/data/definitions/ranks.yaml)). XP gained from
   combat promotes you; dying can demote you. Rank gates technologies, powerups,
   and planet access.
+- **Technology trees.** Twenty-one technologies are split across four trees —
+  **weapons**, **defense**, **resource**, and **research** — and each tree is
+  hosted by its own lab building. Research is gated on the lab you *own* on that
+  planet, and you may own only **one lab per planet**, so the tree is a
+  committed choice (demolish the lab to switch). Techs are additionally
+  rank-gated and paid for in resources.
 - **Agents.** Players train autonomous NPC agents at an Academy and assign them
   roles: army roles `guard` (auto-defense) and `scout` (recon/vision), plus
-  building roles `harvester` (Extractor) and `engineer` (Armory/Lab). Agents
-  pathfind and act on their own each tick.
+  building roles `harvester` (Extractor) and `engineer` (Armory and the labs —
+  an engineer both crafts and drives research). Agents pathfind and act on their
+  own each tick.
 
 ---
 
@@ -217,8 +236,8 @@ automatically by `evennia --initmissing`.
 | `withdraw <res> <amt>` | | Withdraw resources from a co-located storage building |
 | `inventory` | `inv` `i` | List Gear, Supplies, resources, and carried weight vs limit |
 | `get <item>` | `grab` `take` | Pick up an item (weight- and stack-limited) |
-| `research <tech>` | `re` | Research a technology at a Lab |
-| `technology` | `tech` | View the tech tree |
+| `research <tech>` | `re` | Research a technology from your lab's tree |
+| `technology` | `tech` | View your lab's tech tree and progress |
 | `powerup` | `pu` | Activate / view powerups |
 | `equipment` | | Paperdoll: all 12 equipment slots, per-slot stats + totals |
 | `buildings` | `bl` | List your buildings |

@@ -398,13 +398,13 @@ graph LR
 | **BaseEliminationHandler** | event‑driven | Subscribes `BUILDING_DESTROYED`; on a **sentinel‑owned HQ** destruction wipes the whole base (buildings + guards + sentinel), awards `xp_hq_destroy` + drops loot, publishes `BASE_ELIMINATED`. Player HQ untouched (PvP fork = deactivation, not deletion) | EventBus, PlanetRoom, CombatEngine (XP) |
 | **RankSystem** | event‑driven | Level 1‑100 → rank 1‑12 via widening `RANK_BANDS` (`world/constants.py`); XP thresholds from the hybrid formula in `world/progression.py`; no tech unlock/revoke (techs are research‑only); **publishes** `LEVEL_CHANGED`/`RANK_*` | progression, EventBus |
 | **ResourceSystem** | 4, 14 | Manual + presence harvest, Extractor inventory, respawns | Movement, terrain, EventBus |
-| **BuildingSystem** | 4 | Construct/upgrade validation + timers (player‑presence & engineer‑agent) | terrain, EventBus |
+| **BuildingSystem** | 4 | Construct/upgrade validation + timers (player‑presence & engineer‑agent); per‑planet caps — one HQ, **one research lab** (`_validate_one_research_lab_per_planet`), four Shield Generators | terrain, EventBus |
 | **EquipmentSystem** | 5 | Per‑tick item production **and** the use‑case mediating equip/unequip/use/reload/deposit/withdraw + carry‑weight/rank/ammo checks (see §12). (Grenades/mines are now deployed via **BombSystem**, not `throw` here) | registry, EquipmentHandler, injected area‑damage applier + PowerupSystem + supply/resource‑drop spawners |
 | **EquipmentHandler** | — | Per‑character Gear slots (equip/unequip) + stat aggregation + Supply‑bag storage | (standalone; per `CombatEntity`) |
 | **MovementSystem** | 2 | In‑memory moving‑NPC set; per‑tick advance; pathfinding throttle | pathfinding |
 | **RegenSystem** | 11 | Passive HP regen (`hp_regen_percent` of `hp_max`/interval) for living, non‑incapacitated players/agents; buildings never passively heal | EventBus (via BaseSystem) |
 | **PowerupSystem** | 12 | Timed buffs, cooldowns, combat stat modifiers | RankSystem, EventBus |
-| **TechLabSystem** | 13 | Research timers, apply tech effects/unlocks | RankSystem, EventBus |
+| **TechLabSystem** | 13 | Research timers, apply tech effects/unlocks. **Tree gate:** `owned_research_tree()` resolves the `research_lab` building the player OWNS on their planet (`world.utils.owner_research_lab`) and reads its `research_tree`; `start_research` refuses a tech whose `tree` doesn't match, and `list_available` filters to the owned tree (empty with no lab) | RankSystem, registry, EventBus |
 
 > **PvE is ownership‑generic.** The three PvE systems add no PvE‑only combat path:
 > guards, turrets, and base‑elimination all key off *ownership* (`db.owner`,
@@ -871,14 +871,19 @@ erDiagram
     BUILDING_DEF {
         string abbreviation PK "2 chars — registry key"
         string name
+        string category "behavioural grouping (research|economy|defense|…)"
         dict   cost "keys soft → RESOURCE"
         string required_terrain FK "nullable, ENFORCED → TERRAIN_DEF"
         string produces "nullable, soft → RESOURCE"
         list   unlocks "soft → BUILDING_DEF.abbreviation"
+        frozenset capabilities "∈ BUILDING_CAPABILITIES — the behaviour vocabulary"
         int    rank_requirement "a LEVEL 1..60 (not a rank)"
         bool   requires_hq
         bool   requires_agent
         int    storage_capacity
+        string unlock_deed "nullable; deed id gating construction"
+        int    unlock_deed_count "deeds required (default 1)"
+        string research_tree "nullable; ∈ RESEARCH_TREES — research_lab buildings ONLY"
     }
     ITEM_DEF {
         string key PK
@@ -912,6 +917,7 @@ erDiagram
         dict   resource_cost "keys soft → RESOURCE"
         int    research_ticks
         string effect_type
+        string tree "∈ RESEARCH_TREES, default 'research' — the hosting lab's tree"
     }
     POWERUP_DEF {
         string key PK
@@ -983,6 +989,7 @@ erDiagram
     ITEM_DEF              }o..o{ RESOURCE     : "ammo_cost (soft)"
     TECHNOLOGY_DEF        }o..o{ RESOURCE     : "resource_cost (soft)"
     BUILDING_DEF          }o..o{ BUILDING_DEF : "unlocks by abbr (soft)"
+    TECHNOLOGY_DEF        }o--|| BUILDING_DEF : "tree → research_lab's research_tree (ENFORCED, bijective)"
     BASE_TEMPLATE_DEF     ||--o{ TEMPLATE_BUILDING_DEF : "buildings (composition)"
     BASE_TEMPLATE_DEF     ||--o{ TEMPLATE_GUARD_DEF     : "guards (composition)"
     TEMPLATE_BUILDING_DEF }o..o| BUILDING_DEF : "building_type by abbr (soft)"
@@ -996,11 +1003,11 @@ erDiagram
 
 | Entity | Source file | Registry field | Keyed by |
 |---|---|---|---|
-| `BuildingDef` | `buildings.yaml` | `registry.buildings` | `abbreviation` (2 chars) |
+| `BuildingDef` | `buildings.yaml` | `registry.buildings` | `abbreviation` (2 chars); also `research_lab_for_tree(tree)` |
 | `ItemDef` | `items.yaml` | `registry.items` | `key` |
 | `item_production_map` | `items.yaml` | `registry.item_production_map` | `building_abbr → [item_key]` |
 | `RankDef` | `ranks.yaml` | `registry.ranks` (sorted **list**) | `name` (lookup); `level` unique |
-| `TechnologyDef` | `technologies.yaml` | `registry.technologies` | `key` |
+| `TechnologyDef` | `technologies.yaml` | `registry.technologies` | `key` (also `get_technologies_for_tree(tree)`) |
 | `PowerupDef` | `powerups.yaml` | `registry.powerups` | `key` |
 | `TerrainDef` | `terrain.yaml` | `registry.terrain` | `terrain_type` |
 | `PlanetDef` | `terrain.yaml` (`planets:`) | `registry.planets` | `name` |
@@ -1019,6 +1026,13 @@ erDiagram
 - **`RankDef.unlocks` uses building _names_** ("Extractor", "Academy") while
   **`BuildingDef.unlocks` uses building _abbreviations_** ("EX", "AC"). Different key
   spaces for the same concept — and neither is cross‑validated.
+- **The tech tree ↔ lab pairing _is_ enforced**, unusually for this schema.
+  `validate_buildings` requires a `research_lab`‑capability building to name a
+  valid `research_tree` and forbids the field on any non‑lab; `validate_technologies`
+  requires `tree ∈ RESEARCH_TREES`; and `cross_validate` enforces a **bijection** —
+  every tree is hosted by exactly one lab, and no lab shares a tree. The coverage
+  and uniqueness halves are skipped when a dataset ships no lab buildings at all,
+  so minimal test fixtures (default‑tree techs, no labs) still load.
 - **Two distinct "planet" entities.** `PlanetDef` (terrain.yaml) drives terrain‑type
   membership and *is* cross‑validated; `CoordinateSpaceDef` (planets.yaml) drives the
   actual coordinate space/seed and is loaded by a **separate** `PlanetRegistry`, so
