@@ -237,6 +237,25 @@ def _make_registry_with_buildings() -> DataRegistry:
             build_time_seconds=35, rank_requirement=1,
             capabilities=frozenset({"shield_generator", "upgradable"}),
         ),
+        # Two research labs (different trees) for the one-lab-per-planet gate.
+        "LB": BuildingDef(
+            name="Research Lab", abbreviation="LB",
+            cost={"Iron": 40},
+            max_health=250, requires_hq=True, required_terrain=None,
+            category="research", produces=None,
+            unlocks=[], map_symbol="LB",
+            build_time_seconds=38, rank_requirement=1,
+            capabilities=frozenset({"research_lab"}), research_tree="research",
+        ),
+        "WX": BuildingDef(
+            name="Weapons Lab", abbreviation="WX",
+            cost={"Iron": 40},
+            max_health=250, requires_hq=True, required_terrain=None,
+            category="research", produces=None,
+            unlocks=[], map_symbol="WX",
+            build_time_seconds=38, rank_requirement=1,
+            capabilities=frozenset({"research_lab"}), research_tree="weapons",
+        ),
     }
     # Terrain defs for the buildable-gate check: Plains/Rock/Forest are
     # buildable; River is a treacherous non-buildable tile.
@@ -378,6 +397,76 @@ class TestShieldGeneratorCap(unittest.TestCase):
         tile = FakeTile(xyz=(5, 5, "earth")); tile.db.planet = "earth"
         system, created, _ = _make_building_system()
         ok, msg = system.construct(player, tile, "SG")
+        self.assertTrue(ok, msg)
+        self.assertEqual(len(created), 1)
+
+
+class TestOneResearchLabPerPlanet(unittest.TestCase):
+    """Per-player, per-planet one-research-lab gate (research-lab-trees).
+
+    A research lab (Weapons/Defense/Resource/Research) sets the planet's tech
+    tree, so a player may own only ONE per planet — even a DIFFERENT lab type
+    is blocked on the same planet. Mirrors the Shield Generator cap's planet
+    scoping.
+    """
+
+    def _player_with_labs(self, lab_types, planet="earth"):
+        hq = FakeBuilding(building_type="HQ")
+        labs = []
+        for lt in lab_types:
+            lab = FakeBuilding(building_type=lt)
+            lab.attributes.add("coord_planet", planet)
+            labs.append(lab)
+        return FakePlayer(resources={"Iron": 500}, buildings=[hq] + labs)
+
+    def test_first_lab_allowed(self):
+        player = FakePlayer(resources={"Iron": 500},
+                            buildings=[FakeBuilding(building_type="HQ")])
+        tile = FakeTile(xyz=(5, 5, "earth")); tile.db.planet = "earth"
+        system, created, _ = _make_building_system()
+        ok, msg = system.construct(player, tile, "LB")
+        self.assertTrue(ok, msg)
+        self.assertEqual(len(created), 1)
+
+    def test_second_lab_same_type_rejected(self):
+        player = self._player_with_labs(["LB"], planet="earth")
+        tile = FakeTile(xyz=(5, 5, "earth")); tile.db.planet = "earth"
+        system, created, _ = _make_building_system()
+        ok, msg = system.construct(player, tile, "LB")
+        self.assertFalse(ok)
+        self.assertIn("one research lab per planet", msg.lower())
+        self.assertEqual(len(created), 0)
+
+    def test_second_lab_different_type_rejected(self):
+        """Owning a Research Lab blocks building a Weapons Lab on the same
+        planet — the gate is on the capability, not the specific lab."""
+        player = self._player_with_labs(["LB"], planet="earth")
+        tile = FakeTile(xyz=(5, 5, "earth")); tile.db.planet = "earth"
+        system, created, _ = _make_building_system()
+        ok, msg = system.construct(player, tile, "WX")
+        self.assertFalse(ok)
+        self.assertIn("one research lab per planet", msg.lower())
+        self.assertEqual(len(created), 0)
+
+    def test_lab_on_other_planet_does_not_block(self):
+        player = self._player_with_labs(["LB"], planet="mars")
+        tile = FakeTile(xyz=(5, 5, "earth")); tile.db.planet = "earth"
+        system, created, _ = _make_building_system()
+        ok, msg = system.construct(player, tile, "WX")
+        self.assertTrue(ok, msg)
+        self.assertEqual(len(created), 1)
+
+    def test_gate_resolves_planet_from_location_when_coord_planet_unset(self):
+        """Real labs don't store coord_planet — the gate resolves each one's
+        planet from its location so it scopes per-planet, not globally."""
+        hq = FakeBuilding(building_type="HQ")
+        mars_room = FakeTile(xyz=(0, 0, "mars")); mars_room.db.planet = "mars"
+        lab = FakeBuilding(building_type="LB")
+        lab._location = mars_room
+        player = FakePlayer(resources={"Iron": 500}, buildings=[hq, lab])
+        tile = FakeTile(xyz=(5, 5, "earth")); tile.db.planet = "earth"
+        system, created, _ = _make_building_system()
+        ok, msg = system.construct(player, tile, "LB")
         self.assertTrue(ok, msg)
         self.assertEqual(len(created), 1)
 

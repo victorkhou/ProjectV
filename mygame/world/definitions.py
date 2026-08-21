@@ -42,6 +42,11 @@ class BuildingDef:
     unlock_deed: str | None = None
     #: Required deed count for the unlock_deed gate (default 1 = boolean).
     unlock_deed_count: int = 1
+    #: For a ``research_lab``-capability building only: which technology TREE
+    #: (``world.constants.RESEARCH_TREES``) this lab hosts. ``None`` for every
+    #: non-lab building. The schema validator requires a research lab to name a
+    #: valid tree and forbids the field on non-labs.
+    research_tree: str | None = None
 
     def has_capability(self, capability: str) -> bool:
         """Return True if this building declares the given capability flag."""
@@ -154,7 +159,14 @@ class ClassDef:
 
 @dataclass
 class TechnologyDef:
-    """Definition for a researchable technology."""
+    """Definition for a researchable technology.
+
+    ``tree`` names the technology TREE this tech belongs to (one of
+    ``world.constants.RESEARCH_TREES``). Research is gated so a tech can only be
+    researched at the lab that hosts its tree, and a player owns only one such
+    lab per planet. Defaulted to the generalist ``"research"`` tree so an
+    unclassified/legacy tech still lands in the original Lab's line.
+    """
 
     name: str
     key: str
@@ -163,6 +175,7 @@ class TechnologyDef:
     research_ticks: int = 10
     effect_type: str = ""
     effect_value: Any = None
+    tree: str = "research"
 
 
 @dataclass

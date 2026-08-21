@@ -1481,13 +1481,61 @@ def _expected_tech_bonuses(techs) -> dict:
     return bonuses
 
 
+class _FakeResearchLab:
+    """Minimal owned research-lab building for the research-lab-tree gate.
+
+    All these property-based terrain techs default to the ``research`` tree,
+    so the player owns a Research Lab (``LB``) whose def hosts that tree. Only
+    the fields the gate reads are present: ``db.building_type`` (resolved via
+    ``get_building_type``) and no ``under_construction`` flag (a live lab)."""
+
+    def __init__(self, building_type="LB"):
+        self.db = type("_D", (), {"building_type": building_type,
+                                  "under_construction": False})()
+
+
+class _LabAwareRegistry(FakeRegistry):
+    """FakeRegistry that also resolves the Research Lab def for the gate.
+
+    Adds the two lookups the gate uses: ``resolve_building`` (for
+    ``building_has_capability``) and ``get_building`` (for the lab's
+    ``research_tree``). The lab def declares the ``RESEARCH_LAB`` capability
+    and hosts the ``research`` tree."""
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        from mygame.world.constants import RESEARCH_LAB
+        from mygame.world.definitions import BuildingDef
+
+        self._lab_def = BuildingDef(
+            name="Research Lab", abbreviation="LB", cost={}, max_health=100,
+            requires_hq=True, required_terrain=None, category="research",
+            produces=None, capabilities=frozenset({RESEARCH_LAB}),
+            research_tree="research",
+        )
+        self.buildings = {"LB": self._lab_def}
+
+    def resolve_building(self, building_type):
+        return self.buildings.get(str(building_type).upper())
+
+    def get_building(self, abbr):
+        return self.buildings[str(abbr).upper()]
+
+
+def _lab_player(**db_kwargs):
+    """A FakePlayer that owns a Research Lab (for the research-tree gate)."""
+    player = FakePlayer(FakeDb(**db_kwargs))
+    player.get_buildings = lambda: [_FakeResearchLab()]
+    return player
+
+
 def _research_all(techs):
     """Drive the real TechLabSystem through research completion for every
     technology in *techs*; return the (system, player) pair afterwards."""
-    registry = FakeRegistry(terrain={})
+    registry = _LabAwareRegistry(terrain={})
     registry.technologies = {t.key: t for t in techs}
     system = TechLabSystem(registry, EventBus())
-    player = FakePlayer(FakeDb(player_class="ranger", tech_bonuses={}))
+    player = _lab_player(player_class="ranger", tech_bonuses={})
     for tdef in techs:
         ok, msg = system.start_research(player, tdef.key)
         assert ok, f"start_research({tdef.key!r}) failed: {msg}"

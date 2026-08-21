@@ -351,6 +351,7 @@ class DataRegistry:
                 capabilities=frozenset(entry.get("capabilities", []) or []),
                 unlock_deed=entry.get("unlock_deed"),
                 unlock_deed_count=entry.get("unlock_deed_count", 1),
+                research_tree=entry.get("research_tree"),
             )
             self.buildings[bdef.abbreviation] = bdef
 
@@ -409,6 +410,7 @@ class DataRegistry:
                 research_ticks=entry.get("research_ticks", 10),
                 effect_type=entry.get("effect_type", ""),
                 effect_value=entry.get("effect_value"),
+                tree=entry.get("tree", "research"),
             )
             self.technologies[tdef.key] = tdef
 
@@ -1160,6 +1162,22 @@ class DataRegistry:
             for tdef in self.technologies.values()
             if tdef.required_rank in available
         ]
+
+    def get_technologies_for_tree(self, tree: str) -> list[TechnologyDef]:
+        """Return every technology belonging to *tree* (any rank)."""
+        return [t for t in self.technologies.values() if t.tree == tree]
+
+    def research_lab_for_tree(self, tree: str) -> "BuildingDef | None":
+        """Return the research-lab BuildingDef hosting *tree*, or None.
+
+        The tree↔lab bijection is enforced at load (``cross_validate``), so at
+        most one lab matches; the first hit is returned.
+        """
+        from world.constants import RESEARCH_LAB
+        for bdef in self.buildings.values():
+            if bdef.has_capability(RESEARCH_LAB) and bdef.research_tree == tree:
+                return bdef
+        return None
 
     def get_powerups_for_rank(self, rank_level: int) -> list[PowerupDef]:
         """Get all powerups available at or below the given rank level."""

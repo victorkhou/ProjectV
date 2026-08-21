@@ -1,9 +1,22 @@
 # Technology definitions for RTS Combat Overworld
 # required_rank gates align to the R13.4 ladder: the earliest tech is
 # researchable at the new Lab gate (Corporal, L11); the rest space upward.
+#
+# TREES (research-lab-trees feature). Every tech declares a `tree` naming the
+# specialized lab that hosts it (world.constants.RESEARCH_TREES):
+#   weapons  — Weapons Lab (WX):  offense — weapon damage/range, crafted gear.
+#   defense  — Defense Lab (DF):  survivability — building HP, armor.
+#   resource — Resource Lab (RX): economy — production, build cost, salvage.
+#   research — Research Lab (LB): the generalist line — terrain affinities,
+#              vision, and utility techs (the original Lab's tree).
+# A player owns ONE research lab per planet, so a tree is a strategic choice;
+# every tree has exactly one lab (cross-validated at load). Adding a tech is a
+# pure data edit — pick its tree and the owning lab already gates it.
 
+# ── Defense tree (Defense Lab, DF) ──────────────────────────────────
 - name: Reinforced Walls
   key: reinforced_walls
+  tree: defense
   required_rank: Corporal
   resource_cost:
     Stone: 100
@@ -13,8 +26,10 @@
   effect_value:
     building_hp: 50
 
+# ── Weapons tree (Weapons Lab, WX) ──────────────────────────────────
 - name: Advanced Weapons
   key: advanced_weapons
+  tree: weapons
   required_rank: Lieutenant
   resource_cost:
     Iron: 150
@@ -26,6 +41,7 @@
 
 - name: Improved Armor
   key: improved_armor
+  tree: defense
   required_rank: Sergeant
   resource_cost:
     Iron: 80
@@ -35,8 +51,10 @@
   effect_value:
     damage_reduction: 5
 
+# ── Research tree (Research Lab, LB) — vision, terrain, utility ──────
 - name: Extended Range
   key: extended_range
+  tree: research
   required_rank: Staff_Sergeant
   resource_cost:
     Iron: 100
@@ -46,8 +64,10 @@
   effect_value:
     sight_range: 2
 
+# ── Resource tree (Resource Lab, RX) ────────────────────────────────
 - name: Rapid Production
   key: rapid_production
+  tree: resource
   required_rank: Captain
   resource_cost:
     Iron: 200
@@ -64,6 +84,7 @@
 # clamped to 6 by the existing combat_engine armor path — data-only.
 - name: Reactive Plating
   key: reactive_plating
+  tree: defense
   required_rank: Major
   resource_cost:
     Iron: 250
@@ -84,6 +105,7 @@
 # a mid/late economy tech that lands with the Phase-5 salvage loop.
 - name: Salvage Protocols
   key: salvage_protocols
+  tree: resource
   required_rank: Captain
   resource_cost:
     Iron: 200
@@ -99,6 +121,7 @@
 
 - name: Forest Warfare
   key: forest_warfare
+  tree: research
   required_rank: Sergeant
   resource_cost:
     Wood: 200
@@ -109,6 +132,7 @@
 
 - name: Mountain Surveying
   key: mountain_surveying
+  tree: research
   required_rank: Staff_Sergeant
   resource_cost:
     Stone: 120
@@ -120,6 +144,7 @@
 
 - name: Ruin Fortification
   key: ruin_fortification
+  tree: research
   required_rank: Lieutenant
   resource_cost:
     Iron: 150
@@ -131,6 +156,7 @@
 
 - name: Glacier Traversal
   key: glacier_traversal
+  tree: research
   required_rank: Captain
   resource_cost:
     Iron: 180
@@ -155,6 +181,7 @@
 # NOT touch production_multiplier (design §6.3 guardrail).
 - name: Efficient Construction
   key: efficient_construction
+  tree: resource
   required_rank: Lieutenant
   resource_cost:
     Iron: 150
@@ -173,6 +200,7 @@
 # counter). Captain-gated: lands with the Phase-3 poison hook, mid/late.
 - name: Toxicology
   key: toxicology
+  tree: weapons
   required_rank: Captain
   resource_cost:
     Iron: 180
@@ -191,6 +219,7 @@
 # Major-gated: range is the highest-risk stat, so it lands late.
 - name: Ballistics Optimization
   key: ballistics_optimization
+  tree: weapons
   required_rank: Major
   resource_cost:
     Iron: 250
@@ -209,6 +238,7 @@
 # untouched. Colonel-gated: late-game mastery of the craft bench.
 - name: Master Gunsmithing
   key: master_gunsmithing
+  tree: weapons
   required_rank: Colonel
   resource_cost:
     Iron: 300
@@ -218,3 +248,98 @@
   effect_type: stat_bonus
   effect_value:
     craft_iqs_floor: 0.25
+
+# ── New tree-depth techs (research-lab-trees feature) ────────────────
+# Added so each specialized lab has a worthwhile line of research at more than
+# one rank. Every effect key below already has a live consumer (no dead keys):
+#   damage / damage_reduction / building_hp → CombatEngine + building hp path
+#   weapon_range                            → CombatEngine._resolve_weapon_range
+#   sight_range                             → FogOfWar player vision
+#   production_multiplier / build_cost_mult → production + build-cost paths
+
+# Weapons: an entry-rank damage tech so the Weapons Lab pays off before the
+# Lieutenant-gated Advanced Weapons.
+- name: Field Marksmanship
+  key: field_marksmanship
+  tree: weapons
+  required_rank: Corporal
+  resource_cost:
+    Iron: 60
+    Energy: 20
+  research_ticks: 30
+  effect_type: stat_bonus
+  effect_value:
+    damage: 5
+
+# Weapons: a second, small range step (stacks with Ballistics Optimization
+# toward balance.max_weapon_range — the consumer clamps the total).
+- name: Munitions Refinement
+  key: munitions_refinement
+  tree: weapons
+  required_rank: Colonel
+  resource_cost:
+    Iron: 280
+    Circuits: 110
+    Energy: 90
+  research_ticks: 95
+  effect_type: stat_bonus
+  effect_value:
+    weapon_range: 1
+
+# Defense: an entry-rank armor step (stacks with Improved Armor + Reactive
+# Plating toward the perm_bonus_cap_dr cap — the combat armor path clamps it).
+- name: Ablative Plating
+  key: ablative_plating
+  tree: defense
+  required_rank: Lieutenant
+  resource_cost:
+    Iron: 120
+    Stone: 80
+  research_ticks: 55
+  effect_type: stat_bonus
+  effect_value:
+    damage_reduction: 3
+
+# Defense: a second building-HP step, stacking with Reinforced Walls.
+- name: Structural Bracing
+  key: structural_bracing
+  tree: defense
+  required_rank: Captain
+  resource_cost:
+    Stone: 200
+    Iron: 120
+    Circuits: 40
+  research_ticks: 75
+  effect_type: stat_bonus
+  effect_value:
+    building_hp: 75
+
+# Resource: an early build-cost discount so the Resource Lab pays off before
+# the Captain-gated Rapid Production (stacks with Efficient Construction toward
+# the build_cost_mult_floor — the consumer clamps it).
+- name: Prefab Logistics
+  key: prefab_logistics
+  tree: resource
+  required_rank: Sergeant
+  resource_cost:
+    Wood: 120
+    Stone: 100
+  research_ticks: 45
+  effect_type: stat_bonus
+  effect_value:
+    build_cost_mult: 0.92
+
+# Resource: a second production step, stacking multiplicatively with Rapid
+# Production (production_multiplier composes in the tech-bonus accumulator).
+- name: Automated Fabrication
+  key: automated_fabrication
+  tree: resource
+  required_rank: Colonel
+  resource_cost:
+    Iron: 300
+    Energy: 150
+    Circuits: 90
+  research_ticks: 100
+  effect_type: production_bonus
+  effect_value:
+    production_multiplier: 1.25

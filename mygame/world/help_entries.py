@@ -81,7 +81,7 @@ HELP_ENTRY_DICTS = [
 
             # What's Next
 
-            With passive income flowing, expand: |wupgrade|n buildings (costs grow fast), stockpile surplus in a |cVault|n (|whelp storage|n), explore, climb the |clevels and ranks|n to unlock new planets and buildings (|whelp level|n), and research techs at a |cLab|n (rank gates which techs you can research).
+            With passive income flowing, expand: |wupgrade|n buildings (costs grow fast), stockpile surplus in a |cVault|n (|whelp storage|n), explore, climb the |clevels and ranks|n to unlock new planets and buildings (|whelp level|n), and pick a |clab|n to research a technology tree (|whelp technology|n).
 
             # Follow the Directives
 
@@ -139,10 +139,10 @@ HELP_ENTRY_DICTS = [
 
             # What Levels & Ranks Unlock
 
-            |cBuildings|n gate on level — higher-tier structures (Turret, Barracks, Lab, Relay, Medbay) unlock as you climb. |wbuild|n with no argument always lists what you can build right now, and |whelp buildings|n shows the full tier list. Some buildings also need a |cdeed|n — proof of action, like destroying an outpost — on top of the level (|whelp outposts|n).
+            |cBuildings|n gate on level — higher-tier structures (Turret, Barracks, the research labs, Relay, Medbay) unlock as you climb. |wbuild|n with no argument always lists what you can build right now, and |whelp buildings|n shows the full tier list. Some buildings also need a |cdeed|n — proof of action, like destroying an outpost — on top of the level (|whelp outposts|n).
             |cAgent capacity|n rises with rank — a higher rank lets you command more agents (|whelp agents|n). Your agents also can't out-level you: an agent's effective level is capped at your own.
             |cNew planets|n open at rank thresholds — |cForge|n at Staff Sergeant, |cTundra|n and |cSpace|n at Captain, |cInferno|n at Colonel, the |cCitadel|n at General.
-            |cTechnologies|n gate on rank — a |cLab|n lets you research techs, with the earliest available at Corporal and stronger ones spaced upward (|whelp lab|n).
+            |cTechnologies|n gate on rank |wand|n on which lab you own — each of the four labs hosts one |ctech tree|n and you may own only one lab per planet. The earliest techs open at Corporal, with stronger ones spaced upward (|whelp technology|n).
 
             # See Also
 
@@ -219,7 +219,7 @@ HELP_ENTRY_DICTS = [
             |wattack <target>|n (|wa|n) — attack a player, building, or agent
             |wtarget <enemy>|n (|wlock|n) — lock a ranged weapon onto an enemy
             |wshoot|n (|wfire|n) — fire ranged: at a locked target, or a direction
-            |wcraft <item>|n — make gear/ammo at an Armory, Lab, or Medbay
+            |wcraft <item>|n — make gear/ammo at an Armory, Research Lab, or Medbay
             |winsert <item>|n — permanently mod your equipped weapon (at your Blacksmith)
             |wreroll <item>|n — re-roll an item's base stats (at your Blacksmith)
             |wsalvage <item>|n — break an item into Salvage (at your Blacksmith)
@@ -316,7 +316,7 @@ HELP_ENTRY_DICTS = [
             Assign an agent |winside|n a building and its role is chosen for you; or name an army role explicitly.
 
             |cHarvester|n — at an |cExtractor|n: passive resource income
-            |cEngineer|n — at an |cArmory|n or |cLab|n: builds/researches
+            |cEngineer|n — at an |cArmory|n or any |clab|n: builds/researches
             |cGuard|n — army role, assignable anywhere: auto-defense and patrol combat
             |cScout|n — army role, assignable anywhere: patrols and reveals the map within its vision radius
 
@@ -370,7 +370,10 @@ HELP_ENTRY_DICTS = [
             |wAR|n |cArmory|n — crafts weapons, armor, and ammo. (L3)
             |wWL|n |cWall|n — a barrier that blocks passage. (L2)
             |wBK|n |cBarracks|n — army capacity. (L7, requires deed: destroy an outpost)
-            |wLB|n |cLab|n — research and craft advanced gear; needs an Engineer to run. (L11, requires deed: destroy 3 outposts)
+            |wLB|n |cResearch Lab|n — hosts the Research tech tree and crafts advanced gear; needs an Engineer. (L11, requires deed: destroy 3 outposts)
+            |wWX|n |cWeapons Lab|n — hosts the Weapons tech tree (damage, range, gear quality). (L11, requires deed: destroy 3 outposts)
+            |wDF|n |cDefense Lab|n — hosts the Defense tech tree (building HP, armor). (L11, requires deed: destroy 3 outposts)
+            |wRX|n |cResource Lab|n — hosts the Resource tech tree (production, build cost, salvage). (L11, requires deed: destroy 3 outposts)
             |wRD|n |cRadar|n — extends vision. (L9)
             |wTU|n |cTurret|n — auto-attacks enemies in range while your HQ stands. (L5)
             |wVT|n |cVault|n — high-capacity resource storage, protected while you're offline; harvesters prefer to deliver here. (L4)
@@ -385,11 +388,11 @@ HELP_ENTRY_DICTS = [
             |wMP|n |cMunitions Plant|n — the bomb works: crafts every grenade and mine. (L6)
             |wSA|n |cSurvey Array|n — triangulates enemy outpost locations on this planet. (L8)
 
-            Higher-tier buildings unlock as you gain |clevels|n; a few also require a |cdeed|n (Barracks needs one destroyed outpost, Lab needs three). Check |wscore|n for your current level, |wbuild|n to see what's available now, and |whelp level|n for the full progression picture.
+            Higher-tier buildings unlock as you gain |clevels|n; a few also require a |cdeed|n (Barracks needs one destroyed outpost, the four labs each need three). You may own |conly one lab per planet|n — the four labs each host a different technology tree (|whelp technology|n). Check |wscore|n for your current level, |wbuild|n to see what's available now, and |whelp level|n for the full progression picture.
 
             # Per-Building Guides
 
-            Every building has its own help topic with costs, level, dependencies, and examples: |whelp hq|n · |whelp extractor|n · |whelp academy|n · |whelp armory|n · |whelp wall|n · |whelp barracks|n · |whelp lab|n · |whelp radar|n · |whelp turret|n · |whelp vault|n · |whelp relay|n · |whelp shield|n · |whelp medbay|n · |whelp watchtower|n · |whelp sniper nest|n · |whelp field hospital|n · |whelp blacksmith|n · |whelp refinery|n · |whelp munitions plant|n · |whelp survey array|n.
+            Every building has its own help topic with costs, level, dependencies, and examples: |whelp hq|n · |whelp extractor|n · |whelp academy|n · |whelp armory|n · |whelp wall|n · |whelp barracks|n · |whelp lab|n · |whelp weapons lab|n · |whelp defense lab|n · |whelp resource lab|n · |whelp radar|n · |whelp turret|n · |whelp vault|n · |whelp relay|n · |whelp shield|n · |whelp medbay|n · |whelp watchtower|n · |whelp sniper nest|n · |whelp field hospital|n · |whelp blacksmith|n · |whelp refinery|n · |whelp munitions plant|n · |whelp survey array|n.
 
             # See Also
 
@@ -410,7 +413,7 @@ HELP_ENTRY_DICTS = [
 
             # Getting Gear
 
-            Build an |cArmory|n (|wbuild AR|n) for weapons, armor, and ammo, a |cLab|n (|wbuild LB|n) for advanced gear, or a |cMedbay|n (|wbuild MB|n) for medkits and stims. Two ways to get items from them: stand in the building and |wcraft <item>|n to make one instantly for resources, or assign an |cEngineer|n agent and it crafts the same catalog passively while you're away (see |whelp craft|n). Gear also drops as |cloot|n from enemy bases and guards — dropped gear is |crolled|n (two copies of the same item differ) and can carry a rarity and affixes; see |whelp loot|n. Made gear lands in your inventory; pick up dropped items with |wget|n.
+            Build an |cArmory|n (|wbuild AR|n) for weapons, armor, and ammo, a |cResearch Lab|n (|wbuild LB|n) for advanced gear, or a |cMedbay|n (|wbuild MB|n) for medkits and stims. Two ways to get items from them: stand in the building and |wcraft <item>|n to make one instantly for resources, or assign an |cEngineer|n agent and it crafts the same catalog passively while you're away (see |whelp craft|n). Gear also drops as |cloot|n from enemy bases and guards — dropped gear is |crolled|n (two copies of the same item differ) and can carry a rarity and affixes; see |whelp loot|n. Made gear lands in your inventory; pick up dropped items with |wget|n.
 
             # Slots
 
@@ -484,7 +487,7 @@ HELP_ENTRY_DICTS = [
 
             # Ammo & Reloading
 
-            Ranged weapons feed their ammo one of two ways. Most (like the |cassault rifle|n) fire straight from your |cresource stockpile|n — each shot spends a little Iron, Energy, or similar, so there's nothing to reload; just keep the resource stocked. Magazine weapons (like the |cservice rifle|n) fire from a loaded |cmagazine|n and run dry: |wreload|n refills the magazine from the matching |cammo|n in your supply bag (make it at an |cArmory|n or |cLab|n). |wequipment|n shows a magazine weapon's loaded count.
+            Ranged weapons feed their ammo one of two ways. Most (like the |cassault rifle|n) fire straight from your |cresource stockpile|n — each shot spends a little Iron, Energy, or similar, so there's nothing to reload; just keep the resource stocked. Magazine weapons (like the |cservice rifle|n) fire from a loaded |cmagazine|n and run dry: |wreload|n refills the magazine from the matching |cammo|n in your supply bag (make it at an |cArmory|n or |cResearch Lab|n). |wequipment|n shows a magazine weapon's loaded count.
 
             # Armor & Defense
 
@@ -731,7 +734,7 @@ HELP_ENTRY_DICTS = [
             Each production building makes a different set of items. Stand on your own building (or |wenter|n it) to craft there:
 
             |cArmory|n (|wbuild AR|n) — modern weapons, armor, ammo
-            |cLab|n (|wbuild LB|n) — futuristic gear (also runs research)
+            |cResearch Lab|n (|wbuild LB|n) — futuristic gear (and the Research tech tree)
             |cMedbay|n (|wbuild MB|n) — medkits and combat stims
             |cMunitions Plant|n (|wbuild MP|n) — every grenade and mine
 
@@ -741,7 +744,7 @@ HELP_ENTRY_DICTS = [
 
             # Letting Agents Craft
 
-            Assign an |cEngineer|n to an Armory or Lab (|wagent assign <id>|n while inside) and it crafts items on its own over time, paying the same resource cost from your stockpile — the hands-off way to stock up while you do other things. That asynchronous work is the whole point of agents.
+            Assign an |cEngineer|n to an Armory or Research Lab (|wagent assign <id>|n while inside) and it crafts items on its own over time, paying the same resource cost from your stockpile — the hands-off way to stock up while you do other things. That asynchronous work is the whole point of agents.
 
             # What You Get
 
@@ -915,37 +918,48 @@ HELP_ENTRY_DICTS = [
         "text": """
             |wTechnologies|n
 
-            Research permanent bonuses at a |cLab|n: |wtechnology|n shows the tree and your progress, |wresearch <tech>|n starts one (an |cEngineer|n drives it). Each tech is gated by |crank|n and paid in resources. The tree at a glance:
+            Research permanent bonuses at a |clab|n. There are |cfour technology trees|n, each hosted by its own lab, and you may own |conly one lab (one tree) per planet|n — so the lab you build commits that planet to a tree. |wtechnology|n shows the tree your lab hosts and your progress; |wresearch <tech>|n starts one (an |cEngineer|n drives it). Each tech is gated by |crank|n and paid in resources.
 
-            # Combat
+            To research a different tree, |wdemolish|n your lab and build the one that hosts it — you can't have two labs on the same planet.
 
-            |cImproved Armor|n — +5 armor.
-            |cReactive Plating|n — +3 more armor (stacks with Improved Armor, up to the cap).
-            |cAdvanced Weapons|n — +10 damage.
-            |cBallistics Optimization|n — +1 weapon range.
-            |cToxicology|n — your poison damage-over-time ticks 25% harder (|whelp poison|n).
+            # Weapons Tree — |cWeapons Lab (WX)|n
 
-            # Base & Economy
+            |cField Marksmanship|n — +5 damage (Corporal).
+            |cAdvanced Weapons|n — +10 damage (Lieutenant).
+            |cToxicology|n — poison ticks 25% harder (Captain, |whelp poison|n).
+            |cBallistics Optimization|n — +1 weapon range (Major).
+            |cMunitions Refinement|n — +1 more weapon range (Colonel).
+            |cMaster Gunsmithing|n — crafted gear rolls with a raised floor (Colonel, |whelp craft|n).
 
-            |cReinforced Walls|n — your buildings gain +50 HP.
-            |cRapid Production|n — production buildings work 1.5x faster.
-            |cEfficient Construction|n — build and upgrade costs cut by 15%.
-            |cSalvage Protocols|n — Blacksmith rerolls cost 25% less (|whelp blacksmith|n).
-            |cMaster Gunsmithing|n — gear you craft rolls with a raised floor (|whelp craft|n).
-            |cExtended Range|n — +2 sight range.
+            # Defense Tree — |cDefense Lab (DF)|n
 
-            # Terrain
+            |cReinforced Walls|n — buildings gain +50 HP (Corporal).
+            |cImproved Armor|n — +5 armor (Sergeant).
+            |cAblative Plating|n — +3 more armor (Lieutenant).
+            |cStructural Bracing|n — more building HP (Captain).
+            |cReactive Plating|n — +3 more armor, up to the cap (Major).
 
-            |cForest Warfare|n — move faster through Forest.
-            |cMountain Surveying|n — +2 vision on Mountains.
-            |cRuin Fortification|n — +2 defense in Ruins.
-            |cGlacier Traversal|n — move faster on Glaciers and Frozen Lakes.
+            # Resource Tree — |cResource Lab (RX)|n
+
+            |cPrefab Logistics|n — cheaper build/upgrade costs (Sergeant).
+            |cEfficient Construction|n — build and upgrade costs cut 15% (Lieutenant).
+            |cRapid Production|n — production buildings work 1.5x faster (Captain).
+            |cSalvage Protocols|n — Blacksmith rerolls cost 25% less (Captain, |whelp blacksmith|n).
+            |cAutomated Fabrication|n — even faster production (Colonel).
+
+            # Research Tree — |cResearch Lab (LB)|n
+
+            |cForest Warfare|n — move faster through Forest (Sergeant).
+            |cExtended Range|n — +2 sight range (Staff Sergeant).
+            |cMountain Surveying|n — +2 vision on Mountains (Staff Sergeant).
+            |cRuin Fortification|n — +2 defense in Ruins (Lieutenant).
+            |cGlacier Traversal|n — move faster on Glaciers and Frozen Lakes (Captain).
 
             Permanent damage and armor bonuses from research (and alliance perks) are capped — past the cap, |cgear|n is where power grows, and gear is loseable (|whelp loot|n).
 
             # See Also
 
-            |whelp lab|n · |whelp level|n · |whelp craft|n · |whelp loot|n
+            |whelp lab|n · |whelp weapons lab|n · |whelp defense lab|n · |whelp resource lab|n · |whelp level|n · |whelp craft|n
         """,
     },
     # ================================================================= #
@@ -1158,12 +1172,14 @@ HELP_ENTRY_DICTS = [
     },
     {
         "key": "lab",
-        "aliases": ["lb", "lab building", "laboratory"],
+        "aliases": ["lb", "lab building", "laboratory", "research lab"],
         "category": "Buildings",
         "text": """
-            |wLab (LB)|n
+            |wResearch Lab (LB)|n
 
-            Your research center and futuristic-gear workshop. It runs the tech tree and crafts your most advanced equipment.
+            One of the |cfour specialized labs|n. It hosts the |cResearch|n technology tree (vision, terrain, and utility techs) and crafts your most advanced gear.
+
+            The other three labs host the other trees: |cWeapons Lab (WX)|n, |cDefense Lab (DF)|n, and |cResource Lab (RX)|n. You may own |conly one lab per planet|n, so building this one commits the planet to the Research tree — |wdemolish|n it to switch.
 
             # Build Requirements
 
@@ -1180,7 +1196,7 @@ HELP_ENTRY_DICTS = [
 
             # What It Does
 
-            Researches |ctechnologies|n (|wresearch <tech>|n) and crafts futuristic gear. An |cEngineer|n drives research progress and passive crafting.
+            Researches the |cResearch|n tree (|wresearch <tech>|n) — Extended Range, Forest Warfare, Mountain Surveying, Ruin Fortification, Glacier Traversal — and crafts futuristic gear. An |cEngineer|n drives research and passive crafting.
 
             Crafts:
               Weapons - |cplasma rifle|n
@@ -1195,7 +1211,112 @@ HELP_ENTRY_DICTS = [
 
             # See Also
 
-            |whelp technology|n · |whelp craft|n · |whelp armory|n · |whelp equipment|n
+            |whelp technology|n · |whelp weapons lab|n · |whelp defense lab|n · |whelp resource lab|n · |whelp craft|n
+        """,
+    },
+    {
+        "key": "weapons lab",
+        "aliases": ["wx", "weapons lab building", "weapon lab"],
+        "category": "Buildings",
+        "text": """
+            |wWeapons Lab (WX)|n
+
+            The lab that hosts the |cWeapons|n technology tree — offense: weapon damage and range, plus crafted-gear quality. One of the |cfour specialized labs|n; you may own |conly one lab per planet|n, so building this commits the planet to the Weapons tree (|wdemolish|n to switch).
+
+            # Build Requirements
+
+            Cost:
+              Wood - |c20|n
+              Stone - |c15|n
+              Iron - |c25|n
+
+            Requirements:
+              Player - |clevel 11|n
+              HQ - |crequired|n
+              Deed - destroy |c3 outposts|n
+              Agent - an |cEngineer|n to run research
+
+            # What It Does
+
+            Researches the |cWeapons|n tree: |cField Marksmanship|n and |cAdvanced Weapons|n (+damage), |cBallistics Optimization|n and |cMunitions Refinement|n (+range), |cToxicology|n (harder poison), and |cMaster Gunsmithing|n (better crafted gear).
+
+            # Using It
+
+            |wbuild WX|n, assign an |cEngineer|n (|wagent assign <id>|n inside), then |wtechnology|n and |wresearch <tech>|n.
+
+            # See Also
+
+            |whelp technology|n · |whelp lab|n · |whelp defense lab|n · |whelp resource lab|n
+        """,
+    },
+    {
+        "key": "defense lab",
+        "aliases": ["df", "defense lab building"],
+        "category": "Buildings",
+        "text": """
+            |wDefense Lab (DF)|n
+
+            The lab that hosts the |cDefense|n technology tree — survivability: building HP and armor / damage reduction. One of the |cfour specialized labs|n; you may own |conly one lab per planet|n, so building this commits the planet to the Defense tree (|wdemolish|n to switch).
+
+            # Build Requirements
+
+            Cost:
+              Wood - |c20|n
+              Stone - |c25|n
+              Iron - |c15|n
+
+            Requirements:
+              Player - |clevel 11|n
+              HQ - |crequired|n
+              Deed - destroy |c3 outposts|n
+              Agent - an |cEngineer|n to run research
+
+            # What It Does
+
+            Researches the |cDefense|n tree: |cReinforced Walls|n and |cStructural Bracing|n (+building HP), and |cImproved Armor|n, |cAblative Plating|n, and |cReactive Plating|n (+armor, up to the cap).
+
+            # Using It
+
+            |wbuild DF|n, assign an |cEngineer|n (|wagent assign <id>|n inside), then |wtechnology|n and |wresearch <tech>|n.
+
+            # See Also
+
+            |whelp technology|n · |whelp lab|n · |whelp weapons lab|n · |whelp resource lab|n
+        """,
+    },
+    {
+        "key": "resource lab",
+        "aliases": ["rx", "resource lab building"],
+        "category": "Buildings",
+        "text": """
+            |wResource Lab (RX)|n
+
+            The lab that hosts the |cResource|n technology tree — economy: production speed, build cost, and salvage efficiency. One of the |cfour specialized labs|n; you may own |conly one lab per planet|n, so building this commits the planet to the Resource tree (|wdemolish|n to switch).
+
+            # Build Requirements
+
+            Cost:
+              Wood - |c25|n
+              Stone - |c20|n
+              Iron - |c15|n
+
+            Requirements:
+              Player - |clevel 11|n
+              HQ - |crequired|n
+              Deed - destroy |c3 outposts|n
+              Agent - an |cEngineer|n to run research
+
+            # What It Does
+
+            Researches the |cResource|n tree: |cPrefab Logistics|n and |cEfficient Construction|n (cheaper builds), |cRapid Production|n and |cAutomated Fabrication|n (faster production), and |cSalvage Protocols|n (cheaper Blacksmith rerolls).
+
+            # Using It
+
+            |wbuild RX|n, assign an |cEngineer|n (|wagent assign <id>|n inside), then |wtechnology|n and |wresearch <tech>|n.
+
+            # See Also
+
+            |whelp technology|n · |whelp lab|n · |whelp weapons lab|n · |whelp defense lab|n
         """,
     },
     {
@@ -1431,7 +1552,7 @@ HELP_ENTRY_DICTS = [
 
             # The Bench
 
-            |winsert <item> [weapon]|n — permanently apply a crafted insert to your equipped weapon: a damage-type coating (|cVenom Coating|n → poison, |cIncendiary Core|n → fire), an |cExtended Barrel|n (+range), or a |cHollow-Point Kit|n (+damage, -range). Inserts |rcannot be removed|n and a weapon has limited insert slots. If you have both a melee and a ranged weapon equipped, name the |c[weapon]|n to say which one gets the insert. Craft inserts at the Armory/Lab first.
+            |winsert <item> [weapon]|n — permanently apply a crafted insert to your equipped weapon: a damage-type coating (|cVenom Coating|n → poison, |cIncendiary Core|n → fire), an |cExtended Barrel|n (+range), or a |cHollow-Point Kit|n (+damage, -range). Inserts |rcannot be removed|n and a weapon has limited insert slots. If you have both a melee and a ranged weapon equipped, name the |c[weapon]|n to say which one gets the insert. Craft inserts at the Armory or Research Lab first.
             |wreroll <item>|n — draw fresh base stats for a rolled item and re-stamp its quality score. Costs |cSalvage|n plus a little Iron. Affixes, rarity, and applied inserts are untouched.
             |wsalvage <item>|n — destroy a carried item and pocket |cSalvage|n; better items pay more.
 
@@ -1510,7 +1631,7 @@ HELP_ENTRY_DICTS = [
 
             Crafts the full bomb catalog: |cFrag|n and |cPlasma|n grenades (thrown in a direction) and |cLand|n and |cProximity|n mines (armed where you stand). Bombs breach cover — they damage closed buildings and the people sheltering inside them — which makes them the answer to a walled outpost and to anyone turtling in a structure.
 
-            Like the Armory, Lab, and Medbay it is a |cproduction|n building, so an assigned |cEngineer|n crafts the same catalog passively while you're elsewhere, paying the same resource cost from your stockpile.
+            Like the Armory, Research Lab, and Medbay it is a |cproduction|n building, so an assigned |cEngineer|n crafts the same catalog passively while you're elsewhere, paying the same resource cost from your stockpile.
 
             # Using It
 

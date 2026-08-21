@@ -540,6 +540,17 @@ HEAL_AURA = "heal_aura"
 #: ``BalanceConfig.survey_initial_radius``), which is why it is ``upgradable``.
 OUTPOST_SURVEY = "outpost_survey"
 
+#: A research lab that hosts ONE technology tree. Every research building
+#: declares this capability plus a ``research_tree`` naming which tree it hosts
+#: (weapons/defense/resource/research — see ``RESEARCH_TREES``). Research is
+#: gated on OWNERSHIP, not location: ``research`` checks the tree of the lab the
+#: player owns on their current planet, and a player may own only ONE research
+#: lab per planet (``BuildingSystem._validate_one_research_lab_per_planet``), so
+#: choosing a tree is a strategic, per-planet commitment. The capability lets
+#: the tech system find a player's lab and read its tree without hardcoding
+#: abbreviations.
+RESEARCH_LAB = "research_lab"
+
 BUILDING_CAPABILITIES: frozenset[str] = frozenset({
     HARVESTABLE,
     UPGRADABLE,
@@ -558,7 +569,31 @@ BUILDING_CAPABILITIES: frozenset[str] = frozenset({
     VISION_AURA,
     HEAL_AURA,
     OUTPOST_SURVEY,
+    RESEARCH_LAB,
 })
+
+#: The controlled vocabulary of technology TREES. Every technology declares one
+#: ``tree`` (``TechnologyDef.tree``) and every research lab hosts exactly one.
+#: A tree groups techs by domain so a specialized lab gates its own line of
+#: research:
+#:   - ``weapons``  — offense: weapon damage/range, crafted-gear quality.
+#:   - ``defense``  — survivability: building HP, armor/damage-reduction.
+#:   - ``resource`` — economy: production/build-cost/salvage efficiency.
+#:   - ``research`` — the generalist tree: terrain affinities + utility techs
+#:     (the original Lab's line — kept as ``research`` for continuity).
+#: The schema validator rejects any tech ``tree`` or lab ``research_tree``
+#: outside this set, so a typo fails at load.
+RESEARCH_TREE_WEAPONS = "weapons"
+RESEARCH_TREE_DEFENSE = "defense"
+RESEARCH_TREE_RESOURCE = "resource"
+RESEARCH_TREE_RESEARCH = "research"
+
+RESEARCH_TREES: tuple[str, ...] = (
+    RESEARCH_TREE_WEAPONS,
+    RESEARCH_TREE_DEFENSE,
+    RESEARCH_TREE_RESOURCE,
+    RESEARCH_TREE_RESEARCH,
+)
 
 #: Fraction of carried items/resources a Respawn building recovers, by BUILDING
 #: level (1-5). Per-item probabilistic (each item recovered with this chance) and

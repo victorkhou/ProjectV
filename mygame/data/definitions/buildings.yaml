@@ -180,7 +180,15 @@
   storage_capacity: 0
   map_symbol: RD
 
-- name: Lab
+# Research Lab — the GENERALIST research building (research-lab-trees feature).
+# Hosts the `research` technology tree: vision, terrain affinities, and utility
+# techs (the original Lab's line, kept intact for continuity). It is one of the
+# four specialized labs; a player may own only ONE research lab per planet
+# (BuildingSystem._validate_one_research_lab_per_planet), so building this
+# commits the planet to the research tree. The `research_lab` capability lets
+# the tech system find the lab and read its `research_tree`; research is gated
+# on OWNERSHIP of the hosting lab, not on standing in it.
+- name: Research Lab
   abbreviation: LB
   cost:
     Wood: 25
@@ -198,7 +206,86 @@
   produces: null
   requires_agent: true
   storage_capacity: 0
+  capabilities:
+    - research_lab
+  research_tree: research
   map_symbol: LB
+
+# Weapons Lab — hosts the `weapons` technology tree (offense: weapon
+# damage/range, crafted-gear quality). Same shape and level/deed gate as the
+# other labs; a player picks ONE lab tree per planet. See the Research Lab note.
+- name: Weapons Lab
+  abbreviation: WX
+  cost:
+    Wood: 20
+    Stone: 15
+    Iron: 25
+  build_time_seconds: 38
+  max_level: 5
+  rank_requirement: 11
+  unlock_deed: outpost_cleared
+  unlock_deed_count: 3
+  max_health: 250
+  requires_hq: true
+  required_terrain: null
+  category: research
+  produces: null
+  requires_agent: true
+  storage_capacity: 0
+  capabilities:
+    - research_lab
+  research_tree: weapons
+  map_symbol: WX
+
+# Defense Lab — hosts the `defense` technology tree (survivability: building
+# HP, armor / damage reduction). One lab tree per planet.
+- name: Defense Lab
+  abbreviation: DF
+  cost:
+    Wood: 20
+    Stone: 25
+    Iron: 15
+  build_time_seconds: 38
+  max_level: 5
+  rank_requirement: 11
+  unlock_deed: outpost_cleared
+  unlock_deed_count: 3
+  max_health: 250
+  requires_hq: true
+  required_terrain: null
+  category: research
+  produces: null
+  requires_agent: true
+  storage_capacity: 0
+  capabilities:
+    - research_lab
+  research_tree: defense
+  map_symbol: DF
+
+# Resource Lab — hosts the `resource` technology tree (economy: production,
+# build-cost, and salvage efficiency). One lab tree per planet.
+- name: Resource Lab
+  abbreviation: RX
+  cost:
+    Wood: 25
+    Stone: 20
+    Iron: 15
+  build_time_seconds: 38
+  max_level: 5
+  rank_requirement: 11
+  unlock_deed: outpost_cleared
+  unlock_deed_count: 3
+  max_health: 250
+  requires_hq: true
+  required_terrain: null
+  category: research
+  produces: null
+  requires_agent: true
+  storage_capacity: 0
+  capabilities:
+    - research_lab
+  research_tree: resource
+  map_symbol: RX
 
 - name: Relay
   abbreviation: RL

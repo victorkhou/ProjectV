@@ -271,7 +271,9 @@ class TestDataclassContracts:
     """Verify all definitions are proper dataclasses with expected field counts."""
 
     def test_building_def_field_count(self):
-        assert len(fields(BuildingDef)) == 18
+        # 19 after adding research_tree (research-lab-trees: which tech tree a
+        # research_lab building hosts; None for non-labs).
+        assert len(fields(BuildingDef)) == 19
 
     def test_item_def_field_count(self):
         # 16 after adding craft_cost (resource cost for the `craft` command).
@@ -284,7 +286,8 @@ class TestDataclassContracts:
         assert len(fields(RankDef)) == 6
 
     def test_technology_def_field_count(self):
-        assert len(fields(TechnologyDef)) == 7
+        # 8 after adding tree (research-lab-trees: which tech tree gates it).
+        assert len(fields(TechnologyDef)) == 8
 
     def test_powerup_def_field_count(self):
         assert len(fields(PowerupDef)) == 7

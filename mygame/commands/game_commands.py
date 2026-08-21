@@ -3093,7 +3093,7 @@ class CmdCollect(GameCommand):
 
 
 class CmdResearch(GameCommand):
-    """Start researching a technology at your Lab.
+    """Start researching a technology from your lab's tree.
 
     Usage:
       research <tech>
@@ -3105,8 +3105,13 @@ class CmdResearch(GameCommand):
       research improved_armor
 
     Notes:
-      Alias: re. Requires a Lab (with an Engineer agent to progress it). List
-      what you've researched and what's available with 'technology'.
+      Alias: re. Research is gated by which |cresearch lab|n you own on this
+      planet — each hosts one |ctech tree|n (|cWeapons|n, |cDefense|n,
+      |cResource|n, or |cResearch|n) and you may own only one lab per planet,
+      so your tree is a committed choice (demolish the lab to switch). You can
+      only research techs in your lab's tree; an Engineer agent progresses the
+      timer. List your tree and what's available with 'technology'.
+      See 'help research'.
     """
 
     key = "research"
@@ -3898,8 +3903,11 @@ class CmdTechnology(GameCommand):
       technology
 
     Notes:
-      Alias: tech. Shows completed research and what's currently available.
-      Start new research with 'research <tech>' at a Lab.
+      Alias: tech. Shows completed research and what's available in the tree
+      your |cresearch lab|n hosts on this planet. Each planet has one lab (one
+      tree): a |cWeapons|n, |cDefense|n, |cResource|n, or |cResearch Lab|n.
+      'Available' is empty until you build one — that choice picks your tree.
+      Start research with 'research <tech>'. See 'help research'.
     """
 
     key = "technology"
@@ -3920,7 +3928,19 @@ class CmdTechnology(GameCommand):
         ))
 
         if tech_system:
+            # Name the tree the player's lab hosts (or that they have none), so
+            # an empty Available list reads as "build a lab" rather than a bug.
+            tree = None
+            if hasattr(tech_system, "owned_research_tree"):
+                tree = tech_system.owned_research_tree(caller)
             lines.append("")
+            if tree is None:
+                lines.append(
+                    "|xNo research lab on this planet — build one (Weapons, "
+                    "Defense, Resource, or Research Lab) to pick a tree.|n"
+                )
+            else:
+                lines.append(f"|wResearch tree:|n |c{tree}|n")
             available = tech_system.list_available(caller)
             avail_names = [f"{t.name} ({t.key})" for t in available]
             lines.extend(format_section("Available", avail_names, empty="none"))

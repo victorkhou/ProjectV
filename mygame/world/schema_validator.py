@@ -191,6 +191,7 @@ class SchemaValidator:
 
             # capabilities (optional) must be a list of known capability flags
             caps = entry.get("capabilities")
+            cap_list = caps if isinstance(caps, list) else []
             if caps is not None:
                 from world.constants import BUILDING_CAPABILITIES
                 if not isinstance(caps, list):
@@ -204,6 +205,29 @@ class SchemaValidator:
                                 f"{prefix}: unknown capability '{cap}' "
                                 f"(known: {sorted(BUILDING_CAPABILITIES)})"
                             )
+
+            # research_tree pairs with the research_lab capability: a research
+            # lab must name exactly one valid tree, and a non-lab must not name
+            # one (a stray tree would silently never gate any research).
+            from world.constants import RESEARCH_LAB, RESEARCH_TREES
+            tree = entry.get("research_tree")
+            is_lab = RESEARCH_LAB in cap_list
+            if is_lab:
+                if tree is None:
+                    errors.append(
+                        f"{prefix}: a research_lab must declare a research_tree "
+                        f"(one of {sorted(RESEARCH_TREES)})"
+                    )
+                elif tree not in RESEARCH_TREES:
+                    errors.append(
+                        f"{prefix}: unknown research_tree '{tree}' "
+                        f"(known: {sorted(RESEARCH_TREES)})"
+                    )
+            elif tree is not None:
+                errors.append(
+                    f"{prefix}: research_tree '{tree}' set on a building "
+                    f"without the '{RESEARCH_LAB}' capability"
+                )
 
         return errors
 
@@ -776,6 +800,17 @@ class SchemaValidator:
                         prefix, entry.get("effect_value")
                     )
                 )
+
+            # A tech's tree (optional; defaults to the generalist "research"
+            # tree) must be a known tree, so a lab can host it.
+            tree = entry.get("tree")
+            if tree is not None:
+                from world.constants import RESEARCH_TREES
+                if tree not in RESEARCH_TREES:
+                    errors.append(
+                        f"{prefix}: unknown tree '{tree}' "
+                        f"(known: {sorted(RESEARCH_TREES)})"
+                    )
 
         return errors
 
@@ -1644,5 +1679,55 @@ class SchemaValidator:
                         f"not found in building definitions (expects an "
                         f"abbreviation)"
                     )
+
+        # Research trees ↔ labs must be a bijection: every tree in
+        # RESEARCH_TREES needs exactly one lab hosting it (else a whole line of
+        # research is unreachable — no building gates it), and two labs must not
+        # claim the same tree (which tree a player gets would then be ambiguous).
+        # A technology's tree must also be a real tree — a typo'd tree would
+        # make the tech researchable nowhere.
+        from world.constants import RESEARCH_LAB, RESEARCH_TREES
+
+        tree_to_labs: dict[str, list[str]] = {t: [] for t in RESEARCH_TREES}
+        for abbr, bdef in registry.buildings.items():
+            if not bdef.has_capability(RESEARCH_LAB):
+                continue
+            tree = bdef.research_tree
+            if tree in tree_to_labs:
+                tree_to_labs[tree].append(abbr)
+
+        # A tech's tree must always be a known tree — a typo'd tree makes it
+        # researchable nowhere and is wrong in any dataset.
+        trees_with_techs: set[str] = set()
+        for key, tdef in registry.technologies.items():
+            if tdef.tree not in RESEARCH_TREES:
+                errors.append(
+                    f"technology '{key}': tree '{tdef.tree}' "
+                    f"not a known tree {sorted(RESEARCH_TREES)}"
+                )
+            else:
+                trees_with_techs.add(tdef.tree)
+
+        # The tree↔lab coverage/uniqueness rules only apply once the dataset
+        # actually USES research labs. A dataset with no research_lab building
+        # (the many minimal test fixtures that predate this feature, and ship
+        # default-"research"-tree techs) is not required to host them — the
+        # techs are simply inert there. When labs ARE present, enforce the full
+        # bijection: every tree that has techs needs a hosting lab, and no two
+        # labs may claim the same tree.
+        any_lab = any(labs for labs in tree_to_labs.values())
+        if any_lab:
+            for tree in trees_with_techs:
+                if not tree_to_labs.get(tree):
+                    errors.append(
+                        f"research tree '{tree}' has technologies but no lab "
+                        f"hosting it — they would be researchable nowhere"
+                    )
+        for tree, labs in tree_to_labs.items():
+            if len(labs) > 1:
+                errors.append(
+                    f"research tree '{tree}' is hosted by multiple labs "
+                    f"{sorted(labs)} — exactly one lab must host each tree"
+                )
 
         return errors

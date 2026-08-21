@@ -351,3 +351,95 @@ def test_admin_topic_names_do_not_collide():
         other_names.update(other.get("aliases", []))
     clashes = my_names & other_names
     assert not clashes, f"admin topic names collide with other topics: {clashes}"
+
+
+# ------------------------------------------------------------------ #
+#  Research-lab trees — the four specialized labs + tree-gated research
+# ------------------------------------------------------------------ #
+
+_LAB_TOPICS = ("lab", "weapons lab", "defense lab", "resource lab")
+
+
+def test_four_lab_topics_exist_in_buildings_category():
+    """Each of the four specialized labs has its own Buildings topic."""
+    for key in _LAB_TOPICS:
+        assert key in _BY_KEY, f"missing lab help topic '{key}'"
+        assert _BY_KEY[key]["category"] == "Buildings"
+
+
+def test_lab_topics_state_one_lab_per_planet_rule():
+    """The defining gate: one lab (one tree) per planet, demolish to switch."""
+    for key in _LAB_TOPICS:
+        text = _BY_KEY[key]["text"].lower()
+        assert "one lab per planet" in text, (
+            f"{key} topic missing the one-lab-per-planet rule"
+        )
+        assert "demolish" in text, f"{key} topic missing the demolish-to-switch note"
+
+
+def test_lab_topics_name_their_hosted_tree():
+    """Each lab topic names the tree it hosts."""
+    assert "research" in _BY_KEY["lab"]["text"].lower()
+    assert "weapons" in _BY_KEY["weapons lab"]["text"].lower()
+    assert "defense" in _BY_KEY["defense lab"]["text"].lower()
+    assert "resource" in _BY_KEY["resource lab"]["text"].lower()
+
+
+def test_lab_abbreviations_are_reachable_as_aliases():
+    """Each lab's two-letter abbreviation resolves to its topic."""
+    alias_index = {}
+    for entry in HELP_ENTRY_DICTS:
+        for alias in entry.get("aliases", []):
+            alias_index[alias.lower()] = entry["key"]
+    assert alias_index.get("lb") == "lab"
+    assert alias_index.get("wx") == "weapons lab"
+    assert alias_index.get("df") == "defense lab"
+    assert alias_index.get("rx") == "resource lab"
+
+
+def test_technologies_topic_lists_all_four_trees():
+    """The tech overview must present all four trees with their host lab."""
+    text = _BY_KEY["technologies"]["text"]
+    for tree_lab in ("Weapons Lab", "Defense Lab", "Resource Lab",
+                     "Research Lab"):
+        assert tree_lab in text, f"technologies topic missing '{tree_lab}'"
+    # New per-tree techs added with the labs.
+    for tech in ("Field Marksmanship", "Munitions Refinement",
+                 "Ablative Plating", "Structural Bracing",
+                 "Prefab Logistics", "Automated Fabrication"):
+        assert tech in text, f"technologies topic missing '{tech}'"
+
+
+def test_lab_topics_reachable_from_overview_and_technologies():
+    """Discoverability: the labs are cross-linked from the buildings overview
+    and the technologies topic."""
+    buildings_text = _BY_KEY["buildings"]["text"].lower()
+    for name in ("research lab", "weapons lab", "defense lab", "resource lab"):
+        assert name in buildings_text, f"buildings overview missing '{name}'"
+    tech_text = _BY_KEY["technologies"]["text"]
+    for link in ("help weapons lab", "help defense lab", "help resource lab"):
+        assert link in tech_text, f"technologies topic missing cross-link '{link}'"
+
+
+def test_lab_topic_color_tags_balanced():
+    for key in _LAB_TOPICS:
+        text = _BY_KEY[key]["text"]
+        assert len(_OPEN.findall(text)) <= len(_CLOSE.findall(text)), (
+            f"{key}: unbalanced color tags"
+        )
+
+
+def test_lab_topic_names_do_not_collide():
+    """The three new lab topics' keys/aliases must not clash with any OTHER
+    topic (a clash would let one shadow the other)."""
+    for this_key in ("weapons lab", "defense lab", "resource lab"):
+        entry = _BY_KEY[this_key]
+        my_names = {entry["key"], *entry.get("aliases", [])}
+        other_names = set()
+        for other in HELP_ENTRY_DICTS:
+            if other["key"] == this_key:
+                continue
+            other_names.add(other["key"])
+            other_names.update(other.get("aliases", []))
+        clashes = my_names & other_names
+        assert not clashes, f"{this_key} topic names collide: {clashes}"

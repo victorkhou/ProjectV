@@ -41,9 +41,13 @@ class TechLabSystem(BaseSystem):
     # ------------------------------------------------------------------ #
 
     def list_available(self, player: Any) -> list[TechnologyDef]:
-        """Return technologies available at the player's current rank.
+        """Return technologies available to research right now.
 
-        Filters out already-researched technologies.
+        A tech is available when the player's rank meets its ``required_rank``,
+        it is not already researched, AND it belongs to the tree hosted by the
+        research lab the player OWNS on their current planet. With no research
+        lab the list is empty — there is nothing they can research until they
+        build one and thereby pick a tree.
 
         Args:
             player: The player to query.
@@ -51,13 +55,45 @@ class TechLabSystem(BaseSystem):
         Returns:
             List of TechnologyDef objects available for research.
         """
+        tree = self.owned_research_tree(player)
+        if tree is None:
+            return []
+
         rank_level = self._get_player_level(player)
         from world.systems.rank_system import rank_from_level
         rank_num = rank_from_level(rank_level)
         all_techs = self.registry.get_technologies_for_rank(rank_num)
 
         researched = self._get_researched_techs(player)
-        return [t for t in all_techs if t.key not in researched]
+        return [
+            t for t in all_techs
+            if t.key not in researched and t.tree == tree
+        ]
+
+    def owned_research_tree(self, player: Any) -> str | None:
+        """Return the tech tree of the research lab *player* owns, or ``None``.
+
+        Resolves the player's ``research_lab`` building on their current planet
+        (:func:`world.utils.owner_research_lab`) and reads its ``research_tree``
+        from the building's definition. ``None`` when the player owns no
+        research lab on this planet (so they can research nothing yet), or when
+        the lab's type can't be resolved. Passes ``self.registry`` as the
+        capability/definition provider so the lookup stays hermetic in tests.
+        """
+        from world.utils import owner_research_lab, get_building_type
+
+        planet = getattr(getattr(player, "db", None), "coord_planet", None)
+        lab = owner_research_lab(player, planet=planet, provider=self.registry)
+        if lab is None:
+            return None
+        btype = get_building_type(lab)
+        if not btype:
+            return None
+        try:
+            bdef = self.registry.get_building(btype)
+        except (KeyError, AttributeError):
+            return None
+        return getattr(bdef, "research_tree", None)
 
     # ------------------------------------------------------------------ #
     #  Start research
@@ -85,6 +121,24 @@ class TechLabSystem(BaseSystem):
         tdef = self.registry.technologies.get(tech_key)
         if tdef is None:
             return False, f"Unknown technology: {tech_key}"
+
+        # 1b. Research-lab gate (research-lab-trees). Research is gated on
+        # OWNERSHIP: the player must own a research lab on their planet, and its
+        # tree must match this tech's tree. Runs before rank/resource so a
+        # wrong-lab attempt reads clearly ("your lab researches X, not Y")
+        # rather than a misleading rank/cost error.
+        owned_tree = self.owned_research_tree(player)
+        if owned_tree is None:
+            return False, (
+                f"You need a research lab to research {tdef.name}. Build the "
+                f"lab that hosts the '{tdef.tree}' tree."
+            )
+        if tdef.tree != owned_tree:
+            return False, (
+                f"{tdef.name} belongs to the '{tdef.tree}' tree, but your "
+                f"research lab hosts the '{owned_tree}' tree. Each planet has "
+                f"one lab (one tree) — demolish it to switch."
+            )
 
         # 2. Rank check — compare player's derived rank against required rank
         player_level = self._get_player_level(player)

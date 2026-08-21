@@ -65,6 +65,32 @@ from mygame.world.event_bus import EventBus, TECHNOLOGY_RESEARCHED  # noqa: E402
 #  Helpers / Fakes
 # -------------------------------------------------------------- #
 
+from mygame.world.constants import RESEARCH_LAB  # noqa: E402
+
+
+class FakeLab:
+    """A research-lab building owned by a FakePlayer.
+
+    Hosts one tech tree. ``building_type`` is the lab's abbreviation; the
+    registry resolves its ``research_tree`` from that (research-lab-trees gate).
+    A convenience ``_tree_capable`` set makes ``building_has_capability`` report
+    the RESEARCH_LAB flag without a registry (the tech system passes the
+    registry, but the fake registry in this module may lack building defs).
+    """
+    def __init__(self, building_type, tree, planet=None, owner=None):
+        self.key = building_type
+        self.db = types.SimpleNamespace(
+            building_type=building_type, coord_planet=planet,
+            under_construction=False, owner=owner,
+        )
+        self.owner = owner
+        self.research_tree = tree
+        self.capabilities = frozenset({RESEARCH_LAB})
+
+    def has_capability(self, cap):
+        return cap in self.capabilities
+
+
 class FakeDB:
     """Simulates Evennia's db attribute handler."""
     def __init__(self):
@@ -72,19 +98,35 @@ class FakeDB:
         self.researched_techs = set()
         self.hp = 100
         self.hp_max = 100
+        self.coord_planet = "terra"
 
 class FakePlayer:
-    """Lightweight stand-in for CombatCharacter."""
-    def __init__(self, name="TestPlayer", rank_level=5, resources=None):
+    """Lightweight stand-in for CombatCharacter.
+
+    ``research_tree`` (default ``"research"``) is the tree of the research lab
+    this player owns; ``get_buildings`` returns that lab so the tech system's
+    ownership gate passes. Pass ``research_tree=None`` to model a player with no
+    research lab.
+    """
+    def __init__(self, name="TestPlayer", rank_level=5, resources=None,
+                 research_tree="research"):
         self.key = name
         self.db = FakeDB()
         self.db.rank_level = rank_level
+        self._research_tree = research_tree
         self._resources = {
             "Straw": 0, "Clay": 0, "Wood": 0, "Stone": 0, "Iron": 0,
             "Energy": 0, "Metals": 0, "Circuits": 0,
         }
         if resources:
             self._resources.update(resources)
+
+    def get_buildings(self):
+        if self._research_tree is None:
+            return []
+        abbr = _LAB_ABBR_BY_TREE.get(self._research_tree, "LB")
+        return [FakeLab(abbr, self._research_tree,
+                        planet=self.db.coord_planet, owner=self)]
 
     def get_resource(self, resource_type: str) -> int:
         return self._resources.get(resource_type, 0)
@@ -137,12 +179,35 @@ SAMPLE_TECHS = {
     ),
 }
 
+#: Which lab abbreviation hosts each tree, for the FakeLab the FakePlayer owns.
+_LAB_ABBR_BY_TREE = {
+    "weapons": "WX", "defense": "DF", "resource": "RX", "research": "LB",
+}
+
+
+def _lab_building_defs():
+    """The four research-lab BuildingDefs, so the registry can resolve a
+    FakeLab's abbreviation to its research_tree (the tech-gate lookup)."""
+    from mygame.world.definitions import BuildingDef
+    defs = {}
+    for tree, abbr in _LAB_ABBR_BY_TREE.items():
+        defs[abbr] = BuildingDef(
+            name=f"{tree.title()} Lab", abbreviation=abbr, cost={},
+            max_health=250, requires_hq=True, required_terrain=None,
+            category="research", produces=None,
+            capabilities=frozenset({RESEARCH_LAB}), research_tree=tree,
+        )
+    return defs
+
+
 def _make_registry():
     """Create a DataRegistry with test definitions."""
     registry = DataRegistry()
     registry.ranks = list(SAMPLE_RANKS)
     registry.technologies = dict(SAMPLE_TECHS)
     registry.balance = BalanceConfig()
+    # Research-lab defs so the tech-gate can resolve a FakeLab abbr -> tree.
+    registry.buildings = _lab_building_defs()
     return registry
 
 def _make_system(registry=None, event_bus=None):
@@ -544,7 +609,13 @@ class TestReactivePlatingResearch(unittest.TestCase):
         return player
 
     def _research(self, system, player, tech_key):
-        """Start *tech_key* and tick it to completion."""
+        """Start *tech_key* and tick it to completion.
+
+        Gives the player the research lab that hosts this tech's tree, so the
+        ownership gate passes — these tests exercise EFFECT application, not the
+        gate (which has its own tests).
+        """
+        player._research_tree = self.registry.technologies[tech_key].tree
         ok, msg = system.start_research(player, tech_key)
         self.assertTrue(ok, f"start_research({tech_key}) failed: {msg}")
         ticks = self.registry.technologies[tech_key].research_ticks
@@ -633,7 +704,13 @@ class TestSalvageProtocolsResearch(unittest.TestCase):
         return player
 
     def _research(self, system, player, tech_key):
-        """Start *tech_key* and tick it to completion."""
+        """Start *tech_key* and tick it to completion.
+
+        Gives the player the research lab that hosts this tech's tree, so the
+        ownership gate passes — these tests exercise EFFECT application, not the
+        gate (which has its own tests).
+        """
+        player._research_tree = self.registry.technologies[tech_key].tree
         ok, msg = system.start_research(player, tech_key)
         self.assertTrue(ok, f"start_research({tech_key}) failed: {msg}")
         ticks = self.registry.technologies[tech_key].research_ticks
@@ -707,7 +784,13 @@ class _RealDataTechTest(unittest.TestCase):
         return player
 
     def _research(self, system, player, tech_key):
-        """Start *tech_key* and tick it to completion."""
+        """Start *tech_key* and tick it to completion.
+
+        Gives the player the research lab that hosts this tech's tree, so the
+        ownership gate passes — these tests exercise EFFECT application, not the
+        gate (which has its own tests).
+        """
+        player._research_tree = self.registry.technologies[tech_key].tree
         ok, msg = system.start_research(player, tech_key)
         self.assertTrue(ok, f"start_research({tech_key}) failed: {msg}")
         ticks = self.registry.technologies[tech_key].research_ticks
@@ -1068,6 +1151,109 @@ class TestMasterGunsmithingResearch(_RealDataTechTest):
         # lower it (same U sequence under the shared seed).
         for floored, plain in zip(rolls, baseline):
             self.assertGreaterEqual(floored, plain - 1e-9)
+
+
+# -------------------------------------------------------------- #
+#  Research-lab-tree gating (research-lab-trees feature)
+# -------------------------------------------------------------- #
+
+#: Techs across three trees for the gating tests, all at Recruit rank so the
+#: rank gate never interferes (the tree gate runs before rank, but keeping
+#: rank open isolates the behaviour under test).
+_TREE_TECHS = {
+    "wtech": TechnologyDef(
+        name="Weapon Tech", key="wtech", tree="weapons",
+        required_rank="Recruit", resource_cost={}, research_ticks=2,
+        effect_type="stat_bonus", effect_value={"damage": 10},
+    ),
+    "dtech": TechnologyDef(
+        name="Defense Tech", key="dtech", tree="defense",
+        required_rank="Recruit", resource_cost={}, research_ticks=2,
+        effect_type="stat_bonus", effect_value={"building_hp": 50},
+    ),
+    "rtech": TechnologyDef(
+        name="Research Tech", key="rtech", tree="research",
+        required_rank="Recruit", resource_cost={}, research_ticks=2,
+        effect_type="stat_bonus", effect_value={"sight_range": 2},
+    ),
+}
+
+
+def _tree_registry():
+    registry = _make_registry()
+    registry.technologies = dict(_TREE_TECHS)
+    return registry
+
+
+class TestResearchLabTreeGate(unittest.TestCase):
+    """start_research / list_available honour the OWNED lab's tree.
+
+    A player owns at most one research lab per planet; its tree decides which
+    techs they may research. Validates the research-lab-trees ownership gate.
+    """
+
+    def setUp(self):
+        self.registry = _tree_registry()
+        self.system = TechLabSystem(self.registry, EventBus())
+
+    def test_owned_research_tree_reads_the_owned_lab(self):
+        for tree in ("weapons", "defense", "resource", "research"):
+            player = FakePlayer(research_tree=tree)
+            self.assertEqual(self.system.owned_research_tree(player), tree)
+
+    def test_no_lab_reports_no_owned_tree(self):
+        player = FakePlayer(research_tree=None)
+        self.assertIsNone(self.system.owned_research_tree(player))
+
+    def test_matching_tree_research_starts(self):
+        player = FakePlayer(research_tree="weapons")
+        ok, msg = self.system.start_research(player, "wtech")
+        self.assertTrue(ok, msg)
+
+    def test_wrong_tree_research_rejected(self):
+        """A weapons lab cannot research a defense tech, and the message names
+        both the tech's tree and the owned tree."""
+        player = FakePlayer(research_tree="weapons")
+        ok, msg = self.system.start_research(player, "dtech")
+        self.assertFalse(ok)
+        self.assertIn("defense", msg)
+        self.assertIn("weapons", msg)
+
+    def test_no_lab_research_rejected(self):
+        player = FakePlayer(research_tree=None)
+        ok, msg = self.system.start_research(player, "rtech")
+        self.assertFalse(ok)
+        self.assertIn("research lab", msg.lower())
+
+    def test_wrong_tree_does_not_deduct_or_queue(self):
+        """A rejected wrong-tree attempt changes nothing."""
+        player = FakePlayer(research_tree="defense")
+        ok, _ = self.system.start_research(player, "wtech")
+        self.assertFalse(ok)
+        self.assertEqual(player.db.researched_techs, set())
+        # Ticking does not complete a never-queued research.
+        for _ in range(5):
+            self.system.process_tick()
+        self.assertEqual(player.db.researched_techs, set())
+
+    def test_list_available_filters_to_owned_tree(self):
+        player = FakePlayer(research_tree="defense")
+        keys = {t.key for t in self.system.list_available(player)}
+        self.assertEqual(keys, {"dtech"})
+
+    def test_list_available_empty_without_lab(self):
+        player = FakePlayer(research_tree=None)
+        self.assertEqual(self.system.list_available(player), [])
+
+    def test_switching_lab_switches_the_researchable_tree(self):
+        """Same player, different owned lab → different tree gate. Models a
+        demolish-and-rebuild (one lab per planet, so switching is the way)."""
+        player = FakePlayer(research_tree="weapons")
+        ok, _ = self.system.start_research(player, "dtech")
+        self.assertFalse(ok)  # weapons lab can't research defense
+        player._research_tree = "defense"
+        ok, msg = self.system.start_research(player, "dtech")
+        self.assertTrue(ok, msg)
 
 
 if __name__ == "__main__":

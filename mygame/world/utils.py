@@ -1257,29 +1257,54 @@ def _owner_hq_buildings(owner: Any, planet: Any = None, provider: Any = None):
         yield b
 
 
+def owner_research_lab(owner: Any, planet: Any = None, provider: Any = None):
+    """Return *owner*'s research-lab building on *planet*, or ``None``.
+
+    The research-lab-trees gate: a player owns at most one ``research_lab``
+    building per planet (enforced at build time by
+    ``BuildingSystem._validate_one_research_lab_per_planet``), and that lab's
+    ``research_tree`` decides which technology tree they may research. Mirrors
+    :func:`_owner_hq_buildings`: enumerates ``owner.get_buildings()``, filters to
+    the ``RESEARCH_LAB`` capability and — when *planet* is given — to that
+    planet, and returns the first match. A building still under construction is
+    skipped: a half-built lab hosts no research (mirroring
+    :func:`owner_has_active_hq`). Safe outside a full Evennia env; returns
+    ``None`` when the owner exposes no ``get_buildings``.
+
+    Args:
+        owner: The player.
+        planet: Planet key to scope to; ``None`` means any planet.
+        provider: Optional DefinitionsProvider for the capability lookup.
+    """
+    from world.constants import RESEARCH_LAB
+
+    if owner is None or not hasattr(owner, "get_buildings"):
+        return None
+    try:
+        buildings = owner.get_buildings()
+    except Exception:  # noqa: BLE001
+        return None
+    for b in buildings or ():
+        if not building_has_capability(b, RESEARCH_LAB, provider=provider):
+            continue
+        if planet is not None and _building_planet(b) not in (None, planet):
+            continue
+        if get_obj_attr(b, "under_construction", False):
+            continue
+        return b
+    return None
+
+
 def active_hq_owner_ids(buildings: Any, provider: Any = None) -> set:
     """Return the set of owner ``.id``s that have a completed HQ in *buildings*.
 
-    A per-tick precomputation for the "no HQ = base inert" gate. Iterating the
-    already-gathered active-building list once — using only in-memory capability
-    lookups (no DB query) — yields every owner whose base is currently powered.
-    Turret and guard-AI steps then test ``owner.id in active_ids`` instead of
-    calling :func:`owner_has_active_hq` (which runs a ``get_buildings()`` DB
-    query) for *every* turret/guard on *every* tick. This turns an
-    O(entities)-DB-queries-per-tick gate into a single O(buildings) in-memory
-    pass.
+    A per-tick precomputation for the "no HQ = base inert" gate: one in-memory
+    pass over the already-gathered building list, so turret and guard-AI steps
+    test ``owner.id in active_ids`` instead of calling
+    :func:`owner_has_active_hq` (a ``get_buildings()`` DB query) per entity per
+    tick. An HQ still ``under_construction`` does not count.
 
-    An HQ that is still ``under_construction`` does not count (mirrors
-    :func:`owner_has_active_hq`).
-
-    Args:
-        buildings: The active-building list for this tick.
-        provider: Optional DefinitionsProvider for the capability lookup;
-            defaults to the live registry inside ``building_has_capability``.
-
-    Returns:
-        A set of owner ids (ints). Owners without a resolvable ``.id`` are
-        omitted.
+    Owners without a resolvable ``.id`` are omitted.
     """
     from world.constants import HEADQUARTERS
 

@@ -1970,3 +1970,133 @@ class TestBaseTierRarityWeights:
         table = real_registry.balance.rarity_table
         citadel_weights = table["citadel"]["weights"]
         assert citadel_weights.get("legendary", 0) > 0
+
+
+# ================================================================== #
+#  research-lab-trees — the four specialized labs + tree wiring
+# ================================================================== #
+
+# The four research labs and the technology tree each hosts.
+_LAB_TREE_BY_ABBR = {
+    "LB": "research",
+    "WX": "weapons",
+    "DF": "defense",
+    "RX": "resource",
+}
+
+
+class TestRealResearchLabDefs:
+    """The REAL buildings.yaml ships four research labs, one per tech tree.
+
+    Follows the TestRealBlacksmithDef pattern: assert against the loaded real
+    data, so a misindented/omitted ``capabilities: [research_lab]`` or
+    ``research_tree:`` line can't leave a lab unlocatable (or hosting the wrong
+    tree) while unit tests stay green.
+    """
+
+    def test_all_four_labs_load(self, real_registry):
+        for abbr in _LAB_TREE_BY_ABBR:
+            bdef = real_registry.resolve_building(abbr)
+            assert bdef is not None, f"lab {abbr} must exist in the real data"
+            assert bdef.category == "research"
+
+    def test_each_lab_declares_research_lab_capability(self, real_registry):
+        from mygame.world.constants import RESEARCH_LAB
+        for abbr in _LAB_TREE_BY_ABBR:
+            bdef = real_registry.resolve_building(abbr)
+            assert bdef.has_capability(RESEARCH_LAB), (
+                f"lab {abbr} must carry the 'research_lab' capability"
+            )
+
+    def test_each_lab_hosts_the_expected_tree(self, real_registry):
+        for abbr, tree in _LAB_TREE_BY_ABBR.items():
+            bdef = real_registry.resolve_building(abbr)
+            assert bdef.research_tree == tree, (
+                f"lab {abbr} hosts {bdef.research_tree!r}, expected {tree!r}"
+            )
+
+    def test_exactly_four_buildings_are_research_labs(self, real_registry):
+        from mygame.world.constants import RESEARCH_LAB
+        labs = sorted(
+            abbr for abbr, bdef in real_registry.buildings.items()
+            if bdef.has_capability(RESEARCH_LAB)
+        )
+        assert labs == sorted(_LAB_TREE_BY_ABBR), (
+            f"expected exactly the four labs, got {labs}"
+        )
+
+    def test_lab_capability_and_trees_in_vocabulary(self):
+        """The capability + tree names are registered constants, so a typo in
+        the YAML fails the load rather than silently disabling a lab."""
+        from mygame.world.constants import (
+            RESEARCH_LAB, BUILDING_CAPABILITIES, RESEARCH_TREES,
+        )
+        assert RESEARCH_LAB == "research_lab"
+        assert RESEARCH_LAB in BUILDING_CAPABILITIES
+        assert set(RESEARCH_TREES) == {"weapons", "defense", "resource",
+                                       "research"}
+
+    def test_non_lab_buildings_have_no_research_tree(self, real_registry):
+        """Only labs may name a tree — every other building leaves it None
+        (the schema forbids research_tree on a non-lab)."""
+        from mygame.world.constants import RESEARCH_LAB
+        for abbr, bdef in real_registry.buildings.items():
+            if not bdef.has_capability(RESEARCH_LAB):
+                assert bdef.research_tree is None, (
+                    f"non-lab {abbr} must not set research_tree"
+                )
+
+    def test_labs_share_the_mid_tier_rank_and_deed_gate(self, real_registry):
+        """All four labs gate at rank 11 with the 3-outpost deed (the LB's
+        original gate, kept across the new labs)."""
+        for abbr in _LAB_TREE_BY_ABBR:
+            bdef = real_registry.resolve_building(abbr)
+            assert bdef.rank_requirement == 11, abbr
+            assert bdef.unlock_deed == "outpost_cleared", abbr
+            assert bdef.unlock_deed_count == 3, abbr
+
+
+class TestRealTechnologyTrees:
+    """Every real technology is tagged with a valid tree, and each tree is
+    hosted by exactly one lab (the tree<->lab bijection)."""
+
+    def test_every_tech_has_a_valid_tree(self, real_registry):
+        from mygame.world.constants import RESEARCH_TREES
+        for key, tdef in real_registry.technologies.items():
+            assert tdef.tree in RESEARCH_TREES, (
+                f"tech {key} has invalid tree {tdef.tree!r}"
+            )
+
+    def test_every_tree_is_populated(self, real_registry):
+        """No empty tree — each of the four has at least one tech, so no lab
+        is a dead end."""
+        from mygame.world.constants import RESEARCH_TREES
+        trees = {t.tree for t in real_registry.technologies.values()}
+        assert trees == set(RESEARCH_TREES)
+
+    def test_get_technologies_for_tree_partitions_the_catalog(
+            self, real_registry):
+        """get_technologies_for_tree returns exactly that tree's techs, and the
+        four trees partition the full catalog with no overlap or gap."""
+        from mygame.world.constants import RESEARCH_TREES
+        seen = set()
+        total = 0
+        for tree in RESEARCH_TREES:
+            techs = real_registry.get_technologies_for_tree(tree)
+            for t in techs:
+                assert t.tree == tree
+            keys = {t.key for t in techs}
+            assert keys.isdisjoint(seen), "a tech appears in two trees"
+            seen |= keys
+            total += len(techs)
+        assert seen == set(real_registry.technologies)
+        assert total == len(real_registry.technologies)
+
+    def test_research_lab_for_tree_returns_the_hosting_lab(self, real_registry):
+        for abbr, tree in _LAB_TREE_BY_ABBR.items():
+            lab = real_registry.research_lab_for_tree(tree)
+            assert lab is not None, f"no lab hosts the {tree!r} tree"
+            assert lab.abbreviation == abbr
+
+    def test_research_lab_for_tree_unknown_tree_is_none(self, real_registry):
+        assert real_registry.research_lab_for_tree("nonexistent") is None

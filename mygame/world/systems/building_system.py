@@ -169,6 +169,7 @@ class BuildingSystem(BaseSystem):
             lambda: self._validate_hq_requirement(player, building_def),
             lambda: self._validate_one_hq_per_planet(player, building_def, tile),
             lambda: self._validate_shield_generator_cap(player, building_def, tile, x=x, y=y),
+            lambda: self._validate_one_research_lab_per_planet(player, building_def, tile, x=x, y=y),
             lambda: self._validate_rank_requirement(player, building_def),
             lambda: self._validate_deed_requirement(player, building_def),
             lambda: self._validate_terrain(tile, building_def),
@@ -958,6 +959,39 @@ class BuildingSystem(BaseSystem):
             return (
                 f"You can only have {MAX_SHIELD_GENERATORS_PER_PLANET} Shield "
                 f"Generators per planet (you have {existing})."
+            )
+        return None
+
+    def _validate_one_research_lab_per_planet(
+        self, player: Any, building_def: BuildingDef, tile: Any,
+        x: int | None = None, y: int | None = None,
+    ) -> str | None:
+        """Enforce one research lab (one tech tree) per player per planet.
+
+        Every research building (Weapons/Defense/Resource/Research Lab) carries
+        the ``research_lab`` capability and hosts one tree. Owning a lab is how
+        research is gated, so allowing two would let a planet research two trees
+        ??? the feature's core constraint is that a tree is a committed choice.
+        A player may still build a DIFFERENT lab on another planet. Planet-scope
+        the count the same way the Shield Generator cap does; when the target
+        planet is unknown, count all owned labs (fail safe ??? never over-cap).
+        Returns an error message or None.
+        """
+        from world.constants import RESEARCH_LAB
+        if not building_def.has_capability(RESEARCH_LAB):
+            return None
+
+        planet = self._tile_planet(tile, x=x, y=y)
+        for b in self._get_player_buildings(player):
+            if not self._building_has_capability(b, RESEARCH_LAB):
+                continue
+            if planet is not None:
+                b_planet = self._building_planet(b)
+                if b_planet is not None and b_planet != planet:
+                    continue
+            return (
+                "You can only have one research lab per planet ??? it sets your "
+                "tech tree. Demolish it to switch trees."
             )
         return None
 

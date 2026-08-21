@@ -231,6 +231,15 @@ class FakePlayer:
     def msg(self, text):
         self._messages.append(text)
 
+    def get_buildings(self):
+        """Owned buildings (for the research-lab-tree gate).
+
+        The god-stack researches ``ballistics_optimization`` (weapons tree),
+        so this player owns a Weapons Lab (``WX``) by default. Tests that
+        research a different tree set ``self._owned_labs`` to swap it.
+        """
+        return list(getattr(self, "_owned_labs", None) or [FakeBuilding("WX", owner=self)])
+
 
 class FakeAttributes:
     """Simulates Evennia's Attribute handler (for building doubles)."""
