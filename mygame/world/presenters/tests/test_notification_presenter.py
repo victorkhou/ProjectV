@@ -5,8 +5,15 @@ Proves the format-table: each notification kind produces the expected string
 from sample data, and the presenter delivers it to the correct player.
 """
 
+import re
+
 from mygame.world.event_bus import EventBus, PLAYER_NOTIFICATION
 from mygame.world.presenters.notification_presenter import NotificationPresenter
+
+
+def _plain(text: str) -> str:
+    """Strip Evennia colour markup so assertions test text, not markup."""
+    return re.sub(r"\|(?:\[)?[a-zA-Z0-9]", "", str(text))
 
 
 class _FakeNotifier:
@@ -33,8 +40,53 @@ class TestFormatTable:
         bus, n, _ = _make()
         p = _Player()
         bus.publish(PLAYER_NOTIFICATION, player=p, kind="rank_level_up",
-                    data={"level": 7, "rank_name": "Private", "sub": 2})
-        assert n.sent == [(p, "You are now Level 7 (Private 2)")]
+                    data={"level": 7, "rank_name": "Private", "sub": 2,
+                          "old_level": 6})
+        assert len(n.sent) == 1
+        msg = _plain(n.sent[0][1])
+        assert "LEVEL UP" in msg
+        assert "Level 7" in msg
+        assert "Private" in msg
+
+    def test_rank_level_up_names_building_unlocks(self):
+        bus, n, _ = _make()
+        p = _Player()
+        bus.publish(PLAYER_NOTIFICATION, player=p, kind="rank_level_up",
+                    data={"level": 5, "rank_name": "Recruit", "sub": 5,
+                          "old_level": 4,
+                          "buildings_unlocked": ["Factory", "Turret"]})
+        msg = _plain(n.sent[0][1])
+        assert "You can now build: Factory" in msg
+        assert "You can now build: Turret" in msg
+
+    def test_rank_level_up_drop_is_quiet(self):
+        bus, n, _ = _make()
+        p = _Player()
+        bus.publish(PLAYER_NOTIFICATION, player=p, kind="rank_level_up",
+                    data={"level": 4, "rank_name": "Recruit", "sub": 4,
+                          "old_level": 6})
+        msg = n.sent[0][1]
+        assert "LEVEL UP" not in msg
+        assert "slipped to Level 4" in msg
+
+    def test_xp_gain_humanizes_the_reason(self):
+        bus, n, _ = _make()
+        p = _Player()
+        bus.publish(PLAYER_NOTIFICATION, player=p, kind="xp_gain",
+                    data={"amount": 30, "reason": "build_complete"})
+        assert len(n.sent) == 1
+        assert n.sent[0][0] is p
+        # The raw reason identifier must never reach the player.
+        assert _plain(n.sent[0][1]) == "+30 XP (construction)"
+
+    def test_xp_gain_omits_unknown_reason(self):
+        bus, n, _ = _make()
+        p = _Player()
+        bus.publish(PLAYER_NOTIFICATION, player=p, kind="xp_gain",
+                    data={"amount": 5, "reason": "some_internal_reason"})
+        assert _plain(n.sent[0][1]) == "+5 XP"
+
+
 
     def test_building_progress_upgrade(self):
         bus, n, _ = _make()
