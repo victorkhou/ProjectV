@@ -10,6 +10,7 @@ Requirements: 2.1, 2.2, 2.3, 2.5, 2.6, 2.7, 5.2, 5.8, 15.1, 15.2,
 import sys
 import types
 import unittest
+from unittest import mock
 
 # -------------------------------------------------------------- #
 #  Bootstrap: stub out Evennia modules
@@ -829,3 +830,126 @@ class TestSpendPoolCostCheckInvariant(unittest.TestCase):
         self.assertTrue(player.deduct_resources({"Iron": 50, "Stone": 40}))
         self.assertEqual(player.get_resource("Iron"), 150)
         self.assertEqual(player.get_resource("Stone"), 110)
+
+
+# -------------------------------------------------------------- #
+#  Guaranteed first-harvest crit (first-hour dopamine)
+# -------------------------------------------------------------- #
+
+class _CritDB:
+    """Minimal db handler tracking the one-time first-crit flag."""
+
+    def __init__(self):
+        self._data = {}
+
+    def __getattr__(self, name):
+        return self._data.get(name)
+
+    def __setattr__(self, name, value):
+        if name == "_data":
+            super().__setattr__(name, value)
+        else:
+            self._data[name] = value
+
+
+class _CritPlayer(FakePlayer):
+    def __init__(self, **kw):
+        super().__init__(**kw)
+        self.db = _CritDB()
+
+
+class TestFirstHarvestCrit(unittest.TestCase):
+    """The very first manual harvest crits automatically; later harvests roll
+    the normal chance; a disabled crit chance (or a multiplier that grants no
+    bonus, or a refused drop) leaves the one-time freebie unspent.
+
+    The roll is always stubbed via ``mock.patch("random.random")`` rather than
+    ``random.seed()`` so these tests neither depend on the global RNG state nor
+    leave it reseeded for whatever runs next.
+    """
+
+    def _system_capturing_drops(self, crit_chance, multiplier=5,
+                                drop_result="drop"):
+        registry = _make_registry()
+        registry.balance = BalanceConfig(
+            gather_amount=1, resource_respawn_ticks=30,
+            harvest_crit_chance=crit_chance, harvest_crit_multiplier=multiplier,
+        )
+        registry.terrain = {
+            "Plains": TerrainDef(terrain_type="Plains", map_symbol="PP",
+                                 resource_type="Straw"),
+        }
+        system = ResourceSystem(registry, EventBus())
+        drops = []
+        notes = []
+
+        def _spawn(*a, **k):
+            drops.append((a, k))
+            return drop_result
+
+        system._spawn_resource_drop = _spawn
+        system.notify = lambda *a, **k: notes.append((a, k))
+        return system, drops, notes
+
+    def test_first_harvest_crits_even_when_the_roll_misses(self):
+        system, drops, notes = self._system_capturing_drops(crit_chance=0.01)
+        player = _CritPlayer()
+        # A roll of 1.0 can never beat a 1% chance, so a drop here proves the
+        # guaranteed first-harvest path fired rather than a lucky roll.
+        with mock.patch("random.random", return_value=1.0):
+            system._try_harvest_crit(player, FakeTile(), "Straw", 1, None, None)
+        self.assertEqual(len(drops), 1)
+        self.assertTrue(player.db.first_harvest_crit_used)
+        self.assertEqual(len(notes), 1)
+
+    def test_second_harvest_does_not_auto_crit(self):
+        system, drops, notes = self._system_capturing_drops(crit_chance=0.01)
+        player = _CritPlayer()
+        player.db.first_harvest_crit_used = True  # already used the freebie
+        with mock.patch("random.random", return_value=1.0):
+            system._try_harvest_crit(player, FakeTile(), "Straw", 1, None, None)
+        self.assertEqual(len(drops), 0)
+        self.assertEqual(notes, [])
+
+    def test_roll_still_crits_after_the_freebie_is_spent(self):
+        system, drops, _ = self._system_capturing_drops(crit_chance=0.01)
+        player = _CritPlayer()
+        player.db.first_harvest_crit_used = True
+        with mock.patch("random.random", return_value=0.0):
+            system._try_harvest_crit(player, FakeTile(), "Straw", 1, None, None)
+        self.assertEqual(len(drops), 1)
+
+    def test_disabled_crit_suppresses_even_first(self):
+        system, drops, _ = self._system_capturing_drops(crit_chance=0.0)
+        player = _CritPlayer()
+        system._try_harvest_crit(player, FakeTile(), "Straw", 1, None, None)
+        self.assertEqual(len(drops), 0)
+        # The one-time flag is NOT spent when crits are off, so the freebie is
+        # still available once crits are enabled.
+        self.assertFalse(player.db.first_harvest_crit_used)
+
+    def test_unit_multiplier_never_spends_the_freebie(self):
+        # multiplier 1 => bonus 0: there is nothing to grant, so the freebie
+        # must survive for a harvest that can actually pay out.
+        system, drops, _ = self._system_capturing_drops(crit_chance=1.0,
+                                                        multiplier=1)
+        player = _CritPlayer()
+        system._try_harvest_crit(player, FakeTile(), "Straw", 1, None, None)
+        self.assertEqual(len(drops), 0)
+        self.assertFalse(player.db.first_harvest_crit_used)
+
+    def test_refused_drop_leaves_the_freebie_unspent(self):
+        # A full tile refuses the bonus drop (None): nothing landed, so the
+        # player keeps their guaranteed crit for the next harvest.
+        system, drops, notes = self._system_capturing_drops(crit_chance=0.01,
+                                                            drop_result=None)
+        player = _CritPlayer()
+        with mock.patch("random.random", return_value=1.0):
+            system._try_harvest_crit(player, FakeTile(), "Straw", 1, None, None)
+        self.assertEqual(len(drops), 1)  # attempted
+        self.assertFalse(player.db.first_harvest_crit_used)
+        self.assertEqual(notes, [])  # and no "critical harvest!" lie
+
+
+if __name__ == "__main__":
+    unittest.main()
