@@ -8,9 +8,91 @@ typeclass decides *what* to show, these functions decide *how* it reads.
 
 from __future__ import annotations
 
+import logging
 from typing import Any
 
 from world.services import get_registry
+
+logger = logging.getLogger("evennia.world.ui_formatters")
+
+
+def format_xp_bar(percent: float, width: int = 20, bare: bool = False) -> str:
+    """Render an XP progress bar like ``[|g██████|n............] 57%``.
+
+    *percent* is 0-100 (clamped). The filled portion is green, the remainder
+    dim dots, so the bar reads as "how far into this level" at a glance. The
+    single renderer shared by the status prompt and the ``score`` sheet so both
+    look identical.
+
+    The filled cell count FLOORS rather than rounds, so a bar only reads as
+    completely full at a true 100% — otherwise a 97% player would see a full
+    bar and wonder why they hadn't levelled.
+
+    Set *bare* for the status prompt: drops the brackets and the trailing
+    percent (which the prompt has no column budget for), leaving just the
+    glyph run.
+    """
+    try:
+        pct = max(0.0, min(100.0, float(percent)))
+    except (TypeError, ValueError):
+        pct = 0.0
+    width = max(1, int(width))
+    filled = int(pct / 100.0 * width)  # floor: only a true 100% fills the bar
+    filled = max(0, min(width, filled))
+    bar = "|g" + ("\u2588" * filled) + "|n" + ("|x" + ("." * (width - filled)) + "|n")
+    if bare:
+        return bar
+    return f"|w[|n{bar}|w]|n {int(pct)}%"
+
+
+def xp_progress(player: Any) -> dict | None:
+    """Return a player's XP-in-level progress, or ``None`` when unavailable.
+
+    Computes, from the player's total ``combat_xp`` and the shared level curve
+    (``world.progression``): the current level, the XP at the start of that
+    level, the XP needed for the next level, the XP earned within the level, and
+    the percent toward the next level. Returns ``None`` for a maxed player (no
+    next level) or when the curve/level can't be resolved, so callers can hide
+    the bar in those cases.
+
+    ``into_level`` is clamped into ``[0, level_span]``: a stored ``db.level``
+    can lag ``combat_xp`` between an award and its level sync, and an unclamped
+    value would render as "340/297 to Level 13".
+
+    Never raises — but DOES log, so a genuine bug here surfaces instead of
+    silently removing the bar everywhere.
+    """
+    try:
+        from world import progression
+        from world.constants import MAX_LEVEL
+        from world.utils import get_player_level
+
+        db = getattr(player, "db", None)
+        if db is None:
+            return None
+        level = get_player_level(player, default=1)
+        if level >= MAX_LEVEL:
+            return None
+        current_xp = int(getattr(db, "combat_xp", 0) or 0)
+        start = progression.xp_for_level(level)
+        nxt = progression.xp_for_level(level + 1)
+        span = nxt - start
+        if span <= 0:
+            return None
+        into = max(0, min(span, current_xp - start))
+        pct = max(0.0, min(100.0, into / span * 100.0))
+        return {
+            "level": level,
+            "current_xp": current_xp,
+            "level_start_xp": start,
+            "next_level_xp": nxt,
+            "into_level": into,
+            "level_span": span,
+            "percent": pct,
+        }
+    except Exception:  # noqa: BLE001 - never break a prompt/sheet on a read
+        logger.exception("XP-progress computation failed; hiding the XP bar.")
+        return None
 
 
 def format_building_interior(looker: Any, building: Any, registry: Any = None) -> str:
