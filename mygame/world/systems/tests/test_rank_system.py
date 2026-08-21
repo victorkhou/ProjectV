@@ -10,9 +10,11 @@ rank is derived (every 5 levels = 1 rank).
 Requirements: 7.1-7.10, 4b.1-4b.7
 """
 
+import re
 import sys
 import types
 import unittest
+from unittest import mock
 
 # -------------------------------------------------------------- #
 #  Bootstrap: stub out Evennia modules
@@ -145,6 +147,11 @@ def _make_rank_system(registry=None, event_bus=None):
     from mygame.world.presenters.test_support import attach_presenter
     attach_presenter(event_bus)
     return system, event_bus
+
+
+def _plain(text: str) -> str:
+    """Strip Evennia colour markup so assertions test text, not markup."""
+    return re.sub(r"\|(?:\[)?[a-zA-Z0-9]", "", str(text))
 
 
 class TestAwardXP(unittest.TestCase):
@@ -382,23 +389,27 @@ class TestSubLevel(unittest.TestCase):
 
 class TestSubLevelNotification(unittest.TestCase):
     def test_notification_on_level_up(self):
-        """Award XP to cross a level boundary."""
+        """Award XP to cross a level boundary; a LEVEL UP banner naming the
+        new level fires (alongside the XP-gain line)."""
         messages = []
         # Level 6 = Private sub 1, XP=298. Level 7 threshold = 398
         player = FakePlayer(combat_xp=298, level=6)
         player.msg = lambda m: messages.append(m)
         system, _ = _make_rank_system()
         system.award_xp(player, 100, "test")  # XP=398, level 7
-        self.assertTrue(len(messages) >= 1)
-        self.assertIn("Level 7", messages[0])
+        level_up = [m for m in messages if "LEVEL UP" in m]
+        self.assertEqual(len(level_up), 1, messages)
+        self.assertIn("Level 7", _plain(level_up[0]))
 
-    def test_no_notification_when_level_unchanged(self):
+    def test_no_level_up_notification_when_level_unchanged(self):
+        """Exactly the one '+N XP' line — no level-up banner."""
         messages = []
         player = FakePlayer(combat_xp=298, level=6)
         player.msg = lambda m: messages.append(m)
         system, _ = _make_rank_system()
         system.award_xp(player, 5, "small")  # XP=303, still level 6
-        self.assertEqual(len(messages), 0)
+        self.assertEqual(len(messages), 1, messages)
+        self.assertNotIn("LEVEL UP", messages[0])
 
     def test_notification_on_deduct(self):
         messages = []
@@ -427,9 +438,10 @@ class TestSubLevelNotification(unittest.TestCase):
         player = FakePlayer(combat_xp=0, level=1)
         player.msg = lambda m: messages.append(m)
         system.award_xp(player, 40, "test")  # level 2
-        self.assertTrue(len(messages) >= 1)
-        self.assertIn("Staff Sergeant", messages[0])
-        self.assertNotIn("_", messages[0])
+        level_up = [m for m in messages if "LEVEL UP" in m]
+        self.assertEqual(len(level_up), 1, messages)
+        self.assertIn("Staff Sergeant", level_up[0])
+        self.assertNotIn("_", level_up[0])
 
 
 class TestPlanetUnlockAnnouncement(unittest.TestCase):
@@ -497,6 +509,186 @@ class TestPlanetUnlockAnnouncement(unittest.TestCase):
         system.award_xp(player, 85, "test")  # XP=300 → level 6
         found = any("unlocked" in m.lower() for m in messages)
         self.assertFalse(found, f"No unlock expected: {messages}")
+
+
+class TestBuildingUnlockList(unittest.TestCase):
+    """``_check_building_unlocks`` must only promise what the player can
+    ACTUALLY build: a name in the level-up banner that the build command then
+    refuses is worse than no banner at all.
+    """
+
+    @staticmethod
+    def _bdef(name, rank_requirement=1, requires_hq=False,
+              unlock_deed=None, unlock_deed_count=1):
+        from mygame.world.definitions import BuildingDef
+        return BuildingDef(
+            name=name, abbreviation=name[:2].upper(), cost={"Wood": 1},
+            max_health=100, requires_hq=requires_hq, required_terrain=None,
+            category="test", produces=None, rank_requirement=rank_requirement,
+            unlock_deed=unlock_deed, unlock_deed_count=unlock_deed_count,
+        )
+
+    def _system(self, *bdefs):
+        registry = _make_registry()
+        registry.buildings = {b.name: b for b in bdefs}
+        system = RankSystem(registry=registry, event_bus=EventBus())
+        return system
+
+    # -- band arithmetic ------------------------------------------- #
+
+    def test_lists_only_gates_inside_the_crossed_band(self):
+        system = self._system(
+            self._bdef("Below", rank_requirement=3),
+            self._bdef("Lower edge", rank_requirement=6),
+            self._bdef("Upper edge", rank_requirement=8),
+            self._bdef("Above", rank_requirement=9),
+        )
+        names = system._check_building_unlocks(FakePlayer(), 5, 8)
+        # Exclusive at the old level, inclusive at the new one.
+        self.assertEqual(names, ["Lower edge", "Upper edge"])
+
+    def test_no_band_means_no_names(self):
+        system = self._system(self._bdef("Factory", rank_requirement=10))
+        self.assertEqual(system._check_building_unlocks(FakePlayer(), 5, 6), [])
+
+    def test_empty_registry_returns_empty(self):
+        system = self._system()
+        self.assertEqual(system._check_building_unlocks(FakePlayer(), 1, 20), [])
+
+    def test_sorted_by_gate_level_then_name(self):
+        system = self._system(
+            self._bdef("Zulu", rank_requirement=6),
+            self._bdef("Alpha", rank_requirement=7),
+            self._bdef("Bravo", rank_requirement=6),
+        )
+        names = system._check_building_unlocks(FakePlayer(), 5, 7)
+        self.assertEqual(names, ["Bravo", "Zulu", "Alpha"])
+
+    # -- deed gate ------------------------------------------------- #
+
+    def test_deed_gated_building_hidden_without_the_deed(self):
+        system = self._system(
+            self._bdef("Barracks", rank_requirement=7,
+                       unlock_deed="outpost_cleared"),
+            self._bdef("Turret", rank_requirement=7),
+        )
+        player = FakePlayer()
+        player.db.deeds = {}
+        self.assertEqual(system._check_building_unlocks(player, 6, 7), ["Turret"])
+
+    def test_deed_gated_building_shown_once_the_deed_is_held(self):
+        system = self._system(
+            self._bdef("Barracks", rank_requirement=7,
+                       unlock_deed="outpost_cleared"),
+        )
+        player = FakePlayer()
+        player.db.deeds = {"outpost_cleared": 1}
+        self.assertEqual(system._check_building_unlocks(player, 6, 7),
+                         ["Barracks"])
+
+    def test_deed_count_must_be_met_not_just_present(self):
+        system = self._system(
+            self._bdef("Weapons Lab", rank_requirement=11,
+                       unlock_deed="outpost_cleared", unlock_deed_count=3),
+        )
+        player = FakePlayer()
+        player.db.deeds = {"outpost_cleared": 2}
+        self.assertEqual(system._check_building_unlocks(player, 10, 11), [])
+        player.db.deeds = {"outpost_cleared": 3}
+        self.assertEqual(system._check_building_unlocks(player, 10, 11),
+                         ["Weapons Lab"])
+
+    def test_non_dict_deeds_are_treated_as_none_held(self):
+        system = self._system(
+            self._bdef("Barracks", rank_requirement=7,
+                       unlock_deed="outpost_cleared"),
+        )
+        player = FakePlayer()
+        player.db.deeds = ["outpost_cleared"]  # legacy/corrupt shape
+        self.assertEqual(system._check_building_unlocks(player, 6, 7), [])
+
+    # -- HQ gate --------------------------------------------------- #
+
+    def test_hq_gated_buildings_hidden_without_an_hq(self):
+        system = self._system(
+            self._bdef("Factory", rank_requirement=7, requires_hq=True),
+            self._bdef("Tent", rank_requirement=7, requires_hq=False),
+        )
+        player = FakePlayer()
+        player.get_buildings = lambda: []  # a real roster, and it has no HQ
+        self.assertEqual(system._check_building_unlocks(player, 6, 7), ["Tent"])
+
+    def test_hq_gated_buildings_shown_with_an_hq(self):
+        system = self._system(
+            self._bdef("Factory", rank_requirement=7, requires_hq=True),
+        )
+        player = FakePlayer()
+        player.get_buildings = lambda: []
+        with mock.patch("world.utils.owner_has_active_hq", return_value=True):
+            names = system._check_building_unlocks(player, 6, 7)
+        self.assertEqual(names, ["Factory"])
+
+    def test_missing_building_roster_does_not_suppress(self):
+        # A player object that cannot answer "do you have an HQ?" must not be
+        # silently starved of the list — we cannot tell, so we do not suppress.
+        system = self._system(
+            self._bdef("Factory", rank_requirement=7, requires_hq=True),
+        )
+        player = FakePlayer()
+        self.assertFalse(hasattr(player, "get_buildings"))
+        self.assertEqual(system._check_building_unlocks(player, 6, 7),
+                         ["Factory"])
+
+    # -- length cap ------------------------------------------------ #
+
+    def test_long_list_is_capped_with_a_remainder_tail(self):
+        cap = RankSystem._MAX_UNLOCKS_LISTED
+        system = self._system(*[
+            self._bdef(f"B{i:02d}", rank_requirement=7)
+            for i in range(cap + 3)
+        ])
+        names = system._check_building_unlocks(FakePlayer(), 6, 7)
+        self.assertEqual(len(names), cap + 1)
+        self.assertEqual(names[:cap], [f"B{i:02d}" for i in range(cap)])
+        self.assertIn("3 more", names[-1])
+
+    def test_exactly_at_the_cap_has_no_tail(self):
+        cap = RankSystem._MAX_UNLOCKS_LISTED
+        system = self._system(*[
+            self._bdef(f"B{i:02d}", rank_requirement=7) for i in range(cap)
+        ])
+        names = system._check_building_unlocks(FakePlayer(), 6, 7)
+        self.assertEqual(len(names), cap)
+        self.assertFalse(any("more" in n for n in names))
+
+    # -- robustness ------------------------------------------------ #
+
+    def test_malformed_gate_is_skipped_not_raised(self):
+        good = self._bdef("Turret", rank_requirement=7)
+        bad = self._bdef("Broken", rank_requirement=7)
+        bad.rank_requirement = "not-a-number"
+        system = self._system(good, bad)
+        # The XP has already been applied by the time this runs, so a bad
+        # definition must never cost the player their level-up notification.
+        self.assertEqual(system._check_building_unlocks(FakePlayer(), 6, 7),
+                         ["Turret"])
+
+    def test_string_gate_that_is_numeric_still_counts(self):
+        bdef = self._bdef("Turret", rank_requirement=7)
+        bdef.rank_requirement = "7"
+        system = self._system(bdef)
+        self.assertEqual(system._check_building_unlocks(FakePlayer(), 6, 7),
+                         ["Turret"])
+
+    def test_exploding_registry_returns_empty_instead_of_raising(self):
+        system = self._system(self._bdef("Turret", rank_requirement=7))
+
+        class _Boom(dict):
+            def values(self):
+                raise RuntimeError("registry on fire")
+
+        system.registry.buildings = _Boom({"x": 1})
+        self.assertEqual(system._check_building_unlocks(FakePlayer(), 6, 7), [])
 
 
 class TestAgentCapInEvents(unittest.TestCase):
@@ -700,15 +892,17 @@ class TestPreservedPlayerBehavior(unittest.TestCase):
 
     def test_level_change_message_identifies_level_and_rank_name(self):
         """A level change messages the player with the new level and the
-        cosmetic rank name (Req 4.5)."""
+        cosmetic rank name (Req 4.5). The award also emits an XP-gain line; the
+        level-up line is identified by its rank name, not by position."""
         messages = []
         player = FakePlayer(combat_xp=0, level=1)
         player.msg = lambda m: messages.append(m)
         system, _ = _make_rank_system()
         system.award_xp(player, 100, "kill")  # level 1 -> 6 (Private)
-        self.assertTrue(len(messages) >= 1)
-        self.assertIn(f"Level {player.db.level}", messages[0])
-        self.assertIn(system.get_rank_name(player), messages[0])
+        rank = system.get_rank_name(player)
+        level_up = [m for m in messages if rank in m and "LEVEL UP" in m]
+        self.assertEqual(len(level_up), 1, messages)
+        self.assertIn(f"Level {player.db.level}", _plain(level_up[0]))
 
     def test_level_change_message_fires_on_deduct(self):
         """A level decrease also notifies the player (Req 4.5)."""
@@ -720,14 +914,58 @@ class TestPreservedPlayerBehavior(unittest.TestCase):
         self.assertTrue(len(messages) >= 1)
         self.assertIn(f"Level {player.db.level}", messages[0])
 
-    def test_no_message_when_level_unchanged(self):
-        """No notification fires when the level does not change (Req 4.5)."""
+    def test_only_the_xp_gain_message_when_level_unchanged(self):
+        """When the level does not change the player gets EXACTLY the one
+        '+N XP' line — no level-up banner and nothing else (Req 4.5)."""
         messages = []
         player = FakePlayer(combat_xp=298, level=6)
         player.msg = lambda m: messages.append(m)
         system, _ = _make_rank_system()
         system.award_xp(player, 5, "small")  # stays level 6
-        self.assertEqual(len(messages), 0)
+        self.assertEqual(len(messages), 1, messages)
+        self.assertIn("+5 XP", messages[0])
+        self.assertNotIn("LEVEL UP", messages[0])
+
+    def test_xp_gain_omits_unmapped_reason_label(self):
+        """An unmapped internal reason renders as a bare '+N XP' — no raw
+        identifier is ever shown to the player."""
+        messages = []
+        player = FakePlayer(combat_xp=298, level=6)
+        player.msg = lambda m: messages.append(m)
+        system, _ = _make_rank_system()
+        system.award_xp(player, 5, "some_internal_reason")
+        self.assertEqual(len(messages), 1, messages)
+        self.assertNotIn("some_internal_reason", messages[0])
+
+    def test_xp_gain_shows_mapped_reason_label(self):
+        messages = []
+        player = FakePlayer(combat_xp=0, level=1)
+        player.msg = lambda m: messages.append(m)
+        system, _ = _make_rank_system()
+        system.award_xp(player, 30, "build_complete")
+        gain = [m for m in messages if "+30 XP" in m]
+        self.assertEqual(len(gain), 1, messages)
+        self.assertIn("construction", gain[0])  # humanized, not build_complete
+        self.assertNotIn("build_complete", gain[0])
+
+    def test_award_xp_returns_awarded_amount(self):
+        player = FakePlayer(combat_xp=0, level=1)
+        system, _ = _make_rank_system()
+        self.assertEqual(system.award_xp(player, 30, "build_complete"), 30)
+        self.assertEqual(system.award_xp(player, 0, "noop"), 0)
+
+    def test_reasons_with_their_own_xp_display_are_suppressed(self):
+        """combat / base_destroy / directive already quote XP in their own
+        notification, and harvest is suppressed for volume — none of them may
+        emit a duplicate '+N XP' line."""
+        from mygame.world.constants import XP_GAIN_SUPPRESSED_REASONS
+        for reason in sorted(XP_GAIN_SUPPRESSED_REASONS):
+            messages = []
+            player = FakePlayer(combat_xp=298, level=6)
+            player.msg = lambda m, _m=messages: _m.append(m)
+            system, _ = _make_rank_system()
+            system.award_xp(player, 5, reason)  # stays level 6
+            self.assertEqual(messages, [], f"{reason} emitted {messages}")
 
     # -- 4.6: legacy rank_level->level derivation via _get_level --------- #
 
