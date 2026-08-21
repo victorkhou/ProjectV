@@ -81,7 +81,7 @@ HELP_ENTRY_DICTS = [
 
             # What's Next
 
-            With passive income flowing, expand: |wupgrade|n buildings (costs grow fast), stockpile surplus in a |cVault|n (|whelp storage|n), explore, climb the |clevels and ranks|n to unlock new planets and buildings (|whelp level|n), and pick a |clab|n to research a technology tree (|whelp technology|n).
+            With passive income flowing, expand: |wupgrade|n buildings (costs grow fast), stockpile surplus in a |cVault|n (|whelp storage|n), explore, climb the levels and ranks to unlock new planets and buildings (|whelp level|n), and pick a |clab|n to research a technology tree (|whelp technology|n).
 
             # Follow the Directives
 
@@ -109,10 +109,10 @@ HELP_ENTRY_DICTS = [
 
             XP comes from two kinds of activity, and both feed the same level bar:
 
-            |cBuilding your base|n — the early game. You earn XP for completing a construction (|c+30|n), completing an upgrade (|c+30|n), training an agent (|c+40|n), and each manual |wharvest|n yield (|c+1|n). This is renewable-but-modest income designed to carry a brand-new commander to roughly |clevel 8-9|n through base-building alone.
-            |cCombat|n — the long game. Defeating a player (|c+100|n), destroying a building (|c+50|n), and wrecking an enemy base's |cHeadquarters|n (|c+300|n) are the big earners. Combat is where the levels past the early game come from — raiding |coutposts|n is the reliable source (|whelp outposts|n).
+            Building your base — the early game. You earn XP for completing a construction (|c+30|n), completing an upgrade (|c+30|n), training an agent (|c+40|n), and each manual |wharvest|n yield (|c+1|n). This is renewable-but-modest income designed to carry a brand-new commander to roughly |clevel 8-9|n through base-building alone.
+            Combat — the long game. Defeating a player (|c+100|n), destroying a building (|c+50|n), and wrecking an enemy base's |cHeadquarters|n (|c+300|n) are the big earners. Combat is where the levels past the early game come from — raiding |coutposts|n is the reliable source (|whelp outposts|n).
 
-            Losing a fight costs you XP (|c-50|n) and can drop your level — but see Ranks below: your |crank never falls|n even if your level does.
+            Losing a fight costs you XP (|c-50|n) and can drop your level — but see Ranks below: your rank never falls even if your level does.
 
             # The Curve
 
@@ -135,14 +135,14 @@ HELP_ENTRY_DICTS = [
             |cGeneral|n — 85-99
             |cMarshal|n — 100 (the capstone)
 
-            Rank is a |chigh-water mark|n: once earned it sticks, so a bad losing streak that lowers your level never demotes your title.
+            Rank is a high-water mark: once earned it sticks, so a bad losing streak that lowers your level never demotes your title.
 
             # What Levels & Ranks Unlock
 
-            |cBuildings|n gate on level — higher-tier structures (Turret, Barracks, the research labs, Relay, Medbay) unlock as you climb. |wbuild|n with no argument always lists what you can build right now, and |whelp buildings|n shows the full tier list. Some buildings also need a |cdeed|n — proof of action, like destroying an outpost — on top of the level (|whelp outposts|n).
-            |cAgent capacity|n rises with rank — a higher rank lets you command more agents (|whelp agents|n). Your agents also can't out-level you: an agent's effective level is capped at your own.
-            |cNew planets|n open at rank thresholds — |cForge|n at Staff Sergeant, |cTundra|n and |cSpace|n at Captain, |cInferno|n at Colonel, the |cCitadel|n at General.
-            |cTechnologies|n gate on rank |wand|n on which lab you own — each of the four labs hosts one |ctech tree|n and you may own only one lab per planet. The earliest techs open at Corporal, with stronger ones spaced upward (|whelp technology|n).
+            Buildings gate on level — higher-tier structures (Turret, Barracks, the research labs, Relay, Medbay) unlock as you climb. |wbuild|n with no argument always lists what you can build right now, and |whelp buildings|n shows the full tier list. Some buildings also need a deed — proof of action, like destroying an outpost — on top of the level (|whelp outposts|n).
+            Agent capacity rises with rank — a higher rank lets you command more agents (|whelp agents|n). Your agents also can't out-level you: an agent's effective level is capped at your own.
+            New planets open at rank thresholds — |cForge|n at Staff Sergeant, |cTundra|n and |cSpace|n at Captain, |cInferno|n at Colonel, the |cCitadel|n at General.
+            |cTechnologies|n gate on rank |wand|n on which lab you own — each of the four labs hosts one tech tree and you may own only one lab per planet. The earliest techs open at Corporal, with stronger ones spaced upward (|whelp technology|n).
 
             # See Also
 
@@ -164,7 +164,7 @@ HELP_ENTRY_DICTS = [
 
             # How They Work
 
-            You always have one |ccurrent objective|n. Do the thing it asks — build your HQ, set up an Extractor, train an agent, and so on — and it completes automatically, rewards you, and advances to the next. There's nothing to "accept" or "turn in"; just play and the checklist keeps up.
+            You always have one current objective. Do the thing it asks — build your HQ, set up an Extractor, train an agent, and so on — and it completes automatically, rewards you, and advances to the next. There's nothing to "accept" or "turn in"; just play and the checklist keeps up.
 
             # Commands
 
@@ -284,7 +284,7 @@ HELP_ENTRY_DICTS = [
 
             # Carrying & Storing
 
-            Everything you carry has |cweight|n, and you can only carry so much — resources are light but not free. Stockpile the overflow in a |cVault|n or your |cHQ|n with |wdeposit|n, and pull it back with |wwithdraw|n. See |whelp storage|n.
+            Everything you carry has weight, and you can only carry so much — resources are light but not free. Stockpile the overflow in a |cVault|n or your |cHQ|n with |wdeposit|n, and pull it back with |wwithdraw|n. See |whelp storage|n.
 
             # Tips
 
@@ -358,7 +358,7 @@ HELP_ENTRY_DICTS = [
 
             Stand on a tile and type |wbuild <type>|n (by abbreviation like |wEX|n or full name like |wextractor|n). Stay on the tile while it builds — or let an |cEngineer|n agent finish it. |wbuild|n with no argument lists what you can build right now.
 
-            |wupgrade|n improves the building you're standing on; costs and times climb steeply. A building being upgraded is |woffline and does not function|n until it finishes — its turret won't fire, its Armory won't craft, its Extractor won't harvest. Upgrading uses active-presence: stay on the tile (or assign an |cEngineer|n). If you step away it |cpauses|n — typing |wupgrade|n again |cresumes|n it at its saved progress with no extra cost, and |wupgrade cancel|n aborts it and refunds the cost. |wrepair|n restores a damaged building over time, like construction — stay on the tile or assign an |cEngineer|n. Each tick restores 5% of max HP and costs 5% of everything invested in the building (its build cost plus any upgrades), so a heavily-upgraded building costs more to patch up; buildings don't heal on their own, and one knocked offline comes back online as soon as it starts healing. |wdemolish|n tears one down for a partial refund (40% at L1 up to 80% at L5).
+            |wupgrade|n improves the building you're standing on; costs and times climb steeply. A building being upgraded is |woffline and does not function|n until it finishes — its turret won't fire, its Armory won't craft, its Extractor won't harvest. Upgrading uses active-presence: stay on the tile (or assign an |cEngineer|n). If you step away it pauses — typing |wupgrade|n again resumes it at its saved progress with no extra cost, and |wupgrade cancel|n aborts it and refunds the cost. |wrepair|n restores a damaged building over time, like construction — stay on the tile or assign an |cEngineer|n. Each tick restores 5% of max HP and costs 5% of everything invested in the building (its build cost plus any upgrades), so a heavily-upgraded building costs more to patch up; buildings don't heal on their own, and one knocked offline comes back online as soon as it starts healing. |wdemolish|n tears one down for a partial refund (40% at L1 up to 80% at L5).
 
             # Building Types
 
@@ -388,7 +388,7 @@ HELP_ENTRY_DICTS = [
             |wMP|n |cMunitions Plant|n — the bomb works: crafts every grenade and mine. (L6)
             |wSA|n |cSurvey Array|n — triangulates enemy outpost locations on this planet. (L8)
 
-            Higher-tier buildings unlock as you gain |clevels|n; a few also require a |cdeed|n (Barracks needs one destroyed outpost, the four labs each need three). You may own |conly one lab per planet|n — the four labs each host a different technology tree (|whelp technology|n). Check |wscore|n for your current level, |wbuild|n to see what's available now, and |whelp level|n for the full progression picture.
+            Higher-tier buildings unlock as you gain levels; a few also require a deed (Barracks needs one destroyed outpost, the four labs each need three). You may own only one lab per planet — the four labs each host a different technology tree (|whelp technology|n). Check |wscore|n for your current level, |wbuild|n to see what's available now, and |whelp level|n for the full progression picture.
 
             # Per-Building Guides
 
@@ -409,21 +409,21 @@ HELP_ENTRY_DICTS = [
         "text": """
             |wEquipment|n
 
-            Gear makes you tougher and deadlier. You have twelve equipment |cslots|n total: armor and utility slots, one melee weapon slot, one ranged weapon slot, and one accessory slot.
+            Gear makes you tougher and deadlier. You have twelve equipment slots total: armor and utility slots, one melee weapon slot, one ranged weapon slot, and one accessory slot.
 
             # Getting Gear
 
-            Build an |cArmory|n (|wbuild AR|n) for weapons, armor, and ammo, a |cResearch Lab|n (|wbuild LB|n) for advanced gear, or a |cMedbay|n (|wbuild MB|n) for medkits and stims. Two ways to get items from them: stand in the building and |wcraft <item>|n to make one instantly for resources, or assign an |cEngineer|n agent and it crafts the same catalog passively while you're away (see |whelp craft|n). Gear also drops as |cloot|n from enemy bases and guards — dropped gear is |crolled|n (two copies of the same item differ) and can carry a rarity and affixes; see |whelp loot|n. Made gear lands in your inventory; pick up dropped items with |wget|n.
+            Build an |cArmory|n (|wbuild AR|n) for weapons, armor, and ammo, a |cResearch Lab|n (|wbuild LB|n) for advanced gear, or a |cMedbay|n (|wbuild MB|n) for medkits and stims. Two ways to get items from them: stand in the building and |wcraft <item>|n to make one instantly for resources, or assign an |cEngineer|n agent and it crafts the same catalog passively while you're away (see |whelp craft|n). Gear also drops as |cloot|n from enemy bases and guards — dropped gear is rolled (two copies of the same item differ) and can carry a rarity and affixes; see |whelp loot|n. Made gear lands in your inventory; pick up dropped items with |wget|n.
 
             # Slots
 
-            |chead eyes face torso arms hands legs feet back|n — armor and utility. |cweapon_melee|n — your melee weapon, used by |wattack|n. |cweapon_ranged|n — your ranged weapon, used by |wtarget|n/|wshoot|n/|wreload|n. |caccessory|n — a utility item (scope, hauler pack). One item per slot; equipping a new one swaps out the old. A melee weapon auto-equips to |cweapon_melee|n and a ranged weapon to |cweapon_ranged|n, so you can carry one of each at once.
+            head eyes face torso arms hands legs feet back — armor and utility. weapon_melee — your melee weapon, used by |wattack|n. weapon_ranged — your ranged weapon, used by |wtarget|n/|wshoot|n/|wreload|n. accessory — a utility item (scope, hauler pack). One item per slot; equipping a new one swaps out the old. A melee weapon auto-equips to weapon_melee and a ranged weapon to weapon_ranged, so you can carry one of each at once.
 
             # Stat Bonuses
 
-            Beyond |carmor|n (less incoming damage), gear can grant |cdamage bonuses|n, |cmove speed|n, |csight range|n, |ccarry capacity|n, and |cmax HP|n. Passive bonuses from worn armor and accessories stack. Weapon damage is different: each attack uses only the weapon for that action — |cweapon_melee|n for |wattack|n or |cweapon_ranged|n for |wshoot|n — plus shared non-weapon bonuses and that weapon's own affixes. Your other equipped weapon never adds its damage or affixes. |wequipment|n shows shared bonuses and separate effective melee/ranged damage instead of an impossible combined number. Max-HP gear raises your health ceiling — equipping it adds headroom (it doesn't heal you on the spot), and taking it off lowers the ceiling, trimming any HP above the new max.
+            Beyond armor (less incoming damage), gear can grant damage bonuses, move speed, sight range, carry capacity, and max HP. Passive bonuses from worn armor and accessories stack. Weapon damage is different: each attack uses only the weapon for that action — weapon_melee for |wattack|n or weapon_ranged for |wshoot|n — plus shared non-weapon bonuses and that weapon's own affixes. Your other equipped weapon never adds its damage or affixes. |wequipment|n shows shared bonuses and separate effective melee/ranged damage instead of an impossible combined number. Max-HP gear raises your health ceiling — equipping it adds headroom (it doesn't heal you on the spot), and taking it off lowers the ceiling, trimming any HP above the new max.
 
-            Looted and crafted gear is |crolled|n — a quality tag like |c[Rare · 73%]|n on the name tells you how good this copy is, and |wlook <item>|n shows each stat's roll. See |whelp loot|n and |whelp rarity|n.
+            Looted and crafted gear is rolled — a quality tag like |c[Rare · 73%]|n on the name tells you how good this copy is, and |wlook <item>|n shows each stat's roll. See |whelp loot|n and |whelp rarity|n.
 
             # Wearing Gear
 
@@ -437,7 +437,7 @@ HELP_ENTRY_DICTS = [
 
             # Consumables & Bombs
 
-            These live in your |csupply bag|n (counted, not slotted):
+            These live in your supply bag (counted, not slotted):
             |wuse medkit|n — restore health
             |wuse combat_stim|n — a temporary combat buff
             |wset <bomb> <sec>|n then |wthrow <grenade> <dir>|n / |warm <mine>|n — fused area explosives (|whelp bombs|n)
@@ -465,57 +465,57 @@ HELP_ENTRY_DICTS = [
 
             # Attacking
 
-            |wattack <target>|n (|wa|n) — attack a player, building, or agent in reach with your equipped |cmelee|n weapon. You can target anything within your |creach|n — whichever is greater of what you can |csee|n ('scan') and your melee weapon's |crange|n — so 'attack guard' picks the nearest matching foe within reach. In practice a melee weapon only reaches a foe on your |csame tile|n (close in first — an adjacent enemy is not yet in melee reach). Buildings can be meleed from an adjacent tile (to break a wall by hand). To fight at range instead, equip a ranged weapon and use |wtarget|n/|wshoot|n below — melee and ranged live in separate slots, so you can carry both at once. Equip a weapon first (|whelp equipment|n).
+            |wattack <target>|n (|wa|n) — attack a player, building, or agent in reach with your equipped melee weapon. You can target anything within your reach — whichever is greater of what you can see ('scan') and your melee weapon's range — so 'attack guard' picks the nearest matching foe within reach. In practice a melee weapon only reaches a foe on your same tile (close in first — an adjacent enemy is not yet in melee reach). Buildings can be meleed from an adjacent tile (to break a wall by hand). To fight at range instead, equip a ranged weapon and use |wtarget|n/|wshoot|n below — melee and ranged live in separate slots, so you can carry both at once. Equip a weapon first (|whelp equipment|n).
 
             # Ranged: Target & Shoot
 
-            With a |cranged weapon|n you can fight at a distance in two ways:
-            |wtarget <enemy>|n (|wlock|n) — lock onto an enemy in your weapon's range. It takes a few ticks to lock (faster with better gear); you're told when it completes. A lock is a |cheld aim|n — |rhold still while it locks, because moving in any direction breaks it|n. Once locked, your shot is far more accurate (|c90%|n baseline) and keeps hitting the enemy even as |cthey|n move — until they leave your range (or you move).
-            |wshoot|n (|wfire|n) — fire your ranged weapon. With a |clocked|n target, plain |wshoot|n fires at them. Otherwise |wshoot <n/s/e/w>|n fires in a direction and hits the first thing in the line of fire, at lower accuracy (|c70%|n baseline). You can only hit a specific player by locking onto them first. A directional shot |cbreaches cover|n — it damages a |cbuilding|n (open or closed) in the line of fire, so it's how you shoot down a |cWall|n; and if you're |cinside|n a building, any direction fires at the structure around you, letting you shoot your way out. Every shot spends ammo whether it hits or misses.
+            With a ranged weapon you can fight at a distance in two ways:
+            |wtarget <enemy>|n (|wlock|n) — lock onto an enemy in your weapon's range. It takes a few ticks to lock (faster with better gear); you're told when it completes. A lock is a held aim — |rhold still while it locks, because moving in any direction breaks it|n. Once locked, your shot is far more accurate (|c90%|n baseline) and keeps hitting the enemy even as they move — until they leave your range (or you move).
+            |wshoot|n (|wfire|n) — fire your ranged weapon. With a locked target, plain |wshoot|n fires at them. Otherwise |wshoot <n/s/e/w>|n fires in a direction and hits the first thing in the line of fire, at lower accuracy (|c70%|n baseline). You can only hit a specific player by locking onto them first. A directional shot breaches cover — it damages a building (open or closed) in the line of fire, so it's how you shoot down a |cWall|n; and if you're inside a building, any direction fires at the structure around you, letting you shoot your way out. Every shot spends ammo whether it hits or misses.
 
             # Timing: Instant vs. Ticked
 
-            Your own |wattack|n, directional |wshoot|n, and locked-target |wshoot|n resolve |cinstantly|n — the hit lands the moment you act, throttled by a short per-weapon |ccooldown|n (you'll be told if you fire again too soon). |cTurrets|n and |cguards|n resolve on the world |ctick|n instead: that tiny delay is their dodge window and preserves automated-combat ordering.
+            Your own |wattack|n, directional |wshoot|n, and locked-target |wshoot|n resolve instantly — the hit lands the moment you act, throttled by a short per-weapon cooldown (you'll be told if you fire again too soon). |cTurrets|n and guards resolve on the world tick instead: that tiny delay is their dodge window and preserves automated-combat ordering.
 
             # The Combat State
 
-            Dealing or taking damage puts you |rin combat|n for a short time — you'll get a |r[Combat]|n notice when it starts, and |wscore|n shows the seconds remaining. Each new hit resets the timer. While in combat you can't slip through your own |cWalls|n, you can't manually |wenter|n or |wleave|n a building, and moving is slower (better |cmove speed|n gear eases this). It clears on its own once the timer runs out.
+            Dealing or taking damage puts you |rin combat|n for a short time — you'll get a |r[Combat]|n notice when it starts, and |wscore|n shows the seconds remaining. Each new hit resets the timer. While in combat you can't slip through your own |cWalls|n, you can't manually |wenter|n or |wleave|n a building, and moving is slower (better move speed gear eases this). It clears on its own once the timer runs out.
 
             # Friendly Fire
 
-            You |ccan|n attack your own things — your buildings and your own agents — as well as other players. There's no XP or benefit for hitting your own (you can't farm yourself), and it still puts you in the combat state, but it's allowed (handy to clear a misplaced building). Take care with area attacks: a |cgrenade|n hits everything in the blast, friend or foe.
+            You can attack your own things — your buildings and your own agents — as well as other players. There's no XP or benefit for hitting your own (you can't farm yourself), and it still puts you in the combat state, but it's allowed (handy to clear a misplaced building). Take care with area attacks: a |cgrenade|n hits everything in the blast, friend or foe.
 
             # Ammo & Reloading
 
-            Ranged weapons feed their ammo one of two ways. Most (like the |cassault rifle|n) fire straight from your |cresource stockpile|n — each shot spends a little Iron, Energy, or similar, so there's nothing to reload; just keep the resource stocked. Magazine weapons (like the |cservice rifle|n) fire from a loaded |cmagazine|n and run dry: |wreload|n refills the magazine from the matching |cammo|n in your supply bag (make it at an |cArmory|n or |cResearch Lab|n). |wequipment|n shows a magazine weapon's loaded count.
+            Ranged weapons feed their ammo one of two ways. Most (like the |cassault rifle|n) fire straight from your resource stockpile — each shot spends a little Iron, Energy, or similar, so there's nothing to reload; just keep the resource stocked. Magazine weapons (like the |cservice rifle|n) fire from a loaded magazine and run dry: |wreload|n refills the magazine from the matching ammo in your supply bag (make it at an |cArmory|n or |cResearch Lab|n). |wequipment|n shows a magazine weapon's loaded count.
 
             # Armor & Defense
 
-            Every armor piece you |wequip|n reduces incoming damage, and they stack across all slots. Some weapons deal |ctyped|n damage that lingers — |cfire|n burns and |cpoison|n keeps hurting for a few ticks after the hit (|whelp poison|n); matching |cresist|n gear and affixes blunt them. |cTurrets|n auto-attack intruders; |cWalls|n block movement. A |cVault|n protects your stored resources while you're offline. A |cShield Generator|n wraps nearby buildings in a regenerating |cshield|n that soaks damage before their HP (|whelp shield|n). You and your agents heal over time, but |cbuildings do not|n — repair a damaged building with |wrepair|n (see |whelp buildings|n).
+            Every armor piece you |wequip|n reduces incoming damage, and they stack across all slots. Some weapons deal typed damage that lingers — |cfire|n burns and |cpoison|n keeps hurting for a few ticks after the hit (|whelp poison|n); matching resist gear and affixes blunt them. |cTurrets|n auto-attack intruders; |cWalls|n block movement. A |cVault|n protects your stored resources while you're offline. A |cShield Generator|n wraps nearby buildings in a regenerating shield that soaks damage before their HP (|whelp shield|n). You and your agents heal over time, but buildings do not — repair a damaged building with |wrepair|n (see |whelp buildings|n).
 
             # Buildings as Cover
 
-            A |cmelee|n attacker only reaches a foe on their |csame tile|n — an enemy standing on the next tile over is not yet in reach, so someone has to close in first (guards chase onto your tile; you step onto theirs). Being |cinside a building|n adds ranged cover on top of this: |cRanged|n fire and |cturrets|n depend on the building — a |cclosed|n building fully shelters the |coccupant|n from ranged attacks, while an |copen|n one (like the raidable buildings in enemy bases) does not — you can still be shot inside it. So ducking into an open enemy structure stops nothing ranged, and melee still needs the same tile either way. A |cclosed|n building still protects the |cperson|n inside — but the |cbuilding itself|n can be shot down: a directional |wshoot|n breaches the structure (the round hits the wall, not the occupant), which is how you knock down a |cWall|n or a sealed structure from range.
+            A melee attacker only reaches a foe on their same tile — an enemy standing on the next tile over is not yet in reach, so someone has to close in first (guards chase onto your tile; you step onto theirs). Being inside a building adds ranged cover on top of this: Ranged fire and turrets depend on the building — a closed building fully shelters the occupant from ranged attacks, while an open one (like the raidable buildings in enemy bases) does not — you can still be shot inside it. So ducking into an open enemy structure stops nothing ranged, and melee still needs the same tile either way. A closed building still protects the person inside — but the building itself can be shot down: a directional |wshoot|n breaches the structure (the round hits the wall, not the occupant), which is how you knock down a |cWall|n or a sealed structure from range.
 
             # Guards
 
-            A |cGuard|n agent (or |cSoldier|n) automatically attacks any enemy that comes within range each tick — so assigning one actually defends your base. Melee guards must be on your |csame tile|n to strike, so they chase onto it to reach you; ranged soldiers reach several tiles out. This cuts both ways: enemy |coutpost|n and |cfortress|n guards attack you the same way when you raid them (|whelp outposts|n).
+            A |cGuard|n agent (or |cSoldier|n) automatically attacks any enemy that comes within range each tick — so assigning one actually defends your base. Melee guards must be on your same tile to strike, so they chase onto it to reach you; ranged soldiers reach several tiles out. This cuts both ways: enemy |coutpost|n and |cfortress|n guards attack you the same way when you raid them (|whelp outposts|n).
 
             # Destroying a Base
 
-            Destroying an owner's |cHeadquarters|n is decisive. Wreck an |cenemy base|n's HQ and the whole base is eliminated at once — every building and guard is wiped and loot drops on the spot: |g[Combat] Outpost eliminated! +X XP. Loot dropped at (x,y).|n Lose your |cown|n HQ (in PvP) and nothing is deleted — your base goes |rinert|n instead: turrets stop, production halts, agents idle, and building commands are refused until you |wbuild|n a new HQ.
+            Destroying an owner's |cHeadquarters|n is decisive. Wreck an enemy base's HQ and the whole base is eliminated at once — every building and guard is wiped and loot drops on the spot: |g[Combat] Outpost eliminated! +X XP. Loot dropped at (x,y).|n Lose your own HQ (in PvP) and nothing is deleted — your base goes |rinert|n instead: turrets stop, production halts, agents idle, and building commands are refused until you |wbuild|n a new HQ.
 
             # Bombs: Grenades & Mines
 
-            Bombs are |cfused|n explosives — set a fuse first with |wset <bomb> <seconds>|n (or |wset all <seconds>|n for your whole inventory), then deploy. A |cgrenade|n is |wthrow|n-n in a direction (|wthrow frag_grenade n|n): it flies until it hits the first obstacle or its max range, |clands|n, and ticks down before exploding. A |cmine|n is |warm|n-ed in place (|warm land_mine|n): it ticks down where you stand. Anyone on a bomb's tile sees it |rtick|n. The blast hits everything in radius — enemies, your own units, and |ryou|n if you're too close — so mind the fuse and your distance. See |whelp bombs|n. Bombs come from a |cMunitions Plant|n.
+            Bombs are fused explosives — set a fuse first with |wset <bomb> <seconds>|n (or |wset all <seconds>|n for your whole inventory), then deploy. A grenade is |wthrow|n-n in a direction (|wthrow frag_grenade n|n): it flies until it hits the first obstacle or its max range, lands, and ticks down before exploding. A mine is |warm|n-ed in place (|warm land_mine|n): it ticks down where you stand. Anyone on a bomb's tile sees it |rtick|n. The blast hits everything in radius — enemies, your own units, and |ryou|n if you're too close — so mind the fuse and your distance. See |whelp bombs|n. Bombs come from a |cMunitions Plant|n.
 
             # Death & Recovery
 
-            Death is costly: you |rlose everything you're carrying|n — all equipped gear, your supply bag, and the resources on you (resources safely |wdeposit|n-ed in an |cHQ|n or |cVault|n are untouched — death strips |cyou|n, not your base). Your safety net is a |cRespawn Beacon|n (|wbuild RB|n): it salvages a fraction of what you were carrying into a stash — |c55%|n at level 1, rising to |c95%|n at level 5, so |wupgrade|n it to keep more. With |cno beacon on the planet you died on, the loss is total|n. When you respawn at the beacon, |wcollect|n (|wrecover|n) pulls your salvaged gear back into your inventory and your resources up to your carry weight (the rest waits in the beacon). Losing also costs XP.
+            Death is costly: you |rlose everything you're carrying|n — all equipped gear, your supply bag, and the resources on you (resources safely |wdeposit|n-ed in an |cHQ|n or |cVault|n are untouched — death strips you, not your base). Your safety net is a |cRespawn Beacon|n (|wbuild RB|n): it salvages a fraction of what you were carrying into a stash — |c55%|n at level 1, rising to |c95%|n at level 5, so |wupgrade|n it to keep more. With no beacon on the planet you died on, the loss is total. When you respawn at the beacon, |wcollect|n (|wrecover|n) pulls your salvaged gear back into your inventory and your resources up to your carry weight (the rest waits in the beacon). Losing also costs XP.
 
             # After a Fight
 
-            When you fall you redeploy from the |cstaging area|n — choose your |cRespawn Beacon|n (where your recovered loadout waits), your |cHQ|n, your place of death, or a random tile (|whelp spawning|n). A |cMedbay|n shortens respawn time. Winning awards XP toward your next |clevel|n — combat is the main source of levels past the early game (|whelp level|n).
+            When you fall you redeploy from the staging area — choose your |cRespawn Beacon|n (where your recovered loadout waits), your |cHQ|n, your place of death, or a random tile (|whelp spawning|n). A |cMedbay|n shortens respawn time. Winning awards XP toward your next |clevel|n — combat is the main source of levels past the early game (|whelp level|n).
 
             # See Also
 
@@ -532,7 +532,7 @@ HELP_ENTRY_DICTS = [
         "text": """
             |wDeploying into the Game|n
 
-            Before you enter the field you prepare in a |cstaging area|n: choose a |cclass|n and a |cspawn point|n, then deploy. It's a short numbered wizard — just |wtype the number|n of your choice at each step. You are not yet in the world while staging — you can't move, build, or fight until you |wenter|n.
+            Before you enter the field you prepare in a staging area: choose a class and a spawn point, then deploy. It's a short numbered wizard — just |wtype the number|n of your choice at each step. You are not yet in the world while staging — you can't move, build, or fight until you |wenter|n.
 
             # Step 1 — Choose a Class
 
@@ -543,8 +543,8 @@ HELP_ENTRY_DICTS = [
             Next, the currently available spawn points appear under fixed numbers. Hidden choices leave gaps, so a number never changes meaning:
             |w1|n. |cRespawn Beacon|n — deploy at your owned beacon, where recovered gear waits.
             |w2|n. |cHeadquarters|n — deploy at your live HQ.
-            |w3|n. |cPlace of death|n — deploy where you last died.
-            |w4|n. |cRandom location|n — deploy at a random tile in |wopen ground|n, well clear of any building.
+            |w3|n. Place of death — deploy where you last died.
+            |w4|n. Random location — deploy at a random tile in |wopen ground|n, well clear of any building.
             Unavailable choices are omitted. If a selected HQ, beacon, or death tile disappears before you enter, deployment is cancelled and you are asked to choose again — it never silently changes to random. (|wspawn <where>|n also works.)
 
             # Enter the Game
@@ -557,7 +557,7 @@ HELP_ENTRY_DICTS = [
 
             # Dying
 
-            When you're defeated you return here and re-run the whole wizard — |wpick a class again|n, then an available spawn point (|cRespawn Beacon|n / |cHQ|n / |cplace of death|n / |crandom|n). You re-enter at full health with a |wcleared combat timer|n.
+            When you're defeated you return here and re-run the whole wizard — |wpick a class again|n, then an available spawn point (|cRespawn Beacon|n / |cHQ|n / place of death / random). You re-enter at full health with a |wcleared combat timer|n.
 
             # See Also
 
@@ -574,27 +574,27 @@ HELP_ENTRY_DICTS = [
         "text": """
             |wBombs: Grenades & Mines|n
 
-            Bombs are |cfused|n area explosives. There are two families: |cgrenades|n (thrown) and |cmines|n (placed) — with variants of each (e.g. |cFrag|n and |cPlasma|n grenades; |cLand|n and |cProximity|n mines). Both come from a |cMunitions Plant|n (|wbuild MP|n, then |wcraft|n one — or assign an Engineer to make them while you're away).
+            Bombs are fused area explosives. There are two families: |cgrenades|n (thrown) and |cmines|n (placed) — with variants of each (e.g. |cFrag|n and |cPlasma|n grenades; |cLand|n and |cProximity|n mines). Both come from a |cMunitions Plant|n (|wbuild MP|n, then |wcraft|n one — or assign an Engineer to make them while you're away).
 
             # Set the Fuse First
 
-            You must set a fuse before you throw or arm — |wset <bomb> <seconds>|n. This arms |cevery unit|n of that bomb you carry, so |wset frag_grenade 3|n with 3 grenades lets you throw all 3 at a 3s fuse. The fuse is clamped to that bomb's min/max (grenades short, mines longer). |wset all <seconds>|n arms every bomb in your inventory at once (each clamped to its own limits). Each throw/arm |cconsumes one|n armed fuse — re-set once you've deployed them all, or to change the timer.
+            You must set a fuse before you throw or arm — |wset <bomb> <seconds>|n. This arms every unit of that bomb you carry, so |wset frag_grenade 3|n with 3 grenades lets you throw all 3 at a 3s fuse. The fuse is clamped to that bomb's min/max (grenades short, mines longer). |wset all <seconds>|n arms every bomb in your inventory at once (each clamped to its own limits). Each throw/arm consumes one armed fuse — re-set once you've deployed them all, or to change the timer.
 
             # Grenades — throw in a direction
 
-            |wthrow <grenade> <n/s/e/w>|n (alias |wth|n) hurls the grenade in a compass direction. It flies until it hits the |cfirst obstacle|n or reaches its |cmax range|n, then |clands|n and the fuse ticks down before it explodes. It lands just |cin front of a building|n (the blast then breaches the wall from outside), on a |cunit's tile|n if it hits someone, or at max range on a clear line. You can't pick a grenade up once it's away.
+            |wthrow <grenade> <n/s/e/w>|n (alias |wth|n) hurls the grenade in a compass direction. It flies until it hits the first obstacle or reaches its max range, then lands and the fuse ticks down before it explodes. It lands just in front of a building (the blast then breaches the wall from outside), on a unit's tile if it hits someone, or at max range on a clear line. You can't pick a grenade up once it's away.
 
             # Mines — arm in place
 
-            |warm <mine>|n plants the mine on |cyour current tile|n and starts its fuse. A mine can't be thrown, and once armed it can't be picked up — it ticks down where you left it. Good as a timed trap on a chokepoint.
+            |warm <mine>|n plants the mine on your current tile and starts its fuse. A mine can't be thrown, and once armed it can't be picked up — it ticks down where you left it. Good as a timed trap on a chokepoint.
 
             # Ticking & the Blast
 
-            Everyone standing on a bomb's tile sees it |rtick|n each second (and sees a grenade |cland|n or a mine |carm|n). When the fuse reaches zero it explodes: everything within the blast |cradius|n takes flat damage minus armor — |renemies, your own agents and buildings, and you|n if you're in range. A blast |cbreaches cover|n: unlike a gunshot, it damages buildings whether open or closed and reaches players sheltered inside them, so mind your distance. Kills you cause credit you.
+            Everyone standing on a bomb's tile sees it |rtick|n each second (and sees a grenade land or a mine arm). When the fuse reaches zero it explodes: everything within the blast radius takes flat damage minus armor — |renemies, your own agents and buildings, and you|n if you're in range. A blast breaches cover: unlike a gunshot, it damages buildings whether open or closed and reaches players sheltered inside them, so mind your distance. Kills you cause credit you.
 
             # Disarming
 
-            |wdisarm|n (alias |wdis|n) works on a ticking bomb on |cyour current tile|n to neutralize it. It's not instant — it takes |c2-10 ticks|n, and the bomb's fuse |ckeeps ticking|n the whole time, so a short-fuse bomb can explode before you finish (the fuse wins the race). When the attempt resolves it's a base |c70%|n chance to succeed (the bomb is removed, no blast); on |rfailure it detonates immediately|n. Technology, equipment, and your class improve the success chance and shorten the work later.
+            |wdisarm|n (alias |wdis|n) works on a ticking bomb on your current tile to neutralize it. It's not instant — it takes |c2-10 ticks|n, and the bomb's fuse keeps ticking the whole time, so a short-fuse bomb can explode before you finish (the fuse wins the race). When the attempt resolves it's a base |c70%|n chance to succeed (the bomb is removed, no blast); on |rfailure it detonates immediately|n. Technology, equipment, and your class improve the success chance and shorten the work later.
 
             # See Also
 
@@ -627,7 +627,7 @@ HELP_ENTRY_DICTS = [
 
             # Raiding
 
-            Clear the |cguards|n, dodge or destroy the |cTurrets|n, breach the |cWalls|n, and destroy the enemy |cHeadquarters|n. Guards fight back and turrets auto-fire, so bring armor, ammo, and medkits (|whelp equipment|n, |whelp combat|n). Guards you kill stay dead. Destroying the |cHQ|n eliminates the entire base at once: |g[Combat] Outpost eliminated! +X XP. Loot dropped at (x,y).|n Pick up the loot with |wget|n.
+            Clear the guards, dodge or destroy the |cTurrets|n, breach the |cWalls|n, and destroy the enemy |cHeadquarters|n. Guards fight back and turrets auto-fire, so bring armor, ammo, and medkits (|whelp equipment|n, |whelp combat|n). Guards you kill stay dead. Destroying the |cHQ|n eliminates the entire base at once: |g[Combat] Outpost eliminated! +X XP. Loot dropped at (x,y).|n Pick up the loot with |wget|n.
 
             # Respawns
 
@@ -648,31 +648,31 @@ HELP_ENTRY_DICTS = [
         "text": """
             |wSurveying: Finding Outposts|n
 
-            A |cSurvey Array|n turns base hunting from wandering into a search you actually run. It never simply hands over coordinates — it gives you a |csearch area|n and two ways to close in on what's inside it. Build one with |wbuild SA|n, then stand in it (it must be online and not mid-upgrade).
+            A |cSurvey Array|n turns base hunting from wandering into a search you actually run. It never simply hands over coordinates — it gives you a search area and two ways to close in on what's inside it. Build one with |wbuild SA|n, then stand in it (it must be online and not mid-upgrade).
 
             # Open a Search
 
-            |wsurvey scan|n locks onto |cone|n enemy base on your |ccurrent planet|n that isn't on your map yet, and reports a rectangular search area guaranteed to contain it. |cAny tier|n is fair game — the array names what it found, so an |cOutpost|n and a |cFortress|n read differently and you can decide whether you want that fight. The base sits at a |crandom|n spot inside the area — the centre is not the answer — and each scan picks its target at random, so no two searches play out the same way. If every base on the planet is already mapped, the array tells you the planet is swept and charges you nothing.
+            |wsurvey scan|n locks onto one enemy base on your current planet that isn't on your map yet, and reports a rectangular search area guaranteed to contain it. Any tier is fair game — the array names what it found, so an |cOutpost|n and a |cFortress|n read differently and you can decide whether you want that fight. The base sits at a random spot inside the area — the centre is not the answer — and each scan picks its target at random, so no two searches play out the same way. If every base on the planet is already mapped, the array tells you the planet is swept and charges you nothing.
 
-            Only |cone search|n runs at a time, on any planet. Finish it, or |wsurvey abandon|n it — the array will never quietly throw away readings you paid for. If the base you're tracking is razed by someone else while you hunt it, the search closes and tells you so rather than charging for readings against nothing.
+            Only one search runs at a time, on any planet. Finish it, or |wsurvey abandon|n it — the array will never quietly throw away readings you paid for. If the base you're tracking is razed by someone else while you hunt it, the search closes and tells you so rather than charging for readings against nothing.
 
-            |wsurvey|n on its own re-shows the area you're tracking. That readout is |cfree|n; everything else costs resources.
+            |wsurvey|n on its own re-shows the area you're tracking. That readout is free; everything else costs resources.
 
             # Close In
 
             |wsurvey narrow|n buys a sweep that shrinks the area to roughly a quarter of its size, re-placed around the target. It's the blunt tool: reliable, and it always works.
 
-            |wsurvey <x> <y>|n takes a reading from a tile |cinside|n the area and reports a compass |cbearing|n toward the base plus a rough |cdistance|n — "very close", "far off", and so on. It's the cheapest action and the one that rewards thinking: a single bearing gives you a direction, and two readings from |cdifferent|n tiles cross to a much smaller pocket than either alone.
+            |wsurvey <x> <y>|n takes a reading from a tile inside the area and reports a compass bearing toward the base plus a rough distance — "very close", "far off", and so on. It's the cheapest action and the one that rewards thinking: a single bearing gives you a direction, and two readings from different tiles cross to a much smaller pocket than either alone.
 
             # Pinpoint It
 
-            Probe close enough to the base — or narrow the area down to a single tile — and it's |cpinpointed|n: you're given the |cexact coordinates|n and the tile is remembered permanently, in enemy red, even though you've never laid eyes on it. Your |wmap|n only draws the area around you, so the mark appears once you're within map range of it — the coordinates are what you travel by. Then go raid it (|whelp outposts|n).
+            Probe close enough to the base — or narrow the area down to a single tile — and it's pinpointed: you're given the exact coordinates and the tile is remembered permanently, in enemy red, even though you've never laid eyes on it. Your |wmap|n only draws the area around you, so the mark appears once you're within map range of it — the coordinates are what you travel by. Then go raid it (|whelp outposts|n).
 
             |wsurvey abandon|n drops the search with no refund, freeing you to |wscan|n for a different target.
 
             # Array Level
 
-            Upgrading the array |ctightens the opening area|n, so a maxed array starts you where a level 1 array would need several sweeps to reach. That's the whole benefit — the sweeps and probes themselves cost the same at every level.
+            Upgrading the array tightens the opening area, so a maxed array starts you where a level 1 array would need several sweeps to reach. That's the whole benefit — the sweeps and probes themselves cost the same at every level.
 
             # See Also
 
@@ -704,7 +704,7 @@ HELP_ENTRY_DICTS = [
             |wdeposit <resource> [<amount> || all]|n — move from you into storage
             |wwithdraw <resource> [<amount> || all]|n — take from storage back to you
 
-            With no amount (or |wall|n), deposit moves everything you hold and withdraw takes as much as fits under your carry limit. You can only use storage you |cown|n.
+            With no amount (or |wall|n), deposit moves everything you hold and withdraw takes as much as fits under your carry limit. You can only use storage you own.
 
             # Examples
 
@@ -752,7 +752,7 @@ HELP_ENTRY_DICTS = [
 
             # Crafting Quality
 
-            Crafted gear is |crolled|n like loot, but in a tighter, more reliable band — a craft is dependable where a drop gambles (|whelp loot|n). The craft message shows the result's value: its quality tag, e.g. |c[73%]|n. A higher-level crafting building can even land a rarity — up to a |c5%|n chance of |cRare|n at level 5 — and the |cMaster Gunsmithing|n research raises the floor of every roll you craft. Crafted gear |wnever|n carries affixes; those are loot-only (|whelp affixes|n).
+            Crafted gear is rolled like loot, but in a tighter, more reliable band — a craft is dependable where a drop gambles (|whelp loot|n). The craft message shows the result's value: its quality tag, e.g. |c[73%]|n. A higher-level crafting building can even land a rarity — up to a |c5%|n chance of |cRare|n at level 5 — and the |cMaster Gunsmithing|n research raises the floor of every roll you craft. Crafted gear |wnever|n carries affixes; those are loot-only (|whelp affixes|n).
 
             # Examples
 
@@ -776,15 +776,15 @@ HELP_ENTRY_DICTS = [
         "text": """
             |wLoot & Item Quality|n
 
-            Gear that drops as loot is |crolled|n: each stat is drawn fresh from that item's roll band, so two copies of the same item are rarely equal — one Assault Rifle hits harder, another shoots further. Hunting a great roll is the point.
+            Gear that drops as loot is rolled: each stat is drawn fresh from that item's roll band, so two copies of the same item are rarely equal — one Assault Rifle hits harder, another shoots further. Hunting a great roll is the point.
 
             # The Quality Score
 
-            A rolled item carries a quality tag on its name — |c[73%]|n — summing how good its rolls are. Rarity shows in the same tag (|c[Rare · 73%]|n) and colors the name (|whelp rarity|n). Affix bonuses add to the score, so a great Legendary can read |cabove 100%|n. Unrolled things (ammo, consumables, fixed starter gear) show no tag — they're identical by design.
+            A rolled item carries a quality tag on its name — |c[73%]|n — summing how good its rolls are. Rarity shows in the same tag (|c[Rare · 73%]|n) and colors the name (|whelp rarity|n). Affix bonuses add to the score, so a great Legendary can read above 100%. Unrolled things (ammo, consumables, fixed starter gear) show no tag — they're identical by design.
 
             # Inspecting an Item
 
-            |wlook <item>|n shows the full picture: each stat as |crolled (min–max)|n so you can see where in the band this copy landed, plus any affixes. |wequipment|n and |winventory|n show the tags at a glance.
+            |wlook <item>|n shows the full picture: each stat as rolled (min–max) so you can see where in the band this copy landed, plus any affixes. |wequipment|n and |winventory|n show the tags at a glance.
 
             # Where Rolls Come From
 
@@ -814,7 +814,7 @@ HELP_ENTRY_DICTS = [
 
             # Where the Tiers Drop
 
-            The source shifts the odds: |cguard kills|n are mostly Common with a sliver of Rare; |cOutposts|n reach Epic; |cStrongholds|n and |cFortresses|n drop Rares and Epics regularly with a taste of Legendary; |cCitadels|n are where Epics and Legendaries actually live. Raid up the ladder for better colors (|whelp outposts|n).
+            The source shifts the odds: guard kills are mostly Common with a sliver of Rare; |cOutposts|n reach Epic; |cStrongholds|n and |cFortresses|n drop Rares and Epics regularly with a taste of Legendary; |cCitadels|n are where Epics and Legendaries actually live. Raid up the ladder for better colors (|whelp outposts|n).
 
             # Crafted Gear
 
@@ -847,11 +847,11 @@ HELP_ENTRY_DICTS = [
 
             # Loot-Only
 
-            Affixes come from |cloot only|n — crafted gear never has them, which is why raid drops can beat the craft bench. Affix values add to the item's quality tag, so an affixed item can read above 100%.
+            Affixes come from loot only — crafted gear never has them, which is why raid drops can beat the craft bench. Affix values add to the item's quality tag, so an affixed item can read above 100%.
 
             # Permanent
 
-            Affixes are part of the item: the Blacksmith |wreroll|n bench re-rolls only |cbase stats|n and leaves affixes (and rarity) untouched, and salvaging destroys them with the item.
+            Affixes are part of the item: the Blacksmith |wreroll|n bench re-rolls only base stats and leaves affixes (and rarity) untouched, and salvaging destroys them with the item.
 
             # See Also
 
@@ -876,7 +876,7 @@ HELP_ENTRY_DICTS = [
 
             # Countering It
 
-            |cPoison resist|n gear and affixes (|cof Antitoxin|n) blunt the poisoned hit itself, and the lingering ticks are light enough that natural |cregeneration|n and a |cmedkit|n out-heal them — heal through it rather than panic.
+            Poison resist gear and affixes (|cof Antitoxin|n) blunt the poisoned hit itself, and the lingering ticks are light enough that natural regeneration and a |cmedkit|n out-heal them — heal through it rather than panic.
 
             # See Also
 
@@ -918,7 +918,7 @@ HELP_ENTRY_DICTS = [
         "text": """
             |wTechnologies|n
 
-            Research permanent bonuses at a |clab|n. There are |cfour technology trees|n, each hosted by its own lab, and you may own |conly one lab (one tree) per planet|n — so the lab you build commits that planet to a tree. |wtechnology|n shows the tree your lab hosts and your progress; |wresearch <tech>|n starts one (an |cEngineer|n drives it). Each tech is gated by |crank|n and paid in resources.
+            Research permanent bonuses at a lab. There are four technology trees, each hosted by its own lab, and you may own only one lab (one tree) per planet — so the lab you build commits that planet to a tree. |wtechnology|n shows the tree your lab hosts and your progress; |wresearch <tech>|n starts one (an |cEngineer|n drives it). Each tech is gated by |crank|n and paid in resources.
 
             To research a different tree, |wdemolish|n your lab and build the one that hosts it — you can't have two labs on the same planet.
 
@@ -955,7 +955,7 @@ HELP_ENTRY_DICTS = [
             |cRuin Fortification|n — +2 defense in Ruins (Lieutenant).
             |cGlacier Traversal|n — move faster on Glaciers and Frozen Lakes (Captain).
 
-            Permanent damage and armor bonuses from research (and alliance perks) are capped — past the cap, |cgear|n is where power grows, and gear is loseable (|whelp loot|n).
+            Permanent damage and armor bonuses from research (and alliance perks) are capped — past the cap, gear is where power grows, and gear is loseable (|whelp loot|n).
 
             # See Also
 
@@ -985,7 +985,7 @@ HELP_ENTRY_DICTS = [
               Player - |clevel 1|n
               Dependencies - none (the HQ is the one building you raise with no prerequisites)
 
-            Limit: |cone HQ per planet|n.
+            Limit: one HQ per planet.
 
             # What It Does
 
@@ -1018,7 +1018,7 @@ HELP_ENTRY_DICTS = [
             Requirements:
               Player - |clevel 1|n
               HQ - |crequired|n
-              Terrain - |cresource tile|n (Forest, Rock, Mountain, etc. — |wmap|n shows which tiles yield what)
+              Terrain - resource tile (Forest, Rock, Mountain, etc. — |wmap|n shows which tiles yield what)
 
             # What It Does
 
@@ -1177,9 +1177,9 @@ HELP_ENTRY_DICTS = [
         "text": """
             |wResearch Lab (LB)|n
 
-            One of the |cfour specialized labs|n. It hosts the |cResearch|n technology tree (vision, terrain, and utility techs) and crafts your most advanced gear.
+            One of the four specialized labs. It hosts the |cResearch|n technology tree (vision, terrain, and utility techs) and crafts your most advanced gear.
 
-            The other three labs host the other trees: |cWeapons Lab (WX)|n, |cDefense Lab (DF)|n, and |cResource Lab (RX)|n. You may own |conly one lab per planet|n, so building this one commits the planet to the Research tree — |wdemolish|n it to switch.
+            The other three labs host the other trees: |cWeapons Lab (WX)|n, |cDefense Lab (DF)|n, and |cResource Lab (RX)|n. You may own only one lab per planet, so building this one commits the planet to the Research tree — |wdemolish|n it to switch.
 
             # Build Requirements
 
@@ -1221,7 +1221,7 @@ HELP_ENTRY_DICTS = [
         "text": """
             |wWeapons Lab (WX)|n
 
-            The lab that hosts the |cWeapons|n technology tree — offense: weapon damage and range, plus crafted-gear quality. One of the |cfour specialized labs|n; you may own |conly one lab per planet|n, so building this commits the planet to the Weapons tree (|wdemolish|n to switch).
+            The lab that hosts the |cWeapons|n technology tree — offense: weapon damage and range, plus crafted-gear quality. One of the four specialized labs; you may own only one lab per planet, so building this commits the planet to the Weapons tree (|wdemolish|n to switch).
 
             # Build Requirements
 
@@ -1256,7 +1256,7 @@ HELP_ENTRY_DICTS = [
         "text": """
             |wDefense Lab (DF)|n
 
-            The lab that hosts the |cDefense|n technology tree — survivability: building HP and armor / damage reduction. One of the |cfour specialized labs|n; you may own |conly one lab per planet|n, so building this commits the planet to the Defense tree (|wdemolish|n to switch).
+            The lab that hosts the |cDefense|n technology tree — survivability: building HP and armor / damage reduction. One of the four specialized labs; you may own only one lab per planet, so building this commits the planet to the Defense tree (|wdemolish|n to switch).
 
             # Build Requirements
 
@@ -1291,7 +1291,7 @@ HELP_ENTRY_DICTS = [
         "text": """
             |wResource Lab (RX)|n
 
-            The lab that hosts the |cResource|n technology tree — economy: production speed, build cost, and salvage efficiency. One of the |cfour specialized labs|n; you may own |conly one lab per planet|n, so building this commits the planet to the Resource tree (|wdemolish|n to switch).
+            The lab that hosts the |cResource|n technology tree — economy: production speed, build cost, and salvage efficiency. One of the four specialized labs; you may own only one lab per planet, so building this commits the planet to the Resource tree (|wdemolish|n to switch).
 
             # Build Requirements
 
@@ -1404,7 +1404,7 @@ HELP_ENTRY_DICTS = [
 
             # What It Does
 
-            Stores far more than your HQ's starting capacity and is |cprotected while you're offline|n, so raiders can't drain it. Harvester agents with |cdelivery|n prefer to haul resources here.
+            Stores far more than your HQ's starting capacity and is protected while you're offline, so raiders can't drain it. Harvester agents with |cdelivery|n prefer to haul resources here.
 
             # Using It
 
@@ -1476,11 +1476,11 @@ HELP_ENTRY_DICTS = [
             |cLevel 1|n — radius 2 (a 5x5 area around the generator), shield = |c25%|n of each covered building's HP.
             Each level adds |c+1|n to the radius and |c+25%|n to the shield: at |cLevel 4|n a covered building has a shield equal to |c100%|n of its HP (effectively doubling its durability).
 
-            The shield absorbs incoming damage first — from players, turrets, guards, and bombs alike — and only overflow hits the building. A drained shield |cregenerates|n on its own (about 1% of its capacity every few seconds), so between attacks your base heals its shields back up even though buildings never heal their own HP.
+            The shield absorbs incoming damage first — from players, turrets, guards, and bombs alike — and only overflow hits the building. A drained shield regenerates on its own (about 1% of its capacity every few seconds), so between attacks your base heals its shields back up even though buildings never heal their own HP.
 
             # Overlap & Limits
 
-            If several generators cover the same building, it takes the |csingle strongest|n shield — they don't stack, so spreading generators out to cover more ground beats piling them up. You may build at most |c4 per planet|n. (Future tech research will raise these limits.)
+            If several generators cover the same building, it takes the single strongest shield — they don't stack, so spreading generators out to cover more ground beats piling them up. You may build at most |c4 per planet|n. (Future tech research will raise these limits.)
 
             # Using It
 
@@ -1558,7 +1558,7 @@ HELP_ENTRY_DICTS = [
 
             # Level Scaling
 
-            Upgrading improves every bench: the |creroll floor|n rises (a higher-level bench can't roll near the bottom of the band), weapons gain a second |cinsert slot|n from level 3, and |csalvage yield|n grows up to +50% at level 5.
+            Upgrading improves every bench: the reroll floor rises (a higher-level bench can't roll near the bottom of the band), weapons gain a second insert slot from level 3, and salvage yield grows up to +50% at level 5.
 
             # Costs & Research
 
@@ -1592,7 +1592,7 @@ HELP_ENTRY_DICTS = [
 
             # What It Does
 
-            Stand in your own Refinery (online, not mid-upgrade) and |wrefine <resource> [<amount> || all]|n: the batch is |rburned|n and you're credited Salvage — roughly 1 Salvage per 2 units at level 1, and each level improves the rate (1.5x at level 5). The conversion is one-way: the Refinery outputs |cSalvage only|n, never resources.
+            Stand in your own Refinery (online, not mid-upgrade) and |wrefine <resource> [<amount> || all]|n: the batch is |rburned|n and you're credited Salvage — roughly 1 Salvage per 2 units at level 1, and each level improves the rate (1.5x at level 5). The conversion is one-way: the Refinery outputs Salvage only, never resources.
 
             # Using It
 
@@ -1635,7 +1635,7 @@ HELP_ENTRY_DICTS = [
 
             # Using It
 
-            |wbuild MP|n, stand in it, then |wcraft|n with no argument to list the bombs and their costs. |wcraft frag_grenade|n makes one. Bombs land in your |csupply bag|n — set a fuse with |wset frag_grenade 3|n before you |wthrow|n or |warm|n them.
+            |wbuild MP|n, stand in it, then |wcraft|n with no argument to list the bombs and their costs. |wcraft frag_grenade|n makes one. Bombs land in your supply bag — set a fuse with |wset frag_grenade 3|n before you |wthrow|n or |warm|n them.
 
             The |cFrag Grenade|n and |cLand Mine|n cost only starter resources and carry no rank gate, so a plant pays off as soon as you can raise one. |cPlasma|n grenades and |cProximity|n mines need a rank on top.
 
@@ -1651,7 +1651,7 @@ HELP_ENTRY_DICTS = [
         "text": """
             |wSurvey Array (SA)|n
 
-            A signals station that hunts down enemy |cbases|n on your planet — outposts and fortresses alike. It is how you stop wandering the map hoping to bump into one.
+            A signals station that hunts down enemy bases on your planet — outposts and fortresses alike. It is how you stop wandering the map hoping to bump into one.
 
             # Build Requirements
 
@@ -1667,13 +1667,13 @@ HELP_ENTRY_DICTS = [
 
             # What It Does
 
-            Runs the |wsurvey|n search. |wsurvey scan|n picks one enemy base on your |ccurrent planet|n that isn't on your map yet — any tier, and it names which — and returns a |csearch area|n containing it, placed so the base sits at a random spot inside, never at the centre. |wsurvey narrow|n shrinks that area; |wsurvey <x> <y>|n reads a |cbearing|n and rough |cdistance|n from a tile inside it. Pinpoint the outpost and you're given its exact coordinates, and its tile is remembered on your |wmap|n for good.
+            Runs the |wsurvey|n search. |wsurvey scan|n picks one enemy base on your current planet that isn't on your map yet — any tier, and it names which — and returns a search area containing it, placed so the base sits at a random spot inside, never at the centre. |wsurvey narrow|n shrinks that area; |wsurvey <x> <y>|n reads a bearing and rough distance from a tile inside it. Pinpoint the outpost and you're given its exact coordinates, and its tile is remembered on your |wmap|n for good.
 
             Every action except the status readout costs resources, so a search is a real investment — and cheap probing beats expensive sweeping if you read the bearings well.
 
             # Level Scaling
 
-            Upgrading |ctightens the opening search area|n (a maxed array starts roughly where a level 1 array needs several sweeps to get). Sweep and probe costs don't change with level.
+            Upgrading tightens the opening search area (a maxed array starts roughly where a level 1 array needs several sweeps to get). Sweep and probe costs don't change with level.
 
             # Using It
 
@@ -1691,7 +1691,7 @@ HELP_ENTRY_DICTS = [
         "text": """
             |wSniper Nest (SN)|n
 
-            An elevated firing position: while |cyou|n stand on it, your weapon shoots further.
+            An elevated firing position: while you stand on it, your weapon shoots further.
 
             # Build Requirements
 
@@ -1706,7 +1706,7 @@ HELP_ENTRY_DICTS = [
 
             # What It Does
 
-            While its |cowner|n stands on the nest's tile (and it's online), your equipped weapon gains bonus |crange|n: |c+1|n at level 1, |c+2|n at level 3, |c+3|n at level 5. The bonus is strictly positional — step off the tile and it's gone — and it helps no one but you. Total weapon range is hard-capped, so stacking every range bonus can never make a global sniper.
+            While its owner stands on the nest's tile (and it's online), your equipped weapon gains bonus range: |c+1|n at level 1, |c+2|n at level 3, |c+3|n at level 5. The bonus is strictly positional — step off the tile and it's gone — and it helps no one but you. Total weapon range is hard-capped, so stacking every range bonus can never make a global sniper.
 
             # Using It
 
@@ -1724,7 +1724,7 @@ HELP_ENTRY_DICTS = [
         "text": """
             |wWatchtower (WT)|n
 
-            A lookout post: while |cyou|n stand on it, you see further through the fog of war.
+            A lookout post: while you stand on it, you see further through the fog of war.
 
             # Build Requirements
 
@@ -1739,7 +1739,7 @@ HELP_ENTRY_DICTS = [
 
             # What It Does
 
-            While its |cowner|n stands on the tower's tile (and it's online), your |csight range|n grows: |c+1|n at level 1, |c+2|n at level 3, |c+3|n at level 5 — on top of your base 7-tile vision. Strictly positional and owner-only: step off and it's gone. Cheaper and earlier than a |cRadar|n, but you have to climb it yourself.
+            While its owner stands on the tower's tile (and it's online), your sight range grows: |c+1|n at level 1, |c+2|n at level 3, |c+3|n at level 5 — on top of your base 7-tile vision. Strictly positional and owner-only: step off and it's gone. Cheaper and earlier than a |cRadar|n, but you have to climb it yourself.
 
             # Using It
 
@@ -1757,7 +1757,7 @@ HELP_ENTRY_DICTS = [
         "text": """
             |wField Hospital (FH)|n
 
-            A patch-up station: while |cyou|n stand on it, you heal faster.
+            A patch-up station: while you stand on it, you heal faster.
 
             # Build Requirements
 
@@ -1772,7 +1772,7 @@ HELP_ENTRY_DICTS = [
 
             # What It Does
 
-            While its |cowner|n stands on the hospital's tile (and it's online), each natural regeneration tick heals extra HP: |c+1|n at level 1, |c+2|n at level 3, |c+3|n at level 5. It follows the normal regen rules — never past your max HP, and it can't raise the dead. Strictly positional and owner-only: camp the tile between fights, top up, move out.
+            While its owner stands on the hospital's tile (and it's online), each natural regeneration tick heals extra HP: |c+1|n at level 1, |c+2|n at level 3, |c+3|n at level 5. It follows the normal regen rules — never past your max HP, and it can't raise the dead. Strictly positional and owner-only: camp the tile between fights, top up, move out.
 
             # Using It
 
@@ -1795,11 +1795,11 @@ HELP_ENTRY_DICTS = [
         "text": """
             |wAdmin: the unified entity grammar|n
 
-            Every |w@<entity>|n staff command — |w@item|n, |w@building|n, |w@agent|n, |w@tech|n, |w@outpost|n, |w@alliance|n, |w@player|n, |w@stat|n, |w@resource|n, |w@powerup|n, |w@terrain|n, |w@planet|n — speaks one grammar: the same verbs, the same target addressing, and the same |cdefinition|n scope. Learn it once and it works everywhere. Type |whelp @item|n (or any command) for that entity's exact fields, kwargs, and opt-outs.
+            Every |w@<entity>|n staff command — |w@item|n, |w@building|n, |w@agent|n, |w@tech|n, |w@outpost|n, |w@alliance|n, |w@player|n, |w@stat|n, |w@resource|n, |w@powerup|n, |w@terrain|n, |w@planet|n — speaks one grammar: the same verbs, the same target addressing, and the same definition scope. Learn it once and it works everywhere. Type |whelp @item|n (or any command) for that entity's exact fields, kwargs, and opt-outs.
 
             # The Core Verbs
 
-            Ten verbs, split into the |cinstance plane|n (live objects in the world) and the |cdefinition plane|n (the YAML data the world is built from):
+            Ten verbs, split into the instance plane (live objects in the world) and the definition plane (the YAML data the world is built from):
 
             |wlist|n [filter] [player] — live instances as numbered rows (fills the |c#N|n cache)
             |wspawn|n <def> [kwargs] [player] — create an instance from a definition
@@ -1812,11 +1812,11 @@ HELP_ENTRY_DICTS = [
             |wdef reset|n <key> [field] — drop an override and reload
             |wdef diff|n — the current overrides in this entity's domain
 
-            An entity supports each verb or |copts out|n of it with a reason — there is no third state. Invoking an opted-out verb prints its reason and a pointer to the supported path, and changes nothing (e.g. |w@player destroy|n points you at |wobliterate|n; |w@agent def list|n explains agents have no YAML domain).
+            An entity supports each verb or opts out of it with a reason — there is no third state. Invoking an opted-out verb prints its reason and a pointer to the supported path, and changes nothing (e.g. |w@player destroy|n points you at |wobliterate|n; |w@agent def list|n explains agents have no YAML domain).
 
             # Permissions
 
-            Read and instance verbs (|wlist|n, |wspawn|n, |wshow|n, |wset|n, |wdestroy|n) and the read side of the def scope (|wdef list|n, |wdef show|n, |wdef diff|n) sit at |cBuilder|n. The two definition |cwrites|n — |wdef set|n and |wdef reset|n — are |cAdmin|n on every entity and cannot be lowered. A few entities pin an instance verb higher (e.g. |w@stat set|n is Admin).
+            Read and instance verbs (|wlist|n, |wspawn|n, |wshow|n, |wset|n, |wdestroy|n) and the read side of the def scope (|wdef list|n, |wdef show|n, |wdef diff|n) sit at |cBuilder|n. The two definition writes — |wdef set|n and |wdef reset|n — are |cAdmin|n on every entity and cannot be lowered. A few entities pin an instance verb higher (e.g. |w@stat set|n is Admin).
 
             # Target Grammar
 
@@ -1835,7 +1835,7 @@ HELP_ENTRY_DICTS = [
 
             # Definition-Only & Read-Only Commands
 
-            |w@powerup|n and |w@terrain|n are |cdefinition-only|n: they are never spawned as standalone objects, so every instance verb opts out and points at the |wdef|n scope. |w@planet|n is |cdefinition-read-only|n: |wdef list|n and |wdef show|n serve straight from the planet registry, but planets are not hot-reloadable, so |wdef set|n / |wdef reset|n / |wdef diff|n opt out — to change a planet, edit |cplanets.yaml|n and restart.
+            |w@powerup|n and |w@terrain|n are definition-only: they are never spawned as standalone objects, so every instance verb opts out and points at the |wdef|n scope. |w@planet|n is definition-read-only: |wdef list|n and |wdef show|n serve straight from the planet registry, but planets are not hot-reloadable, so |wdef set|n / |wdef reset|n / |wdef diff|n opt out — to change a planet, edit |cplanets.yaml|n and restart.
 
             # Legacy Spellings
 
