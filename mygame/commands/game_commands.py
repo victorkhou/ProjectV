@@ -52,8 +52,8 @@ def _resolved_modifier_suffix(caller, planet, x, y):
     """' [vision -2, movement -1, defense +3]' for the tile at (x, y), or ''.
 
     Values come from ``resolve_for_player`` — the clamped, affinity-adjusted
-    modifiers, never raw TerrainDef fields (Req 8.1). An unwired or failing
-    resolver yields '' (terrain type still shows, just without values).
+    modifiers, never raw TerrainDef fields. An unwired or failing resolver
+    yields '' (terrain type still shows, just without values).
     """
     system = _get_system(caller, "terrain_modifier_system")
     if system is None:
@@ -73,12 +73,11 @@ def _resolved_modifier_suffix(caller, planet, x, y):
 def _terrain_header_info(caller, planet, x, y):
     """Map-header fragment describing the tile at (x, y), discovery-gated.
 
-    Coordinate-inspection surface (Req 8.1, 8.4): a tile the caller has never
-    discovered reveals nothing — ' | unexplored', with no terrain type and no
-    modifier values. A discovered (visible or fog) tile shows the terrain
-    type, its resource, and the three caller-resolved modifier values.
-    Returns '' when tile info is unavailable (unwired generators/fog degrade
-    to the legacy no-extra-info display). Never raises.
+    A tile the caller has never discovered reveals nothing — ' | unexplored',
+    with no terrain type and no modifier values. A discovered (visible or fog)
+    tile shows the terrain type, its resource, and the three caller-resolved
+    modifier values. Returns '' when tile info is unavailable (unwired
+    generators/fog degrade to the legacy no-extra-info display). Never raises.
     """
     if x == "?" or y == "?" or not planet:
         return ""
@@ -145,8 +144,7 @@ def _send_map_update(caller):
             fog = _get_system(caller, "fog_system")
             if fog:
                 data["discovered_count"] = len(fog.get_discovered_tile_set(caller))
-        # Add current terrain info for the webclient header — discovery-gated
-        # like every coordinate-inspection surface (Req 8.4): an unexplored
+        # Add current terrain info for the webclient header — an unexplored
         # tile reveals neither its terrain type nor any modifier values.
         try:
             coords = coords_of(caller)
@@ -158,14 +156,9 @@ def _send_map_update(caller):
                     if gen:
                         tt, res = gen.get_terrain_and_resource(int(x), int(y))
                         data["player"]["terrain"] = tt
-                        # Always set explicitly (never omitted): the webclient
-                        # footer merges incoming fields into a persistent
-                        # status object (so per-command prompt updates don't
-                        # blank fields they don't know about — see
-                        # map_renderer.js updateInfoFooter). An omitted key
-                        # would leave the PREVIOUS tile's resource showing
-                        # after moving onto a resource-less tile; an explicit
-                        # "" clears it.
+                        # Always set explicitly: the webclient footer merges
+                        # fields into a persistent object, so an omitted key
+                        # would leave the PREVIOUS tile's resource showing.
                         data["player"]["resource"] = res if (res and caller_is_admin) else ""
                     system = _get_system(caller, "terrain_modifier_system")
                     if system is not None:
@@ -340,7 +333,7 @@ def _render_and_send_map(caller):
         x = getattr(caller.db, "coord_x", "?")
         y = getattr(caller.db, "coord_y", "?")
 
-        # Discovery-gated tile inspection (Req 8.1, 8.4): terrain type plus
+        # Discovery-gated tile inspection: terrain type plus
         # the caller-resolved modifier values, or only 'unexplored'.
         terrain_info = _terrain_header_info(caller, planet, x, y)
 
@@ -367,14 +360,10 @@ class GameCommand(BaseCommand):
 
     Exact aliases (n, s, e, w, i, m, a) are still matched first.
 
-    Lifecycle gate: when the lobby/spawning flow is enabled
-    (``LOBBY_FLOW_ENABLED``), a player who is not yet PLAYING (still in the
-    SPAWNING or LOBBY state) may not issue world-action commands. Each command
-    opts OUT of the gate via ``available_out_of_game = True`` — the
-    informational/social commands (look/say/who/score/map/inventory/message)
-    set it so they work in every state. The gate is a no-op when the flow is
-    disabled or the character has no lifecycle state (nothing changes for
-    players until the flow is switched on).
+    Lifecycle gate: when the lobby/spawning flow is enabled, a player who
+    is not yet PLAYING may not issue world-action commands. Commands opt
+    OUT of the gate via ``available_out_of_game = True``. The gate is a
+    no-op when the flow is disabled or the character has no lifecycle state.
     """
 
     #: Whether this command may run while the player is still in the
@@ -788,21 +777,19 @@ class CmdMove(GameCommand):
         """Gate a player's move while they are in the combat state.
 
         Out of combat, movement is always instant (returns ``True`` and
-        clears any stale pending lag — Req 4.3). While in combat
-        (``combat_timer_expires`` is in the future), a base movement lag of
+        clears any stale pending lag). While in combat, a base movement lag of
         ``COMBAT_MOVE_LAG_TICKS`` applies between steps, reduced by the
         player's equipment ``move_speed`` and the DESTINATION tile's resolved
-        terrain Movement_Modifier (Req 4.1; Req 2.7 tile asymmetry — movement
-        resolves against the tile being entered, not the tile occupied) via
-        ``compute_combat_move_lag`` (zero-floored, Req 4.2). Returns ``False``
-        (and messages the caller with the remaining wait in ticks, Req 4.6)
-        when the player must still wait before moving; a blocked move leaves
-        position and pending lag untouched (Req 4.4).
+        terrain Movement_Modifier (movement resolves against the tile being
+        entered, not the tile occupied) via ``compute_combat_move_lag``
+        (zero-floored). Returns ``False`` (and messages the caller with the
+        remaining wait in ticks) when the player must still wait before moving;
+        a blocked move leaves position and pending lag untouched.
 
         Defensive: an entity with no equipment handler yields a ``move_speed``
         modifier of 0 (``_get_move_speed_modifier``); an unwired or failing
-        terrain resolver yields a terrain modifier of 0 (Req 4.7); a failed
-        wait-message delivery still blocks the move (Req 4.5).
+        terrain resolver yields a terrain modifier of 0; a failed
+        wait-message delivery still blocks the move.
         """
         from world.constants import COMBAT_MOVE_LAG_TICKS, compute_combat_move_lag
         from world.combat_timer import _get_current_tick, player_in_combat
@@ -826,9 +813,9 @@ class CmdMove(GameCommand):
         next_move_tick = getattr(caller.db, "next_move_tick", 0) or 0
         if current_tick < next_move_tick:
             # Blocked: return before any state change so position and pending
-            # lag stay exactly as they were (Req 4.4). The remaining wait is
+            # lag stay exactly as they were. The remaining wait is
             # always > 0 on this path — zero remaining means the move proceeds
-            # — so the no-message-at-zero rule (Req 4.6) holds structurally.
+            # — so the no-message-at-zero rule holds structurally.
             remaining = next_move_tick - current_tick
             try:
                 caller.msg(
@@ -836,7 +823,7 @@ class CmdMove(GameCommand):
                     f"Wait {remaining} more tick(s)."
                 )
             except Exception:
-                # Message delivery failure must not unblock the move (Req 4.5).
+                # Message delivery failure must not unblock the move.
                 pass
             return False
 
@@ -846,8 +833,8 @@ class CmdMove(GameCommand):
             else 0
         )
 
-        # Destination tile's Movement_Modifier (Req 4.1; Req 2.7 asymmetry).
-        # Unresolvable or unwired resolver → 0 (Req 4.7).
+        # Destination tile's Movement_Modifier (movement resolves against the
+        # tile being entered). Unresolvable or unwired resolver → 0.
         terrain_mod = 0.0
         try:
             resolver = _get_system(caller, "terrain_modifier_system")
@@ -1052,7 +1039,7 @@ class CmdBuild(GameCommand):
             if bdef.rank_requirement > player_level:
                 continue
             cost_str = format_cost_summary(bdef.cost)
-            # Deed-gate suffix (R9.5): mark gated buildings the player hasn't
+            # Deed-gate suffix: mark gated buildings the player hasn't
             # unlocked, so the requirement is visible before a refused build.
             locked = ""
             unlock_deed = getattr(bdef, "unlock_deed", None)
@@ -2919,7 +2906,7 @@ class CmdRefine(GameCommand):
 def _parse_resource_amount(args):
     """Parse ``<resource> [<amount>|all]`` into ``(Title_Case_resource, amount)``.
 
-    Per Req 12.8 the amount is optional and the literal ``all`` is accepted:
+    The amount is optional and the literal ``all`` is accepted:
 
     - ``deposit iron`` or ``deposit iron all`` → ``("Iron", None)`` (all available).
     - ``deposit iron 100`` → ``("Iron", 100)``.
@@ -3267,7 +3254,7 @@ def _gear_display_name(item, looker=None):
     """Return a gear item's display name, quality-tag decorated when rolled.
 
     Rolled GameItems decorate their name as ``Name [Rarity · IQS%]``
-    (item-loot-economy R2.3) via ``get_display_name``; anything without
+    via ``get_display_name``; anything without
     that hook falls back to its key so mock/legacy objects render as before.
     """
     getter = getattr(item, "get_display_name", None)
@@ -3469,7 +3456,7 @@ class CmdScore(GameCommand):
             f"  Position: ({x}, {y}) on {planet}",
         ]
 
-        # Terrain — the three resolved modifiers at the current tile (Req 8.2).
+        # Terrain — the three resolved modifiers at the current tile.
         # Values come from resolve_for_player: clamped, affinity-adjusted, never
         # raw TerrainDef fields. All three always print, zeros included. An
         # unwired or failing resolver omits the section (fail-soft, matching the
@@ -4659,7 +4646,7 @@ class CmdLeave(GameCommand):
                     x = getattr(caller.db, "coord_x", "?")
                     y = getattr(caller.db, "coord_y", "?")
                     planet = getattr(caller.db, "coord_planet", "?")
-                    # Discovery-gated tile inspection (Req 8.1, 8.4).
+                    # Discovery-gated tile inspection.
                     terrain_info = _terrain_header_info(caller, planet, x, y)
                     _send_ascii_map(caller, f"|wMap — ({x}, {y}) on {planet}{terrain_info}|n\n{map_str}")
             except Exception:

@@ -183,25 +183,6 @@ class CmdAdminBuilding(EntityAdminRouter):
       @building def list | def show <key> | def diff
       @building def set <key> <field> <value> | def reset <key> [field]
 
-    Core verbs (shared EntityAdminRouter handlers, driven by the building
-    adapter registered under ``adapter_key = "building"``):
-      list    — live building instances on your current planet room;
-                definition (type) listing moved to 'def list'
-      spawn   — create a building at your current tile through the
-                existing creation path (kwargs: owner=<name|none>,
-                level=<1-5>); <type> accepts an abbreviation (EX), a full
-                name (extractor), or an unambiguous prefix
-      show    — full instance readout: level, HP, owner, position,
-                open/offline state, modifiable fields with [min–max]
-      set     — bounded field write (level 1-5, hp clamped into the
-                target's hp_max, hp_max) through the shared building
-                attribute writer, clamp-with-note
-      destroy — delete a building instance; with no target, destroys the
-                building at your current tile (legacy behavior)
-      def …   — definition scope: 'def list'/'def show'/'def diff' at
-                Builder; 'def set'/'def reset' (overlay-backed, validated
-                reload) at Admin
-
     Targets resolve uniformly: '#N' from the last '@building list', the
     building key/abbreviation (e.g. 'EX'), the building name, or an
     unambiguous prefix.
@@ -218,9 +199,8 @@ class CmdAdminBuilding(EntityAdminRouter):
 
         While the ``@building`` migration window remains open, every
         ``@building list`` includes the pointer that definition listing
-        moved to ``def list`` — the old def-list meaning of ``list``
-        moved there in this rollout phase (Requirement 11.4). The shared
-        handler stays generic; only this subclass appends the pointer.
+        moved to ``def list``. The shared handler stays generic; only
+        this subclass appends the pointer.
         """
         super()._sub_list(rest)
         self.caller.msg(
@@ -233,9 +213,9 @@ class CmdAdminBuilding(EntityAdminRouter):
 
         ``@building destroy`` with no target keeps its pre-migration
         meaning — destroy the building at the caller's current tile —
-        so existing muscle memory is never punished (Requirement 11.6).
-        Targeted (and multi-target, confirmation-gated) destroys go
-        through the shared handler.
+        so existing muscle memory is never punished. Targeted (and
+        multi-target, confirmation-gated) destroys go through the shared
+        handler.
         """
         if (rest or "").strip():
             super()._sub_destroy(rest)
@@ -323,21 +303,6 @@ class CmdAdminResource(EntityAdminRouter):
       @resource set <player> <type> <amount>
       @resource reset [player]
 
-    Core verbs (shared EntityAdminRouter handlers, driven by the resource
-    adapter registered under ``adapter_key = "resource"``):
-      spawn   — grant (credit) <amount> of a resource, or 'all' for every
-                resource, to a player (defaults to you) via the existing
-                add_resource single-writer; admin grants bypass the
-                carry-weight cap (Req 16.7). The positional grant grammar
-                is kept by the ``_sub_spawn`` override below.
-      show    — one player's balances readout (defaults to you)
-      set     — set an absolute balance (bounded ≥ 0, clamp with a note)
-      reset   — reset one player, or every player, to STARTING_RESOURCES
-                (Admin+)
-      list    — not available: balances are per-player fields, not a roster
-      destroy — not available: zero a balance or use 'reset' instead
-      def …   — not available: resources have no YAML definition domain
-
     Targets resolve uniformly: 'me'/'self' (or omitted) means you; any
     other token resolves to a single player by name.
 
@@ -356,13 +321,11 @@ class CmdAdminResource(EntityAdminRouter):
     def _sub_spawn(self, rest):
         """``spawn <type|all> <amount> [player]``: the grant path.
 
-        The design maps the legacy ``give`` onto ``spawn`` (per-entity
-        matrix, "A"), but the positional grant grammar and its additive
-        credit semantics don't fit the base ``spawn <def> [k=v] [player]``
-        parser — so this subclass keeps the legacy parsing/messages and
-        delegates the credit to the adapter's single-writer (Requirement
-        11.6). Target resolution uses the shared ``resolve_player`` so the
-        not-found wording is unchanged from the legacy verb.
+        The positional grant grammar and its additive credit semantics
+        don't fit the base ``spawn <def> [k=v] [player]`` parser — so this
+        subclass keeps the legacy parsing/messages and delegates the credit
+        to the adapter's single-writer. Target resolution uses the shared
+        ``resolve_player`` so the not-found wording is unchanged.
         """
         caller = self.caller
         adapter = self.adapter
@@ -409,7 +372,7 @@ class CmdAdminResource(EntityAdminRouter):
             target = caller
 
         # Credit through the adapter's single-writer; a path failure reports
-        # the reason and changes nothing (Requirement 4.8).
+        # the reason and changes nothing.
         try:
             result = adapter.create(
                 caller, resource_token,
@@ -514,25 +477,6 @@ class CmdAdminItem(EntityAdminRouter):
       @item def list | def show <key> | def diff
       @item def set <key> <field> <value> | def reset <key> [field]
 
-    Core verbs (shared EntityAdminRouter handlers, driven by the item
-    adapter registered under ``adapter_key = "item"``):
-      list    — live item instances in a player's holdings (defaults to
-                yours); definition listing moved to 'def list'
-      spawn   — create item(s) from a definition through the existing
-                creation paths (kwargs: count=, iqs=, rarity=); rollable
-                Gear is rolled exactly like a loot drop
-      show    — full instance readout: state, modifiable fields with
-                [min–max] roll bands, staleness notes for stamped
-                attributes that drifted from the current merged def
-      set     — bounded stat write clamped into the def's roll band
-                (with a note), re-stamping IQS through the loot roller
-                before the response; 'rarity' accepts a tier name
-      destroy — delete an item instance (multi-target destroys need
-                explicit confirmation)
-      def …   — definition scope: 'def list'/'def show'/'def diff' at
-                Builder; 'def set'/'def reset' (overlay-backed, validated
-                reload) at Admin
-
     Targets resolve uniformly: '#N' from the last '@item list', the item
     key (e.g. 'assault_rifle'), the item name, or an unambiguous prefix;
     a trailing player name scopes to that player's holdings ('@item show
@@ -550,10 +494,8 @@ class CmdAdminItem(EntityAdminRouter):
 
         While the ``@item`` migration aliases remain installed (the
         deprecation window), every ``@item list`` includes the pointer
-        that definition listing moved to ``def list`` — the old def-list
-        meaning of ``list`` moved there in this rollout phase
-        (Requirement 11.4). The shared handler stays generic; only this
-        subclass appends the pointer.
+        that definition listing moved to ``def list``. The shared handler
+        stays generic; only this subclass appends the pointer.
         """
         super()._sub_list(rest)
         self.caller.msg(
@@ -573,27 +515,6 @@ class CmdAdminTech(EntityAdminRouter):
       @tech def list | def show <key> | def diff
       @tech def set <key> <field> <value> | def reset <key> [field]
 
-    Core verbs (shared EntityAdminRouter handlers, driven by the tech
-    adapter registered under ``adapter_key = "tech"``):
-      list    — technologies granted to a player (defaults to you);
-                optional filter on key/name/effect
-      grant   — grant a technology (maps to the spawn verb): adds
-                through the existing research path and recomputes the
-                player's derived tech bonuses before the response;
-                granting an already-held tech errors stating the
-                current grant state, nothing changes
-      revoke  — revoke a granted technology (maps to the destroy verb):
-                removes + recomputes derived bonuses before the
-                response; revoking a non-held tech errors stating the
-                current grant state, nothing changes
-      show    — one granted tech: holder, rank/cost/effect read live
-                from the merged definition
-      set     — not available: technologies have no modifiable
-                per-instance fields
-      def …   — definition scope: 'def list'/'def show'/'def diff' at
-                Builder; 'def set'/'def reset' (overlay-backed,
-                validated reload) at Admin
-
     Targets resolve uniformly: '#N' from the last '@tech list', the
     tech key (e.g. 'drone_swarm'), the tech name, or an unambiguous
     prefix; a trailing player name scopes to that player's granted
@@ -610,7 +531,7 @@ class CmdAdminTech(EntityAdminRouter):
         ``grant``/``revoke`` are the intended spellings, not legacy
         ones. The canonical verb's permission check and handler run so
         state changes, perm outcomes, and audit entries are identical
-        to invoking the canonical verb directly (Requirement 9.1).
+        to invoking the canonical verb directly.
         """
         entry = self.subcommands.get(canonical)
         if entry is None:
@@ -622,11 +543,11 @@ class CmdAdminTech(EntityAdminRouter):
         handler(self, rest)
 
     def sub_grant(self, rest):
-        """``grant <tech> [player]`` — maps to spawn (Requirement 7.1)."""
+        """``grant <tech> [player]`` — maps to spawn."""
         self._dispatch_extra_to_core("spawn", rest)
 
     def sub_revoke(self, rest):
-        """``revoke <tech> [player]`` — maps to destroy (Requirement 7.1)."""
+        """``revoke <tech> [player]`` — maps to destroy."""
         self._dispatch_extra_to_core("destroy", rest)
 
 
@@ -638,22 +559,6 @@ class CmdAdminPlayer(ValueFirstSetAliasMixin, EntityAdminRouter):
       @player show <player>
       @player set <player> level <1-100>
       @player set <player> rank <1-12>
-
-    Core verbs (shared EntityAdminRouter handlers, driven by the player
-    adapter registered under ``adapter_key = "player"``):
-      list    — live player characters as indexed rows
-      show    — full progression readout: level, rank, XP, modifiable
-                fields with [min–max] bounds
-      set     — bounded field write (Admin+) through the existing
-                rank-system progression path: 'level' (1-100, out-of-
-                bounds values clamp with a note) re-stamps XP and
-                recomputes the rank; 'rank' (numeric rank id 1-12)
-                jumps to that rank's first level. Rank events (tech
-                unlocks, agent-cap adjustments) recompute before the
-                response, exactly like the legacy verbs.
-      spawn   — not available: players register through account creation
-      destroy — not available: use the '@obliterate' flow instead
-      def …   — not available: players have no YAML definition domain
 
     Targets resolve uniformly: 'me'/'self' (yourself), '#N' from the
     last '@player list', an exact name, or an unambiguous prefix.
@@ -1718,7 +1623,7 @@ class CmdAdminOutpost(EntityAdminRouter):
         and its positional ``[x y]`` form doesn't fit the shared
         ``spawn <def> [k=v ...] [player]`` parser — so this subclass keeps
         the legacy parsing/messages and delegates creation to the
-        adapter's spawner path (Requirement 11.6).
+        adapter's spawner path.
         """
         caller = self.caller
         spawner = self.require_system("outpost_spawner", "Outpost spawner")

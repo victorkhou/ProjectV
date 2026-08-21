@@ -211,12 +211,12 @@ class GameSubcommandRouter(SubcommandDispatchMixin, GameCommand):
 
 
 # ---------------------------------------------------------------------- #
-#  EntityAdminRouter — unified admin CRUD grammar (unified-admin-crud)
+#  EntityAdminRouter — unified admin CRUD grammar
 # ---------------------------------------------------------------------- #
 
-#: Permission-tier ordering for the per-field escalation check
-#: (Requirement 8.4). Unknown tiers rank above everything so a typo'd
-#: FieldSpec.perm fails closed (the check always runs) instead of open.
+#: Permission-tier ordering for the per-field escalation check.
+#: Unknown tiers rank above everything so a typo'd FieldSpec.perm fails
+#: closed (the check always runs) instead of open.
 _PERM_RANK: dict[str, int] = {
     "player": 0,
     "helper": 1,
@@ -235,8 +235,8 @@ def coerce_field_value(spec, raw):
     """Interpret *raw* as *spec*'s declared kind.
 
     Returns ``(value, None)`` on success or ``(None, error)`` where
-    *error* states the expected kind (Requirement 3.8) or, for enum
-    fields, lists the valid values (Requirement 3.9).
+    *error* states the expected kind or, for enum fields, lists the
+    valid values.
     """
     text = str(raw).strip()
     if spec.kind == "int":
@@ -275,10 +275,9 @@ def clamp_field_value(spec, entity, requested):
 
     - Bounds are static (``min_value``/``max_value``) or dynamic
       (``spec.dynamic_bounds(entity)`` computed from the target entity's
-      current state — Requirement 3.4); dynamic bounds take precedence.
-    - Out-of-bounds numeric values clamp to the nearest bound
-      (Requirement 3.2); in-bounds or unbounded values pass through
-      unchanged (Requirement 3.3).
+      current state); dynamic bounds take precedence.
+    - Out-of-bounds numeric values clamp to the nearest bound;
+      in-bounds or unbounded values pass through unchanged.
     - ``clamped == (applied != requested)`` (the SetResult contract).
     - Non-numeric kinds never clamp; ``lo``/``hi`` are ``None``.
     """
@@ -296,8 +295,8 @@ def clamp_field_value(spec, entity, requested):
 #: Pending multi-target destroy confirmations, keyed by
 #: (caller, entity_key). A multi-target ``destroy`` stores its resolved
 #: targets here and deletes nothing until the caller runs
-#: ``destroy confirm`` (Requirement 4.5); ``destroy cancel`` (or issuing
-#: a different destroy) discards the entry with no state change.
+#: ``destroy confirm``; ``destroy cancel`` (or issuing a different
+#: destroy) discards the entry with no state change.
 _PENDING_DESTROY: dict = {}
 
 
@@ -305,32 +304,19 @@ class EntityAdminRouter(AdminSubcommandRouter):
     """Admin router base driven by an EntityAdapter's grammar contract.
 
     Subclasses set ``adapter_key`` (e.g. ``"item"``); the ``subcommands``
-    dict is auto-built from the adapter registered under that key in the
-    :class:`~world.admin.adapter_registry.AdapterRegistry`:
+    dict is auto-built from the adapter registered under that key:
 
-    - Core verbs the adapter supports get the shared handlers below at
-      their canonical tiers (read verbs at Builder, ``def set``/``def
-      reset`` at Admin — Requirements 8.1–8.3).
-    - Opted-out core verbs dispatch to a handler that surfaces the
-      adapter's declared reason (which carries the pointer to the
-      supported path) and changes no state (Requirement 1.5).
-    - ``adapter.extra_verbs`` register alongside the core verbs with
-      their declared help text (Requirement 1.6); their handlers live on
-      the subclass as ``sub_<verb>`` methods.
-    - ``adapter.aliases`` dispatch to the canonical handler — identical
-      state changes, permission outcomes, output, and audit entries —
-      plus a one-line deprecation note naming both spellings
-      (Requirements 11.1, 11.2).
-    - Unknown verbs error with the list of available verbs and change no
-      state (Requirement 1.8).
+    - Supported core verbs get the shared handlers at their canonical
+      permission tiers (read verbs at Builder, def-write at Admin).
+    - Opted-out core verbs surface the adapter's declared reason and
+      change no state.
+    - ``adapter.extra_verbs`` register alongside with their declared help
+      text; handlers live on the subclass as ``sub_<verb>`` methods.
+    - ``adapter.aliases`` dispatch to the canonical handler with a
+      deprecation note.
+    - Unknown verbs error with the available verb list.
 
-    The Builder floor is unchanged (``locks`` inherited from
-    :class:`AdminSubcommandRouter`). The ``def`` keyword pivots into the
-    Definition_Scope sub-dispatch, whose read verbs (``def list``,
-    ``def show``, ``def diff``) are functional here; the mutating
-    instance verbs (``spawn``/``set``/``destroy``) and the ``def set``/
-    ``def reset`` flow are registered at their tiers but delegate to
-    ``_do_*`` methods that later phases implement.
+    The Builder floor is inherited from :class:`AdminSubcommandRouter`.
     """
 
     #: Subclasses set this to the adapter's entity_key ("item", ...).
@@ -342,10 +328,9 @@ class EntityAdminRouter(AdminSubcommandRouter):
     #: preserves the explicit-target contract every other entity uses.
     default_show_target: str | None = None
 
-    #: Canonical permission tier per core verb (design Verb Grammar
-    #: Table). Adapters may override a verb's tier via an optional
-    #: ``verb_perms`` mapping (Requirement 8.7) — except the def-write
-    #: verbs, which are Admin on every entity (Requirement 8.3).
+    #: Canonical permission tier per core verb. Adapters may override a
+    #: verb's tier via an optional ``verb_perms`` mapping — except the
+    #: def-write verbs, which are Admin on every entity.
     CORE_VERB_PERMS: dict = {
         "list": "Builder",
         "spawn": "Builder",
@@ -401,7 +386,7 @@ class EntityAdminRouter(AdminSubcommandRouter):
         """The tier for *verb*: canonical, unless the adapter escalates it.
 
         ``def set``/``def reset`` are pinned to Admin on every entity
-        (Requirement 8.3) and cannot be lowered by an adapter override.
+        and cannot be lowered by an adapter override.
         """
         default = self.CORE_VERB_PERMS.get(verb, "Builder")
         if verb in ("def set", "def reset"):
@@ -459,7 +444,7 @@ class EntityAdminRouter(AdminSubcommandRouter):
         )
 
         # Adapter-declared extra verbs — handlers live on the subclass as
-        # sub_<verb> methods (Requirement 1.6).
+        # sub_<verb> methods.
         def _missing_handler(verb):
             def handler(cmd, rest):
                 cmd.caller.msg(
@@ -477,9 +462,9 @@ class EntityAdminRouter(AdminSubcommandRouter):
             )
 
         # Migration aliases: old spelling -> canonical verb, dispatched
-        # through the canonical handler with a deprecation note
-        # (Requirements 11.1, 11.2). Perm is checked against the CANONICAL
-        # verb inside _dispatch_alias so outcomes are identical.
+        # through the canonical handler with a deprecation note. Perm is
+        # checked against the CANONICAL verb inside _dispatch_alias so
+        # outcomes are identical.
         def _alias_handler(alias, canonical):
             def handler(cmd, rest):
                 cmd._dispatch_alias(alias, canonical, rest)
@@ -499,7 +484,7 @@ class EntityAdminRouter(AdminSubcommandRouter):
     # ------------------------------------------------------------------ #
 
     def _msg_opt_out(self, verb: str):
-        """Surface the adapter's opt-out reason; no state change (R1.5).
+        """Surface the adapter's opt-out reason; no state change.
 
         The reason string is declared with its pointer to the supported
         alternative path (enforced non-empty at registration).
@@ -508,7 +493,7 @@ class EntityAdminRouter(AdminSubcommandRouter):
         self.caller.msg(f"{self.key} {verb} is not available: {reason}")
 
     def _available_verbs(self) -> list:
-        """Every invocable spelling, for unknown-verb errors (R1.8)."""
+        """Every invocable spelling, for unknown-verb errors."""
         adapter = self.adapter
         verbs = [v for v in self._INSTANCE_VERBS
                  if v in adapter.supported_verbs]
@@ -519,7 +504,7 @@ class EntityAdminRouter(AdminSubcommandRouter):
         return verbs
 
     def _show_error(self, invalid_verb: str):
-        """Unknown verb: list the available verbs, change nothing (R1.8)."""
+        """Unknown verb: list the available verbs, change nothing."""
         valid = ", ".join(self._available_verbs())
         self.caller.msg(
             f"Unknown subcommand '{invalid_verb}'. Available: {valid}"
@@ -528,11 +513,10 @@ class EntityAdminRouter(AdminSubcommandRouter):
     def _dispatch_alias(self, alias: str, canonical: str, rest: str):
         """Dispatch a Migration_Alias to its canonical handler.
 
-        Emits the one-line deprecation note naming both spellings
-        (Requirement 11.2), then runs the canonical verb's permission
-        check and handler so state changes, perm outcomes, output, and
-        audit entries are identical to the canonical spelling
-        (Requirement 11.1).
+        Emits the one-line deprecation note naming both spellings, then
+        runs the canonical verb's permission check and handler so state
+        changes, perm outcomes, output, and audit entries are identical
+        to the canonical spelling.
         """
         self.caller.msg(
             f"Note: '{alias}' is deprecated — use "
@@ -602,7 +586,7 @@ class EntityAdminRouter(AdminSubcommandRouter):
 
     def _sub_list(self, rest: str):
         """``list [filter]``: indexed instance rows; replaces the caller's
-        List_Cache with exactly the displayed rows (Requirements 4.1, 4.6).
+        List_Cache with exactly the displayed rows.
         """
         adapter = self.adapter
         filter_str = (rest or "").strip()
@@ -622,7 +606,7 @@ class EntityAdminRouter(AdminSubcommandRouter):
 
     def _sub_show(self, rest: str):
         """``show <target>``: resolve via the Resolution_Engine, render the
-        adapter's ShowReport (Requirement 4.3).
+        adapter's ShowReport.
 
         An entity may set ``default_show_target`` (e.g. ``"me"``) to keep
         the legacy "defaults to you" behavior when the target is omitted;
@@ -692,8 +676,7 @@ class EntityAdminRouter(AdminSubcommandRouter):
         return sorted(vars(definition).items())
 
     def _def_list(self, rest: str):
-        """``def list``: definitions in this domain from the merged
-        registry (Requirement 5.7)."""
+        """``def list``: definitions in this domain from the merged registry."""
         registry_dict = self.adapter.def_registry_dict()
         if registry_dict is None:
             self.caller.msg(
@@ -719,7 +702,7 @@ class EntityAdminRouter(AdminSubcommandRouter):
 
     def _def_show(self, rest: str):
         """``def show <key>``: merged definition values, overridden fields
-        flagged ``*override*`` (Requirement 5.4 rendering)."""
+        flagged ``*override*``."""
         token = (rest or "").strip()
         if not token:
             self.caller.msg(f"Usage: {self.key} def show <key>")
@@ -740,7 +723,7 @@ class EntityAdminRouter(AdminSubcommandRouter):
         self.caller.msg("\n".join(lines))
 
     def _live_instances_note(self, def_key: str) -> str:
-        """The ``def show`` live-instances note (Requirement 10.4).
+        """The ``def show`` live-instances note.
 
         When the adapter can report live-instance existence for a
         definition key — by declaring an optional
@@ -764,7 +747,7 @@ class EntityAdminRouter(AdminSubcommandRouter):
 
     def _def_diff(self, rest: str):
         """``def diff``: current deviations from base YAML in this domain;
-        an empty overlay produces an empty diff (Requirement 5.6)."""
+        an empty overlay produces an empty diff."""
         domain = self._def_domain()
         if not domain:
             self.caller.msg(
@@ -789,8 +772,8 @@ class EntityAdminRouter(AdminSubcommandRouter):
         self.caller.msg("\n".join(lines))
 
     # ------------------------------------------------------------------ #
-    #  Mutating verbs — spawn / set / destroy (task 1.12);
-    #  def set / def reset land in task 1.15.
+    #  Mutating verbs — spawn / set / destroy;
+    #  def set / def reset.
     # ------------------------------------------------------------------ #
 
     def _sub_spawn(self, rest: str):
@@ -813,10 +796,9 @@ class EntityAdminRouter(AdminSubcommandRouter):
     def _audit(self, verb: str, detail: str) -> str:
         """Record one Audit_Log entry; return the response note on failure.
 
-        Exactly one call per successful mutation (Requirement 9.1). An
-        audit-write failure leaves the completed mutation applied and
-        returns the note the response must carry (Requirement 9.4);
-        success returns an empty string.
+        Exactly one call per successful mutation. An audit-write failure
+        leaves the completed mutation applied and returns the note the
+        response must carry; success returns an empty string.
         """
         try:
             self._log_admin(verb, detail)
@@ -840,7 +822,7 @@ class EntityAdminRouter(AdminSubcommandRouter):
     # --- spawn ------------------------------------------------------------ #
 
     def _do_spawn(self, rest: str):
-        """``spawn <def> [k=v ...] [player]`` (Requirements 4.2, 4.7, 4.8)."""
+        """``spawn <def> [k=v ...] [player]``."""
         adapter = self.adapter
         parts = (rest or "").split()
         if not parts:
@@ -866,8 +848,7 @@ class EntityAdminRouter(AdminSubcommandRouter):
                 return
 
         # Def-token resolution via the adapter's existing resolver: an
-        # unresolved token errors naming the token; nothing is created
-        # (Requirement 4.7).
+        # unresolved token errors naming the token; nothing is created.
         definition = adapter.def_resolve(def_token)
         if definition is None:
             self.caller.msg(
@@ -884,7 +865,7 @@ class EntityAdminRouter(AdminSubcommandRouter):
 
         # Create through the adapter's existing creation path; a path
         # failure (exception, None, or ok=False result) is reported with
-        # no further state change (Requirement 4.8).
+        # no further state change.
         try:
             result = adapter.create(self.caller, def_token, kwargs)
         except Exception as exc:  # noqa: BLE001 - relay creation-path errors
@@ -905,8 +886,7 @@ class EntityAdminRouter(AdminSubcommandRouter):
     # --- set ---------------------------------------------------------------- #
 
     def _do_set(self, rest: str):
-        """``set <target> <field> <value>`` — the bounded write
-        (Requirements 3.2–3.5, 3.7–3.10, 8.4, 8.5, 9.1, 9.3)."""
+        """``set <target> <field> <value>`` — the bounded write."""
         adapter = self.adapter
         parts = (rest or "").split(None, 2)
         if len(parts) < 3:
@@ -922,8 +902,7 @@ class EntityAdminRouter(AdminSubcommandRouter):
             return
         target = resolution.target
 
-        # Unknown field: error naming the valid fields, no state change
-        # (Requirement 3.7).
+        # Unknown field: error naming the valid fields, no state change.
         fields = adapter.instance_fields()
         spec = fields.get(field_name)
         if spec is None:
@@ -937,9 +916,8 @@ class EntityAdminRouter(AdminSubcommandRouter):
 
         # Per-field permission escalation: checked after the verb-level
         # check (already passed in dispatch) and before bounds handling;
-        # a FieldSpec tier at or below the verb tier adds no extra check
-        # (Requirement 8.4). Insufficient tier rejects in full, naming
-        # the required tier (Requirement 8.5).
+        # a FieldSpec tier at or below the verb tier adds no extra check.
+        # Insufficient tier rejects in full, naming the required tier.
         if _perm_rank(spec.perm) > _perm_rank(self._verb_perm("set")):
             if not self.caller.check_permstring(spec.perm):
                 self.record_outcome(PERM_DENIED, required=spec.perm,
@@ -963,8 +941,7 @@ class EntityAdminRouter(AdminSubcommandRouter):
         applied, clamped, lo, hi = clamp_field_value(spec, target, requested)
 
         # Write through the entity's existing single-writer path; a
-        # failed write errors with the pre-command state retained
-        # (Requirements 3.5, 3.10).
+        # failed write errors with the pre-command state retained.
         try:
             result = adapter.update(self.caller, target, spec.name, applied)
         except Exception as exc:  # noqa: BLE001 - relay write-path errors
@@ -997,7 +974,7 @@ class EntityAdminRouter(AdminSubcommandRouter):
                 f"{fmt_bound(lo)}–{fmt_bound(hi)})"
             )
         # Audit: requested and applied values recorded, distinguishable
-        # on clamp (Requirements 9.1, 9.3).
+        # on clamp.
         note = self._audit(
             "set",
             f"{adapter.entity_key} {identity} {spec.name}: "
@@ -1011,7 +988,7 @@ class EntityAdminRouter(AdminSubcommandRouter):
 
     def _do_destroy(self, rest: str):
         """``destroy <target>[, <target> ...]`` | ``destroy confirm`` |
-        ``destroy cancel`` (Requirements 4.4, 4.5, 4.8)."""
+        ``destroy cancel``."""
         raw = (rest or "").strip()
         if not raw:
             self.caller.msg(
@@ -1049,7 +1026,7 @@ class EntityAdminRouter(AdminSubcommandRouter):
             return
 
         # Multi-target: show count + identities, delete nothing before
-        # explicit confirmation (Requirement 4.5).
+        # explicit confirmation.
         _PENDING_DESTROY[pending_key] = tuple(targets)
         lines = [
             f"|yThis will destroy {len(targets)} "
@@ -1075,7 +1052,7 @@ class EntityAdminRouter(AdminSubcommandRouter):
         self._destroy_now(list(targets))
 
     def _destroy_cancel(self, pending_key):
-        """Decline a pending destroy: cancel, no state change (R4.5)."""
+        """Decline a pending destroy: cancel, no state change."""
         if _PENDING_DESTROY.pop(pending_key, None) is None:
             self.caller.msg("No destroy is pending confirmation.")
             return
@@ -1085,8 +1062,8 @@ class EntityAdminRouter(AdminSubcommandRouter):
         """Delete *targets* through the adapter's existing deletion path.
 
         Deletion-path failure reports the error and makes no further
-        state change (Requirement 4.8); already-completed deletions in a
-        confirmed batch stay deleted and are audited.
+        state change; already-completed deletions in a confirmed batch
+        stay deleted and are audited.
         """
         adapter = self.adapter
         destroyed = []
@@ -1107,7 +1084,7 @@ class EntityAdminRouter(AdminSubcommandRouter):
         note = ""
         if destroyed:
             # Exactly one audit entry per completed destroy invocation,
-            # listing every destroyed identity (Requirement 9.1).
+            # listing every destroyed identity.
             note = self._audit(
                 "destroy",
                 f"{adapter.entity_key}: {', '.join(destroyed)}",
@@ -1128,7 +1105,7 @@ class EntityAdminRouter(AdminSubcommandRouter):
                 f"instances: {', '.join(destroyed)}.{note}"
             )
 
-    # --- def set / def reset (task 1.15) ---------------------------------- #
+    # --- def set / def reset ---------------------------------- #
 
     def _data_registry(self):
         """The live DataRegistry the def-write flow reloads (test hook).
@@ -1139,7 +1116,7 @@ class EntityAdminRouter(AdminSubcommandRouter):
         return get_system(self.caller, "registry")
 
     def _reload_lock(self):
-        """The lock serializing overlay-write + reload sequences (R6.6).
+        """The lock serializing overlay-write + reload sequences.
 
         The real :data:`world.data_registry.OVERLAY_RELOAD_LOCK` (an
         RLock — ``reload_all`` re-enters it cleanly under our outer
@@ -1194,7 +1171,7 @@ class EntityAdminRouter(AdminSubcommandRouter):
 
     def _do_def_set(self, rest: str):
         """``def set <key> <field> <value>`` — overlay write + serialized
-        validated reload (Requirements 5.2, 5.8, 6.3–6.8, 8.4, 9.2)."""
+        validated reload."""
         adapter = self.adapter
         parts = (rest or "").split(None, 2)
         if len(parts) < 3:
@@ -1205,7 +1182,7 @@ class EntityAdminRouter(AdminSubcommandRouter):
         token, field_name, raw_value = parts
 
         # Field must be in the adapter's definition Field_Spec schema —
-        # else error naming the valid fields, overlay untouched (R5.8).
+        # else error naming the valid fields, overlay untouched.
         fields = adapter.definition_fields()
         spec = fields.get(field_name)
         if spec is None:
@@ -1219,7 +1196,7 @@ class EntityAdminRouter(AdminSubcommandRouter):
             return
 
         # Per-field perm escalation above the def-set tier, checked after
-        # the verb-level check and before the write (R8.4, R8.5).
+        # the verb-level check and before the write.
         if _perm_rank(spec.perm) > _perm_rank(self._verb_perm("def set")):
             if not self.caller.check_permstring(spec.perm):
                 self.record_outcome(PERM_DENIED, required=spec.perm,
@@ -1230,7 +1207,7 @@ class EntityAdminRouter(AdminSubcommandRouter):
                 )
                 return
 
-        # Kind coercion (reuses the instance-plane helper; R3.8/3.9
+        # Kind coercion (reuses the instance-plane helper;
         # messaging). Deeper validation belongs to the merged reload.
         value, error = coerce_field_value(spec, raw_value)
         if error is not None:
@@ -1242,7 +1219,7 @@ class EntityAdminRouter(AdminSubcommandRouter):
             return
 
         # The resolve → write → reload sequence runs inside the shared
-        # transaction under the serialization lock (R6.6); the write is a
+        # transaction under the serialization lock; the write is a
         # single-field overlay set, and only this field is reported.
         result = self._def_transaction(domain, registry).run(
             token,
@@ -1259,7 +1236,7 @@ class EntityAdminRouter(AdminSubcommandRouter):
             )
             return
         if result.status == OVERLAY_ERROR:
-            # Overlay-write failure: no reload, overlay unchanged (R6.8).
+            # Overlay-write failure: no reload, overlay unchanged.
             self.caller.msg(
                 f"Override write failed: {result.store_error} "
                 "No reload was triggered; the overlay is unchanged."
@@ -1283,7 +1260,7 @@ class EntityAdminRouter(AdminSubcommandRouter):
             return
 
         # Reload failed (validation/parse/IO): live registry is unchanged;
-        # the overlay was rolled back inside the transaction (R6.5).
+        # the overlay was rolled back inside the transaction.
         note = self._audit(
             "def set",
             f"{adapter.entity_key} def {def_key}.{spec.name}: "
@@ -1298,7 +1275,7 @@ class EntityAdminRouter(AdminSubcommandRouter):
 
     def _do_def_reset(self, rest: str):
         """``def reset <key> [field]`` — remove override(s) + serialized
-        validated reload (Requirements 5.5, 5.9, 6.3–6.8, 9.2)."""
+        validated reload."""
         adapter = self.adapter
         parts = (rest or "").split()
         if not parts or len(parts) > 2:
@@ -1332,8 +1309,8 @@ class EntityAdminRouter(AdminSubcommandRouter):
             )
             return
         if result.status == OVERLAY_ERROR:
-            # Covers no-existing-override (R5.9) and unparseable-file
-            # rejection (R5.11): no reload, overlay untouched.
+            # Covers no-existing-override and unparseable-file
+            # rejection: no reload, overlay untouched.
             self.caller.msg(
                 f"{result.store_error} No reload was triggered; "
                 "the overlay is unchanged."
@@ -1380,10 +1357,10 @@ class ValueFirstSetAliasMixin:
     A handful of entities (``@player``, ``@stat``) carry legacy migration
     aliases whose argument order is VALUE-first — ``@player level <N>
     [player]``, ``@stat hp <N> [target]`` — while the unified canonical
-    verb is TARGET-first: ``set <target> <field> <value>`` (Requirement
-    11.5). Both routers previously reimplemented the same ``_dispatch_alias``
-    override + ``_reshape_legacy_set_args`` pair, differing only in two
-    knobs, so the reshape lives here once:
+    verb is TARGET-first: ``set <target> <field> <value>``. Both routers
+    previously reimplemented the same ``_dispatch_alias`` override +
+    ``_reshape_legacy_set_args`` pair, differing only in two knobs, so the
+    reshape lives here once:
 
     - ``_LEGACY_SET_ALIASES`` — the value-first alias spellings this router
       reshapes (others fall straight through to the shared alias path).
@@ -1397,7 +1374,7 @@ class ValueFirstSetAliasMixin:
     Mixed in BEFORE :class:`EntityAdminRouter` so its ``_dispatch_alias``
     wins, reshapes, then delegates to the shared alias path (deprecation
     note → canonical perm check → canonical handler), keeping state, perms,
-    output, and audit identical to the canonical spelling (R11.1, R11.2).
+    output, and audit identical to the canonical spelling.
     """
 
     #: Subclasses list the value-first alias spellings to reshape.

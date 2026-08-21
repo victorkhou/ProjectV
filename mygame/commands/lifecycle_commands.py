@@ -1,33 +1,19 @@
 """
-Player-lifecycle commands — the state-3 (spawning) and state-4 (lobby) flow.
+Player-lifecycle commands — the spawning and lobby flow.
 
-These are the command-driven front end to the ``world.player_lifecycle`` state
-machine. The game is imperative-command-based throughout (no EvMenu anywhere),
-so the spawning/lobby flow follows suit: a small set of commands the player
-issues while their character sits in the SPAWNING or LOBBY state, before they
-Enter the world.
+Command-driven front end to the ``world.player_lifecycle`` state machine.
+The character stays puppeted throughout; ``db.player_state`` gates what the
+player may do. While SPAWNING or LOBBY the game commands refuse via the
+shared :func:`require_in_game` guard.
 
-Model: the character stays PUPPETED throughout (auto-puppet is unchanged), and
-``db.player_state`` gates what the player may do. While SPAWNING or LOBBY the
-player is "not yet in the game" — the game commands (move/attack/build/...)
-refuse via the shared :func:`require_in_game` guard, and combat/tick systems
-treat a non-PLAYING character as not a live participant. The commands here are
-the only way to advance:
-
-    SPAWNING:  ``class <name>``  — pick a class (state 3.2)
-               ``spawn <where>`` — pick a spawn location (state 3.1); once BOTH
-                                   class and location are chosen, advance to LOBBY
-    LOBBY:     ``enter``         — enter the game world (→ PLAYING)   [4.1]
-               ``quit``          — leave (handled by Evennia's quit)  [4.2]
-
-Informational and out-of-world social commands remain available in every state
-(they don't require being deployed): ``look``, ``help``, ``who``, ``score``,
-``map``, ``inventory``, ``message`` (DMs), and ``chat`` (the global channel).
-Tile-scoped ``say`` is gated — a staging player is not on a tile to speak on.
+    SPAWNING:  ``class <name>``  — pick a class
+               ``spawn <where>`` — pick a spawn location; once BOTH are
+                                   chosen, advance to LOBBY
+    LOBBY:     ``enter``         — enter the game world (→ PLAYING)
+               ``quit``          — leave (handled by Evennia's quit)
 
 Wiring these into a live cmdset + disabling the behavioral gate is done at the
-composition root behind the ``LOBBY_FLOW_ENABLED`` flag, so the machinery can
-ship and be verified before the flow is switched on.
+composition root behind the ``LOBBY_FLOW_ENABLED`` flag.
 """
 
 from __future__ import annotations
