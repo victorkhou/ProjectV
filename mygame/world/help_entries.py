@@ -107,12 +107,21 @@ HELP_ENTRY_DICTS = [
 
             # Earning XP
 
-            XP comes from two kinds of activity, and both feed the same level bar:
+            XP comes from two kinds of activity, both feeding the same level bar:
 
-            Building your base — the early game. You earn XP for completing a construction (|c+30|n), completing an upgrade (|c+30|n), training an agent (|c+40|n), and each manual |wharvest|n yield (|c+1|n). This is renewable-but-modest income designed to carry a brand-new commander to roughly |clevel 8-9|n through base-building alone.
-            Combat — the long game. Defeating a player (|c+100|n), destroying a building (|c+50|n), and wrecking an enemy base's |cHeadquarters|n (|c+300|n) are the big earners. Combat is where the levels past the early game come from — raiding |coutposts|n is the reliable source (|whelp outposts|n).
+            Base-building — the early game. Modest but renewable; carries a new commander to roughly |clevel 8-9|n:
+            Construction complete — |c+30|n XP
+            Upgrade complete — |c+30|n XP
+            Agent trained — |c+40|n XP
+            Manual harvest — |c+1|n XP per yield
 
-            Losing a fight costs you XP (|c-50|n) and can drop your level — but see Ranks below: your rank never falls even if your level does.
+            Combat — the long game. Where levels past the early game come from; raiding |coutposts|n is the reliable source (|whelp outposts|n):
+            Defeating a player — |c+100|n XP
+            Destroying a building — |c+50|n XP
+            Destroying an enemy HQ — |c+300|n XP
+            Losing a fight — |c-50|n XP (can drop your level)
+
+            Your rank never falls even if your level does — see Ranks below.
 
             # The Curve
 
@@ -139,10 +148,10 @@ HELP_ENTRY_DICTS = [
 
             # What Levels & Ranks Unlock
 
-            Buildings gate on level — higher-tier structures (Turret, Barracks, the research labs, Relay, Medbay) unlock as you climb. |wbuild|n with no argument always lists what you can build right now, and |whelp buildings|n shows the full tier list. Some buildings also need a deed — proof of action, like destroying an outpost — on top of the level (|whelp outposts|n).
-            Agent capacity rises with rank — a higher rank lets you command more agents (|whelp agents|n). Your agents also can't out-level you: an agent's effective level is capped at your own.
-            New planets open at rank thresholds — |cForge|n at Staff Sergeant, |cTundra|n and |cSpace|n at Captain, |cInferno|n at Colonel, the |cCitadel|n at General.
-            |cTechnologies|n gate on rank |wand|n on which lab you own — each of the four labs hosts one tech tree and you may own only one lab per planet. The earliest techs open at Corporal, with stronger ones spaced upward (|whelp technology|n).
+            Buildings gate on level — higher-tier structures unlock as you climb. |wbuild|n with no argument lists what you can build now; |whelp buildings|n shows the full tier list. Some buildings also need a deed (|whelp outposts|n).
+            Agent capacity rises with rank — more agents under your command. Your agents can't out-level you: an agent's effective level is capped at yours (|whelp agents|n).
+            New planets open at rank thresholds — |cForge|n at Staff Sergeant, |cTundra|n/|cSpace|n at Captain, |cInferno|n at Colonel, |cCitadel|n at General.
+            Technologies gate on rank and lab ownership — each of four labs hosts one tech tree. Earliest techs open at Corporal, stronger ones spaced upward (|whelp technology|n).
 
             # See Also
 
@@ -356,9 +365,10 @@ HELP_ENTRY_DICTS = [
 
             # Building & Upgrading
 
-            Stand on a tile and type |wbuild <type>|n (by abbreviation like |wEX|n or full name like |wextractor|n). Stay on the tile while it builds — or let an |cEngineer|n agent finish it. |wbuild|n with no argument lists what you can build right now.
-
-            |wupgrade|n improves the building you're standing on; costs and times climb steeply. A building being upgraded is |woffline and does not function|n until it finishes — its turret won't fire, its Armory won't craft, its Extractor won't harvest. Upgrading uses active-presence: stay on the tile (or assign an |cEngineer|n). If you step away it pauses — typing |wupgrade|n again resumes it at its saved progress with no extra cost, and |wupgrade cancel|n aborts it and refunds the cost. |wrepair|n restores a damaged building over time, like construction — stay on the tile or assign an |cEngineer|n. Each tick restores 5% of max HP and costs 5% of everything invested in the building (its build cost plus any upgrades), so a heavily-upgraded building costs more to patch up; buildings don't heal on their own, and one knocked offline comes back online as soon as it starts healing. |wdemolish|n tears one down for a partial refund (40% at L1 up to 80% at L5).
+            |wbuild <type>|n — construct a building (by abbreviation like |wEX|n or full name like |wextractor|n). Stay on the tile or assign an |cEngineer|n. |wbuild|n alone lists available types.
+            |wupgrade|n — improve the building you're on; costs and times climb steeply. Building goes offline until done. Pause by stepping away; resume with |wupgrade|n again; cancel with |wupgrade cancel|n (full refund).
+            |wrepair|n — restore a damaged building over time. Stay on the tile or assign an |cEngineer|n. Each tick restores 5% HP and costs 5% of total investment. Buildings don't self-heal; one knocked offline comes back online as soon as healing starts.
+            |wdemolish|n — tear down for a partial refund: 40% at L1, 80% at L5.
 
             # Building Types
 
@@ -417,11 +427,21 @@ HELP_ENTRY_DICTS = [
 
             # Slots
 
-            head eyes face torso arms hands legs feet back — armor and utility. weapon_melee — your melee weapon, used by |wattack|n. weapon_ranged — your ranged weapon, used by |wtarget|n/|wshoot|n/|wreload|n. accessory — a utility item (scope, hauler pack). One item per slot; equipping a new one swaps out the old. A melee weapon auto-equips to weapon_melee and a ranged weapon to weapon_ranged, so you can carry one of each at once.
+            Armor/utility: head, eyes, face, torso, arms, hands, legs, feet, back
+            Melee weapon: weapon_melee — used by |wattack|n
+            Ranged weapon: weapon_ranged — used by |wtarget|n / |wshoot|n / |wreload|n
+            Accessory: one utility slot (scope, hauler pack)
+
+            One item per slot; equipping a new one swaps out the old. Melee and ranged weapons auto-equip to their respective slots, so you carry one of each at once.
 
             # Stat Bonuses
 
-            Beyond armor (less incoming damage), gear can grant damage bonuses, move speed, sight range, carry capacity, and max HP. Passive bonuses from worn armor and accessories stack. Weapon damage is different: each attack uses only the weapon for that action — weapon_melee for |wattack|n or weapon_ranged for |wshoot|n — plus shared non-weapon bonuses and that weapon's own affixes. Your other equipped weapon never adds its damage or affixes. |wequipment|n shows shared bonuses and separate effective melee/ranged damage instead of an impossible combined number. Max-HP gear raises your health ceiling — equipping it adds headroom (it doesn't heal you on the spot), and taking it off lowers the ceiling, trimming any HP above the new max.
+            Armor: reduces incoming damage, stacks across all worn slots.
+            Weapons: each attack uses only that slot's weapon + shared non-weapon bonuses. Your other equipped weapon never contributes its damage or affixes.
+            Other stats: move speed, sight range, carry capacity, max HP. Passive bonuses from armor and accessories stack.
+            Max-HP gear raises your health ceiling — equipping adds headroom (doesn't heal), removing lowers the ceiling and trims any HP above the new max.
+
+            |wequipment|n shows shared bonuses and separate effective melee/ranged damage.
 
             Looted and crafted gear is rolled — a quality tag like |c[Rare · 73%]|n on the name tells you how good this copy is, and |wlook <item>|n shows each stat's roll. See |whelp loot|n and |whelp rarity|n.
 
@@ -465,13 +485,13 @@ HELP_ENTRY_DICTS = [
 
             # Attacking
 
-            |wattack <target>|n (|wa|n) — attack a player, building, or agent in reach with your equipped melee weapon. You can target anything within your reach — whichever is greater of what you can see ('scan') and your melee weapon's range — so 'attack guard' picks the nearest matching foe within reach. In practice a melee weapon only reaches a foe on your same tile (close in first — an adjacent enemy is not yet in melee reach). Buildings can be meleed from an adjacent tile (to break a wall by hand). To fight at range instead, equip a ranged weapon and use |wtarget|n/|wshoot|n below — melee and ranged live in separate slots, so you can carry both at once. Equip a weapon first (|whelp equipment|n).
+            |wattack <target>|n (|wa|n) — melee-attack a player, building, or agent with your equipped melee weapon. Melee only reaches a foe on your same tile (close in first — an adjacent enemy is not in melee reach). Buildings can be meleed from an adjacent tile. To fight at range, use |wtarget|n/|wshoot|n below — melee and ranged live in separate slots, so you carry both at once. Equip a weapon first (|whelp equipment|n).
 
             # Ranged: Target & Shoot
 
             With a ranged weapon you can fight at a distance in two ways:
-            |wtarget <enemy>|n (|wlock|n) — lock onto an enemy in your weapon's range. It takes a few ticks to lock (faster with better gear); you're told when it completes. A lock is a held aim — |rhold still while it locks, because moving in any direction breaks it|n. Once locked, your shot is far more accurate (|c90%|n baseline) and keeps hitting the enemy even as they move — until they leave your range (or you move).
-            |wshoot|n (|wfire|n) — fire your ranged weapon. With a locked target, plain |wshoot|n fires at them. Otherwise |wshoot <n/s/e/w>|n fires in a direction and hits the first thing in the line of fire, at lower accuracy (|c70%|n baseline). You can only hit a specific player by locking onto them first. A directional shot breaches cover — it damages a building (open or closed) in the line of fire, so it's how you shoot down a |cWall|n; and if you're inside a building, any direction fires at the structure around you, letting you shoot your way out. Every shot spends ammo whether it hits or misses.
+            |wtarget <enemy>|n (|wlock|n) — lock onto an enemy in range. Takes a few ticks (faster with better gear). |rHold still while it locks — moving breaks it.|n Once locked, shots are far more accurate (|c90%|n baseline) and track the target until they leave range or you move.
+            |wshoot|n (|wfire|n) — fire your ranged weapon. With a lock, plain |wshoot|n fires at the locked target. Without one, |wshoot <n/s/e/w>|n fires in a direction and hits the first thing in line at lower accuracy (|c70%|n baseline). A directional shot breaches cover — it damages buildings (open or closed) in the line of fire, and if you're inside a building it fires at the structure around you, letting you shoot your way out. Every shot spends ammo whether it hits or misses.
 
             # Timing: Instant vs. Ticked
 
@@ -487,7 +507,9 @@ HELP_ENTRY_DICTS = [
 
             # Ammo & Reloading
 
-            Ranged weapons feed their ammo one of two ways. Most (like the |cassault rifle|n) fire straight from your resource stockpile — each shot spends a little Iron, Energy, or similar, so there's nothing to reload; just keep the resource stocked. Magazine weapons (like the |cservice rifle|n) fire from a loaded magazine and run dry: |wreload|n refills the magazine from the matching ammo in your supply bag (make it at an |cArmory|n or |cResearch Lab|n). |wequipment|n shows a magazine weapon's loaded count.
+            Ranged weapons feed ammo one of two ways:
+            Resource ammo: most weapons (like the |cassault rifle|n) spend resources per shot (Iron, Energy, etc.) — no reload needed, just keep the resource stocked.
+            Magazine weapons: some (like the |cservice rifle|n) fire from a loaded magazine and run dry. |wreload|n refills from matching ammo in your supply bag (craft it at an |cArmory|n or |cResearch Lab|n). |wequipment|n shows the loaded count.
 
             # Armor & Defense
 
@@ -495,7 +517,10 @@ HELP_ENTRY_DICTS = [
 
             # Buildings as Cover
 
-            A melee attacker only reaches a foe on their same tile — an enemy standing on the next tile over is not yet in reach, so someone has to close in first (guards chase onto your tile; you step onto theirs). Being inside a building adds ranged cover on top of this: Ranged fire and turrets depend on the building — a closed building fully shelters the occupant from ranged attacks, while an open one (like the raidable buildings in enemy bases) does not — you can still be shot inside it. So ducking into an open enemy structure stops nothing ranged, and melee still needs the same tile either way. A closed building still protects the person inside — but the building itself can be shot down: a directional |wshoot|n breaches the structure (the round hits the wall, not the occupant), which is how you knock down a |cWall|n or a sealed structure from range.
+            Closed building = full ranged cover (occupant can't be shot inside).
+            Open building = no ranged cover (you can still be shot inside).
+            Directional |wshoot|n breaches any building — the round hits the structure, not the occupant. This is how you knock down a |cWall|n or sealed structure from range.
+            Melee always requires same tile regardless of cover.
 
             # Guards
 
@@ -511,7 +536,13 @@ HELP_ENTRY_DICTS = [
 
             # Death & Recovery
 
-            Death is costly: you |rlose everything you're carrying|n — all equipped gear, your supply bag, and the resources on you (resources safely |wdeposit|n-ed in an |cHQ|n or |cVault|n are untouched — death strips you, not your base). Your safety net is a |cRespawn Beacon|n (|wbuild RB|n): it salvages a fraction of what you were carrying into a stash — |c55%|n at level 1, rising to |c95%|n at level 5, so |wupgrade|n it to keep more. With no beacon on the planet you died on, the loss is total. When you respawn at the beacon, |wcollect|n (|wrecover|n) pulls your salvaged gear back into your inventory and your resources up to your carry weight (the rest waits in the beacon). Losing also costs XP.
+            Death is costly:
+            You lose all equipped gear, supplies, and resources on your person.
+            Resources in storage (|cHQ|n / |cVault|n) are safe — death strips you, not your base.
+            A |cRespawn Beacon|n (|wbuild RB|n) salvages a fraction: |c55%|n at L1, up to |c95%|n at L5. Upgrade it to keep more.
+            No beacon on the planet you died on = total loss.
+            |wcollect|n (|wrecover|n) at the beacon retrieves salvaged gear and resources up to carry weight (the rest waits in the beacon).
+            Death also costs XP.
 
             # After a Fight
 
