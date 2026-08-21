@@ -67,6 +67,19 @@ def _install_systems(systems):
     services.get_systems().update(systems)
 
 
+class _FakeDirectiveSystem:
+    """Minimal directive_system exposing get_progress_view for deploy tests."""
+
+    def __init__(self, steps, muted=False, progress=0):
+        self._steps = steps
+        self._muted = muted
+        self._progress = progress
+
+    def get_progress_view(self, player):
+        return {"steps": self._steps, "muted": self._muted,
+                "progress": self._progress, "total": len(self._steps)}
+
+
 # -------------------------------------------------------------- #
 #  Fakes
 # -------------------------------------------------------------- #
@@ -682,6 +695,85 @@ class TestCmdDeploy(unittest.TestCase):
         _run(CmdDeploy, c, "")
         self.assertEqual(c.db.combat_timer_expires, 0)
         self.assertEqual(c.db.combat_lockout_tick, 0)
+
+    def test_deploy_points_at_current_directive(self):
+        """On deploy, the player is pointed at their current objective (a new
+        player's first move is 'Build your Headquarters')."""
+        c = _Caller(state=PLAYER_STATE_LOBBY)
+        c.db.player_class = "vanguard"
+        c.db.pending_spawn_choice = "hq"
+        _install_systems({"directive_system": _FakeDirectiveSystem(
+            steps=[{"description": "Build your Headquarters", "current": True}],
+            muted=False,
+        )})
+        _run(CmdDeploy, c, "")
+        self.assertTrue(
+            any("Build your Headquarters" in m for m in c._messages),
+            c._messages,
+        )
+        self.assertTrue(any("Objective" in m for m in c._messages))
+
+    def test_deploy_no_directive_prompt_when_muted(self):
+        c = _Caller(state=PLAYER_STATE_LOBBY)
+        c.db.player_class = "vanguard"
+        c.db.pending_spawn_choice = "hq"
+        _install_systems({"directive_system": _FakeDirectiveSystem(
+            steps=[{"description": "Build your Headquarters", "current": True}],
+            muted=True,
+        )})
+        _run(CmdDeploy, c, "")
+        self.assertFalse(any("Objective" in m for m in c._messages), c._messages)
+
+    def test_deploy_no_directive_prompt_when_chain_complete(self):
+        c = _Caller(state=PLAYER_STATE_LOBBY)
+        c.db.player_class = "vanguard"
+        c.db.pending_spawn_choice = "hq"
+        _install_systems({"directive_system": _FakeDirectiveSystem(
+            steps=[{"description": "Build your HQ", "current": False}],
+            muted=False,
+        )})
+        _run(CmdDeploy, c, "")
+        self.assertFalse(any("Objective" in m for m in c._messages), c._messages)
+
+    def test_deploy_does_not_re_announce_once_underway(self):
+        """deploy_from_lobby also runs on every death-respawn and re-login, so
+        the hint is first-deploy only: a player mid-chain must not be nagged
+        with the objective line every time they die."""
+        c = _Caller(state=PLAYER_STATE_LOBBY)
+        c.db.player_class = "vanguard"
+        c.db.pending_spawn_choice = "hq"
+        _install_systems({"directive_system": _FakeDirectiveSystem(
+            steps=[{"description": "Build your HQ", "current": False},
+                   {"description": "Build an Extractor", "current": True}],
+            muted=False,
+            progress=1,  # one step already banked
+        )})
+        _run(CmdDeploy, c, "")
+        self.assertEqual(c.db.player_state, PLAYER_STATE_PLAYING)  # still deploys
+        self.assertFalse(any("Objective" in m for m in c._messages), c._messages)
+
+    def test_deploy_hint_skipped_for_a_blank_description(self):
+        c = _Caller(state=PLAYER_STATE_LOBBY)
+        c.db.player_class = "vanguard"
+        c.db.pending_spawn_choice = "hq"
+        _install_systems({"directive_system": _FakeDirectiveSystem(
+            steps=[{"description": "", "current": True}], muted=False,
+        )})
+        _run(CmdDeploy, c, "")
+        self.assertFalse(any("Objective" in m for m in c._messages), c._messages)
+
+    def test_deploy_survives_an_exploding_directive_system(self):
+        class _Boom:
+            def get_progress_view(self, player):
+                raise RuntimeError("directive store offline")
+
+        c = _Caller(state=PLAYER_STATE_LOBBY)
+        c.db.player_class = "vanguard"
+        c.db.pending_spawn_choice = "hq"
+        _install_systems({"directive_system": _Boom()})
+        _run(CmdDeploy, c, "")
+        # A broken hint must never cost the player their deploy.
+        self.assertEqual(c.db.player_state, PLAYER_STATE_PLAYING)
 
     def test_missing_planet_room_cancels_deploy(self):
         c = _Caller(state=PLAYER_STATE_LOBBY, classes=_CLASSES)
