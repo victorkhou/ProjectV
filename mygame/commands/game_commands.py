@@ -3433,12 +3433,27 @@ class CmdScore(GameCommand):
         y = getattr(caller.db, "coord_y", "?")
         planet = getattr(caller.db, "coord_planet", "?")
 
-        # Build display line
+        # Build display line. The XP figures come from ONE source (xp_progress)
+        # so the level line and the bar beneath it can never disagree: the level
+        # it resolves is also the level labelled here, and its in-level
+        # numerator/denominator are what the bar is drawn from. Falls back to
+        # the plain total (and RankSystem's absolute to-next figure) at max level
+        # or when the curve can't be resolved.
+        from world.ui_formatters import xp_progress, format_xp_bar
+
+        prog = xp_progress(caller)
         rank_display = rank_name.replace("_", " ")
-        xp_line = f"  Level {level} — {rank_display} | XP: {xp}"
-        if xp_to_next_level is not None and xp_to_next_level > 0:
-            next_xp = xp + xp_to_next_level
-            xp_line += f"/{next_xp} to Level {level + 1}"
+        if prog is not None:
+            level = prog["level"]
+            xp_line = (
+                f"  Level {level} — {rank_display} | "
+                f"XP: {prog['into_level']}/{prog['level_span']} "
+                f"to Level {level + 1}"
+            )
+        else:
+            xp_line = f"  Level {level} — {rank_display} | XP: {xp}"
+            if xp_to_next_level is not None and xp_to_next_level > 0:
+                xp_line += f"/{xp + xp_to_next_level} to Level {level + 1}"
 
         kills = int(getattr(caller.db, "kills", 0) or 0)
         deaths = int(getattr(caller.db, "deaths", 0) or 0)
@@ -3446,6 +3461,10 @@ class CmdScore(GameCommand):
         lines = [
             f"|w=== {name} ===|n",
             xp_line,
+        ]
+        if prog is not None:
+            lines.append(f"  {format_xp_bar(prog['percent'])}")
+        lines += [
             f"  HP: {hp}/{hp_max}  |  Kills: {kills}  |  Deaths: {deaths}",
             f"  Position: ({x}, {y}) on {planet}",
         ]
