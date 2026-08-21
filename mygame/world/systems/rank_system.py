@@ -31,6 +31,7 @@ from world.constants import (
     MAX_LEVEL,
     NUM_RANKS,
     RANK_BANDS,
+    XP_GAIN_SUPPRESSED_REASONS,
 )
 
 if TYPE_CHECKING:
@@ -132,7 +133,7 @@ class RankSystem(BaseSystem):
     #  Public API
     # ------------------------------------------------------------------ #
 
-    def award_xp(self, player: Any, amount: int, reason: str = "") -> None:
+    def award_xp(self, player: Any, amount: int, reason: str = "") -> int:
         """Award Combat XP and check for level-up / promotion.
 
         Delegates the XP mutation to the entity's ``CombatEntity.award_xp``
@@ -141,9 +142,13 @@ class RankSystem(BaseSystem):
         The outgrown-planet throttle (§4) scales XP by the player's
         outgrown_factor for their current planet — a player who COULD graduate
         but is camping earns less XP, incentivizing progression up the ladder.
+
+        Returns the amount ACTUALLY awarded (post-throttle), or 0 when nothing
+        was awarded, so a caller that reports the gain to the player can quote
+        the real figure rather than its pre-throttle request.
         """
         if amount <= 0:
-            return
+            return 0
         # Apply the outgrown-planet XP throttle (§4).
         from world.utils import outgrown_factor
         factor = outgrown_factor(player)
@@ -155,7 +160,17 @@ class RankSystem(BaseSystem):
             "Awarded %d XP to %s (reason: %s). Total: %d",
             amount, getattr(player, "key", "?"), reason, player.db.combat_xp,
         )
+        # Surface the gain to the player (feel the bar fill), but only for the
+        # sources that are otherwise SILENT. Reasons whose own notification
+        # already quotes the XP are suppressed here (see
+        # XP_GAIN_SUPPRESSED_REASONS) — a second line would double-report, and
+        # would disagree whenever the outgrown throttle has scaled the award.
+        # Fires before _sync_level so "+N XP" reads just above any "LEVEL UP!"
+        # banner the sync then emits.
+        if reason not in XP_GAIN_SUPPRESSED_REASONS:
+            self.notify(player, "xp_gain", amount=amount, reason=reason or None)
         self._sync_level(player, old_level)
+        return amount
 
     def deduct_xp(self, player: Any, amount: int) -> None:
         """Deduct Combat XP (floor at 0) and check for level-down / demotion.
@@ -291,6 +306,106 @@ class RankSystem(BaseSystem):
                 })
         return unlocked
 
+    #: Most buildings to name in a level-up unlock list before collapsing the
+    #: rest into an "…and N more" tail. A big single award (a fortress kill can
+    #: jump 13 levels) would otherwise bury the banner in unlock lines.
+    _MAX_UNLOCKS_LISTED = 4
+
+    def _check_building_unlocks(
+        self, player: Any, old_level: int, new_level: int
+    ) -> list[str]:
+        """Return buildings *player* can ACTUALLY build now, newly opened by
+        crossing into ``new_level``.
+
+        A building's ``rank_requirement`` is a LEVEL gate, but it is only one of
+        the gates ``BuildingSystem._validate_construction`` enforces — so a name
+        is only listed here when the player also satisfies the other *durable*
+        gates, otherwise the level-up would promise something the build command
+        immediately refuses:
+
+        * ``unlock_deed`` / ``unlock_deed_count`` — deed-gated buildings (the
+          Barracks, the four labs, the Blacksmith, the Refinery) are omitted
+          until the player holds the deeds.
+        * ``requires_hq`` — a player with no HQ cannot build these at all, so
+          they are omitted (the HQ directive is guiding them there anyway).
+
+        Per-tile gates (terrain, per-planet caps) are deliberately NOT consulted:
+        they depend on *where* the player builds, not on whether the building is
+        available to them, and a tile-specific refusal is not a broken promise.
+
+        Sorted by gate level then name for a stable read, and capped at
+        :attr:`_MAX_UNLOCKS_LISTED` with an "…and N more" tail. Returns ``[]``
+        when the registry is unavailable. Never raises — a malformed
+        ``rank_requirement`` skips that entry rather than losing the level-up
+        notification (this runs inside the XP-award path, where the XP has
+        already been applied).
+        """
+        try:
+            registry = getattr(self, "registry", None)
+            buildings = getattr(registry, "buildings", None)
+            if not buildings:
+                return []
+
+            deeds = getattr(getattr(player, "db", None), "deeds", None) or {}
+            if not isinstance(deeds, dict):
+                deeds = {}
+
+            newly: list[tuple[int, str]] = []
+            has_hq: bool | None = None  # resolved lazily, at most once
+            for bdef in buildings.values():
+                try:
+                    req = int(getattr(bdef, "rank_requirement", 1) or 1)
+                except (TypeError, ValueError):
+                    continue  # malformed gate — skip this entry, not the banner
+                if not (old_level < req <= new_level):
+                    continue
+                # Deed gate: omit what the player cannot yet build.
+                deed = getattr(bdef, "unlock_deed", None)
+                if deed:
+                    try:
+                        required = int(getattr(bdef, "unlock_deed_count", 1) or 1)
+                    except (TypeError, ValueError):
+                        required = 1
+                    if int(deeds.get(deed, 0) or 0) < required:
+                        continue
+                # HQ gate: a player without an HQ cannot build these at all.
+                if getattr(bdef, "requires_hq", False):
+                    if has_hq is None:
+                        has_hq = self._player_has_hq(player)
+                    if not has_hq:
+                        continue
+                newly.append((req, str(getattr(bdef, "name", None) or "?")))
+
+            if not newly:
+                return []
+
+            names = [name for _req, name in sorted(newly)]
+            if len(names) > self._MAX_UNLOCKS_LISTED:
+                extra = len(names) - self._MAX_UNLOCKS_LISTED
+                names = names[: self._MAX_UNLOCKS_LISTED]
+                names.append(f"…and {extra} more")
+            return names
+        except Exception:  # noqa: BLE001 - never lose the level-up notification
+            logger.exception("Building-unlock check failed; omitting the list.")
+            return []
+
+    @staticmethod
+    def _player_has_hq(player: Any) -> bool:
+        """Return True if *player* owns a completed HQ on their current planet.
+
+        Reuses the shared ``owner_has_active_hq`` predicate. Falls back to
+        ``True`` when the query is unavailable (isolated tests with no building
+        roster) so the unlock list is not suppressed purely by a missing fake.
+        """
+        try:
+            from world.utils import owner_has_active_hq
+            if not hasattr(player, "get_buildings"):
+                return True  # cannot tell — do not suppress
+            planet = getattr(getattr(player, "db", None), "coord_planet", None)
+            return bool(owner_has_active_hq(player, planet))
+        except Exception:  # noqa: BLE001
+            return True
+
     # ------------------------------------------------------------------ #
     #  Agent cap
     # ------------------------------------------------------------------ #
@@ -333,12 +448,21 @@ class RankSystem(BaseSystem):
             rank_name = rank_def.name.replace("_", " ") if rank_def else f"Rank {new_rank_num}"
             band_low, _ = level_range_for_rank(new_rank_num)
             sub = new_level - band_low + 1
-            # Check for planet unlocks at this new level.
+            # Check for planet + building unlocks at this new level, so the
+            # level-up message can name the concrete "you can now build X"
+            # payoff. Only announce on a level GAIN — a level drop (death XP
+            # loss) is not celebratory and unlocks nothing new.
             planets_unlocked = self._check_planet_unlocks(old_level, new_level)
+            buildings_unlocked = (
+                self._check_building_unlocks(player, old_level, new_level)
+                if new_level > old_level else []
+            )
             self.notify(
                 player, "rank_level_up",
                 level=new_level, rank_name=rank_name, sub=sub,
+                old_level=old_level,
                 planets_unlocked=planets_unlocked,
+                buildings_unlocked=buildings_unlocked,
             )
 
         # Fire rank events if rank boundary crossed
