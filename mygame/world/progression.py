@@ -1,33 +1,15 @@
 """
-Shared progression curve helper for the RTS Combat Overworld game.
+Shared progression curve — single source of truth for level->XP thresholds.
 
-Pure-Python module-level helper that holds the precomputed level->XP
-threshold table. This is the single source of truth for the XP curve so
-that both ``CombatEntity`` (``typeclasses/combat_entity.py``) and
-``RankSystem`` (``world/systems/rank_system.py``) derive levels from one
-place without duplicating the curve logic.
+Hybrid curve: per-level XP delta starts at ``xp_curve_base_delta`` (40) for
+L1→L2, grows by ``xp_curve_early_ratio`` (+20%) per level through the knee
+(L20), then by ``xp_curve_late_ratio`` (+5%) to MAX_LEVEL (100).
 
-**Hybrid curve (early-game rebalance R14/D11).** The per-level XP delta is
-anchored at ``xp_curve_base_delta`` (40) for L1→L2, grows by
-``xp_curve_early_ratio`` (+20%) per level through ``xp_curve_knee_level``
-(L20), then by ``xp_curve_late_ratio`` (+5%) per level to ``MAX_LEVEL``
-(100). ranks.yaml ``xp_threshold`` values do NOT feed this curve. Pure +20%
-compounding to L100 is deliberately avoided (a ×69M growth factor — a
-mathematical wall around L45–50 given roughly flat XP income); the hybrid
-lands L100 at ~1.09M XP (~360 hours at sustained combat income). The L2
-delta is fixed at 40 XP — all economy-XP calibration is tuned against it.
+``build_thresholds(ranks)`` reads curve tunables from the live balance config;
+the *ranks* argument triggers a rebuild but supplies no threshold data.
 
-``build_thresholds(ranks)`` keeps its signature (every composition root and
-hot-reload path calls it with ``DataRegistry.ranks``) but reads curve
-TUNABLES from the live balance config when available — the *ranks* argument
-only trips a rebuild; it supplies no thresholds.
-
-This module must stay free of Evennia imports and must not import
-``RankSystem`` at module load time. To avoid a circular import
-(``rank_system`` -> ``progression`` -> ``rank_system``), the level->rank
-rule (``rank_from_level``) is imported lazily inside ``rank_for_level``;
-only ``world.constants`` is imported at the top level.
-
+Must stay free of Evennia imports. ``rank_from_level`` is imported lazily
+inside ``rank_for_level`` to avoid circular imports with ``rank_system``.
 """
 
 from __future__ import annotations
@@ -75,11 +57,10 @@ def xp_delta(level: int, *, base_delta: int | None = None,
              early_ratio: float | None = None,
              late_ratio: float | None = None,
              knee_level: int | None = None) -> int:
-    """XP needed to go from ``level - 1`` to ``level`` (hybrid curve, D11).
+    """XP needed to go from ``level - 1`` to ``level``.
 
     ``delta(n) = base × early^(n−2)`` for ``n <= knee``;
-    ``delta(n) = delta(knee) × late^(n−knee)`` beyond it. The L21 delta
-    derives from ``delta(20)`` so there is no discontinuity at the knee.
+    ``delta(n) = delta(knee) × late^(n−knee)`` beyond it.
     Level 1 costs 0 (the starting level).
     """
     if level <= 1:
@@ -95,16 +76,11 @@ def xp_delta(level: int, *, base_delta: int | None = None,
 def build_thresholds(ranks: Any = None) -> list[int]:
     """Build and cache the level->XP threshold table from the hybrid formula.
 
-    The *ranks* argument is accepted for signature compatibility with every
-    composition-root / hot-reload call site (``build_thresholds(registry
-    .ranks)``) but supplies no threshold data — the curve is the
-    R14/D11 formula, parameterized by the live balance tunables
-    (``xp_curve_base_delta`` / ``early_ratio`` / ``late_ratio`` /
-    ``knee_level``). Rank definitions carry only names/agent-caps/planet
-    access; rank membership derives from ``RANK_BANDS``.
+    The *ranks* argument is accepted for signature compatibility but supplies
+    no threshold data — the curve is parameterized by the live balance tunables.
 
     Idempotent for fixed tunables. Call once at server start and again on
-    hot-reload (a balance retune of the curve then takes effect).
+    hot-reload.
 
     Returns:
         The newly built threshold table (also cached module-side).

@@ -94,19 +94,10 @@ def resting_activity_status(agent: Any) -> str:
     """Return the *resting* activity status for *agent* — what it shows when
     stationed and not mid-action.
 
-    The single authority for the resting status: a pure function of the agent's
-    persistent state (incapacitated / reserve / role / role_target), so no
-    caller has to guess it and no two writers can disagree. The movement engine
-    (``NPC.advance_movement``) knows nothing about roles, so it calls this on
-    arrival rather than hardcoding ``"Idle"`` — otherwise an engineer at a
-    producing Armory reads "Idle", having no per-tick status writer of its own.
+    Pure function of the agent's persistent state (incapacitated / reserve /
+    role / role_target). Transient per-tick statuses supersede this default.
 
-    Transient, moment-to-moment statuses (``"Harvesting Wood"``,
-    ``"Patrol blocked — retrying"``, ``"Delivering ..."``) are NOT resting
-    statuses: the role scripts set those imperatively each tick, after
-    movement, so they naturally supersede this default while the agent is
-    actively doing something. Precedence (highest first):
-
+    Precedence (highest first):
         incapacitated > reserve > (role at a building) > (army role) > idle
     """
     from world.constants import (
@@ -151,12 +142,8 @@ def resting_activity_status(agent: Any) -> str:
 def coords_of(entity: Any) -> tuple[int, int, str | None] | None:
     """Return *entity*'s overworld coordinates as ``(x, y, planet)``, or None.
 
-    The single coordinate-read implementation, and the only place the defensive
-    nested-getattr read belongs — every other site calls it. Returns None when
-    the entity has no ``db`` handler or either coordinate is unset; never raises.
-    ``planet`` is the stored ``coord_planet`` or None. Values come back as
-    stored: every write path int-coerces via ``place_on_tile``, so x/y are ints
-    in practice.
+    Returns None when the entity has no ``db`` handler or either coordinate is
+    unset; never raises.
     """
     db = getattr(entity, "db", None)
     if db is None:
@@ -179,14 +166,9 @@ def get_coords(obj: Any) -> tuple[int, int] | None:
 def place_on_tile(obj: Any, room: Any, x: Any, y: Any) -> None:
     """Stamp ``obj``'s tile coords and register it in ``room``'s coordinate index.
 
-    The shared spawn-placement step every drop/agent/guard/building creation
-    path repeats: set ``obj.db.coord_x``/``coord_y`` (int-coerced) and — because
-    ``at_object_receive`` fired during ``create_object`` while the coords were
-    still ``None`` — add the object to ``room.coord_index`` now that they are
-    set. Falls back to the ``attributes`` handler for objects without a ``db``
-    proxy, and no-ops the index step when the room carries no ``coord_index``.
-    Callers keep their own None/validity and tile-capacity checks; this only
-    performs the write.
+    Int-coerces x/y, writes to ``db`` (or ``attributes`` fallback), and adds
+    the object to ``room.coord_index``. No-ops the index step when the room
+    has no ``coord_index``. Callers handle validity/capacity checks.
     """
     ix, iy = int(x), int(y)
     if hasattr(obj, "db"):
@@ -508,8 +490,7 @@ def find_linkdead_characters() -> list:
     """Return every character persisted in the LINKDEAD state (or ``[]``).
 
     The single enumeration of linkdead characters, shared by the tick-loop grace
-    expiry (``GameTickScript._process_linkdead_expiry``) and the ``who`` roster
-    (``CmdWho._append_linkdead_rows``) — they hold no session, so the
+    expiry and the ``who`` roster — they hold no session, so the
     online-players roster misses them and both callers must search the DB.
 
     Correctness note (the reason this is a function, not an inline ORM filter):
@@ -556,7 +537,7 @@ def get_player_level(entity: Any, default: int = 1) -> int:
 
     Prefers ``db.level``. Falls back to the legacy ``db.rank_level`` (a 1-12
     rank number) by mapping it to the first level of that rank's band via
-    ``RANK_BANDS`` (R14.5: band widths vary per rank, so the mapping must go
+    ``RANK_BANDS`` (band widths vary per rank, so the mapping must go
     through the table); a ``rank_level`` already above the rank range is
     treated as an actual level. Returns ``default`` when the entity has no
     ``db`` or neither attribute is set.
@@ -607,15 +588,12 @@ def award_player_xp(player: Any, amount: int, reason: str = "") -> bool:
 
 
 def get_tech_bonus(player: Any, key: str, default: float = 0.0) -> float:
-    """Return *player*'s researched-tech bonus for *key* (R13.3).
+    """Return *player*'s researched-tech bonus for *key*.
 
-    Reads ``db.tech_bonuses`` — the cumulative bonus dict written by
-    ``TechLabSystem._apply_tech_effect`` when research completes. The single
-    reader shared by every consumer path (CombatEngine damage/armor, building
-    hp_max, FogOfWar sight, production), so "how tech bonuses are read" cannot
-    drift between them. Returns *default* when the player has no ``db``, no
-    bonuses, or a non-numeric value; ``production_multiplier`` callers should
-    pass ``default=1.0``.
+    Reads ``db.tech_bonuses`` — the cumulative bonus dict written when research
+    completes. Returns *default* when the player has no ``db``, no bonuses, or
+    a non-numeric value; ``production_multiplier`` callers should pass
+    ``default=1.0``.
     """
     db = getattr(player, "db", None)
     if db is None:
@@ -761,8 +739,7 @@ def _aura_owning_player(entity: Any) -> Any | None:
 
     A player is its own owner; a player-owned unit (agent) resolves through
     its ``db.owner`` — so an owner's AGENT standing on the aura tile benefits
-    on the owner's behalf, mirroring ``CombatEngine._owning_player``'s
-    attribution for tech bonuses and kills. Callers with a richer resolver
+    on the owner's behalf. Callers with a richer resolver
     (e.g. the combat engine, which additionally excludes enemy-NPC guards)
     inject their own via ``resolve_owner``.
     """
@@ -965,23 +942,10 @@ def is_owner(caller: Any, owner: Any) -> bool:
 def _is_real_player(entity: Any) -> bool:
     """Return True if *entity* is a real player character (not an NPC/Sentinel).
 
-    The defense-in-depth guard behind the alliance real-player invariant (C8):
-    an alliance member must be a genuine player character — not a Sentinel (the
-    never-puppeted NPC-base owner) and not an ``npc_type`` unit (agents / enemy
-    guards). Even if a stray ``player_alliance`` pointer were somehow written
-    onto an NPC base owner, :func:`are_allied` would still refuse to treat it as
-    an ally — so a PvE fortress can never be made untargetable.
-
-    IMPORTANT: this must NOT gate on ``has_account`` — Evennia's ``has_account``
-    is ``self.sessions.count()`` (i.e. *currently connected*), so an OFFLINE
-    real player would fail it and an offline ally would wrongly be treated as
-    hostile / un-invitable. Membership is a persistent, session-independent fact,
-    so we identify a player structurally: a character (carries ``combat_xp`` via
-    :func:`is_player`) that is neither a Sentinel nor an ``npc_type`` unit. The
-    persistent account link (``db_account``), when present, is a positive signal
-    but its absence does not disqualify a legitimately-offline character.
-
-    Value-based reads only; never raises.
+    A player is identified structurally: carries ``combat_xp``, has no
+    ``npc_type``, and is not a Sentinel. Does NOT gate on ``has_account``
+    (which reflects session state, not identity) — an offline player is still
+    a real player. Value-based reads only; never raises.
     """
     if entity is None:
         return False
@@ -1009,30 +973,12 @@ def _is_real_player(entity: Any) -> bool:
 def are_allied(a: Any, b: Any) -> bool:
     """Return True iff *a* and *b* are two DISTINCT real players in the same alliance.
 
-    The single ally predicate — the alliance counterpart to :func:`is_owner`,
-    added alongside it as the one authority for "same side". In combat it is
-    ALWAYS called with the Owning_Players (via ``_owning_player``), never raw
-    units, so a turret/agent is judged by its owner's alliance.
+    Returns True only when: both are real player characters, they are distinct
+    (same ``.id`` → False), both hold the same non-None ``db.player_alliance``,
+    and that alliance still resolves to a live record.
 
-    Returns ``True`` only when ALL hold:
-
-    * both *a* and *b* are real player characters (:func:`_is_real_player` — has
-      an account, not a Sentinel, no ``npc_type``), so an NPC base owner can
-      never be treated as an ally (C8);
-    * they are DISTINCT players — sameness decided exactly like ``is_owner``
-      (compare ``.id`` when both non-``None``; else identity), so a unit is never
-      "allied to itself" and two same-PK instances after an idmapper flush are
-      treated as the same player (→ ``False``);
-    * both hold the SAME non-``None`` ``db.player_alliance`` (value-based reads:
-      ``is None`` / ``==``, never truthiness — a legitimate ``alliance_id`` is
-      always ``>= 1`` so this never trips on ``0``);
-    * that shared ``alliance_id`` STILL resolves to a live Alliance_Record via
-      the AllianceSystem — a stale pointer left by a disband while a member was
-      offline resolves to nothing and yields ``False``.
-
-    Fails toward ``False`` on any missing ``db``, unavailable AllianceSystem, or
-    unresolved record: a lookup failure must never SUPPRESS legitimate hostile
-    targeting (the safe direction is "treat as enemies").
+    Fails toward False on any missing data or unavailable system — a lookup
+    failure must never suppress legitimate hostile targeting.
     """
     if a is None or b is None:
         return False
@@ -1076,7 +1022,7 @@ def is_friendly(a: Any, b: Any) -> bool:
 
 
 def player_scout_agents(player: Any) -> list:
-    """Return *player*'s active scout agents for fog vision projection (R5).
+    """Return *player*'s active scout agents for fog vision projection.
 
     Resolves the roster via the AgentSystem and filters to role ``"scout"``,
     same planet as the player, not incapacitated/reserved. Returns ``[]``
@@ -1107,7 +1053,7 @@ def player_scout_agents(player: Any) -> list:
 
 def _visible_tiles_with_scouts(fog_system: Any, player: Any,
                                player_buildings: Any) -> set:
-    """Call ``fog_system.get_visible_tiles`` including scout vision (R5).
+    """Call ``fog_system.get_visible_tiles`` including scout vision.
 
     Passes ``player_scouts`` only when the player has active scouts, so test
     fakes with the legacy 2-arg ``get_visible_tiles`` signature keep working.
@@ -1130,7 +1076,7 @@ def shared_visible_tiles(player: Any, player_buildings: Any, fog_system: Any) ->
     map-data provider, and the ``look`` path) use so shared vision cannot drift
     between them. Delegates to ``AllianceSystem.shared_visible_tiles`` (which
     applies the PLAYING-only filter and the per-ally union); falls back to the
-    player's own vision (including scout circles — R5) when there is no
+    player's own vision (including scout circles) when there is no
     AllianceSystem or the perk is inactive. Never raises into map building.
     """
     try:
@@ -1182,8 +1128,8 @@ def owner_has_active_hq(owner: Any, planet: Any = None, provider: Any = None) ->
     stored state: the moment a new HQ completes, every gated system reactivates
     on the next tick.
 
-    Unlike ``BuildingSystem._player_has_hq`` (which counts an in-progress HQ to
-    enforce one-per-planet at build time), a half-built HQ does not count here.
+    Unlike the build-time check (which counts an in-progress HQ to
+    enforce one-per-planet), a half-built HQ does not count here.
 
     Args:
         owner: The building/agent owner (a Character, or an NPC Sentinel).
@@ -1200,8 +1146,8 @@ def owner_has_active_hq(owner: Any, planet: Any = None, provider: Any = None) ->
 def _owner_hq_buildings(owner: Any, planet: Any = None, provider: Any = None):
     """Yield *owner*'s HQ-capability buildings (optionally scoped to *planet*).
 
-    The single enumeration used by both :func:`owner_has_active_hq` and
-    ``BuildingSystem._player_has_hq`` (Req 12.5). Enumerates ``owner``'s
+    The single enumeration used by both :func:`owner_has_active_hq` and the
+    build-time HQ check. Enumerates ``owner``'s
     buildings via ``get_buildings()`` (NOT planet-scoped — it returns every
     planet's buildings), filters to those declaring the ``HEADQUARTERS``
     capability, and — when *planet* is given — to those on that planet.
@@ -1230,8 +1176,7 @@ def owner_research_lab(owner: Any, planet: Any = None, provider: Any = None):
     """Return *owner*'s research-lab building on *planet*, or ``None``.
 
     The research-lab-trees gate: a player owns at most one ``research_lab``
-    building per planet (enforced at build time by
-    ``BuildingSystem._validate_one_research_lab_per_planet``), and that lab's
+    building per planet (enforced at build time), and that lab's
     ``research_tree`` decides which technology tree they may research. Mirrors
     :func:`_owner_hq_buildings`: enumerates ``owner.get_buildings()``, filters to
     the ``RESEARCH_LAB`` capability and — when *planet* is given — to that
@@ -1501,15 +1446,15 @@ def _get_rank_name(player: Any, provider: Any = None) -> str:
 
 
 # ------------------------------------------------------------------ #
-#  Graduation economy (§4) — outgrown-planet throttle
+#  Graduation economy — outgrown-planet throttle
 # ------------------------------------------------------------------ #
 
 def planet_scale(planet_key: str | None, attr: str, default: float = 1.0,
                  planet_registry: Any = None) -> float:
     """Read a per-planet scale field (``yield_scale`` / ``npc_scale``).
 
-    The single data-driven lookup for planet-tier multipliers (Phase 4
-    ascending yields + NPC-base tiering) — the scales live on each planet's
+    The single data-driven lookup for planet-tier multipliers (ascending
+    yields + NPC-base tiering) — the scales live on each planet's
     entry in planets.yaml (``CoordinateSpaceDef``), NOT in per-system Python
     dicts, so adding a planet is a YAML-only change.
 

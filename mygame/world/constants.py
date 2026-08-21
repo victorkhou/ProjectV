@@ -23,19 +23,18 @@ Grouped by system:
 from enum import StrEnum
 
 # ------------------------------------------------------------------ #
-#  Rank / Level progression (early-game rebalance R14/D11)
+#  Rank / Level progression
 # ------------------------------------------------------------------ #
 
 #: Total number of ranks (Recruit through Marshal)
 NUM_RANKS = 12
 
-#: Maximum player level — 100-level hybrid-curve ladder (R14.1).
+#: Maximum player level — 100-level hybrid-curve ladder.
 MAX_LEVEL = 100
 
-#: Rank number → (min_level, max_level) — WIDENING bands over the 100-level
-#: ladder (R14.5). The first three bands stay 5 levels wide so Corporal still
-#: begins at L11 (preserving the Lab L11 / tech-gate alignment); later bands
-#: widen so late ranks are long-term goals. Marshal is the L100 capstone.
+#: Rank number → (min_level, max_level). The first three bands are 5 levels
+#: wide (Corporal starts at L11 for tech-gate alignment); later bands widen
+#: so late ranks are long-term goals. Marshal is the L100 capstone.
 RANK_BANDS: dict[int, tuple[int, int]] = {
     1: (1, 5),      # Recruit
     2: (6, 10),     # Private
@@ -58,11 +57,10 @@ LIMBO_ROOM_ID = 2
 #  Resources
 # ------------------------------------------------------------------ #
 
-#: Canonical set of resource identifiers. Single source of truth, shared by
-#: player defaults (``typeclasses.characters`` re-exports this) and the data
-#: registry's cross-validation (which rejects any building/item/tech/terrain
-#: reference to a resource name outside this set). Structural, not balance:
-#: adding a resource here changes what the schema accepts.
+#: Canonical set of resource identifiers. Single source of truth shared by
+#: player defaults and data registry cross-validation (rejects any reference
+#: to a resource name outside this set). Adding a resource here changes what
+#: the schema accepts.
 RESOURCE_TYPES: tuple[str, ...] = (
     "Wood", "Stone", "Iron",
     "Energy", "Circuits", "Nexium",
@@ -73,14 +71,9 @@ RESOURCE_TYPES: tuple[str, ...] = (
 #  Equipment & Items
 # ------------------------------------------------------------------ #
 
-#: The twelve canonical equipment slots (nine armor-bearing body slots plus
-#: ``weapon_melee``, ``weapon_ranged``, and ``accessory``). Single source of
-#: truth for the slot vocabulary: the schema validator requires every Gear
-#: item's ``slot`` to be a member of this tuple, and the equipment system
-#: rejects equipping into any slot outside it. Structural, not balance: adding
-#: a slot is a constant edit. A ``category: weapon`` item's required slot is
-#: derived from its ``weapon_type`` (melee -> ``weapon_melee``, ranged ->
-#: ``weapon_ranged``) — see ``schema_validator``.
+#: The twelve canonical equipment slots. Single source of truth for the slot
+#: vocabulary: the schema validator requires every Gear item's ``slot`` to be
+#: a member of this tuple, and the equipment system rejects equipping outside it.
 EQUIPMENT_SLOTS = ("head", "eyes", "face", "torso", "arms", "hands",
                    "legs", "feet", "back", "weapon_melee", "weapon_ranged",
                    "accessory")
@@ -118,25 +111,15 @@ EQUIPMENT_SLOT_LABELS = {
 GEAR_CATEGORIES = ("armor", "weapon", "accessory")
 
 #: Item categories stored as counted stacks in the Supply_Bag ``db.supplies``.
-#: ``throwable`` = grenades (thrown in a direction, land, then fuse); ``mine`` =
-#: mines (armed in place via ``arm``, then fuse). Both are "bombs": a fused AoE
-#: explosive placed on a tile, differing only in how they're deployed.
-#: ``insert`` = Blacksmith weapon-mod consumables (item-loot-economy §4.3): a
-#: counted, slotless supply carrying an ``insert_effect`` payload, consumed by
-#: the `insert` command at the Blacksmith bench. Classified as a SUPPLY (not
-#: Gear) deliberately — the design calls an insert "a consumable item", so it
-#: stacks in the Supply_Bag and rides the existing supply routing in
-#: ``equipment_system._route_produced_item`` (production/craft), the respawn
-#: stash restore, and the admin spawn path with zero code changes. It is NOT
-#: usable via `use` (that command requires category ``consumable``) nor
-#: throwable (gated on BOMB_CATEGORIES); the only consumer is task 4.3's
-#: `insert` command.
+#: ``throwable`` = grenades (thrown, land, fuse); ``mine`` = armed in place, fuse.
+#: Both are "bombs": a fused AoE explosive differing only in deployment method.
+#: ``insert`` = Blacksmith weapon-mod consumables consumed by the ``insert``
+#: command. Stacks in the Supply_Bag (not Gear); not usable via ``use`` or
+#: ``throw``.
 SUPPLY_CATEGORIES = ("ammo", "consumable", "throwable", "mine", "insert")
 
-#: The two bomb families (fused AoE explosives). A ``throwable`` item is a
-#: grenade; a ``mine`` item is a mine. Used to gate the ``throw`` vs ``arm``
-#: commands and to label a live bomb. Kept separate from the category tuple so a
-#: future non-bomb throwable/mine wouldn't silently become a bomb.
+#: The two bomb families (fused AoE explosives). A ``throwable`` is a grenade;
+#: a ``mine`` is a mine. Gates the ``throw`` vs ``arm`` commands.
 BOMB_CATEGORIES = ("throwable", "mine")
 
 #: The full controlled vocabulary of item categories. The schema validator
@@ -154,15 +137,12 @@ AGGREGATED_STATS = ("damage_reduction", "damage_bonus", "move_speed",
                     "sight_range", "carry_capacity", "max_hp", "accuracy")
 
 #: Valid Item_Effect ``type`` values for consumable/throwable items.
-#: NOT data-only: a new effect needs this tuple + a validator rule + a
-#: use/throw branch + (usually) a presenter kind. The three mechanics are
-#: genuinely different; a handler-registry would only relocate the branch, not
-#: remove it. See COMPLEXITY_REVIEW touchpoint row.
+#: A new effect needs this tuple + a validator rule + a use/throw branch +
+#: (usually) a presenter kind.
 EFFECT_TYPES = ("heal", "buff", "aoe_damage")
 
 #: Base carry weight (weight units); a holder's limit is
-#: ``BASE_CARRY_WEIGHT + Σ carry_capacity(gear)``. Structural (it gates the
-#: carry-limit correctness property), so it lives here rather than in balance.
+#: ``BASE_CARRY_WEIGHT + Σ carry_capacity(gear)``.
 BASE_CARRY_WEIGHT = 1000
 
 #: Per-unit weight for a resource absent from ``BalanceConfig.resource_weights``.
@@ -297,10 +277,10 @@ def compute_effective_delay(base_delay: int, speed_modifier: int) -> int:
 def compute_combat_move_lag(base: int, move_speed: int, terrain_mod: float) -> int:
     """Player in-combat movement lag: ``max(0, int(base - move_speed - terrain_mod))``.
 
-    Zero-floored (Req 4.2): unlike :func:`compute_effective_delay` (which floors
-    at 1 for agents), a fast, favorably-positioned player may move again on the
-    same tick. ``int()`` truncates toward zero, so a fractional terrain modifier
-    never grants more relief than a full tick.
+    Zero-floored: unlike :func:`compute_effective_delay` (which floors at 1 for
+    agents), a fast, favorably-positioned player may move again on the same tick.
+    ``int()`` truncates toward zero, so a fractional terrain modifier never
+    grants more relief than a full tick.
 
     Args:
         base: Base combat movement lag in ticks (``COMBAT_MOVE_LAG_TICKS``).
@@ -390,9 +370,8 @@ PLAYER_STATE_LABELS = {
     PLAYER_STATE_LINKDEAD: "Linkdead",
 }
 
-#: Display label per combat-unit kind, shared by the owner-attributed notification
-#: lines (NotificationSystem._unit_suffix and NotificationPresenter's unit-attacked
-#: formatter) so the "Turret"/"Agent"/"Building" wording can't drift between them.
+#: Display label per combat-unit kind, shared by owner-attributed notification
+#: lines so the "Turret"/"Agent"/"Building" wording can't drift between them.
 UNIT_KIND_LABELS = {"turret": "Turret", "agent": "Agent", "building": "Building"}
 
 #: Allowed transitions: state -> set of states reachable from it. Encodes the
@@ -460,95 +439,53 @@ HEADQUARTERS = "headquarters"
 COMBAT_BARRIER = "combat_barrier"
 TURRET = "turret"
 SHIELD_GENERATOR = "shield_generator"
-#: A building that serves as its owner's respawn point on its planet AND recovers
-#: a building-level-scaled fraction of items/resources the player was carrying
-#: when they died (deposited into the building for collection). See
-#: EquipmentSystem.apply_death_loss + RESPAWN_RECOVERY_BY_LEVEL.
+#: A building that serves as its owner's respawn point on its planet AND
+#: recovers a level-scaled fraction of carried items/resources on death.
 RESPAWN_POINT = "respawn_point"
 
-#: A Launch Pad enables cross-planet travel: the player `launch`es from here,
+#: A Launch Pad enables cross-planet travel: the player ``launch``es from here,
 #: consuming fuel, routing through Space, and arriving at their Beacon/HQ on the
 #: destination planet (or public spawn). Also supports manifest loading
-#: (agents/cargo for cross-planet transport). See steering doc §7.
+#: (agents/cargo for cross-planet transport).
 LAUNCH_PAD = "launch_pad"
 
-#: The Blacksmith gear bench (item-loot-economy §4). The capability exists so
-#: the bench commands (``insert``/``reroll``/``salvage``) can LOCATE the
-#: building the player is standing in — the Blacksmith is a pure bench, it does
-#: NOT produce items (deliberately absent from
-#: ``equipment_system.EQUIPMENT_BUILDING_TYPES``). Usage gates on ownership +
-#: operational status (offline / mid-upgrade) mirroring the craft gate order;
-#: there is no active-HQ usage gate.
+#: The Blacksmith gear bench. Bench commands (``insert``/``reroll``/``salvage``)
+#: locate the building the player is standing in. Does NOT produce items.
+#: Usage gates on ownership + operational status.
 BLACKSMITH = "blacksmith"
 
-#: The Refinery resource converter (item-loot-economy §7, R10.4). The
-#: capability exists so the ``refine`` command can LOCATE the building the
-#: player is standing in — like the Blacksmith bench, the Refinery is a
-#: player-operated station, not a producer. It is the economy's **Nexium
-#: sink**: ``refine <resource> <amount>`` converts a carried resource stock
-#: (Nexium included — that is the point) into Salvage at a building-level
-#: scaled rate. The conversion NEVER outputs Nexium or any other resource
-#: (anti-loop, R10.4) — Salvage is the only credit path. Usage gates on
-#: ownership + operational status (offline / mid-upgrade), mirroring the
-#: Blacksmith bench; there is no active-HQ usage gate.
+#: The Refinery resource converter. ``refine <resource> <amount>`` converts a
+#: carried resource into Salvage at a building-level-scaled rate. The conversion
+#: NEVER outputs Nexium or any other resource (anti-loop). Usage gates on
+#: ownership + operational status.
 RESOURCE_CONVERTER = "resource_converter"
 
-#: The Sniper Nest range aura (item-loot-economy §7, R10.1). While the
-#: building's OWNER stands on its tile, an operational range-aura building
-#: grants a level-scaled weapon +range through the R8 range-resolution hook
-#: (``CombatEngine._tile_range_bonus``): ``1 + (level - 1) // 2`` → L1 +1,
-#: L3 +2, L5 +3. Strictly ON-TILE and OWNER-ONLY — positional, not permanent
-#: (design decision §12: adjacency is an explicit later extension, not
-#: shipped). The total is still clamped by ``balance.max_weapon_range``.
+#: The Sniper Nest range aura. While the building's OWNER stands on its tile,
+#: grants a level-scaled weapon +range: ``1 + (level - 1) // 2`` → L1 +1,
+#: L3 +2, L5 +3. Strictly ON-TILE and OWNER-ONLY. Clamped by max_weapon_range.
 RANGE_AURA = "range_aura"
 
-#: The Watchtower vision aura (item-loot-economy §7, R10.2). While the
-#: building's OWNER stands on its tile, an operational vision-aura building
-#: grants a level-scaled ``sight_range`` bonus to the player vision circle
-#: through the fog-of-war sight read (``FogOfWarSystem._tile_vision_bonus``):
-#: ``1 + (level - 1) // 2`` → L1 +1, L3 +2, L5 +3 — the same modest curve as
-#: the Sniper Nest. Strictly ON-TILE and OWNER-ONLY, mirroring the RANGE_AURA
-#: decision (positional, not permanent; a radius aura around the tower is an
-#: explicit possible later extension, not shipped in this feature).
+#: The Watchtower vision aura. While the building's OWNER stands on its tile,
+#: grants a level-scaled sight_range bonus: ``1 + (level - 1) // 2`` → L1 +1,
+#: L3 +2, L5 +3. Strictly ON-TILE and OWNER-ONLY.
 VISION_AURA = "vision_aura"
 
-#: The Field Hospital heal aura (item-loot-economy §7, R10.3). While the
-#: building's OWNER (or the owner's agent) stands on its tile, an operational
-#: heal-aura building grants a flat heal-over-time through the passive
-#: HP-regen path (``RegenSystem._tile_heal_bonus``): ``1 + (level - 1) // 2``
-#: extra HP per regen interval (``hp_regen_interval_ticks``) → L1 +1, L3 +2,
-#: L5 +3 — the same modest curve as the other auras. The bonus is ADDITIVE on
-#: top of (not scaled by) the entity's ``regen_multiplier`` — it is the
-#: facility healing you, not your own metabolism — and rides the regen
-#: machinery, so it obeys the same interval cadence, skips the dead /
-#: incapacitated, and never overheals past ``hp_max``. Strictly ON-TILE and
-#: OWNER-ONLY, mirroring the RANGE_AURA/VISION_AURA decisions (positional,
-#: not permanent; a radius aura is an explicit later extension, not shipped).
+#: The Field Hospital heal aura. While the building's OWNER (or owner's agent)
+#: stands on its tile, grants a flat heal-over-time bonus per regen interval:
+#: ``1 + (level - 1) // 2`` extra HP → L1 +1, L3 +2, L5 +3. Additive (not
+#: scaled by regen_multiplier). Strictly ON-TILE and OWNER-ONLY.
 HEAL_AURA = "heal_aura"
 
-#: The Survey Array outpost-triangulation bench. The capability exists so the
-#: ``survey`` command can LOCATE the building the player is standing in — like
-#: the Blacksmith and Refinery, the array is a player-operated station, not a
-#: producer. Standing in your own operational array, ``survey`` searches for one
-#: enemy NPC outpost on your CURRENT planet: it never hands over coordinates,
-#: it returns a randomly-placed search box known to contain the target, which
-#: ``survey narrow`` shrinks and ``survey <x> <y>`` probes for bearing and
-#: distance band until the tile is pinpointed and written into the player's
-#: fog-of-war discovery memory. Usage gates on ownership + operational status
-#: (offline / mid-upgrade), mirroring the other benches; there is no active-HQ
-#: usage gate. The building LEVEL tightens the opening box (see
-#: ``BalanceConfig.survey_initial_radius``), which is why it is ``upgradable``.
+#: The Survey Array outpost-triangulation bench. Standing in your own
+#: operational array, ``survey`` searches for an enemy NPC outpost on the
+#: current planet, returning a search box the player narrows via successive
+#: probes until the tile is pinpointed. Building LEVEL tightens the opening
+#: box. Usage gates on ownership + operational status.
 OUTPOST_SURVEY = "outpost_survey"
 
-#: A research lab that hosts ONE technology tree. Every research building
-#: declares this capability plus a ``research_tree`` naming which tree it hosts
-#: (weapons/defense/resource/research — see ``RESEARCH_TREES``). Research is
-#: gated on OWNERSHIP, not location: ``research`` checks the tree of the lab the
-#: player owns on their current planet, and a player may own only ONE research
-#: lab per planet (``BuildingSystem._validate_one_research_lab_per_planet``), so
-#: choosing a tree is a strategic, per-planet commitment. The capability lets
-#: the tech system find a player's lab and read its tree without hardcoding
-#: abbreviations.
+#: A research lab that hosts ONE technology tree. Research is gated on
+#: OWNERSHIP, not location; a player may own only one lab per planet, so
+#: choosing a tree is a strategic per-planet commitment.
 RESEARCH_LAB = "research_lab"
 
 BUILDING_CAPABILITIES: frozenset[str] = frozenset({
@@ -657,7 +594,7 @@ ALLIANCE_NAME_DENYLIST = ("admin", "system", "staff", "public", "chat", "pub")
 ALLIANCE_IGNORE_ALL = "all"
 
 # ------------------------------------------------------------------ #
-#  Deeds (early-game rebalance R9/D9)
+#  Deeds
 # ------------------------------------------------------------------ #
 
 #: Deed ids awarded by BASE_ELIMINATED (per NPC-base tier).

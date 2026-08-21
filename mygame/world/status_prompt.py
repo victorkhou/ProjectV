@@ -1,33 +1,16 @@
 """Player status prompt — the classic MUD status line + webclient footer feed.
 
-One source of truth for the player's status readout (HP, level, position, and
-the terrain underfoot), shared by two callers so they never drift:
+Renders the player's HP, level, position, and terrain into a status prompt.
+Called by two paths so the display never drifts:
 
-* the command post-hook (:meth:`commands.game_commands.GameCommand.at_post_cmd`)
-  refreshes it after every command the player issues; and
-* the :class:`~world.presenters.notification_presenter.NotificationPresenter`
-  pushes it whenever a *server-driven* event changes the player's HP/level
-  (being attacked, healed, levelling) — so the webclient footer updates live
-  even when the player never typed anything.
+* the post-cmd hook refreshes it after every player command;
+* the NotificationPresenter pushes it on server-driven HP/level changes.
 
-Delivery is per-channel so each client shows it once and only once:
-
-* a printed text line tagged ``cls="prompt-line"`` — the visible classic MUD
-  prompt. Broadcast to EVERY session: a bare ``prompt=`` OOB is unreliable on raw
-  telnet (with Evennia's default ``NOGOAHEAD`` no telnet GA is emitted, so basic
-  clients swallow the promptless line). Telnet/SSH show it directly. The
-  webclient's ``custom_out`` decides how to present it *per view*: rendered
-  inline in the text output when in Text view (matching raw telnet), and dropped
-  in Map view — there the map footer already shows the same fields (fed by
-  ``prompt_status``), so an inline copy would just duplicate it. Only
-  :func:`send_status` emits this printed line (:func:`push_status` does not), so
-  a server-driven HP change never spams the scrollback.
-* ``prompt=`` — the same text as an input-line prompt, for capable clients
-  (Mudlet/TinTin++) with a dedicated prompt area. Hidden in the webclient (CSS
-  hides ``#prompt``; ``custom_out`` also drops it).
-* ``prompt_status=`` — a structured OOB the webclient's ``map_renderer`` folds
-  into the map footer, so HP/level/position refresh on every update. Telnet
-  ignores it.
+Dual-push OOB delivery per session:
+  - printed text line (``cls="prompt-line"``) — visible on telnet/SSH and
+    the webclient Text view; dropped in Map view (footer covers it).
+  - ``prompt=`` — input-line prompt for Mudlet/TinTin++.
+  - ``prompt_status=`` — structured OOB for the webclient map footer.
 """
 
 from __future__ import annotations
