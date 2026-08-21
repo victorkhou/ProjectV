@@ -23,16 +23,45 @@ logger = logging.getLogger("evennia.world.presenters.notification")
 
 
 def _fmt_rank_level_up(d: dict) -> str:
-    msg = f"You are now Level {d['level']} ({d['rank_name']} {d['sub']})"
-    # Announce planet unlocks when the new level crosses a gate.
-    unlocked = d.get("planets_unlocked")
-    if unlocked:
-        for p in unlocked:
-            msg += (
-                f"\n|g→ New planet unlocked: |w{p['name']}|g ({p['type']})"
-                f" — build a Launch Pad to travel there.|n"
-            )
-    return msg
+    level = d["level"]
+    old_level = d.get("old_level")
+    # A level DROP (death XP loss) reuses this kind — keep it quiet and factual,
+    # never a celebratory banner.
+    if old_level is not None and old_level > level:
+        return f"|y[Level] You slipped to Level {level} ({d['rank_name']}).|n"
+
+    lines = [
+        "|G============================|n",
+        f"|G  ⚡ |wLEVEL UP!|G  You are now Level |w{level}|n",
+        f"|G     {d['rank_name']} (tier {d['sub']})|n",
+        "|G============================|n",
+    ]
+    # The concrete payoff: what this level just made buildable.
+    for name in d.get("buildings_unlocked") or []:
+        lines.append(f"|g  ● You can now build: |w{name}|g — |wbuild|g to place it.|n")
+    # Planet gates are a bigger deal — call them out distinctly.
+    for p in d.get("planets_unlocked") or []:
+        lines.append(
+            f"|g  ★ New planet unlocked: |w{p['name']}|g ({p['type']})"
+            f" — build a Launch Pad to travel there.|n"
+        )
+    return "\n".join(lines)
+
+
+def _fmt_xp_gain(d: dict) -> str:
+    """A "+N XP" line for an otherwise-silent award.
+
+    The award ``reason`` is an INTERNAL identifier (``build_complete``,
+    ``agent_trained``, …), so it is rendered through
+    :data:`world.constants.XP_REASON_LABELS`; an unmapped reason degrades to a
+    bare "+N XP" rather than leaking the identifier to the player.
+    """
+    from world.constants import XP_REASON_LABELS
+
+    amount = d.get("amount", 0)
+    label = XP_REASON_LABELS.get(d.get("reason") or "")
+    tail = f" ({label})" if label else ""
+    return f"|C+{amount} XP{tail}|n"
 
 
 def _fmt_building_progress(d: dict) -> str:
@@ -1046,6 +1075,7 @@ class NotificationPresenter:
     #: every per-player notification line.
     _FORMATTERS: dict[str, Callable[[dict], str]] = {
         "rank_level_up": _fmt_rank_level_up,
+        "xp_gain": _fmt_xp_gain,
         "building_progress": _fmt_building_progress,
         "building_complete": _fmt_building_complete,
         "repair_progress": _fmt_repair_progress,
@@ -1151,7 +1181,16 @@ class NotificationPresenter:
     #: without the player having to type a command. "attacked" = took a hit,
     #: "healed" = restored, "rank_level_up" = levelled. (Kinds about a player's
     #: BUILDINGS/UNITS being hit are excluded: the player's own HP is unchanged.)
-    _STATUS_AFFECTING_KINDS = frozenset({"attacked", "healed", "rank_level_up"})
+    #: ``xp_gain`` is included so the prompt's XP bar advances on a SERVER-driven
+    #: award (a timed build completing, an agent finishing training) where the
+    #: player typed nothing and ``at_post_cmd`` will not fire. On an award that
+    #: also levels the player this pushes twice — ``xp_gain`` fires before the
+    #: level sync, so its push can read the pre-sync level, and the
+    #: ``rank_level_up`` push immediately after is the authoritative one. Both
+    #: are OOB-only (no printed line), so the transient is invisible.
+    _STATUS_AFFECTING_KINDS = frozenset({
+        "attacked", "healed", "rank_level_up", "xp_gain",
+    })
 
     def __init__(self, event_bus: EventBus, player_notifier: Any = None) -> None:
         self.event_bus = event_bus
