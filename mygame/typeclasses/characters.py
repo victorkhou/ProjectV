@@ -118,9 +118,6 @@ class Character(ObjectParent, DefaultCharacter):
 #  Resource type constants
 # ------------------------------------------------------------------ #
 
-# RESOURCE_TYPES is imported from world.constants (single source of truth) at
-# the top of this module and re-exported here for existing importers.
-
 DEFAULT_HEALTH = 500
 
 # The pre-rebalance base ceiling. Used only by the one-time login migration
@@ -226,16 +223,16 @@ PLAYER_DEFAULTS: dict[str, object] = {
     # None = accepting invites from everyone.
     "alliance_invite_ignore": None,
     # --- Early-game rebalance (tech repair + deeds + directives) --- #
-    # Tech bonus store (R13/D5): accumulated stat bonuses from researched techs.
+    # Tech bonus store: accumulated stat bonuses from researched techs.
     # Derived from researched_techs via TechSystem._apply_tech_effect; consumers
     # read it directly (building hp_max, combat damage/armor, vision, production).
     "tech_bonuses": {},
-    # Deed store (R9/D9): deed-id -> count. Boolean deeds are count >= 1;
+    # Deed store: deed-id -> count. Boolean deeds are count >= 1;
     # counted gates (e.g. Lab requires 3 cleared outposts) read the count.
     "deeds": {},
     # Directive-chain progress: index into the ordered directives sequence.
     "directives_progress": 0,
-    # Dismiss-all flag (R10.7/D2): True = advance silently, no rewards.
+    # Dismiss-all flag: True = advance silently, no rewards.
     "directives_muted": False,
 }
 
@@ -271,18 +268,13 @@ class CombatCharacter(CombatEntity, DefaultCharacter):
         or None — never overwrites existing valid data.
 
         Special handling: if ``level`` is missing but ``rank_level``
-        exists, derives level from the old rank number (1-12) by mapping it to
-        the first level of that rank's band (``RANK_BANDS`` — the same rule as
-        ``world.utils.get_player_level``, so the two migration paths agree).
+        exists, derives level from the old rank number via ``RANK_BANDS``.
         """
         for key, default in PLAYER_DEFAULTS.items():
             if self.attributes.get(key) is None:
                 if key == "level":
                     # Migrate a legacy rank_level (1-12) to a level (1-100)
-                    # via the band-start mapping (R14.5) — NOT uniform
-                    # (rank-1)*LEVELS_PER_RANK+1 math, which diverges
-                    # from the widened bands for rank >= 5 and would land a
-                    # legacy player one rank below their stored rank.
+                    # via the band-start mapping.
                     from world.constants import NUM_RANKS, RANK_BANDS
                     old_rank = self.attributes.get("rank_level")
                     if old_rank is not None and isinstance(old_rank, int) and 1 <= old_rank <= NUM_RANKS:
@@ -318,20 +310,13 @@ class CombatCharacter(CombatEntity, DefaultCharacter):
             logger.debug("First-harvest-crit migration skipped", exc_info=True)
 
     def _migrate_level_curve(self):
-        """Remap stored XP onto the live curve, never demoting (R14.8).
+        """Remap stored XP onto the live curve, never demoting.
 
-        A curve retune (like the R14 hybrid-curve rebalance) can map a
-        player's stored ``combat_xp`` to a LOWER level than the one they
-        already hold. Recompute the level from XP and keep
-        ``max(stored, recomputed)`` — an upgrade under the new curve applies,
-        a downgrade never does (no visible demotion from a rebalance).
-
-        When the stored level wins, ``combat_xp`` is raised to that level's
-        threshold on the new curve: every XP change recomputes level from XP
-        (``recompute_progression``), so without the XP top-up the kept level
-        would be silently demoted on the player's next kill. ``rank_level``
-        is re-derived from the kept level. Guarded: a progression-module
-        failure must never block login.
+        A curve retune can map a player's stored XP to a LOWER level than the
+        one they hold. Recompute from XP and keep ``max(stored, recomputed)`` —
+        upgrades apply, downgrades never do. When the stored level wins,
+        ``combat_xp`` is raised to that level's threshold so future
+        recompute-from-XP agrees. Guarded: never blocks login.
         """
         try:
             from world import progression
@@ -357,19 +342,13 @@ class CombatCharacter(CombatEntity, DefaultCharacter):
             logger.debug("Level-curve migration skipped", exc_info=True)
 
     def _migrate_tech_bonuses(self):
-        """Grandfather pre-rebalance researched techs into db.tech_bonuses (R13.5).
+        """Grandfather pre-rebalance researched techs into db.tech_bonuses.
 
         Before the tech-repair rebalance, techs were auto-granted on promotion
-        and the old apply-path mutated stats in place — it never populated
-        ``db.tech_bonuses``. Under the new derived-bonus model those techs are
-        silent no-ops until the bonus dict is rebuilt from ``researched_techs``.
-        Re-researching cannot fix it (``start_research`` rejects an already-known
-        tech), so the only recovery is a one-time recompute on login.
-
-        Runs at most once per player: only when they have researched techs but
-        an empty/absent ``tech_bonuses`` (a player who researched post-rebalance
-        already has a populated dict, so this is skipped). Guarded — a missing
-        TechLabSystem or recompute failure must never block login.
+        and the old apply-path never populated ``db.tech_bonuses``. This one-time
+        recompute on login rebuilds the bonus dict from ``researched_techs``.
+        Runs at most once per player (skipped when bonuses already exist).
+        Guarded — never blocks login.
         """
         try:
             researched = self.attributes.get("researched_techs")
@@ -388,19 +367,11 @@ class CombatCharacter(CombatEntity, DefaultCharacter):
     def _migrate_base_health(self):
         """Lift a character still on the legacy 100 base to the new DEFAULT_HEALTH.
 
-        The base player HP was raised from 100 to 500. A character created
-        before that carries ``hp_max == 100 + equipment_hp_bonus`` and must be
-        re-based so it doesn't stay on the old ceiling forever. Recognises the
-        legacy base by backing out the tracked equipment bonus: if the non-gear
-        portion equals the old default (100), rebase it to the new default,
-        preserving the gear bonus (``hp_max = DEFAULT_HEALTH + gear``). A
-        full-health character is topped up to the new ceiling; a wounded one
-        keeps its current ``hp`` (headroom only, no free heal).
-
-        Runs at most meaningfully once: after the rebase the non-gear portion is
-        ``DEFAULT_HEALTH``, so the legacy check no longer matches. Skips staff
-        characters entirely — their ceiling is owned by ``_ensure_admin_health``.
-        Guarded: a failure must never block login.
+        Recognises the legacy base by backing out the tracked equipment bonus: if
+        the non-gear portion equals 100, rebase to DEFAULT_HEALTH preserving the
+        gear bonus. A full-health character is topped up; a wounded one keeps its
+        current ``hp``. Skips staff characters (their ceiling is owned by
+        ``_ensure_admin_health``). Guarded: never blocks login.
         """
         try:
             if self._is_staff():
@@ -418,17 +389,11 @@ class CombatCharacter(CombatEntity, DefaultCharacter):
             logger.debug("Base-health migration skipped", exc_info=True)
 
     def _ensure_admin_health(self):
-        """Grant staff (Builder+) characters the raised admin HP ceiling on login.
+        """Grant staff (Builder+) the raised admin HP ceiling on login.
 
-        Staff need to survive normal combat while testing, so a Builder+
-        character's ``hp_max`` is bumped to ``ADMIN_BASE_HEALTH`` (1000). Applied
-        idempotently on every login: only RAISES the ceiling from the ordinary
-        default, never lowers a character that has legitimately built past it
-        (gear/tech), and never touches a non-staff character. When the ceiling is
-        raised and the character is at (or above) its previous full health, it is
-        topped up to the new max so a freshly-promoted operator logs in at full
-        admin HP rather than 100/1000. Guarded — a permission-lookup or attribute
-        failure must never block login.
+        Only raises the ceiling from the ordinary default, never lowers a
+        character that has legitimately built past it. Tops up HP when at full
+        health. Guarded — never blocks login.
         """
         try:
             from world.constants import ADMIN_BASE_HEALTH
@@ -501,13 +466,11 @@ class CombatCharacter(CombatEntity, DefaultCharacter):
         return True
 
     # ------------------------------------------------------------------ #
-    #  Salvage currency helpers (item-loot-economy R7)
+    #  Salvage currency helpers
     # ------------------------------------------------------------------ #
-    # Salvage is a per-player counted currency stored as a dedicated
-    # ``db.salvage`` int — weightless and currency-like, deliberately NOT in
-    # the validator-enforced RESOURCE_TYPES tuple (precedent: the Supply_Bag's
-    # ``db.supplies`` counted store). A character without the attribute reads
-    # 0, so legacy characters keep working unchanged (R12.1).
+    # Salvage is a per-player counted currency stored as ``db.salvage`` int —
+    # weightless and currency-like, deliberately NOT in RESOURCE_TYPES.
+    # A character without the attribute reads 0.
 
     def get_salvage(self) -> int:
         """Return the current Salvage balance (0 when never credited)."""
@@ -604,16 +567,10 @@ class CombatCharacter(CombatEntity, DefaultCharacter):
     def at_post_puppet(self, **kwargs):
         """Called after an account puppets (logs into) this character.
 
-        This is the REAL post-login hook for a Character — Evennia has no
-        ``Character.at_post_login`` (that hook lives only on the Account and is
-        NOT forwarded here), so puppeting is where "You become X" + the auto-look
-        happen and where our login logic must run: attribute migration, overworld
-        positioning, lifecycle routing, and the login event.
-
-        When the lobby flow routes this login to SPAWNING/LOBBY, the player is
-        staging (not in the world), so we suppress the parent's "You become X" +
-        map look and show the wizard prompt instead. Otherwise we defer to the
-        parent (which emits the become-message and looks at the current tile).
+        Runs attribute migration, overworld positioning, lifecycle routing, and
+        the login event. When the lobby flow routes to SPAWNING/LOBBY, the
+        parent's "You become X" + map look is suppressed in favor of the wizard
+        prompt.
         """
         # Under EvenniaTest, setUp() performs a synthetic ``login()`` that
         # puppets a bare character with no game systems wired. Our custom login
@@ -697,15 +654,9 @@ class CombatCharacter(CombatEntity, DefaultCharacter):
     def _route_lifecycle_on_login(self):
         """Route this login through the player lifecycle state machine.
 
-        Returns the STAGING state (``SPAWNING``/``LOBBY``) when the player is not
-        yet in the world — so the caller suppresses the normal map look and lets
-        the wizard prompt stand — or ``None`` when the flow is disabled or the
-        player resumed straight into PLAYING (normal puppet). Guarded so a
-        routing hiccup never blocks login (returns ``None`` on error).
-
-        SPAWNING → stow OOC + show the class/spawn wizard; LOBBY → show the
-        deploy menu; PLAYING → nothing (resume in the world, e.g. a reconnect or
-        crash-resume).
+        Returns the staging state (SPAWNING/LOBBY) when the player isn't in the
+        world — caller suppresses the map look — or None when the flow is
+        disabled or the player resumed into PLAYING. Guarded: never blocks login.
         """
         try:
             from world.lobby_flow import lobby_flow_enabled
@@ -901,25 +852,9 @@ class CombatCharacter(CombatEntity, DefaultCharacter):
     def at_post_unpuppet(self, account=None, session=None, **kwargs):
         """Route lifecycle state on disconnect, then run the default stow-away.
 
-        Distinguishes a CLEAN quit from a dropped connection (lobby flow only):
-
-        * a player who was PLAYING and dropped WITHOUT quitting → LINKDEAD with a
-          grace timer (they stay a live combat target until it expires — the
-          anti-combat-log rule); the character is NOT stowed away, so it lingers
-          in the world during grace.
-        * a clean quit (``reason`` starts with "quit") from PLAYING → LOBBY
-          (next login lands in the lobby), then the default stow-away removes the
-          character from the grid.
-        * SPAWNING/LOBBY states are left as-is (a mid-selection disconnect
-          resumes there on next login).
-
-        A CLEAN quit is detected via the transient ``ndb._clean_quit`` marker set
-        by :class:`~commands.lifecycle_commands.CmdQuit` just before it
-        disconnects. Evennia's ``unpuppet_object`` does NOT forward the disconnect
-        ``reason`` to this hook, so a marker (not the reason) is the reliable
-        signal: marker present → clean quit → LOBBY; absent → dropped connection
-        → LINKDEAD. A no-op beyond the default when the flow is disabled, so
-        current behavior is unchanged.
+        Clean quit (``ndb._clean_quit`` marker) → LOBBY; unclean drop → LINKDEAD
+        with grace timer (character lingers as a combat target). SPAWNING/LOBBY
+        states are left as-is. No-op when the lobby flow is disabled.
         """
         # Stamp last-seen wall-clock time on disconnect (epoch seconds). Read by
         # AllianceSystem._leader_absent to judge an absentee-leader `claim`
@@ -968,14 +903,9 @@ class CombatCharacter(CombatEntity, DefaultCharacter):
     def stow_from_world(self):
         """Remove this character from the map grid (de-index + stow away).
 
-        Used to pull a player OUT of the world while they are OOC in the
-        SPAWNING state — after death, or on a login that resumes spawning — so
-        they can't be attacked (by anything: turrets, guards, bombs, melee)
-        while choosing their class + spawn point. ``deploy`` relocates them back
-        onto a tile. Mirrors the linkdead-expiry stow-away: de-index from the
-        room's coordinate index FIRST (setting ``location=None`` does not fire
-        ``at_object_leave``, which is the only path that de-indexes), then null
-        the location. Best-effort — never raises.
+        Used to pull a player out of the world while OOC (SPAWNING) so they
+        can't be attacked while choosing class + spawn. De-indexes from the
+        coordinate index first, then nulls location. Best-effort — never raises.
         """
         try:
             from world.utils import coords_of
@@ -995,12 +925,9 @@ class CombatCharacter(CombatEntity, DefaultCharacter):
 
     @staticmethod
     def _linkdead_grace_seconds() -> float:
-        """Linkdead grace window (seconds) from balance config, default 1800 (30 min).
+        """Linkdead grace window (seconds) from balance config, default 1800.
 
-        Falls back to a safe default when the registry/balance is unavailable
-        (early boot / tests). Set far above the ~60s combat timer so pulling the
-        plug can't dodge an active fight — the dropped body stays a live target
-        well past when any combat timer would expire.
+        Falls back to a safe default when the registry is unavailable.
         """
         try:
             from world.data_registry import DataRegistry
