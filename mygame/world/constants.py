@@ -672,6 +672,40 @@ DEED_DESCRIPTIONS = {
 }
 
 # ------------------------------------------------------------------ #
+#  XP-gain reporting vocabulary
+# ------------------------------------------------------------------ #
+#
+# ``RankSystem.award_xp`` emits a "+N XP" line so economy actions aren't
+# silent. The reason strings below are the ones passed by the award call
+# sites; they are INTERNAL identifiers and must never reach a player
+# verbatim, hence the display map.
+
+#: Reason -> player-facing label for the "+N XP" line. A reason absent from
+#: this map renders as a bare "+N XP" rather than leaking its identifier.
+XP_REASON_LABELS = {
+    "build_complete": "construction",
+    "upgrade_complete": "upgrade",
+    "agent_trained": "training",
+    "harvest_action": "harvesting",
+    "combat": "combat",
+    "base_destroy": "base destroyed",
+    "directive": "directive",
+}
+
+#: Award reasons that must NOT emit a "+N XP" line, because the action's own
+#: notification already quotes the XP — a second line would double-report and,
+#: since those notifications carry the PRE-throttle figure while the award is
+#: post-throttle, would contradict it on an outgrown planet:
+#:   * ``combat``       -> ``npc_killed`` / player-defeat lines
+#:   * ``base_destroy`` -> ``base_eliminated``
+#:   * ``directive``    -> ``directive_complete``
+#: ``harvest_action`` is suppressed for volume: +1 per action on a short
+#: cooldown, already covered by its own drop/crit feedback.
+XP_GAIN_SUPPRESSED_REASONS = frozenset({
+    "harvest_action", "combat", "base_destroy", "directive",
+})
+
+# ------------------------------------------------------------------ #
 #  Disconnect cleanup
 # ------------------------------------------------------------------ #
 
