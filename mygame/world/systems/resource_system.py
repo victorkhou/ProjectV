@@ -646,23 +646,53 @@ class ResourceSystem(BaseSystem):
 
     def _try_harvest_crit(self, player: Any, tile: Any, resource_type: str,
                           base_amount: int, px: Any, py: Any) -> None:
-        """Roll for a harvest crit; spawn bonus drop + notify on hit (R7)."""
+        """Roll for a harvest crit; spawn bonus drop + notify on hit (R7).
+
+        A new player's VERY FIRST manual harvest crits automatically (a
+        guaranteed opening spike so the first minutes have a high moment
+        instead of a flat +1 grind); every harvest after that rolls the normal
+        ``harvest_crit_chance``. The one-time grant is marked on
+        ``db.first_harvest_crit_used`` so it never re-fires — not on relogin,
+        not on respawn.
+        """
         import random
         bal = self.registry.balance
         chance = getattr(bal, "harvest_crit_chance", 0) or 0
+        # A zero crit chance disables the mechanic entirely — including the
+        # first-harvest freebie, so an admin turning crits off (and tests that
+        # want deterministic drop counts) never see a surprise crit.
         if chance <= 0:
             return
-        if random.random() >= chance:
-            return
         multiplier = getattr(bal, "harvest_crit_multiplier", 5) or 5
+
         bonus = base_amount * (multiplier - 1)
         if bonus <= 0:
+            return  # nothing to grant (multiplier 1) — never spend the freebie
+
+        db = getattr(player, "db", None)
+        first_time = db is not None and not getattr(
+            db, "first_harvest_crit_used", False
+        )
+        if not first_time and random.random() >= chance:
             return
-        # Spawn the bonus drop at the same location.
+
+        # Spawn the bonus drop at the same location. A full tile refuses the
+        # drop (returns None), in which case nothing was granted — so the
+        # one-time freebie must NOT be marked as spent.
         if px is not None and py is not None:
-            self._spawn_resource_drop(tile, resource_type, bonus, x=px, y=py)
+            drop = self._spawn_resource_drop(tile, resource_type, bonus,
+                                             x=px, y=py)
         else:
-            self._spawn_resource_drop(tile, resource_type, bonus)
+            drop = self._spawn_resource_drop(tile, resource_type, bonus)
+        if drop is None:
+            return
+
+        if first_time:
+            # Guaranteed opening spike: a new player's very first manual
+            # harvest always crits, so the first minutes have a high moment
+            # instead of a flat +1 grind. Marked spent only now that the bonus
+            # has actually landed, so a refused drop leaves it available.
+            db.first_harvest_crit_used = True
         self.notify(player, "harvest_crit", amount=bonus, resource=resource_type)
 
     @staticmethod
