@@ -34,6 +34,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from world.ui_formatters import format_xp_bar, xp_progress
 from world.utils import get_game_systems, coords_of
 
 
@@ -81,7 +82,7 @@ def status_fields(player: Any) -> dict | None:
 
     in_combat, combat_secs = _combat_state(db)
 
-    return {
+    fields = {
         "hp": int(getattr(db, "hp", 0) or 0),
         "hp_max": int(getattr(db, "hp_max", 0) or 0),
         "level": int(getattr(db, "level", None) or 1),
@@ -92,6 +93,24 @@ def status_fields(player: Any) -> dict | None:
         "in_combat": in_combat,
         "combat_secs": combat_secs,
     }
+
+    # XP-in-level progress for the prompt bar. Also emitted on the structured
+    # ``prompt_status`` OOB, which the webclient footer can render — it does not
+    # today, so treat these as available-but-unrendered rather than live.
+    # A maxed player (or an unresolvable curve) yields None and no bar.
+    #
+    # The level is re-read from xp_progress so the number beside the bar always
+    # describes the SAME level the bar was computed for: a legacy character with
+    # only ``db.rank_level`` set resolves through get_player_level there, and
+    # would otherwise render "Lv 1" next to a level-11 bar.
+    prog = xp_progress(player)
+    if prog is not None:
+        fields["level"] = prog["level"]
+        fields["xp_percent"] = round(prog["percent"], 1)
+        fields["xp_into_level"] = prog["into_level"]
+        fields["xp_level_span"] = prog["level_span"]
+
+    return fields
 
 
 def _combat_state(db: Any) -> tuple[bool, int]:
@@ -138,9 +157,20 @@ def format_status_line(fields: dict) -> str:
     hp, hp_max = fields["hp"], fields["hp_max"]
     frac = (hp / hp_max) if hp_max > 0 else 0.0
     hp_col = "|g" if frac >= 0.6 else ("|y" if frac >= 0.3 else "|r")
+    # Level segment carries a compact XP bar when progress is known — e.g.
+    # "Lv 5 ███..." — so the player sees the bar fill as they act. Rendered
+    # BARE (no brackets, no percent) to keep the whole prompt inside 80
+    # columns, and omitted entirely while in combat, where the combat segment
+    # takes the remaining budget. A maxed player has no xp_percent and shows
+    # the plain level.
+    lvl_seg = f"Lv {fields['level']}"
+    xp_pct = fields.get("xp_percent")
+    if xp_pct is not None and not fields.get("in_combat"):
+        lvl_seg = f"Lv {fields['level']} {format_xp_bar(xp_pct, width=6, bare=True)}"
+
     segs = [
         f"HP {hp_col}{hp}/{hp_max}|n",
-        f"Lv {fields['level']}",
+        lvl_seg,
         f"({fields['x']},{fields['y']}) {fields['planet']}",
     ]
     terrain = fields.get("terrain")
