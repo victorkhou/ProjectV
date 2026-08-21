@@ -1,86 +1,60 @@
 """
-Loot roller — per-instance stat rolling (item-loot-economy, design §1.2/§1.3).
+Loot roller — per-instance stat rolling.
 
 A pure, RNG-injected service: given an :class:`~world.definitions.ItemDef`
-with a ``roll_spec``, produce the per-instance rolled ``stat_modifiers`` that
-the spawn wiring (task 1.5) writes onto the ``GameItem``. No Evennia, no
-registry, no globals — every source of randomness comes in through ``rng``,
-so rolls are fully deterministic under an injected seed (R1.5).
+with a ``roll_spec``, produce the per-instance rolled ``stat_modifiers``
+stamped onto a ``GameItem``. No Evennia, no registry, no globals — all
+randomness arrives through ``rng``, so rolls are deterministic under a seed.
 
-Contract (R1.5, design "Error Handling" table + Property 1):
+Contract:
 
-- ``roll_item`` **never raises** — malformed spec fragments are skipped, and
-  any unexpected failure degrades to "no roll" (``None``), i.e. a fixed item.
-- Every rolled value is **clamped** to its ``[min, max]`` band.
-- Two calls with the same spec and the same injected RNG seed produce
-  identical results.
+- ``roll_item`` never raises: malformed spec fragments are skipped and any
+  unexpected failure degrades to ``None`` (a fixed, unrolled item).
+- Every rolled value is clamped to its ``[min, max]`` band.
 
-Distribution (design §1.3)::
+Distribution::
 
     rolled = min + (max - min) * (U ** skew)    # U ~ uniform(0,1), skew >= 1
 
 ``skew=2`` puts the median roll at ~25% of the band, so near-max rolls are
-genuinely scarce — that scarcity is the economy (R1.2).
+scarce — that scarcity is the economy.
 
-Crafted items (``crafted=True``, R1.4/R6.1) roll in the tighter ``craft``
-band declared per stat; a stat without a craft band falls back to its loot
-band. The effective craft band is always intersected with the loot band, so
-a crafted roll can never escape the loot band even on odd data.
+Crafted items roll in the tighter per-stat ``craft`` band (falling back to
+the loot band when absent). The craft band is always intersected with the
+loot band, so a crafted roll can never escape the loot band on odd data.
 
-IQS (design §2.1, R2.1) — :func:`compute_iqs` gives the BASE score (the
-weighted mean of per-stat roll quality, 0–100). The stamped/displayed item
-score (task 2.4, design §2.2, R2.2) is ``IQS_base + Σ affix.value``
-(:func:`displayed_iqs`) — it can exceed 100 (reads as top-tier, e.g.
-"Legendary 112") and the math is NEVER clamped; the display layer caps
-what it renders at 999. :func:`recompute_iqs` is the SINGLE WRITER of the
-stamped ``iqs`` (R2.4): the spawn stamping routes through it, and the
-Phase-4 Blacksmith (reroll / insert) calls it after any mutation.
+IQS: :func:`compute_iqs` is the BASE score — the weighted mean of per-stat
+roll quality, 0-100. The displayed score is ``IQS_base + Σ affix.value``
+(:func:`displayed_iqs`), deliberately unclamped so it can read above 100;
+the display layer caps rendering at 999. :func:`recompute_iqs` is the only
+writer of the stamped ``iqs`` — spawn stamping and the Blacksmith
+reroll/insert paths all route through it.
 
-Rarity (Phase 2, task 2.2 — design §3.1/§3.2, R3.2/R3.3): a LOOT roll first
-assigns a rarity tier via a weighted choice over the source bucket's row of
-the rarity table (``RARITY_TABLE`` in balance — data-tunable; the module
-:data:`DEFAULT_RARITY_TABLE` mirrors it as the pure fallback). The drop
-source's numeric ``source_rarity_weight`` (guard kill 0 < outpost 1 <
-stronghold 2 < fortress 3 < citadel 4) selects the bucket: the
-highest-threshold bucket whose ``min_weight`` it reaches. The assigned
-rarity then RAISES THE ROLL FLOOR by clamping ``U`` into ``[floor, 1]``
-before the skew (design §1.3) — Rare 0.25, Epic 0.50, Legendary 0.75 — so
-high rarity guarantees good base rolls without removing variance.
+Rarity: a loot roll assigns a tier by weighted choice over the source
+bucket's row of the rarity table (``balance.rarity_table``, mirrored by
+:data:`DEFAULT_RARITY_TABLE` as a pure fallback). The drop source's
+``source_rarity_weight`` (guard kill 0 < outpost 1 < stronghold 2 <
+fortress 3 < citadel 4) selects the highest-threshold bucket it reaches.
+The tier then raises the roll FLOOR by clamping ``U`` into ``[floor, 1]``
+before the skew — Rare 0.25, Epic 0.50, Legendary 0.75 — so high rarity
+guarantees good base rolls without removing variance.
 
-Crafted rarity (post-spec change — DELIBERATE DEVIATION from R6.1): the
-spec shipped crafted items with NO rarity at all. Per a later user request
-("higher level armory increases quality, capping at Rare 5% at building
-level 5"), a crafted roll now draws a rarity from a **building-level-keyed**
-craft table (``craft_rarity_table`` in balance — data-tunable; the module
-:data:`DEFAULT_CRAFT_RARITY_TABLE` mirrors it as the pure fallback): the
-crafting building's level (Armory/Lab/Medbay alike — the mechanism is
-generic over the building) selects the row, and higher levels shift the
-distribution up, reaching **Rare at exactly 5% at level 5** and 0% at
-level 1. Crafted rarity is HARD-CAPPED at Rare — Epic/Legendary stay
-loot-only (R6.2 intact) — and crafted items still NEVER roll affixes
-(R6.1's no-affix rule stays; only the "Common/Uncommon only" clause was
-relaxed). A rare crafted item applies its normal 0.25 roll-floor U-clamp
-INSIDE the craft band, so it genuinely rolls better without ever escaping
-the band. When both a rarity floor and the Master Gunsmithing
-``craft_iqs_floor`` apply, the EFFECTIVE floor is ``max`` of the two —
-mirroring how the reroll path combines its bench floor with the item's
-rarity floor. Callers that pass no ``craft_level`` (< 1) keep the original
-no-rarity behavior — a ``None`` rarity reads as the modest, neutral score
-(R6.3, design §3.2 "safe floor treatment"). The spec docs are deliberately
-NOT updated for this change; this docstring is the record.
+Crafted rarity draws from a building-level-keyed table
+(``balance.craft_rarity_table``): higher bench levels shift the
+distribution up, reaching Rare at 5% at level 5 and 0% at level 1. Capped
+at Rare — Epic/Legendary are loot-only — and crafted items never roll
+affixes. A rare crafted item applies its 0.25 floor INSIDE the craft band.
+When both a rarity floor and the Master Gunsmithing ``craft_iqs_floor``
+apply, the effective floor is the ``max`` of the two (mirroring the reroll
+path). A ``craft_level`` below 1 skips rarity entirely.
 
-Affixes (task 2.3 — design §3.3, R3.1/R3.3/R3.4): once a rarity is
-assigned, its **affix budget** (Common 0, Uncommon 1, Rare 2, Epic 3,
-Legendary 4 — :data:`RARITY_AFFIX_BUDGETS`) affixes are drawn WITHOUT
-replacement (no duplicate keys) from the item's category pool — the pool
-named by ``roll_spec.affix_pool`` in the ``affix_pools`` mapping the spawn
-wiring passes through (``registry.affixes``). Each drawn affix rolls its
-own magnitude in its ``[min, max]`` band with the same skew, and carries a
-``value`` contribution for the displayed score (design §2.2): the rolled
-magnitude normalized into its band × the entry's pool weight ×
-:data:`AFFIX_VALUE_SCALE`. If the budget exceeds the pool size, whatever
-is available is drawn. Crafted items and callers that pass no pools get
-no affixes — the module stays pure.
+Affixes: the assigned rarity's budget (Common 0 → Legendary 4, see
+:data:`RARITY_AFFIX_BUDGETS`) is drawn WITHOUT replacement from the pool
+named by ``roll_spec.affix_pool``. Each affix rolls its magnitude in its
+own band with the same skew and contributes ``value`` to the displayed
+score: normalized magnitude × pool weight × :data:`AFFIX_VALUE_SCALE`. A
+budget larger than the pool draws whatever is available. Crafted items and
+callers passing no pools get no affixes.
 """
 
 from __future__ import annotations
@@ -212,11 +186,11 @@ def _num(val: Any) -> bool:
     """True for real, FINITE numbers (bool excluded, matching the schema
     validator's ``_is_num``).
 
-    NaN/inf are rejected (review M1): every NaN comparison is False, so a
-    NaN that slips past a ``>``/``<`` guard silently takes the wrong branch
-    — e.g. a NaN source weight used to resolve to the HIGHEST rarity bucket
-    because no ``threshold > nan`` comparison ever skipped a row. Non-finite
-    values now degrade exactly like non-numbers (R1.5).
+    NaN/inf are rejected because every NaN comparison is False, so a NaN
+    slipping past a ``>``/``<`` guard silently takes the wrong branch — a NaN
+    source weight would resolve to the HIGHEST rarity bucket, since no
+    ``threshold > nan`` comparison ever skips a row. Non-finite values degrade
+    exactly like non-numbers.
     """
     return (isinstance(val, (int, float)) and not isinstance(val, bool)
             and math.isfinite(val))
@@ -450,13 +424,11 @@ def _usable_affix_entries(pool) -> list[dict]:
 
 
 def _affix_draw_weight(entry) -> float:
-    """The relative draw weight of one pool entry (design §3.3).
+    """The relative draw weight of one pool entry.
 
-    ``weight`` in affixes.yaml is documented as a RELATIVE DRAW WEIGHT —
-    a 3.0 entry is drawn ~3x as often as a 1.0 entry (review F2; the draw
-    used to be uniform, ignoring weights entirely). Missing / non-numeric /
-    non-positive weights default to 1.0, mirroring the value-formula
-    treatment below (degrade, never raise — R1.5).
+    ``weight`` in affixes.yaml is a RELATIVE DRAW WEIGHT: a 3.0 entry is drawn
+    ~3x as often as a 1.0 entry. Missing, non-numeric, or non-positive weights
+    default to 1.0 — degrade, never raise.
     """
     weight = entry.get("weight")
     return float(weight) if _num(weight) and weight > 0 else 1.0

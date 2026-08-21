@@ -42,37 +42,29 @@ from world.systems.equipment_storage import StorageMixin
 
 logger = logging.getLogger("mygame.equipment_system")
 
-# Building abbreviations that run item production each tick. Armorer (AR)
-# makes weapons/ammo/modern gear, Medbay (MB) makes consumables, Lab (LB)
-# makes futuristic gear, and Munitions Plant (MP) makes every bomb — grenades
-# and mines (see items.yaml ``production_map``). There is no Armory ``AA``
-# building — the abbreviation is Armorer ``AR`` — so it is intentionally
-# excluded (task 8.4 / 8.3).
+# Buildings that run item production each tick: Armorer (weapons/ammo/modern
+# gear), Medbay (consumables), Lab (futuristic gear), Munitions Plant (bombs).
+# Per-building catalogs live in items.yaml ``production_map``. Note the Armorer
+# is ``AR``, not ``AA`` — there is no such building.
 EQUIPMENT_BUILDING_TYPES = ("AR", "MB", "LB", "MP")
 
-# Blacksmith reroll floor per level (item-loot-economy task 4.4, design §4.4
-# "reroll floor (U clamp rises with level)"). The DECIDED formula:
+# Blacksmith reroll floor per level:
 #
 #     level_floor = REROLL_FLOOR_PER_LEVEL * (blacksmith_level - 1)
 #
-# i.e. L1 0.0 (no floor) → L2 0.1 → ... → L5 0.4 — a modest curve that makes
-# a maxed bench meaningfully kinder without guaranteeing god-rolls (a 0.4 U
-# clamp at skew 2 puts the worst possible roll at 16% of the band). The
-# EFFECTIVE floor is ``max(level_floor, rarity_floor)``: the bench floor is
-# the lever, the item's rarity floor stays the guarantee — an Epic (0.50)
-# or Legendary (0.75) item never rerolls below its rarity-guaranteed band
-# fraction, at any bench level.
+# L1 0.0 (no floor) through L5 0.4 — a maxed bench is meaningfully kinder
+# without guaranteeing god-rolls (a 0.4 U clamp at skew 2 puts the worst
+# possible roll at 16% of the band). The effective floor is
+# ``max(level_floor, rarity_floor)``, so an Epic (0.50) or Legendary (0.75)
+# item never rerolls below its rarity guarantee at any bench level.
 REROLL_FLOOR_PER_LEVEL = 0.1
 
-# Salvage Protocols cost-multiplier floor (item-loot-economy task 5.4,
-# R11.2): the reroll-charge consumer clamps the researched
-# ``salvage_cost_mult`` tech value to ``[floor, 1.0]`` — mirroring
-# ``building_system._build_cost_multiplier`` — so stacked cost-reduction
-# research can never trivialize the reroll Salvage sink (the economy's
-# anti-inflation valve, design §5) nor raise costs. A module constant
-# rather than a balance field (deliberate, task 5.4): the shipped tech is
-# 0.75, well above the floor, so this is a stacking guard, not a tuning
-# lever — promote to balance.yaml if a second economy-cost tech ships.
+# Floor for the researched ``salvage_cost_mult``, clamped to ``[floor, 1.0]``
+# (mirroring ``building_system._build_cost_multiplier``) so stacked
+# cost-reduction research can neither trivialize the reroll Salvage sink nor
+# raise costs. A module constant rather than a balance field because the
+# shipped tech is 0.75 — this is a stacking guard, not a tuning lever.
+# Promote to balance.yaml if a second economy-cost tech ships.
 SALVAGE_COST_MULT_FLOOR = 0.5
 
 # Master Gunsmithing craft-floor cap (item-loot-economy task 6.4, R11.6):
@@ -92,27 +84,23 @@ CRAFT_IQS_FLOOR_CAP = 0.5
 class EquipmentSystem(BenchGateMixin, CarryWeightMixin, StorageMixin, BaseSystem):
     """Mediates equipment production, item actions, carry weight, and storage.
 
-    The single use-case for the equipment/weapons/special-items feature: it
-    routes per-tick item production (Armorer/Medbay/Lab) into the owner's
+    Routes per-tick item production (Armory/Medbay/Lab) into the owner's
     stores, mediates equip/unequip/use/throw/reload with rank gating, computes
     the weight-based carry cap, and moves resources between a player's
     Spend_Pool and a Storage_Building (with over-capacity spill). All
     player-facing text is emitted as ``PLAYER_NOTIFICATION`` events for the
     presenter; the system composes no strings.
 
-    Two of those concerns live in mixins combined here (mirroring the
-    ``AgentSystem`` split, same MRO/zero behavior change): the carry-weight
-    model in :class:`~world.systems.equipment_carry.CarryWeightMixin` and the
-    Vault/HQ storage + inflow choke point in
+    Carry weight lives in
+    :class:`~world.systems.equipment_carry.CarryWeightMixin` and the Vault/HQ
+    storage + inflow choke point in
     :class:`~world.systems.equipment_storage.StorageMixin`.
 
     Args:
         registry: The DataRegistry holding item/building definitions.
         event_bus: The EventBus for publishing game events.
-        create_item_func: Optional factory callable for creating item
-            objects. Signature: ``(item_def, owner) -> item``.
-            If not provided, uses a default that creates a simple
-            dict-like item.
+        create_item_func: Optional ``(item_def, owner) -> item`` factory;
+            defaults to a dict-like item.
     """
 
     def __init__(
@@ -123,47 +111,25 @@ class EquipmentSystem(BenchGateMixin, CarryWeightMixin, StorageMixin, BaseSystem
     ) -> None:
         super().__init__(registry, event_bus)
         self._create_item_func = create_item_func or self._default_create_item
-        # Injected collaborator (composition root wires this via
-        # ``set_powerup_system``) — used by ``use`` to apply consumable buffs
-        # through the real timed-effect machinery rather than reaching into a
-        # global service locator. Keeps ``world/systems`` framework-free.
+        # Collaborators injected by the composition root via the set_* methods
+        # below, rather than reached through a global service locator, so
+        # ``world/systems`` stays framework-free. Each degrades safely when
+        # unwired (isolated tests) — see the individual setters.
+
+        #: Applies consumable buffs through the real timed-effect machinery.
         self._powerup_system: Any = None
-        # Injected supply-drop spawner (composition root wires this via
-        # ``set_supply_drop_spawner``). A callable ``(player, item_key, count)``
-        # that re-creates a ground pickup for supply units that could not be
-        # carried (over stack/weight). ``add_supply_drop`` calls it to spill the
-        # leftover so supplies are never destroyed (D9). Kept as an injected
-        # callable — rather than a ``game_systems``/``typeclasses`` reach at
-        # module scope — so ``world/systems`` stays framework-free and the
-        # layering guard stays green; when unwired the spill degrades to a log.
+        #: ``(player, item_key, count)`` — respawns a ground pickup for supply
+        #: units that exceeded stack/weight, so supplies are never destroyed.
         self._supply_drop_spawner: Callable[[Any, str, int], Any] | None = None
-        # Injected resource-drop spawner (composition root wires this via
-        # ``set_resource_drop_spawner`` — see game_init, task 11.1). A callable
-        # ``(holder, resource, amount)`` that spawns a ``ResourceDrop`` at the
-        # holder's coords for the over-capacity remainder of an inflow into a
-        # *holder pool* (a player's Spend_Pool or a Storage_Building's pool).
-        # ``add_resource_capped`` calls it to spill the leftover so resources
-        # are never destroyed (D9, Req 16.8). Mirrors the supply-drop spawner
-        # pattern: an injected callable rather than a
-        # ``game_systems``/``typeclasses`` reach at module scope, so
-        # ``world/systems`` stays framework-free and the layering guard stays
-        # green; when unwired the spill degrades to a log.
+        #: ``(holder, resource, amount)`` — spills the over-capacity remainder
+        #: of an inflow into a holder pool as a ResourceDrop at their coords.
         self._resource_drop_spawner: Callable[[Any, str, int], Any] | None = None
-        # Injected gear-drop spawner (composition root wires this via
-        # ``set_gear_drop_spawner``). A callable ``(building, item_def)`` that
-        # spawns a unique equippable Gear ``GameItem`` as a GROUND DROP on the
-        # building's tile (indexed), used by PASSIVE/agent production so produced
-        # gear lands on the map for the player to ``get`` rather than teleporting
-        # into their inventory. When unwired (isolated tests), the gear branch
-        # falls back to the ``_create_item_func`` inventory factory.
+        #: ``(building, item_def)`` — passive/agent production drops gear on the
+        #: building's tile to be picked up, not into the owner's inventory.
+        #: Unwired, the gear branch falls back to ``_create_item_func``.
         self._gear_drop_spawner: Callable[[Any, Any], Any] | None = None
-        # Injected PvP gear drop-on-death spawner (composition root wires this
-        # via ``set_pvp_gear_drop_spawner``). A callable ``(victim, item_def) ->
-        # obj`` that spawns a ground-pickup Gear ``GameItem`` on the VICTIM's
-        # death tile (indexed) so a killer can collect it. Used by
-        # ``apply_death_loss`` for the underdog-bounty drop; when unwired (PvE or
-        # isolated tests) no drop happens and the gear is simply destroyed as
-        # before.
+        #: ``(victim, item_def)`` — the PvP underdog-bounty drop on the victim's
+        #: death tile. Unwired (PvE), the gear is destroyed instead.
         self._pvp_gear_drop_spawner: Callable[[Any, Any], Any] | None = None
 
     # ------------------------------------------------------------------ #
@@ -2259,11 +2225,9 @@ class EquipmentSystem(BenchGateMixin, CarryWeightMixin, StorageMixin, BaseSystem
     ) -> bool:
         """Shared bench gate: ownership + operational (offline/upgrading).
 
-        Thin alias of :meth:`BenchGateMixin.check_owner_operational`, which owns
-        the single implementation shared by the five identical tails in
-        craft/insert/reroll/salvage/refine AND by the Survey Array's ``survey``.
-        Kept as a private name because those five call sites read better with it
-        and it documents the gate as part of this system's bench contract.
+        Alias of :meth:`BenchGateMixin.check_owner_operational`, kept under a
+        private name because the craft/insert/reroll/salvage/refine call sites
+        read better with it.
         """
         return self.check_owner_operational(
             player, building, fail_kind, **payload
@@ -2274,10 +2238,8 @@ class EquipmentSystem(BenchGateMixin, CarryWeightMixin, StorageMixin, BaseSystem
     ) -> bool:
         """Return ``True`` if *player*'s rank satisfies *required_rank*.
 
-        Shared by :meth:`equip` and :meth:`use`. When the item declares a
-        ``required_rank`` the player does not meet, emits an ``equip_denied``
-        notification and returns ``False``. An unknown rank name falls open
-        (returns ``True``) — content is load-validated, matching TechSystem.
+        Emits ``equip_denied`` and returns ``False`` when it does not. An
+        unknown rank name falls open — content is load-validated.
         """
         if not required_rank:
             return True
@@ -2304,31 +2266,24 @@ class EquipmentSystem(BenchGateMixin, CarryWeightMixin, StorageMixin, BaseSystem
         """Strip everything the *player* was carrying on death, recovering a
         building-level-scaled fraction into their Respawn building's stash.
 
-        On death a player loses ALL equipped gear, their Supply_Bag, and their
-        CARRIED resources (base storage in an HQ/Vault is untouched — death
-        strips the character, not the base). If the player owns a Respawn
-        building (``RESPAWN_POINT`` capability) on the planet they died on, a
-        fraction of what they held is recovered into that building's
-        ``db.recovery_stash`` for collection when they respawn there; the rest is
-        destroyed. With NO respawn building the loss is total — the building IS
-        the safety net.
+        Death strips the character, not the base: all equipped gear, the
+        Supply_Bag, and CARRIED resources are lost, while HQ/Vault storage is
+        untouched. An owned ``RESPAWN_POINT`` building on the death planet
+        recovers a fraction into its ``db.recovery_stash``; with no respawn
+        building the loss is total — the building IS the safety net.
 
-        Recovery fraction = ``RESPAWN_RECOVERY_BY_LEVEL[building_level]`` (55% at
-        L1 → 95% at L5). Applied per-item probabilistically (each equipped item
-        and each supply unit is recovered with that chance) and as
+        The fraction is ``RESPAWN_RECOVERY_BY_LEVEL[building_level]`` (55% at L1
+        → 95% at L5), applied per-item probabilistically and as
         ``floor(pct × amount)`` of each carried resource stack.
 
-        PvP gear drop (underdog bounty): when *killer* is the real player who
-        defeated this player, each equipped gear item that is NOT recovered into
-        the victim's stash (i.e. would be destroyed) rolls to DROP as a ground
-        pickup on the victim's tile instead — with probability
-        ``pvp_gear_drop_base_chance`` plus a per-level underdog bonus when the
-        victim outranks the killer, clamped to ``pvp_gear_drop_max_chance``. Only
-        equipped gear drops; supplies and resources are never dropped. *killer*
-        is None for PvE/agent/self/ally deaths → no drop (unchanged behavior).
+        PvP underdog bounty: when *killer* is a real player, each equipped item
+        NOT recovered rolls to drop as a ground pickup on the victim's tile,
+        at ``pvp_gear_drop_base_chance`` plus a per-level bonus when the victim
+        outranks the killer, clamped to ``pvp_gear_drop_max_chance``. Only
+        equipped gear drops. *killer* is None for PvE/agent/self/ally deaths.
 
-        Returns a summary dict ``{recovered, lost, dropped, building}`` for
-        notification; never raises (a recovery failure must not break combat).
+        Returns ``{recovered, lost, dropped, building}``; never raises, since a
+        recovery failure must not break combat.
         """
         from world.constants import RESPAWN_POINT, RESPAWN_RECOVERY_BY_LEVEL
         from world.utils import (

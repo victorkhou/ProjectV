@@ -12,7 +12,7 @@ mirroring how ``world.player_lifecycle`` co-locates the FSM and its helpers:
   ``db.alliance_rank`` on a ``CombatCharacter``). All founding, invite, join,
   leave, kick, disband, transfer, treasury, and perk mutations route through it.
 
-Design invariants (see .kiro/specs/alliance):
+Design invariants:
 
 * **Single writer** — no other module writes an Alliance_Record or a
   Member_Pointer (the admin router routes through this system too).
@@ -23,40 +23,30 @@ Design invariants (see .kiro/specs/alliance):
   attributes, so every read coalesces ``None`` and compares with ``is None`` /
   ``==`` (never ``hasattr`` on ``db``, never truthiness on ``player_alliance``).
 * **Read-modify-reassign** — in-place mutation of a ``SaverDict``/``SaverSet`` is
-  unreliable in this codebase; every treasury/roster/active_perks/pending-*
-  mutation reads, mutates a plain copy, and writes the whole container back.
-* **Roster rebuildable** — the roster is reconstructable from the per-character
+  unreliable here; every treasury/roster/active_perks/pending-* mutation reads,
+  mutates a plain copy, and writes the whole container back.
+* **Roster rebuildable** — reconstructable from the per-character
   Member_Pointers via ``search_object_attribute`` (NOT a ``db_strvalue`` filter,
   which matches nothing for a pickled int).
-* **Shallow integration** — ``owner_has_active_hq`` / ``active_hq_owner_ids`` are
-  never consulted or modified here; an ally's HQ does not power your base.
+* **Shallow integration** — an ally's HQ does not power your base;
+  ``owner_has_active_hq`` is never consulted here.
 
-Known constraints (settled simplifications — see .kiro/specs/alliance R16):
+Accepted simplifications:
 
-* **Even-split on disband** — the treasury is split across the CURRENT roster
-  (remainder to the Leader), not discarded. RESIDUAL RISK (accepted, not solved):
-  because officer withdraws are capped rather than the disband being a
-  recent-window split, a Leader can still kick everyone THEN disband to keep the
-  whole split. Documented, not defended against.
-* **Grandfathered perks** — an activated perk stays active even if the alliance
-  level later drops below its tier (activation is a permanent purchase); the
-  level-recompute path is read-only for perks.
-* **Kept fog residual-intel** — tiles / enemy-building intel discovered through
-  an ally's vision persist as ordinary discovered memory after a member leaves
-  (only LIVE shared vision cuts off on leave).
-* **Free founding, uncapped treasury** — founding costs no resources and the
-  treasury has no capacity cap in v1; officer count IS capped
+* Disband even-splits the treasury across the current roster (remainder to the
+  Leader). A Leader can still kick everyone then disband to keep the whole
+  split — known, not defended against.
+* An activated perk stays active if the alliance level later drops below its
+  tier; activation is a permanent purchase.
+* Intel discovered through an ally's vision persists as ordinary fog memory
+  after they leave; only LIVE shared vision cuts off.
+* Founding is free and the treasury uncapped; officer count is capped
   (``alliance_max_officers``) to keep withdraw/kick privilege scarce.
-* **Single-character-per-account** — membership is per-CHARACTER while chat is
-  per-ACCOUNT; this is coherent only while ``MAX_NR_CHARACTERS == 1`` (multi-char
-  is out of scope).
-* **Best-effort reconciliation** — roster/pointer consistency is reconciled on
-  registry load + on demand (no timer); the Member_Pointer is the tiebreaker. An
-  absent Leader is handled by reconcile succession or a proactive Officer
-  ``claim``. Treasury deposit/withdraw is protected by ordered writes + a
-  pre-write re-read + in-call rollback, not a cross-object transaction.
-* **First-guess tuning** — the score weights, decay knobs, level thresholds, and
-  the perk catalog are all first-guess values flagged for live balancing.
+* Membership is per-CHARACTER while chat is per-ACCOUNT — coherent only while
+  ``MAX_NR_CHARACTERS == 1``.
+* Roster/pointer consistency is reconciled on registry load and on demand (no
+  timer), with the Member_Pointer as tiebreaker. Treasury writes use ordered
+  write + pre-write re-read + in-call rollback, not a cross-object transaction.
 """
 
 from __future__ import annotations

@@ -94,13 +94,12 @@ def resting_activity_status(agent: Any) -> str:
     """Return the *resting* activity status for *agent* — what it shows when
     stationed and not mid-action.
 
-    This is the single authority for the resting status. It is a pure function
-    of the agent's persistent state (incapacitated / reserve / role /
-    role_target), so no caller has to *guess* the status and no two writers can
-    disagree. In particular the movement engine (``NPC.advance_movement``),
-    which knows nothing about roles, calls this on arrival instead of
-    hardcoding ``"Idle"`` — the defect that left an engineer at a producing
-    Armory stuck reading "Idle" (it has no per-tick status writer of its own).
+    The single authority for the resting status: a pure function of the agent's
+    persistent state (incapacitated / reserve / role / role_target), so no
+    caller has to guess it and no two writers can disagree. The movement engine
+    (``NPC.advance_movement``) knows nothing about roles, so it calls this on
+    arrival rather than hardcoding ``"Idle"`` — otherwise an engineer at a
+    producing Armory reads "Idle", having no per-tick status writer of its own.
 
     Transient, moment-to-moment statuses (``"Harvesting Wood"``,
     ``"Patrol blocked — retrying"``, ``"Delivering ..."``) are NOT resting
@@ -152,13 +151,12 @@ def resting_activity_status(agent: Any) -> str:
 def coords_of(entity: Any) -> tuple[int, int, str | None] | None:
     """Return *entity*'s overworld coordinates as ``(x, y, planet)``, or None.
 
-    The single coordinate-read implementation (Coordinate_Accessor). Returns
-    None when the entity has no ``db`` handler or when either ``coord_x`` or
-    ``coord_y`` is absent/None — never raises. ``planet`` is the stored
-    ``coord_planet`` value or None when unset. Values are returned as stored
-    (no coercion); every write path int-coerces via ``place_on_tile``, so x/y
-    are ints in practice. This function is the one sanctioned home of the
-    defensive nested-getattr coordinate read; all other sites call it.
+    The single coordinate-read implementation, and the only place the defensive
+    nested-getattr read belongs — every other site calls it. Returns None when
+    the entity has no ``db`` handler or either coordinate is unset; never raises.
+    ``planet`` is the stored ``coord_planet`` or None. Values come back as
+    stored: every write path int-coerces via ``place_on_tile``, so x/y are ints
+    in practice.
     """
     db = getattr(entity, "db", None)
     if db is None:
@@ -205,10 +203,13 @@ def chebyshev_distance(x1: int, y1: int, x2: int, y2: int) -> int:
     """Return the Chebyshev (chessboard) distance between two coordinate pairs.
 
     ``max(|dx|, |dy|)`` — a diagonal step counts as distance 1, so all eight
-    surrounding tiles are "1 away". This is the SINGLE distance metric for the
-    game's spatial reach: combat range/adjacency, guard/turret target
-    acquisition, and throw AoE all use it, matching the Chebyshev vision circles
-    used by fog-of-war. So "1 north and 1 west" (a diagonal) is in melee reach.
+    surrounding tiles are "1 away" and "1 north and 1 west" is in melee reach.
+    The single distance metric for the game's spatial reach: combat
+    range/adjacency, guard/turret acquisition, and throw AoE all use it,
+    matching the Chebyshev vision circles used by fog-of-war.
+
+    NOTE: ``BuildingSystem`` uses Manhattan distance for build-range gating, so
+    build reach is deliberately narrower on diagonals than everything else.
     """
     return max(abs(x1 - x2), abs(y1 - y2))
 
@@ -445,27 +446,19 @@ def get_building_level(building: Any) -> int:
 
 
 def is_player(entity: Any) -> bool:
-    """Return True if the entity is a ``CombatEntity`` — i.e. a mobile combat unit.
+    """Return True if *entity* is a ``CombatEntity`` — a mobile combat unit.
 
-    Despite the name, this is really "is this a combat entity that carries
-    ``db.combat_xp``": that covers player characters AND every NPC
-    (``CombatEntity``: player-owned agents AND enemy-base guards). It does NOT
-    cover buildings/items/drops (``GameEntity`` only, no ``combat_xp``). Callers
-    that mean specifically "player character" should additionally check
-    ``has_account`` / ``npc_type``; callers that mean "any movable combat unit"
-    (e.g. the ``transfer`` admin command, which pulls players AND NPCs but must
-    reject fixed structures) use this predicate as-is. Combat routing relies on
-    the same breadth — see ``combat_engine`` / ``base_elimination`` ("enemy NPCs
-    also satisfy is_player").
+    Despite the name this means "carries ``db.combat_xp``", which covers player
+    characters AND every NPC (player-owned agents and enemy-base guards) but not
+    buildings/items/drops. Callers meaning strictly "player character" should
+    also check ``has_account`` / ``npc_type``; callers meaning "any movable
+    combat unit" (e.g. the ``transfer`` admin command) use it as-is.
 
-    The check reads the VALUE of ``combat_xp``, not merely whether the attribute
-    is accessible: on a real Evennia object ``db`` is a ``DbHolder`` whose
-    ``__getattribute__`` returns ``None`` for any unset attribute and never
-    raises, so ``hasattr(entity.db, "combat_xp")`` is ``True`` for *every* object
-    with a ``.db``. A value-based check (``combat_xp is not None``) correctly
-    excludes buildings, whose ``combat_xp`` is unset (``None``). ``combat_xp`` is
-    always initialised to ``0`` on a CombatEntity, so a live unit still reads a
-    non-``None`` value.
+    The check reads the VALUE of ``combat_xp`` rather than using ``hasattr``:
+    an Evennia ``DbHolder`` returns ``None`` for any unset attribute and never
+    raises, so ``hasattr(entity.db, ...)`` is True for every object with a
+    ``.db``. ``combat_xp`` is initialised to ``0`` on a CombatEntity, so a live
+    unit reads non-``None`` while a building reads ``None``.
     """
     if entity is None or not hasattr(entity, "db"):
         return False
@@ -590,17 +583,15 @@ def get_player_level(entity: Any, default: int = 1) -> int:
 
 
 def award_player_xp(player: Any, amount: int, reason: str = "") -> bool:
-    """Award *amount* XP to *player* through RankSystem (the single choke point).
+    """Award *amount* XP to *player* through RankSystem — the single choke point.
 
-    The one shared "give a player XP" path for every economy/directive source
-    (build/upgrade/harvest/train/directive rewards — R1, R10), so the
-    resolve-RankSystem-and-award plumbing cannot drift between systems. Routes
-    through ``RankSystem.award_xp`` (level/rank recompute + LEVEL_CHANGED /
-    RANK_* events); never writes ``db.combat_xp`` directly.
+    The shared path for every economy/directive XP source
+    (build/upgrade/harvest/train/directive rewards). Routes through
+    ``RankSystem.award_xp`` (level/rank recompute + LEVEL_CHANGED / RANK_*
+    events); never writes ``db.combat_xp`` directly.
 
     Silent no-op (returns False) when *player* is None, *amount* <= 0, or the
-    RankSystem is unavailable (isolated tests / partial boots) — economy XP is
-    a reward, never a crash source.
+    RankSystem is unavailable — economy XP is a reward, never a crash source.
     """
     if player is None or not amount or amount <= 0:
         return False
@@ -788,37 +779,24 @@ def tile_aura_level(
 ) -> int:
     """Level-scaled tile-aura bonus at *entity*'s tile (0..3).
 
-    THE single implementation of the positional-aura read shared by the
-    Sniper Nest range aura (``RANGE_AURA``, R10.1), the Watchtower vision
-    aura (``VISION_AURA``, R10.2), and the Field Hospital heal aura
-    (``HEAL_AURA``, R10.3) — previously three hand-rolled copies in
-    CombatEngine / FogOfWarSystem / RegenSystem that had already diverged
-    on owner attribution and error guards (DRY H2 fix).
+    The shared positional-aura read behind the Sniper Nest range aura
+    (``RANGE_AURA``), the Watchtower vision aura (``VISION_AURA``), and the
+    Field Hospital heal aura (``HEAL_AURA``).
 
-    Grants ``1 + (level - 1) // 2`` → L1 +1, L3 +2, L5 +3 (the shared aura
-    curve: meaningful at L1, +1 per two levels so a maxed aura never
-    exceeds +3 — matching the tech-bonus magnitude ceiling) when the
-    building on *entity*'s tile (the same ``_building_on_tile`` read
-    ``player_is_sheltered`` uses):
+    Grants ``1 + (level - 1) // 2`` → L1 +1, L3 +2, L5 +3, capping at the
+    tech-bonus magnitude ceiling, when the building on *entity*'s tile:
 
-    - declares *capability* (checked via :func:`building_has_capability`
-      against *provider*, falling back to the live registry when None),
-    - is OWNED by the entity's owning player — resolved via
-      *resolve_owner* (default :func:`_aura_owning_player`: a player is
-      its own owner; an owner's AGENT on the tile also benefits). NOTE:
-      this unifies the fog-of-war aura on the owning-player attribution
-      the range/heal auras already used — an owned agent on a Watchtower
-      tile extending its owner's vision is consistent with the other two
-      auras (previously fog attributed to the raw player only), and
-    - is operational (not offline / mid-upgrade / mid-construction —
-      the same "is it doing its job" gate as turrets/production).
+    - declares *capability* (via :func:`building_has_capability` against
+      *provider*, falling back to the live registry when None),
+    - is OWNED by the entity's owning player, resolved via *resolve_owner*
+      (default :func:`_aura_owning_player`: a player owns itself, and an
+      owner's AGENT on the tile benefits on their behalf), and
+    - is operational (not offline / mid-upgrade / mid-construction).
 
-    Strictly ON-TILE and OWNER-ONLY — positional, not permanent (decided
-    §12: adjacency/radius is an explicit later extension, not shipped;
-    standing on someone ELSE's aura building grants nothing). Returns 0 in
-    every other case and NEVER raises (full-body guard): a corrupted
-    building read — e.g. ``building_level`` stored as None — degrades to 0
-    instead of blowing up combat/fog/regen (the L1 TypeError fix).
+    Strictly ON-TILE and OWNER-ONLY: standing on someone else's aura building
+    grants nothing, and adjacency/radius is a deliberate non-feature. Returns
+    0 in every other case and never raises, so a corrupted building read
+    degrades to 0 rather than breaking combat/fog/regen.
     """
     try:
         room = getattr(entity, "location", None)
@@ -1198,29 +1176,20 @@ def _building_planet(building: Any) -> Any:
 def owner_has_active_hq(owner: Any, planet: Any = None, provider: Any = None) -> bool:
     """Return True if *owner* has a live (non-under-construction) HQ on *planet*.
 
-    This is the "no HQ = base inert" predicate: it gates turret auto-fire,
-    guard combat AI, equipment production, and building-specific commands, so
-    that destroying a base's HQ deactivates the whole base until an HQ is
-    rebuilt (PvP) — or, for an NPC base, until it is wiped (PvE). It is a live
-    query with no stored state: the moment a new HQ finishes construction, this
-    flips back to True and every gated system reactivates on the next tick.
+    The "no HQ = base inert" predicate gating turret auto-fire, guard combat AI,
+    equipment production, and building-specific commands, so destroying a base's
+    HQ deactivates the whole base until one is rebuilt. A live query with no
+    stored state: the moment a new HQ completes, every gated system reactivates
+    on the next tick.
 
-    Shares the ``get_buildings`` enumeration + ``HEADQUARTERS`` capability check
-    with :func:`_owner_hq_buildings`, which ``BuildingSystem._player_has_hq``
-    also uses (Req 12.5), so the "does this owner have an HQ" logic lives in one
-    place. Unlike ``_player_has_hq`` (which counts an HQ under construction, to
-    enforce one-HQ-per-planet at build time), this predicate ignores an HQ that
-    is still ``under_construction`` — a half-built HQ does not power the base.
+    Unlike ``BuildingSystem._player_has_hq`` (which counts an in-progress HQ to
+    enforce one-per-planet at build time), a half-built HQ does not count here.
 
     Args:
         owner: The building/agent owner (a Character, or an NPC Sentinel).
         planet: Planet key to scope the search to. ``None`` means any planet.
         provider: Optional DefinitionsProvider for the capability lookup
             (injected in tests); defaults to the live registry.
-
-    Returns:
-        ``True`` if *owner* has at least one completed HQ (optionally on
-        *planet*); ``False`` otherwise.
     """
     for hq in _owner_hq_buildings(owner, planet=planet, provider=provider):
         if not get_obj_attr(hq, "under_construction", False):

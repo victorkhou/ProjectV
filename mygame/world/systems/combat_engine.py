@@ -25,23 +25,20 @@ from world.services import get_service
 from world.systems.base_system import BaseSystem
 
 
-#: Upper clamp on the researched ``poison_dot_mult`` tech multiplier read
-#: by :meth:`CombatEngine._apply_poison_dot` (Toxicology, item-loot-economy
-#: R11.5, task 6.4). The tech accumulator ADDS effect values, so a second
-#: poison tech would SUM multipliers (1.25 + 1.25 = 2.5 — nonsense as a
-#: multiplier); the clamp to ``[1.0, cap]`` absorbs additive stacking and
-#: keeps a boosted DoT counterable (regen/medkits still out-heal a light
-#: DoT — the R9.4 counter). Only one poison_dot_mult tech is the supported
-#: data shape; promote to balance.yaml if a second ships.
+#: Upper clamp on the researched ``poison_dot_mult`` tech multiplier read by
+#: :meth:`CombatEngine._apply_poison_dot`. The tech accumulator ADDS effect
+#: values, so a second poison tech would SUM multipliers (1.25 + 1.25 = 2.5,
+#: nonsense for a multiplier); clamping to ``[1.0, cap]`` absorbs that and
+#: keeps a boosted DoT out-healable by regen/medkits. One poison_dot_mult tech
+#: is the supported data shape; promote to balance.yaml if a second ships.
 POISON_DOT_MULT_CAP = 1.5
 
 
 def _tile_distance(x1: int, y1: int, x2: int, y2: int) -> int:
-    """Return the tile-reach distance between two coords (Chebyshev).
+    """Return the Chebyshev tile-reach distance between two coords.
 
-    Delegates to :func:`world.utils.chebyshev_distance` — the single metric for
-    combat range/adjacency, so a diagonal tile is distance 1 (reachable by a
-    range-1 melee weapon), matching the vision model.
+    Delegates to :func:`world.utils.chebyshev_distance`, so a diagonal tile is
+    distance 1 (reachable by a range-1 melee weapon), matching the vision model.
     """
     from world.utils import chebyshev_distance
     return chebyshev_distance(x1, y1, x2, y2)
@@ -1940,21 +1937,17 @@ class CombatEngine(BaseSystem):
         return dist <= weapon_range
 
     def _tile_range_bonus(self, attacker: Any) -> int:
-        """Tile/building range bonus at *attacker*'s tile (R8, R10.1).
+        """Tile/building range bonus at *attacker*'s tile.
 
-        The Sniper Nest term of the R8 range formula, delegated to the ONE
-        shared aura read :func:`world.utils.tile_aura_level` (DRY H2 —
-        also used by the Watchtower vision and Field Hospital heal auras),
-        with the ``RANGE_AURA`` capability and this engine's
-        ``_owning_player`` as the owner resolver (R10.1 — the aura serves
-        the player who built it; an owner's AGENT on the tile also
-        benefits, mirroring the tech-bonus attribution; an enemy-NPC guard
-        resolves no owner and gets nothing).
+        The Sniper Nest term of the range formula, delegated to the shared aura
+        read :func:`world.utils.tile_aura_level` with the ``RANGE_AURA``
+        capability and this engine's ``_owning_player`` as the owner resolver:
+        the aura serves the player who built it, an owner's AGENT on the tile
+        also benefits, and an enemy-NPC guard resolves no owner so gets nothing.
 
-        Strictly ON-TILE and OWNER-ONLY — positional, not permanent
-        (decided §12). Returns 0 in every other case and never raises; the
-        caller (:meth:`resolve_weapon_range`) still clamps the stacked
-        total to ``balance.max_weapon_range``.
+        Strictly ON-TILE and OWNER-ONLY. Returns 0 in every other case and never
+        raises; the caller (:meth:`resolve_weapon_range`) still clamps the
+        stacked total to ``balance.max_weapon_range``.
         """
         from world.constants import RANGE_AURA
         from world.utils import tile_aura_level

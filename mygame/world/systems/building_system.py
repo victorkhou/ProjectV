@@ -971,10 +971,10 @@ class BuildingSystem(BaseSystem):
         Every research building (Weapons/Defense/Resource/Research Lab) carries
         the ``research_lab`` capability and hosts one tree. Owning a lab is how
         research is gated, so allowing two would let a planet research two trees
-        ??? the feature's core constraint is that a tree is a committed choice.
+        — the feature's core constraint is that a tree is a committed choice.
         A player may still build a DIFFERENT lab on another planet. Planet-scope
         the count the same way the Shield Generator cap does; when the target
-        planet is unknown, count all owned labs (fail safe ??? never over-cap).
+        planet is unknown, count all owned labs (fail safe — never over-cap).
         Returns an error message or None.
         """
         from world.constants import RESEARCH_LAB
@@ -990,7 +990,7 @@ class BuildingSystem(BaseSystem):
                 if b_planet is not None and b_planet != planet:
                     continue
             return (
-                "You can only have one research lab per planet ??? it sets your "
+                "You can only have one research lab per planet — it sets your "
                 "tech tree. Demolish it to switch trees."
             )
         return None
@@ -1182,11 +1182,11 @@ class BuildingSystem(BaseSystem):
         more than a fresh one.
 
         When *owner* is given, every term is priced with the owner's clamped
-        ``build_cost_mult`` tech discount — the SAME discounted basis
-        :meth:`get_build_cost` / :meth:`get_upgrade_cost` charged on the way
-        in (F5 review fix: repair previously billed against the UNDISCOUNTED
-        investment, overcharging Efficient Construction players; pass the
-        building's owner on every pricing path so charge and basis match).
+        ``build_cost_mult`` tech discount — the same discounted basis
+        :meth:`get_build_cost` / :meth:`get_upgrade_cost` charged on the way in.
+        Pass the building's owner on every pricing path so the repair charge and
+        the investment basis match; otherwise Efficient Construction players are
+        billed against an undiscounted investment.
         """
         total: dict[str, float] = {
             res: float(amt)

@@ -162,9 +162,8 @@ class RegenSystem(BaseSystem):
     def _tile_heal_bonus(self, entity: Any) -> int:
         """Field Hospital heal aura at *entity*'s tile (item-loot-economy R10.3).
 
-        The Field Hospital term of the passive heal, delegated to the ONE
-        shared aura read :func:`world.utils.tile_aura_level` (DRY H2 — also
-        used by the Sniper Nest range and Watchtower vision auras) with the
+        The Field Hospital term of the passive heal, delegated to the shared
+        aura read :func:`world.utils.tile_aura_level` with the
         ``HEAL_AURA`` capability: grants ``1 + (level - 1) // 2`` → L1 +1,
         L3 +2, L5 +3 extra HP per regen interval while the entity's owning
         player stands on their OWN, OPERATIONAL heal-aura building's tile.
