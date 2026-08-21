@@ -40,9 +40,7 @@ from world.constants import (
 # Default maximum build range (Manhattan distance)
 DEFAULT_BUILD_RANGE = 10
 
-# ``MAX_BUILDING_LEVEL`` is imported from ``world.constants`` (the single
-# structural source) and re-exported here for backward compatibility with
-# callers/tests that import it from this module.
+# ``MAX_BUILDING_LEVEL`` re-exported from ``world.constants`` for backward compatibility.
 __all__ = ["BuildingSystem", "MAX_BUILDING_LEVEL", "DEFAULT_BUILD_RANGE"]
 
 
@@ -89,9 +87,8 @@ class BuildingSystem(BaseSystem):
         self._factory: "BuildingFactory" = building_factory or EvenniaBuildingFactory()
         self._create_building_func = create_building_func or self._factory.create_building
         self._terrain_provider = terrain_provider
-        # TerrainModifierSystem for placement feedback (terrain-strategy
-        # Req 8.3); injected at the composition root like terrain_provider,
-        # with a services-lookup fallback when unset.
+        # TerrainModifierSystem for placement feedback; injected at the
+        # composition root, with a services-lookup fallback when unset.
         self._terrain_modifier_resolver: Any | None = None
         self.build_range = build_range
         self._current_tick_func = current_tick_func or (lambda: 0)
@@ -107,7 +104,7 @@ class BuildingSystem(BaseSystem):
         self._terrain_provider = terrain_provider
 
     def set_terrain_modifier_resolver(self, resolver: Any) -> None:
-        """Inject the TerrainModifierSystem after construction (Req 8.3).
+        """Inject the TerrainModifierSystem after construction.
 
         Wired at the composition root once the per-planet terrain generators
         exist, mirroring :meth:`set_terrain_provider`. When unset, placement
@@ -118,13 +115,11 @@ class BuildingSystem(BaseSystem):
     def _terrain_defense_note(
         self, tile: Any, x: int | None = None, y: int | None = None
     ) -> str:
-        """' [terrain defense +3]' for the target tile, or '' (Req 8.3).
+        """' [terrain defense +3]' for the target tile, or ''.
 
-        The value shown is the tile's BASE Defense_Modifier via
-        ``resolve_base`` — buildings never receive class or technology
-        affinity adjustments (Req 2.6, 5.3). Fail-soft: an unwired or failing
-        resolver, unresolvable coordinates, or an unresolvable terrain type
-        (no generator / no TerrainDef) omit the note rather than raising.
+        Shows the tile's BASE Defense_Modifier via ``resolve_base`` — buildings
+        never receive class or technology affinity adjustments. Fail-soft: an
+        unwired or failing resolver omits the note rather than raising.
         """
         resolver = self._terrain_modifier_resolver
         if resolver is None:
@@ -211,11 +206,9 @@ class BuildingSystem(BaseSystem):
     def _apply_building_hp_tech_bonus(self, owner: Any, building: Any) -> None:
         """Raise a new/upgraded building's hp_max by the owner's tech bonus.
 
-        The ``building_hp`` consumer read point (R13.3): a flat addition from
-        ``db.tech_bonuses`` on top of the level-scaled hp_max the factory or
-        upgrade path just set. Applied at creation and upgrade completion —
-        existing buildings gain it on their next upgrade, matching the
-        "new computations read the bonus" model (no retroactive sweep).
+        A flat addition from ``db.tech_bonuses`` on top of the level-scaled
+        hp_max. Applied at creation and upgrade completion — existing buildings
+        gain it on their next upgrade.
         """
         from world.utils import get_tech_bonus
         bonus = int(get_tech_bonus(owner, "building_hp"))
@@ -237,9 +230,8 @@ class BuildingSystem(BaseSystem):
         """Construct a building on the given tile (instant, for testing/admin).
 
         Returns:
-            (success, message) tuple. Both the acceptance message and every
-            rejection message carry the target tile's base terrain defense
-            modifier when resolvable (Req 8.3).
+            (success, message) tuple. Messages include the target tile's base
+            terrain defense modifier when resolvable.
         """
         terrain_note = self._terrain_defense_note(tile, x=x, y=y)
         building_def, err = self._validate_construction(player, tile, building_abbr, x=x, y=y)
@@ -263,27 +255,13 @@ class BuildingSystem(BaseSystem):
     # ------------------------------------------------------------------ #
 
     def _build_cost_multiplier(self, owner: Any) -> float:
-        """Resolve *owner*'s build-cost tech multiplier (R11.1, design §6.3).
+        """Resolve *owner*'s build-cost tech multiplier.
 
-        Reads the NEW ``build_cost_mult`` tech key via ``get_tech_bonus`` with
-        ``default=1.0`` (no research → costs unchanged). The Efficient
-        Construction tech ships ``effect_value: {build_cost_mult: 0.85}``
-        meaning "costs ×0.85" (−15%).
-
-        Accumulator semantics (documented decision): ``TechSystem.
-        _apply_tech_effect`` ADDS effect values for every key except
-        ``production_multiplier``, so a single ``build_cost_mult`` tech stores
-        its multiplier verbatim (0 + 0.85), which this consumer reads directly.
-        Two such techs would SUM (0.85 + 0.85 = 1.7 — nonsense as a
-        multiplier), so the value is clamped to
-        ``[balance.build_cost_mult_floor, 1.0]``: research can never RAISE
-        costs (upper clamp absorbs additive stacking) and stacking can never
-        trivialize them (the floor, default 0.6). Only one build_cost_mult
-        tech is the supported data shape.
-
-        MUST NOT read ``production_multiplier`` (R11.1) — that key belongs to
-        the production path and would stack multiplicatively with Rapid
-        Production.
+        Reads the ``build_cost_mult`` tech key via ``get_tech_bonus`` (default
+        1.0 = no research → costs unchanged). The value is clamped to
+        ``[balance.build_cost_mult_floor, 1.0]``: research can never raise
+        costs, and stacking can never trivialize them. Does not read
+        ``production_multiplier`` — that key belongs to the production path.
         """
         from world.utils import get_tech_bonus
 
@@ -294,7 +272,7 @@ class BuildingSystem(BaseSystem):
     def get_build_cost(
         self, building_def: BuildingDef, owner: Any = None
     ) -> dict[str, int]:
-        """Resource cost to construct *building_def* for *owner* (R11.1).
+        """Resource cost to construct *building_def* for *owner*.
 
         ``building_def.cost`` × the owner's clamped ``build_cost_mult`` tech
         multiplier (see :meth:`_build_cost_multiplier`), rounded per resource.
@@ -313,9 +291,8 @@ class BuildingSystem(BaseSystem):
         Exponential scaling makes higher levels increasingly expensive,
         creating the resource sink that drives agent utilization. The base is
         the hot-tunable ``balance.upgrade_cost_base``. When *owner* is given,
-        the owner's clamped ``build_cost_mult`` tech multiplier applies on top
-        (R11.1, design §6.3) — pass the owner on every charge/refund path so
-        the two always match.
+        the ``build_cost_mult`` tech multiplier applies on top — pass the owner
+        on every charge/refund path so the two always match.
         """
         multiplier = self.registry.balance.upgrade_cost_base ** (target_level - 1)
         tech_mult = self._build_cost_multiplier(owner)
@@ -604,9 +581,8 @@ class BuildingSystem(BaseSystem):
         """Begin a timed construction requiring player active-presence.
 
         Returns:
-            (success, message) tuple. Both the acceptance message and every
-            rejection message carry the target tile's base terrain defense
-            modifier when resolvable (Req 8.3).
+            (success, message) tuple. Messages include the target tile's base
+            terrain defense modifier when resolvable.
         """
         terrain_note = self._terrain_defense_note(tile, x=x, y=y)
         building_def, err = self._validate_construction(player, tile, building_abbr, x=x, y=y)
@@ -883,7 +859,7 @@ class BuildingSystem(BaseSystem):
     def _validate_deed_requirement(
         self, player: Any, building_def: BuildingDef
     ) -> str | None:
-        """Check the player holds the building's deed gate (R9/D9).
+        """Check the player holds the building's deed gate.
 
         ``unlock_deed`` names a deed the player must have earned at least
         ``unlock_deed_count`` times (``db.deeds`` is a deed-id → count dict;
@@ -1434,13 +1410,11 @@ class BuildingSystem(BaseSystem):
     def _player_has_hq(self, player: Any) -> bool:
         """Check if the player owns a headquarters-capability building.
 
-        Shares the ``get_buildings`` + ``HEADQUARTERS`` enumeration with
-        :func:`world.utils.owner_has_active_hq` via ``_owner_hq_buildings``
-        (Req 12.5). Semantics are unchanged from the previous inline loop: NOT
-        planet-scoped (an HQ anywhere counts, for the one-HQ build gate) and it
-        COUNTS an HQ still under construction — unlike ``owner_has_active_hq``,
-        which excludes a half-built HQ. Passes ``self.registry`` as the
-        capability provider so the check stays hermetic in tests.
+        NOT planet-scoped (an HQ anywhere counts for the one-HQ build gate)
+        and it COUNTS an HQ still under construction — unlike
+        ``owner_has_active_hq``, which excludes a half-built HQ. Passes
+        ``self.registry`` as the capability provider so the check stays
+        hermetic in tests.
         """
         from world.utils import _owner_hq_buildings
         return any(
@@ -1505,7 +1479,7 @@ class BuildingSystem(BaseSystem):
                 new_max_hp = int(bdef.max_health * (1 + 0.2 * (target_level - 1)))
                 self._set_building_attr(building, "hp_max", new_max_hp)
                 self._set_building_attr(building, "hp", new_max_hp)
-                # Owner's researched building_hp tech (R13.3) tops up the
+                # Owner's researched building_hp tech tops up the
                 # recomputed hp_max — the upgrade path recalculates from the
                 # base def, so the bonus must be re-applied here.
                 owner = self._get_building_attr(building, "owner") or player
@@ -1574,7 +1548,7 @@ class BuildingSystem(BaseSystem):
                 player.db.activity_target = None
                 player.db.activity_progress = 0
 
-        # Economy XP award (R1.1, R1.2 — both player-present and engineer paths).
+        # Economy XP award (both player-present and engineer paths).
         # Distinguish: an upgrade has upgrade_target_level set to None (already
         # consumed above), but building_level > 1 after the upgrade branch ran.
         # A new build stays at level 1 with no prior upgrade_target_level.
@@ -1599,7 +1573,7 @@ class BuildingSystem(BaseSystem):
 
     def _award_economy_xp(self, player: Any, reason: str,
                            amount: int | None = None) -> None:
-        """Award economy XP to *player* via RankSystem (R1).
+        """Award economy XP to *player* via RankSystem.
 
         Looks up the amount from ``balance.xp_{reason}`` if not supplied, then
         routes through the shared :func:`world.utils.award_player_xp` choke

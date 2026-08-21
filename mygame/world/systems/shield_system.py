@@ -1,31 +1,16 @@
 """
 Shield System — regenerating damage-absorbing shields from Shield Generators.
 
-A Shield Generator (``shield_generator`` capability) projects a shield onto the
-OWNER's buildings within a level-scaled Chebyshev radius:
+A Shield Generator projects a shield onto the owner's buildings within a
+level-scaled Chebyshev radius. The shield is a second HP bar drained before HP
+(handled by the combat engine). Overlapping generators do NOT stack — a building
+takes the single largest covering shield.
 
-    radius      = balance.shield_base_radius + (level - 1)   (L1 = 2 → a 5x5 area)
-    shield_max  = balance.shield_hp_fraction * level * (covered building's hp_max)
-                  (L1 = 25%, L2 = 50%, L4 = 100%, L5 = 125% of each building's HP)
-
-A shield is a second HP bar drained BEFORE HP: the combat engine's
-``_apply_damage`` spends ``db.shield`` first (see CombatEngine). This system owns
-the other half:
-
-  * :meth:`refresh` recomputes every building's ``db.shield_max`` (and clamps
-    ``db.shield``) from the generators currently covering it. Overlapping
-    generators do NOT stack — a building takes the single LARGEST covering
-    shield (``max``). Called on build/upgrade/destroy and defensively on a
-    cadence, so a building always reflects the live generator layout.
-  * :meth:`process_tick` regenerates each shielded building's ``db.shield``
-    toward ``db.shield_max`` at ``shield_regen_percent`` every
-    ``shield_regen_interval_ticks`` (default 1% per 5 ticks), with a sub-point
-    accumulator so small rates aren't lost to integer truncation.
-
-Framework-free: operates on the building objects the tick loop already passes,
-reading/writing plain ``db`` attributes via the shared value-based accessors.
-Grouping is per (owner, planet) so one player's generator never shields another
-player's — or an NPC base's — buildings.
+This system owns two concerns:
+  * :meth:`refresh` — recomputes each building's ``db.shield_max`` from the
+    generators currently covering it, called on build/upgrade/destroy events.
+  * :meth:`process_tick` — regenerates ``db.shield`` toward ``shield_max`` at
+    a configurable percent per interval. Grouping is per (owner, planet).
 """
 
 from __future__ import annotations
@@ -53,14 +38,9 @@ logger = logging.getLogger("mygame.shield_system")
 def _building_planet(building: Any) -> Any:
     """Resolve a building's planet for shield grouping.
 
-    Real ``Building`` objects do NOT store ``db.coord_planet`` — ``place_on_tile``
-    only stamps ``coord_x``/``coord_y`` — so reading that attribute alone would
-    return ``None`` for EVERY building, collapsing the per-planet scope and
-    leaking a generator's shield across planets. Fall back to the building's
-    location (the ``PlanetRoom``): its ``db.planet`` / ``planet_name``. Returns
-    the planet key, or ``None`` only when nothing resolves (a truly locationless
-    building — then all such of an owner's buildings still group together, which
-    is harmless since they can't be on different real planets).
+    Falls back to the building's location (``PlanetRoom``)'s ``db.planet`` /
+    ``planet_name`` since buildings don't store ``db.coord_planet``. Returns
+    ``None`` only for a truly locationless building.
     """
     planet = get_obj_attr(building, "coord_planet")
     if planet:
@@ -146,21 +126,10 @@ class ShieldSystem(BaseSystem):
     def refresh_owners(self, active_buildings: Iterable[Any]) -> None:
         """Recompute shields for the owners of *active_buildings*, full-roster.
 
-        The tick loop's periodic safety-net sweep. The build/upgrade/destroy
-        event hooks keep shields current on the normal paths, but a building
-        that comes into existence WITHOUT firing one of those events — an admin
-        ``@building spawn``, or a building predating the Shield Generator
-        feature — would otherwise never receive a shield. Running this each
-        regen interval makes shields self-healing regardless of creation path.
-
         For every distinct owner with at least one building in
         *active_buildings*, refreshes that owner's ENTIRE roster
-        (``owner.get_buildings()``). It deliberately does NOT refresh from the
-        chunk-active subset: a covered building and the generator shielding it
-        must be considered together, and a generator just outside the active
-        chunks must not be dropped from the pass (which would spuriously clamp a
-        covered building's ``shield_max`` to 0). Best-effort per owner — one
-        failed roster query never aborts the sweep.
+        (``owner.get_buildings()``). Best-effort per owner — one failed roster
+        query never aborts the sweep.
         """
         seen: set = set()
         for b in active_buildings or ():

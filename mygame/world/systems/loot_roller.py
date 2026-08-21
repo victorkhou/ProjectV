@@ -1,60 +1,28 @@
 """
 Loot roller — per-instance stat rolling.
 
-A pure, RNG-injected service: given an :class:`~world.definitions.ItemDef`
-with a ``roll_spec``, produce the per-instance rolled ``stat_modifiers``
-stamped onto a ``GameItem``. No Evennia, no registry, no globals — all
-randomness arrives through ``rng``, so rolls are deterministic under a seed.
-
-Contract:
-
-- ``roll_item`` never raises: malformed spec fragments are skipped and any
-  unexpected failure degrades to ``None`` (a fixed, unrolled item).
-- Every rolled value is clamped to its ``[min, max]`` band.
+A pure, RNG-injected service: given an ItemDef with a ``roll_spec``, produce
+per-instance rolled ``stat_modifiers`` stamped onto a GameItem. All randomness
+arrives through ``rng``, so rolls are deterministic under a seed.
 
 Distribution::
 
     rolled = min + (max - min) * (U ** skew)    # U ~ uniform(0,1), skew >= 1
 
-``skew=2`` puts the median roll at ~25% of the band, so near-max rolls are
-scarce — that scarcity is the economy.
+``skew=2`` puts the median at ~25% of the band — near-max rolls are scarce.
 
-Crafted items roll in the tighter per-stat ``craft`` band (falling back to
-the loot band when absent). The craft band is always intersected with the
-loot band, so a crafted roll can never escape the loot band on odd data.
+Key concepts:
 
-IQS: :func:`compute_iqs` is the BASE score — the weighted mean of per-stat
-roll quality, 0-100. The displayed score is ``IQS_base + Σ affix.value``
-(:func:`displayed_iqs`), deliberately unclamped so it can read above 100;
-the display layer caps rendering at 999. :func:`recompute_iqs` is the only
-writer of the stamped ``iqs`` — spawn stamping and the Blacksmith
-reroll/insert paths all route through it.
+- **IQS** — weighted mean of per-stat roll quality (0–100 base). Displayed
+  score is ``IQS_base + Σ affix.value``, unclamped (can exceed 100).
+- **Rarity** — assigned by weighted choice from source-bucket tables. Higher
+  tiers clamp ``U`` into ``[floor, 1]`` before the skew, guaranteeing better
+  base rolls without removing variance.
+- **Affixes** — drawn without replacement from category pools; budget set by
+  rarity tier. Crafted items never get affixes.
 
-Rarity: a loot roll assigns a tier by weighted choice over the source
-bucket's row of the rarity table (``balance.rarity_table``, mirrored by
-:data:`DEFAULT_RARITY_TABLE` as a pure fallback). The drop source's
-``source_rarity_weight`` (guard kill 0 < outpost 1 < stronghold 2 <
-fortress 3 < citadel 4) selects the highest-threshold bucket it reaches.
-The tier then raises the roll FLOOR by clamping ``U`` into ``[floor, 1]``
-before the skew — Rare 0.25, Epic 0.50, Legendary 0.75 — so high rarity
-guarantees good base rolls without removing variance.
-
-Crafted rarity draws from a building-level-keyed table
-(``balance.craft_rarity_table``): higher bench levels shift the
-distribution up, reaching Rare at 5% at level 5 and 0% at level 1. Capped
-at Rare — Epic/Legendary are loot-only — and crafted items never roll
-affixes. A rare crafted item applies its 0.25 floor INSIDE the craft band.
-When both a rarity floor and the Master Gunsmithing ``craft_iqs_floor``
-apply, the effective floor is the ``max`` of the two (mirroring the reroll
-path). A ``craft_level`` below 1 skips rarity entirely.
-
-Affixes: the assigned rarity's budget (Common 0 → Legendary 4, see
-:data:`RARITY_AFFIX_BUDGETS`) is drawn WITHOUT replacement from the pool
-named by ``roll_spec.affix_pool``. Each affix rolls its magnitude in its
-own band with the same skew and contributes ``value`` to the displayed
-score: normalized magnitude × pool weight × :data:`AFFIX_VALUE_SCALE`. A
-budget larger than the pool draws whatever is available. Crafted items and
-callers passing no pools get no affixes.
+Contract: ``roll_item`` never raises; malformed specs degrade to ``None``.
+Every rolled value is clamped to its ``[min, max]`` band.
 """
 
 from __future__ import annotations
@@ -65,19 +33,15 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Any
 
-#: Global default for the U**skew exponent. Mirrors the design's
-#: ``balance.loot_roll_skew`` starting value (design §9); the spawn wiring
-#: passes the live balance value via ``default_skew`` once that tunable
-#: lands — this constant is the pure-module fallback.
+#: Default U**skew exponent. The spawn wiring passes the live balance value;
+#: this is the pure-module fallback.
 DEFAULT_LOOT_ROLL_SKEW = 2.0
 
-#: Rarity tiers, low → high (design §3.1). Stored lowercase on instances
-#: (``GameItem.db.rarity``); the display layer capitalizes + colors them.
+#: Rarity tiers, low → high. Stored lowercase on instances.
 RARITY_ORDER = ("common", "uncommon", "rare", "epic", "legendary")
 
-#: Roll-floor U-clamp per rarity (design §3.1): before the skew, ``U`` is
-#: clamped into ``[floor, 1]`` — so Epic/Legendary guarantee base rolls in
-#: the upper part of every band without removing variance (R3.3).
+#: Roll-floor U-clamp per rarity: before the skew, ``U`` is clamped into
+#: ``[floor, 1]`` so higher rarities guarantee better base rolls.
 RARITY_ROLL_FLOORS = {
     "common": 0.0,
     "uncommon": 0.0,
@@ -86,8 +50,7 @@ RARITY_ROLL_FLOORS = {
     "legendary": 0.75,
 }
 
-#: Affix budget per rarity tier (design §3.1, R3.1): the number of affixes
-#: a loot roll of that tier draws from its category pool (task 2.3).
+#: Number of affixes a loot roll of each tier draws from its category pool.
 RARITY_AFFIX_BUDGETS = {
     "common": 0,
     "uncommon": 1,
@@ -96,21 +59,14 @@ RARITY_AFFIX_BUDGETS = {
     "legendary": 4,
 }
 
-#: Scale applied to an affix's normalized magnitude × pool weight to get
-#: its displayed-score ``value`` contribution (design §2.2). Calibrated to
-#: the design's worked example — "4 strong affixes (~27)": a strong roll
-#: (q ≈ 0.7) at weight 1.0 contributes ~7 score points.
+#: Scale applied to an affix's normalized magnitude × pool weight to get its
+#: displayed-score contribution. A strong roll (q ≈ 0.7) at weight 1.0
+#: contributes ~7 score points.
 AFFIX_VALUE_SCALE = 10.0
 
-#: Pure-module fallback for the balance ``rarity_table`` (design §3.2/§9).
-#: Mirrors ``BalanceConfig.rarity_table`` — a sync test in
-#: test_loot_roller.py keeps the two from drifting. Each SOURCE BUCKET row:
-#: ``min_weight`` is the numeric source-rarity-weight threshold that
-#: activates the bucket (the highest reached threshold wins), and
-#: ``weights`` are the relative rarity odds for drops from that source.
-#: Starting numbers per design §9: citadel ≈ {epic 40%, legendary 15%},
-#: guard kill ≈ {common 70%, uncommon 25%, rare 5%}. Production drops pass
-#: weight 0 → the lowest bucket (guard_kill) — the safe-floor treatment.
+#: Fallback rarity table (mirrored by ``BalanceConfig.rarity_table``).
+#: Each source bucket has a ``min_weight`` threshold and relative rarity
+#: ``weights``. The highest-threshold bucket reached by the source wins.
 DEFAULT_RARITY_TABLE = {
     "guard_kill": {
         "min_weight": 0.0,
@@ -138,21 +94,13 @@ DEFAULT_RARITY_TABLE = {
 }
 
 
-#: Rarity tiers a CRAFTED roll may reach (deviation-from-R6.1 decision, see
-#: the module docstring): crafted gear caps at Rare — Epic/Legendary remain
-#: loot-only. ``assign_craft_rarity`` filters any higher tier out of a craft
-#: table row defensively, so even odd data can never mint an epic craft.
+#: Rarity tiers a CRAFTED roll may reach — capped at Rare. Epic/Legendary
+#: are loot-only; higher tiers in craft data are filtered out defensively.
 CRAFT_RARITY_TIERS = frozenset({"common", "uncommon", "rare"})
 
-#: Pure-module fallback for the balance ``craft_rarity_table`` (see the
-#: module docstring's crafted-rarity section). Mirrors
-#: ``BalanceConfig.craft_rarity_table`` — a sync test in test_loot_roller.py
-#: keeps the two from drifting. Keyed by the CRAFTING BUILDING's level
-#: (1–5); a level above the highest key uses the highest row, below the
-#: lowest key means no rarity. Weights sum to 100 per row so they read as
-#: percentages. The curve: L1 has NO Rare chance; Rare rises with level to
-#: EXACTLY 5% at L5 (the user-requested cap), with Uncommon steadily
-#: displacing Common along the way.
+#: Fallback craft rarity table (mirrored by ``BalanceConfig.craft_rarity_table``).
+#: Keyed by crafting building level (1–5). L1 has no Rare chance; Rare rises
+#: to exactly 5% at L5. Levels above the highest key use the top row.
 DEFAULT_CRAFT_RARITY_TABLE = {
     1: {"common": 90, "uncommon": 10},
     2: {"common": 79, "uncommon": 20, "rare": 1},
@@ -183,14 +131,11 @@ class RollResult:
 
 
 def _num(val: Any) -> bool:
-    """True for real, FINITE numbers (bool excluded, matching the schema
-    validator's ``_is_num``).
+    """True for real, FINITE numbers (bool excluded).
 
     NaN/inf are rejected because every NaN comparison is False, so a NaN
-    slipping past a ``>``/``<`` guard silently takes the wrong branch — a NaN
-    source weight would resolve to the HIGHEST rarity bucket, since no
-    ``threshold > nan`` comparison ever skips a row. Non-finite values degrade
-    exactly like non-numbers.
+    slipping past a ``>``/``<`` guard silently takes the wrong branch.
+    Non-finite values degrade exactly like non-numbers.
     """
     return (isinstance(val, (int, float)) and not isinstance(val, bool)
             and math.isfinite(val))
@@ -199,9 +144,8 @@ def _num(val: Any) -> bool:
 def _resolve_skew(roll_spec: dict, default_skew: float) -> float:
     """The U**skew exponent: per-item ``roll_spec.skew``, else the default.
 
-    Invalid values (non-numeric, < 1) fall back to the default — load-time
-    validation rejects them, but the never-raise contract means we degrade
-    rather than trust (R1.5).
+    Invalid values (non-numeric, < 1) fall back to the default — degrade
+    rather than raise.
     """
     skew = roll_spec.get("skew")
     if _num(skew) and skew >= 1:
@@ -215,40 +159,36 @@ def _roll_band(lo: float, hi: float, skew: float, rng,
                floor: float = 0.0) -> float:
     """One skewed roll in ``[lo, hi]``: lo + (hi - lo) * U**skew, clamped.
 
-    ``floor`` is the rarity roll-floor U-clamp (design §1.3/§3.1): ``U`` is
-    clamped into ``[floor, 1]`` BEFORE the skew, so the roll can never land
-    below the ``floor**skew`` fraction of the band — high rarity guarantees
-    good base rolls without removing variance (R3.3).
+    ``floor`` is the rarity roll-floor U-clamp: ``U`` is clamped into
+    ``[floor, 1]`` BEFORE the skew, so the roll can never land below the
+    ``floor**skew`` fraction of the band.
     """
     u = rng.random()
     if _num(floor) and 0.0 < floor < 1.0:
-        u = floor + (1.0 - floor) * u  # clamp U into [floor, 1] (§1.3)
+        u = floor + (1.0 - floor) * u  # clamp U into [floor, 1]
     rolled = lo + (hi - lo) * (u ** skew)
-    # Clamp defensively (R1.5) — float edge cases must never escape the band.
+    # Clamped defensively — float edge cases must never escape the band.
     return min(max(rolled, lo), hi)
 
 
 def rarity_roll_floor(rarity) -> float:
-    """The roll-floor U-clamp for *rarity* (design §3.1); 0.0 when none."""
+    """The roll-floor U-clamp for *rarity*; 0.0 when none."""
     floor = RARITY_ROLL_FLOORS.get(str(rarity).lower()) if rarity else None
     return float(floor) if _num(floor) and 0.0 < floor < 1.0 else 0.0
 
 
 def resolve_rarity_bucket(source_rarity_weight: float,
                           rarity_table: dict) -> str | None:
-    """The source bucket a numeric drop-source weight lands in (§3.2).
+    """The source bucket a numeric drop-source weight lands in.
 
     Buckets are threshold rows: the bucket with the HIGHEST ``min_weight``
-    that ``source_rarity_weight`` reaches wins (guard_kill 0 < outpost 1 <
-    stronghold 2 < fortress 3 < citadel 4 in the default table). Malformed
-    rows are skipped; no reachable bucket → ``None`` (never raises, R1.5).
+    that ``source_rarity_weight`` reaches wins. Malformed rows are skipped;
+    no reachable bucket → ``None``. Never raises.
 
-    A NON-FINITE numeric weight (NaN/inf) degrades to ``0.0`` — the lowest
-    bucket, the same safe-floor treatment production drops get (review M1
-    decision). Before this hardening a NaN weight resolved to the HIGHEST
-    bucket (every ``threshold > nan`` comparison is False, so no row was
-    ever skipped) — free citadel-grade loot on corrupt data. Non-numeric
-    weights still yield ``None`` (no bucket at all).
+    A non-finite numeric weight (NaN/inf) degrades to ``0.0`` — the lowest
+    bucket. Before this hardening a NaN weight resolved to the HIGHEST
+    bucket (every ``threshold > nan`` comparison is False). Non-numeric
+    weights yield ``None`` (no bucket at all).
     """
     try:
         if (isinstance(source_rarity_weight, float)
@@ -291,13 +231,13 @@ def _rarity_entries(weights: dict) -> list[tuple[str, float]]:
 
 def assign_rarity(source_rarity_weight: float, rarity_table: dict,
                   rng) -> str | None:
-    """Weighted-choice rarity for a drop source (design §3.2, R3.2).
+    """Weighted-choice rarity for a drop source.
 
     Resolves the source bucket from the numeric weight, then draws one
     rarity from the bucket's relative ``weights`` under the injected
     ``rng`` (one ``rng.random()`` call — deterministic under a seed).
-    An unusable table/bucket consumes NO randomness and returns ``None``
-    (no rarity, no floor — the Phase-1 behavior). Never raises (R1.5).
+    An unusable table/bucket consumes NO randomness and returns ``None``.
+    Never raises.
     """
     try:
         bucket = resolve_rarity_bucket(source_rarity_weight, rarity_table)
@@ -325,25 +265,20 @@ def assign_craft_rarity(craft_level, craft_rarity_table: dict,
                         rng) -> str | None:
     """Weighted-choice rarity for a CRAFTED roll, capped at Rare.
 
-    The crafted counterpart of :func:`assign_rarity` (deviation-from-R6.1
-    decision — module docstring): the crafting building's *craft_level*
-    selects a row of *craft_rarity_table* (the row with the HIGHEST level
-    key that *craft_level* reaches — so a level above the top key uses the
-    top row, and a level below the lowest key yields no rarity), then one
-    rarity is drawn from the row's relative weights under the injected
-    ``rng`` (one ``rng.random()`` call — deterministic under a seed).
+    The crafting building's *craft_level* selects a row of
+    *craft_rarity_table* (the row with the HIGHEST level key that
+    *craft_level* reaches), then one rarity is drawn from the row's
+    relative weights (one ``rng.random()`` call — deterministic under a
+    seed).
 
-    Tiers above Rare are filtered out of the row defensively
-    (:data:`CRAFT_RARITY_TIERS`): crafted gear can NEVER come out Epic or
-    Legendary, whatever the data says. A non-numeric / sub-1 *craft_level*
-    or an unusable table/row consumes NO randomness and returns ``None``
-    (the original crafted no-rarity behavior). Never raises (R1.5).
+    Tiers above Rare are filtered out defensively: crafted gear can NEVER
+    come out Epic or Legendary. A non-numeric / sub-1 *craft_level* or an
+    unusable table/row consumes NO randomness and returns ``None``.
+    Never raises.
     """
     try:
         # `not (>= 1)` (rather than `< 1`) so NaN — for which every
-        # comparison is False — also degrades to "no rarity". (_num now
-        # rejects NaN outright too, M1; the comparison form stays as
-        # defense-in-depth.)
+        # comparison is False — also degrades to "no rarity".
         if not _num(craft_level) or not (craft_level >= 1):
             return None
         if not isinstance(craft_rarity_table, dict):
@@ -384,7 +319,7 @@ def assign_craft_rarity(craft_level, craft_rarity_table: dict,
 
 
 def rarity_affix_budget(rarity) -> int:
-    """The affix budget for *rarity* (design §3.1, R3.1); 0 when none."""
+    """The affix budget for *rarity*; 0 when none."""
     budget = RARITY_AFFIX_BUDGETS.get(str(rarity).lower()) if rarity else None
     return int(budget) if _num(budget) and budget > 0 else 0
 
@@ -393,13 +328,12 @@ def _usable_affix_entries(pool) -> list[dict]:
     """The drawable entries of an affix pool, key-deduplicated.
 
     An entry is usable when it is a dict with a non-empty ``key``, EXACTLY
-    ONE of a non-empty ``stat`` axis or a non-empty ``proc`` key (task 3.4
-    — proc affixes like ``proc: poison`` are drawable once their combat
-    hook exists), and a valid numeric ``[min, max]`` magnitude band. Later
-    duplicates of a ``key`` are dropped (the no-dup contract, R3.4 —
-    load-time validation rejects them, but the never-raise contract means
-    we degrade rather than trust). Order is preserved so the draw is
-    deterministic under an injected RNG.
+    ONE of a non-empty ``stat`` axis or a non-empty ``proc`` key (proc
+    affixes like ``proc: poison`` are drawable once their combat hook
+    exists), and a valid numeric ``[min, max]`` magnitude band. Later
+    duplicates of a ``key`` are dropped (the no-dup contract — degrade
+    rather than raise). Order is preserved so the draw is deterministic
+    under an injected RNG.
     """
     usable: list[dict] = []
     seen: set[str] = set()
@@ -436,17 +370,15 @@ def _affix_draw_weight(entry) -> float:
 
 def draw_affixes(pool, budget: int, *, skew: float = DEFAULT_LOOT_ROLL_SKEW,
                  rng) -> list[dict]:
-    """Draw up to *budget* affixes WITHOUT replacement from *pool* (§3.3).
+    """Draw up to *budget* affixes WITHOUT replacement from *pool*.
 
-    Each draw is WEIGHT-PROPORTIONAL over the remaining candidates (review
-    F2 — ``weight`` is a relative draw weight, not display metadata): one
+    Each draw is WEIGHT-PROPORTIONAL over the remaining candidates: one
     ``rng.random()`` call walks the cumulative weights, the picked entry is
     removed, and the remainder renormalizes implicitly on the next pass —
-    so keys are never duplicated (R3.4) and the whole draw stays
-    deterministic under an injected seed (R1.5). Each drawn affix then
-    rolls its magnitude in its ``[min, max]`` band with the same skewed
-    distribution as base stats (one more ``rng.random()`` per pick —
-    design §3.3), and carries its displayed-score ``value`` (design §2.2)::
+    so keys are never duplicated and the whole draw stays deterministic
+    under an injected seed. Each drawn affix rolls its magnitude in its
+    ``[min, max]`` band with the same skewed distribution as base stats,
+    and carries its displayed-score ``value``::
 
         q     = (magnitude - min) / (max - min)    # 1.0 on a degenerate band
         value = weight * q * AFFIX_VALUE_SCALE
@@ -455,7 +387,7 @@ def draw_affixes(pool, budget: int, *, skew: float = DEFAULT_LOOT_ROLL_SKEW,
 
     Args:
         pool: List of affix entry dicts ({key, name, stat-or-proc, min,
-            max, weight}) — one pool of ``registry.affixes``.
+            max, weight}) — one pool from the affix registry.
         budget: The rarity's affix budget (:func:`rarity_affix_budget`).
         skew: The resolved U**skew exponent (same as the base-stat rolls).
         rng: Injected random source exposing ``random()``.
@@ -463,11 +395,10 @@ def draw_affixes(pool, budget: int, *, skew: float = DEFAULT_LOOT_ROLL_SKEW,
     Returns:
         A list of stored affix dicts ready for ``GameItem.db.affixes`` —
         ``{key, name, stat, magnitude, value}`` for stat affixes,
-        ``{key, name, proc, magnitude, value}`` for proc affixes (task
-        3.4; a proc entry carries NO ``stat`` key, so ``get_stat`` /
-        ``get_stat_total`` never see it — its magnitude is consumed by
-        the combat proc dispatch instead). Empty on an unusable pool or a
-        non-positive budget. Never raises (R1.5).
+        ``{key, name, proc, magnitude, value}`` for proc affixes (a proc
+        entry carries NO ``stat`` key — its magnitude is consumed by the
+        combat proc dispatch instead). Empty on an unusable pool or a
+        non-positive budget. Never raises.
     """
     try:
         candidates = _usable_affix_entries(pool)
@@ -479,10 +410,9 @@ def draw_affixes(pool, budget: int, *, skew: float = DEFAULT_LOOT_ROLL_SKEW,
 
         drawn: list[dict] = []
         for _ in range(count):
-            # Weight-proportional pick without replacement (F2/R3.4): one
-            # rng.random() scaled by the remaining total walks the
-            # cumulative weights; the picked entry is removed so the next
-            # pick renormalizes over what is left.
+            # Weight-proportional pick without replacement: one rng.random()
+            # scaled by the remaining total walks the cumulative weights;
+            # the picked entry is removed so the next pick renormalizes.
             total = sum(_affix_draw_weight(e) for e in candidates)
             r = rng.random() * total
             cumulative = 0.0
@@ -511,8 +441,7 @@ def draw_affixes(pool, budget: int, *, skew: float = DEFAULT_LOOT_ROLL_SKEW,
             drawn.append(stored)
         return drawn
     except Exception:
-        # Never-raise (R1.5): a drop without affixes is safe; a crashed
-        # spawn path never is.
+        # Never-raise: a drop without affixes is safe.
         return []
 
 
@@ -521,9 +450,9 @@ def _effective_band(stat: str, loot_band: dict, craft_bands: dict,
     """The ``(lo, hi)`` band this roll draws from, or None if unusable.
 
     Loot rolls use ``stats[stat]``. Crafted rolls use ``craft[stat]``
-    intersected with the loot band (craft band ⊂ loot band, R6.1 / design
-    Property 4); a stat with no craft band falls back to the loot band.
-    Malformed bands (non-numeric, min > max) yield None → skip the stat.
+    intersected with the loot band (craft band ⊂ loot band); a stat with
+    no craft band falls back to the loot band. Malformed bands yield
+    None → skip the stat.
     """
     lo, hi = loot_band.get("min"), loot_band.get("max")
     if not _num(lo) or not _num(hi) or lo > hi:
@@ -536,10 +465,7 @@ def _effective_band(stat: str, loot_band: dict, craft_bands: dict,
             c_lo, c_hi = craft.get("min"), craft.get("max")
             if _num(c_lo) and _num(c_hi) and c_lo <= c_hi:
                 # Intersect with the loot band so the craft band can never
-                # escape it, even on odd data. Containment (craft ⊂ loot) IS
-                # enforced at load (_validate_roll_spec, review M2), but the
-                # never-trust contract keeps this defensive clamp anyway —
-                # stored specs may predate validation or bypass the loader.
+                # escape it, even on odd data.
                 c_lo = min(max(float(c_lo), lo), hi)
                 c_hi = min(max(float(c_hi), lo), hi)
                 if c_lo <= c_hi:
@@ -549,7 +475,7 @@ def _effective_band(stat: str, loot_band: dict, craft_bands: dict,
 
 
 def compute_iqs(rolled: dict, roll_spec: dict) -> int | None:
-    """Base Item Quality Score: weighted mean roll quality, 0–100 (§2.1).
+    """Base Item Quality Score: weighted mean roll quality, 0–100.
 
     Per rolled stat ``s`` with loot band ``[min_s, max_s]`` and weight
     ``w_s`` from ``roll_spec.stats[s].weight``::
@@ -557,31 +483,22 @@ def compute_iqs(rolled: dict, roll_spec: dict) -> int | None:
         q_s      = (rolled_s - min_s) / (max_s - min_s)      # 0..1
         IQS_base = round(100 * Σ(w_s * q_s) / Σ w_s)          # 0..100
 
-    All-minimum rolls score 0, all-maximum rolls score 100, and the score
-    is monotone in every rolled value (design Property 3). Affix values
-    add on top of this base in Phase 2 (§2.2) — this is base-stat quality
-    only.
+    All-minimum rolls score 0, all-maximum rolls score 100. Affix values
+    add on top of this base via :func:`displayed_iqs`.
 
-    Degrades rather than raises (the module's R1.5 spirit):
+    Degrades rather than raises:
 
-    - Degenerate bands (``min == max``) carry no roll-quality signal and
-      are excluded from the mean.
+    - Degenerate bands (``min == max``) are excluded from the mean.
     - A missing/invalid ``weight`` defaults to 1.0; ``q_s`` is clamped to
       ``[0, 1]`` so out-of-band values can't push the score outside 0–100.
     - Malformed spec fragments and non-numeric rolled values are skipped.
 
     Returns:
-        The 0–100 score, or ``None`` when nothing is scorable (no usable
-        spec, no rolled stats, or only degenerate bands) — the caller
-        leaves ``iqs`` neutral. Never raises.
+        The 0–100 score, or ``None`` when nothing is scorable. Never raises.
     """
     try:
-        # Mapping, NOT dict: on real Evennia, reading a stored dict back
-        # through ``db``/``attributes`` yields a ``_SaverDict`` (a
-        # MutableMapping that is not a dict subclass). A strict dict check
-        # rejects every live item and IQS is silently never stamped — the
-        # stubbed test suite can't see that (conftest hands back plain
-        # dicts). Same reasoning everywhere this module reads stored state.
+        # Mapping, NOT dict: on real Evennia, stored dicts read back as
+        # ``_SaverDict`` (a MutableMapping that isn't a dict subclass).
         if not isinstance(rolled, Mapping) or not isinstance(roll_spec, Mapping):
             return None
         stats = roll_spec.get("stats")
@@ -602,7 +519,7 @@ def compute_iqs(rolled: dict, roll_spec: dict) -> int | None:
             weight = band.get("weight")
             w = float(weight) if _num(weight) and weight > 0 else 1.0
             q = (float(value) - float(lo)) / (float(hi) - float(lo))
-            q = min(max(q, 0.0), 1.0)  # clamp defensively (R1.5)
+            q = min(max(q, 0.0), 1.0)  # clamp defensively
             weighted_q += w * q
             total_weight += w
 
@@ -616,17 +533,15 @@ def compute_iqs(rolled: dict, roll_spec: dict) -> int | None:
 
 
 def affix_value_total(affixes) -> float:
-    """Sum of the displayed-score ``value`` contributions of *affixes* (§2.2).
+    """Sum of the displayed-score ``value`` contributions of *affixes*.
 
     Malformed entries and non-numeric values are skipped; unusable input
-    totals ``0.0``. Never raises (R1.5 spirit).
+    totals ``0.0``. Never raises.
     """
     total = 0.0
     try:
-        # Sequence, NOT list/tuple: a stored affix list reads back as a
-        # ``_SaverList`` (MutableSequence) on real Evennia — see the
-        # Mapping note on compute_iqs. str/bytes are sequences too, so
-        # exclude them explicitly.
+        # Sequence, NOT list/tuple: stored affix lists read back as
+        # ``_SaverList`` (MutableSequence) on real Evennia.
         if not isinstance(affixes, Sequence) or isinstance(affixes, (str, bytes)):
             return 0.0
         for affix in affixes:
@@ -639,19 +554,16 @@ def affix_value_total(affixes) -> float:
 
 
 def displayed_iqs(iqs_base, affixes) -> int | None:
-    """The displayed item score: ``IQS_base + Σ affix.value`` (§2.2, R2.2).
+    """The displayed item score: ``IQS_base + Σ affix.value``.
 
     The one place the score math lives — :func:`roll_item` and
-    :func:`recompute_iqs` both go through it, so the spawn stamp and every
-    later mutation (reroll, insert) can never disagree (task 2.4). The
-    score CAN exceed 100 (great base rolls + strong affixes read as
-    top-tier, e.g. "Legendary 112") and is NEVER clamped here — the
-    display layer caps what it renders at 999, but this number is the
-    sort key players trade on.
+    :func:`recompute_iqs` both route through it, so the spawn stamp and
+    every later mutation can never disagree. The score CAN exceed 100 and
+    is NEVER clamped here — the display layer caps rendering at 999.
 
     Returns:
-        The rounded score, or ``None`` when *iqs_base* is ``None``/unusable
-        (nothing scorable — the item stays neutral). Never raises.
+        The rounded score, or ``None`` when *iqs_base* is unusable.
+        Never raises.
     """
     if not _num(iqs_base):
         return None
@@ -707,20 +619,12 @@ def _resolve_roll_spec(item, spec_source) -> dict | None:
 
 
 def recompute_iqs(item, spec_source=None) -> int | None:
-    """Recompute and re-stamp *item*'s displayed IQS (task 2.4, R2.4).
+    """Recompute and re-stamp *item*'s displayed IQS.
 
-    THE single writer of the stamped ``iqs`` (design §2.3): the spawn
-    stamping (:func:`roll_and_stamp`) routes through it, and the Phase-4
-    Blacksmith calls it after ANY change to the item's rolls or affixes
-    (reroll, insert applied) — so the number players sort/trade on is
-    always ``IQS_base + Σ affix.value`` (§2.2) for the item's CURRENT
-    state.
-
-    Reads the item's ``rolled_stats`` + ``affixes`` (duck-typed — live
-    ``GameItem``, attribute-bag stub, or dict factory item) and the
-    governing ``roll_spec`` (pass it, pass the ``ItemDef``, or let the
-    item's own ``item_def`` supply it), computes the displayed score, and
-    writes ``iqs`` back onto the item.
+    THE single writer of the stamped ``iqs``: the spawn stamping routes
+    through it, and the Blacksmith calls it after ANY change to the item's
+    rolls or affixes — so the number is always ``IQS_base + Σ affix.value``
+    for the item's CURRENT state.
 
     Args:
         item: The rolled item instance. ``None`` no-ops.
@@ -728,9 +632,8 @@ def recompute_iqs(item, spec_source=None) -> int | None:
             or ``None`` to use ``item.item_def.roll_spec``.
 
     Returns:
-        The re-stamped score, or ``None`` when nothing is scorable (no
-        rolled stats / no usable spec) — in that case the item is left
-        untouched. Never raises (R1.5 spirit).
+        The re-stamped score, or ``None`` when nothing is scorable — item
+        is left untouched. Never raises.
     """
     try:
         if item is None:
@@ -743,8 +646,7 @@ def recompute_iqs(item, spec_source=None) -> int | None:
             write_instance_field(item, "iqs", int(score))
         return score
     except Exception:
-        # Never-raise: a stale score is safe; a crashed bench/spawn path
-        # never is.
+        # Never-raise: a stale score is safe.
         return None
 
 
@@ -761,50 +663,35 @@ def roll_item(item_def, *, source_rarity_weight: float = 0.0,
     Args:
         item_def: An ItemDef (anything carrying a ``roll_spec`` attribute).
         source_rarity_weight: Drop-source rarity weight (guard kill 0 <
-            outpost < ... < citadel). Selects the rarity-table bucket the
-            rarity is drawn from (task 2.2, design §3.2).
+            outpost < ... < citadel). Selects the rarity-table bucket.
         crafted: True for the craft path — roll in the tighter per-stat
-            ``craft`` band (R1.4, R6.1); crafted items never get affixes.
-            With a usable ``craft_level`` a crafted rarity (≤ Rare) is
-            drawn from the craft table (deviation-from-R6.1 decision,
-            module docstring); without one, rarity assignment is skipped
-            (the original behavior).
+            ``craft`` band; crafted items never get affixes. With a usable
+            ``craft_level`` a crafted rarity (≤ Rare) is drawn from the
+            craft table; without one, rarity assignment is skipped.
         craft_floor: Roll-floor U-clamp for CRAFTED rolls only (Master
-            Gunsmithing research, R11.6/task 6.4) — the exact mechanism the
-            rarity floors use, applied inside the craft band, so a raised
-            floor lifts the low end of a crafted roll but can NEVER push it
-            past the band (R6.1 stays intact). Ignored on loot rolls (whose
-            floor is the rarity floor); values outside ``(0, 1)`` degrade
-            to 0 (no floor), mirroring :func:`rarity_roll_floor`. When a
-            crafted rarity also carries a floor (a Rare craft), the
-            EFFECTIVE floor is ``max`` of the two — mirroring the reroll
-            path's bench-floor/rarity-floor combination.
-        craft_level: The CRAFTING BUILDING's level (1–5) — selects the
-            ``craft_rarity_table`` row a crafted rarity is drawn from
-            (deviation-from-R6.1 decision, module docstring). ``< 1`` (the
-            default) keeps the original crafted no-rarity behavior.
+            Gunsmithing research) — applied inside the craft band. Ignored
+            on loot rolls; values outside ``(0, 1)`` degrade to 0. When a
+            crafted rarity also carries a floor, the effective floor is
+            ``max`` of the two.
+        craft_level: The crafting building's level (1–5) — selects the
+            ``craft_rarity_table`` row. ``< 1`` keeps no-rarity behavior.
             Ignored on loot rolls.
         craft_rarity_table: The balance ``craft_rarity_table`` (building
             level → rarity weights, capped at Rare). ``None`` →
-            :data:`DEFAULT_CRAFT_RARITY_TABLE`; an empty/unusable table
-            disables crafted rarity assignment.
-        rng: Injected random source exposing ``random()`` (e.g.
-            ``random.Random(seed)``). Same seed → identical result (R1.5).
+            :data:`DEFAULT_CRAFT_RARITY_TABLE`.
+        rng: Injected random source exposing ``random()``. Same seed →
+            identical result.
         default_skew: The balance-level ``loot_roll_skew`` fallback used
             when the spec declares no per-item ``skew``.
         rarity_table: The balance ``rarity_table`` (source bucket →
-            {min_weight, weights}). ``None`` → :data:`DEFAULT_RARITY_TABLE`;
-            an empty/unusable table disables rarity assignment.
-        affix_pools: The affix registry (pool name → entry list, i.e.
-            ``registry.affixes``) the item's ``roll_spec.affix_pool`` pool
-            is looked up in (task 2.3, design §3.3). ``None``/empty → no
-            affixes are ever drawn — production drops and other no-affix
-            paths simply don't pass pools (design §3.2).
+            {min_weight, weights}). ``None`` → :data:`DEFAULT_RARITY_TABLE`.
+        affix_pools: The affix registry (pool name → entry list) the item's
+            ``roll_spec.affix_pool`` pool is looked up in. ``None``/empty →
+            no affixes are drawn.
 
     Returns:
         A :class:`RollResult`, or ``None`` when the def declares no usable
-        ``roll_spec`` — the caller leaves the item fixed, exactly as today
-        (R1.3). Never raises (R1.5).
+        ``roll_spec`` — the caller leaves the item fixed. Never raises.
     """
     try:
         roll_spec = getattr(item_def, "roll_spec", None)
@@ -819,13 +706,9 @@ def roll_item(item_def, *, source_rarity_weight: float = 0.0,
         if not isinstance(craft_bands, dict):
             craft_bands = {}
 
-        # Rarity is assigned FIRST (design §2.2/§3.2): the tier then raises
-        # the base-roll floor below. Crafted rolls draw from the building-
-        # level-keyed craft table instead of the source-weighted loot table
-        # (deviation-from-R6.1 decision, module docstring): capped at Rare,
-        # 0% Rare at L1 rising to exactly 5% at L5. Without a usable
-        # craft_level the crafted roll keeps its original no-rarity,
-        # neutral/modest read.
+        # Rarity is assigned FIRST: the tier then raises the base-roll
+        # floor. Crafted rolls draw from the building-level-keyed craft
+        # table instead of the source-weighted loot table.
         rarity = None
         floor = 0.0
         if not crafted:
@@ -838,20 +721,17 @@ def roll_item(item_def, *, source_rarity_weight: float = 0.0,
                                if craft_rarity_table is not None
                                else DEFAULT_CRAFT_RARITY_TABLE)
                 rarity = assign_craft_rarity(craft_level, craft_table, rng)
-            # A Rare craft applies its normal 0.25 roll-floor benefit —
-            # INSIDE the craft band, so it rolls genuinely better without
-            # ever escaping the band (R6.1's band containment stays).
+            # A Rare craft applies its normal roll-floor benefit INSIDE the
+            # craft band.
             floor = rarity_roll_floor(rarity)
             if _num(craft_floor) and 0.0 < craft_floor < 1.0:
-                # Master Gunsmithing (R11.6) craft_iqs_floor: both floors
-                # can apply — take max(floors), mirroring how the reroll
-                # path combines its bench floor with the rarity floor.
+                # Both floors can apply — take max(floors).
                 floor = max(floor, float(craft_floor))
 
         rolled: dict[str, float] = {}
         for stat, band in stats.items():
             if not isinstance(band, dict):
-                continue  # malformed entry — skip, never raise (R1.5)
+                continue  # malformed entry — skip, never raise
             eff = _effective_band(stat, band, craft_bands, crafted)
             if eff is None:
                 continue
@@ -861,12 +741,10 @@ def roll_item(item_def, *, source_rarity_weight: float = 0.0,
         if not rolled:
             return None
 
-        # Affix draw (task 2.3, design §3.3): budget by rarity, drawn
-        # without replacement from the item's category pool. Crafted items
-        # NEVER get affixes — R6.1's no-affix rule stays intact even now
-        # that a crafted roll can carry a (≤ Rare) rarity: the `not
-        # crafted` guard is load-bearing, since a Rare craft would
-        # otherwise claim a budget of 2. Affixes are loot-only.
+        # Affix draw: budget by rarity, drawn without replacement from the
+        # item's category pool. Crafted items NEVER get affixes — the
+        # `not crafted` guard is load-bearing, since a Rare craft would
+        # otherwise claim a budget of 2.
         affixes: list[dict] = []
         if not crafted and rarity is not None and isinstance(affix_pools, dict):
             budget = rarity_affix_budget(rarity)
@@ -876,48 +754,42 @@ def roll_item(item_def, *, source_rarity_weight: float = 0.0,
                 if pool:
                     affixes = draw_affixes(pool, budget, skew=skew, rng=rng)
 
-        # The displayed score (task 2.4, §2.2): base IQS + Σ affix.value —
-        # the same math recompute_iqs re-stamps with on any later change.
+        # Displayed score: base IQS + Σ affix.value.
         return RollResult(stat_modifiers=rolled,
                           affixes=affixes,
                           rarity=rarity,
                           iqs=displayed_iqs(compute_iqs(rolled, roll_spec),
                                             affixes))
     except Exception:
-        # Never-raise contract (R1.5): an unrolled (fixed) item is always a
-        # safe outcome; a crashed spawn path never is.
+        # Never-raise: an unrolled (fixed) item is always a safe outcome.
         return None
 
 
 def reroll_base_stats(roll_spec, *, floor: float = 0.0, rng,
                       default_skew: float = DEFAULT_LOOT_ROLL_SKEW
                       ) -> dict[str, float] | None:
-    """Re-roll an item's BASE stats in their loot bands (task 4.4, R4.5).
+    """Re-roll an item's BASE stats in their loot bands.
 
     The Blacksmith reroll backend: draws a fresh skewed roll for every stat
-    in ``roll_spec.stats`` — always the LOOT band (a reroll is bench work on
-    an existing instance, never the crafted floor) — with an explicit roll
-    floor *floor* (the U clamp of :func:`_roll_band`). The caller supplies
-    the EFFECTIVE floor: the Blacksmith-level floor combined with the item's
-    rarity floor (``max`` of the two — the bench floor is the lever, the
-    rarity floor stays the guarantee; design §4.4).
+    in ``roll_spec.stats`` — always the LOOT band — with an explicit roll
+    floor (the U clamp of :func:`_roll_band`). The caller supplies the
+    EFFECTIVE floor: the Blacksmith-level floor combined with the item's
+    rarity floor (``max`` of the two).
 
     Base stats ONLY: rarity, affixes, and applied inserts are not this
     function's business — the caller re-applies insert deltas on top and
-    re-stamps IQS through :func:`recompute_iqs` (R2.4).
+    re-stamps IQS through :func:`recompute_iqs`.
 
     Args:
         roll_spec: The item's ``roll_spec`` dict (must carry ``stats``).
         floor: The effective roll-floor U-clamp in ``[0, 1)``; invalid
-            values degrade to 0 (no floor), mirroring :func:`_roll_band`.
-        rng: Injected random source exposing ``random()`` (R1.5 —
-            deterministic under a seed).
+            values degrade to 0 (no floor).
+        rng: Injected random source exposing ``random()``.
         default_skew: The balance ``loot_roll_skew`` fallback skew.
 
     Returns:
         The fresh rolled values (stat -> float, every value in its loot
-        band), or ``None`` when the spec is unusable — the caller refuses
-        the reroll rather than mutate. Never raises (R1.5).
+        band), or ``None`` when the spec is unusable. Never raises.
     """
     try:
         if not isinstance(roll_spec, dict):
@@ -929,7 +801,7 @@ def reroll_base_stats(roll_spec, *, floor: float = 0.0, rng,
         rolled: dict[str, float] = {}
         for stat, band in stats.items():
             if not isinstance(band, dict):
-                continue  # malformed entry — skip, never raise (R1.5)
+                continue  # malformed entry — skip, never raise
             eff = _effective_band(stat, band, {}, False)
             if eff is None:
                 continue
@@ -937,29 +809,25 @@ def reroll_base_stats(roll_spec, *, floor: float = 0.0, rng,
             rolled[str(stat)] = _roll_band(lo, hi, skew, rng, floor=floor)
         return rolled or None
     except Exception:
-        # Never-raise contract (R1.5): "no reroll" is always a safe outcome
-        # for the bench; a crashed command path never is.
+        # Never-raise: "no reroll" is always a safe outcome for the bench.
         return None
 
 
 def stats_at_quality(roll_spec, quality) -> dict[str, float] | None:
     """Deterministic per-stat values at one quality fraction (admin spawn).
 
-    The ``@item spawn ... iqs=<N>`` backend: instead of a random skewed
-    draw, every stat lands at the SAME fraction of its loot band::
+    The ``@item spawn ... iqs=<N>`` backend: every stat lands at the SAME
+    fraction of its loot band::
 
         rolled = min + q * (max - min)      # q = clamp(quality, 0, 1)
 
     Because every non-degenerate band sits at the same ``q``,
     :func:`compute_iqs`'s weighted mean reads back exactly ``round(100*q)``
-    — the operator's requested value IS the stamped base IQS (whatever the
-    per-stat weights are). No randomness, no skew: this is a deliberate,
-    reproducible admin stamp, not a loot roll.
+    — the operator's requested value IS the stamped base IQS. No
+    randomness, no skew: a deliberate, reproducible admin stamp.
 
-    Mirrors :func:`reroll_base_stats`' degradation rules (R1.5 spirit):
-    malformed bands are skipped, an unusable spec yields ``None`` (the
-    caller leaves the item fixed), and *quality* is clamped into [0, 1].
-    Never raises.
+    Malformed bands are skipped; an unusable spec yields ``None``;
+    *quality* is clamped to [0, 1]. Never raises.
 
     Args:
         roll_spec: The item's ``roll_spec`` dict (must carry ``stats``).
@@ -979,7 +847,7 @@ def stats_at_quality(roll_spec, quality) -> dict[str, float] | None:
         rolled: dict[str, float] = {}
         for stat, band in stats.items():
             if not isinstance(band, dict):
-                continue  # malformed entry — skip, never raise (R1.5)
+                continue  # malformed entry — skip, never raise
             eff = _effective_band(stat, band, {}, False)
             if eff is None:
                 continue
@@ -987,24 +855,21 @@ def stats_at_quality(roll_spec, quality) -> dict[str, float] | None:
             rolled[str(stat)] = lo + (hi - lo) * q
         return rolled or None
     except Exception:
-        # Never-raise: an unrolled (fixed) item is a safe outcome; a
-        # crashed admin-spawn path never is.
+        # Never-raise: an unrolled (fixed) item is a safe outcome.
         return None
 
 
 def write_instance_field(item, name: str, value: Any) -> bool:
     """Best-effort write of one per-instance field onto a spawned item.
 
-    The spawn wiring's single write path (task 1.5): a live ``GameItem``
-    takes the value on its ``db`` proxy (persisted Attribute), an Evennia
+    A live ``GameItem`` takes the value on its ``db`` proxy, an Evennia
     object without a ``db`` shim falls back to the ``attributes`` handler,
-    and the dict-shaped default/test item factory takes a plain key. Stays
-    duck-typed so ``world/systems`` never imports ``typeclasses``.
+    and a dict-shaped test factory item takes a plain key. Stays duck-typed
+    so ``world/systems`` never imports ``typeclasses``.
 
     Returns:
         ``True`` if the value was written somewhere, ``False`` otherwise.
-        Never raises (R1.5 spirit — a failed stamp degrades to a fixed
-        item, never a crashed spawn path).
+        Never raises.
     """
     try:
         db = getattr(item, "db", None)
@@ -1032,53 +897,45 @@ def roll_and_stamp(item, item_def, *, source_rarity_weight: float = 0.0,
                    craft_level: int = 0,
                    craft_rarity_table: dict | None = None
                    ) -> RollResult | None:
-    """Roll ``item_def`` and stamp the result onto the spawned *item* (task 1.5).
+    """Roll ``item_def`` and stamp the result onto the spawned *item*.
 
-    The one call every ROLLING spawn path makes after its ``GameItem`` exists
-    (design §1.2): HQ-destroy gear drops (``base_elimination._spawn_gear_item``),
-    passive/agent production drops, and the craft path. The PvP death drop
-    never calls this — it carries the dropped instance's state instead (R1.6).
+    The one call every ROLLING spawn path makes after its ``GameItem``
+    exists: HQ-destroy gear drops, passive/agent production drops, and the
+    craft path.
 
-    Writes ``rolled_stats`` (the per-instance rolled values ``get_stat``
-    prefers), — when a rarity was assigned (task 2.2) — ``rarity``, and
-    — when affixes were drawn (task 2.3) — ``affixes`` onto the item,
-    then stamps ``iqs`` through :func:`recompute_iqs` (task 2.4): the
-    displayed score ``IQS_base + Σ affix.value``, single-writer (R2.4).
-    Only meaningful state is written (R12): unrolled items and crafted
-    (no-rarity) items carry no ``rarity``/``affixes`` attributes at all.
+    Writes ``rolled_stats``, and when applicable ``rarity`` and ``affixes``
+    onto the item, then stamps ``iqs`` through :func:`recompute_iqs`.
+    Only meaningful state is written (unrolled/no-rarity items carry no
+    ``rarity``/``affixes`` attributes).
 
     Args:
-        item: The freshly-spawned item (``GameItem``, attribute-bag stub, or
-            the dict-shaped test factory item). ``None`` no-ops.
-        item_def: The def that spawned it; no ``roll_spec`` → no-op (R1.3).
+        item: The freshly-spawned item. ``None`` no-ops.
+        item_def: The def that spawned it; no ``roll_spec`` → no-op.
         source_rarity_weight: Drop-source rarity weight — selects the
-            rarity-table bucket (design §3.2).
-        crafted: True on the craft path — the tighter craft band (R1.4/R6.1);
-            crafted rarity (≤ Rare) is drawn from the craft table only when
-            a ``craft_level`` is supplied.
-        rng: Injected random source (``random()``); defaults to the module
-            :mod:`random` for live spawn paths. Tests inject a seeded RNG.
+            rarity-table bucket.
+        crafted: True on the craft path — tighter craft band; crafted
+            rarity (≤ Rare) drawn from the craft table only when a
+            ``craft_level`` is supplied.
+        rng: Injected random source; defaults to the module :mod:`random`
+            for live spawn paths. Tests inject a seeded RNG.
         default_skew: The balance ``loot_roll_skew`` fallback skew.
         rarity_table: The balance ``rarity_table``; ``None`` → the module
             :data:`DEFAULT_RARITY_TABLE`.
-        affix_pools: The affix registry (``registry.affixes``) — the pools
-            the item's ``roll_spec.affix_pool`` draws from (task 2.3).
-            ``None``/empty → no affixes (the production-drop / craft
-            treatment, design §3.2).
+        affix_pools: The affix registry — the pools the item's
+            ``roll_spec.affix_pool`` draws from. ``None``/empty → no
+            affixes.
         craft_floor: Crafted-roll floor U-clamp (Master Gunsmithing
-            research, R11.6/task 6.4) — see :func:`roll_item`. Only
-            meaningful with ``crafted=True``.
+            research) — see :func:`roll_item`. Only meaningful with
+            ``crafted=True``.
         craft_level: The crafting building's level — selects the crafted-
-            rarity row (deviation-from-R6.1 decision; see :func:`roll_item`
-            and the module docstring). Only meaningful with
-            ``crafted=True``; ``< 1`` keeps the no-rarity behavior.
+            rarity row. Only meaningful with ``crafted=True``; ``< 1``
+            keeps the no-rarity behavior.
         craft_rarity_table: The balance ``craft_rarity_table``; ``None`` →
             the module :data:`DEFAULT_CRAFT_RARITY_TABLE`.
 
     Returns:
         The :class:`RollResult` that was stamped, or ``None`` when nothing
-        was rolled (unrolled def / malformed spec / ``item`` is None).
-        Never raises.
+        was rolled. Never raises.
     """
     if item is None:
         return None
@@ -1096,20 +953,18 @@ def roll_and_stamp(item, item_def, *, source_rarity_weight: float = 0.0,
             craft_rarity_table=craft_rarity_table,
         )
         if result is None or not result.stat_modifiers:
-            return None  # fixed item, exactly as today (R1.3)
+            return None  # fixed item — no roll_spec
         write_instance_field(item, "rolled_stats", dict(result.stat_modifiers))
         if result.rarity is not None:
             write_instance_field(item, "rarity", str(result.rarity))
         if result.affixes:
             write_instance_field(item, "affixes",
                                  [dict(affix) for affix in result.affixes])
-        # Single-writer discipline (task 2.4, R2.4): the iqs stamp goes
-        # through recompute_iqs — the same writer the Blacksmith's reroll/
-        # insert paths use — reading back the state just written, so the
-        # spawn stamp and every later mutation can never disagree.
+        # Single-writer discipline: the iqs stamp goes through
+        # recompute_iqs — the same writer the Blacksmith's reroll/insert
+        # paths use.
         recompute_iqs(item, getattr(item_def, "roll_spec", None))
         return result
     except Exception:
-        # Never-raise contract (R1.5): an unrolled (fixed) item is always a
-        # safe outcome; a crashed spawn path never is.
+        # Never-raise: an unrolled (fixed) item is always a safe outcome.
         return None

@@ -25,12 +25,7 @@ from world.services import get_service
 from world.systems.base_system import BaseSystem
 
 
-#: Upper clamp on the researched ``poison_dot_mult`` tech multiplier read by
-#: :meth:`CombatEngine._apply_poison_dot`. The tech accumulator ADDS effect
-#: values, so a second poison tech would SUM multipliers (1.25 + 1.25 = 2.5,
-#: nonsense for a multiplier); clamping to ``[1.0, cap]`` absorbs that and
-#: keeps a boosted DoT out-healable by regen/medkits. One poison_dot_mult tech
-#: is the supported data shape; promote to balance.yaml if a second ships.
+#: Max multiplier for the poison_dot_mult tech — prevents stacking beyond this value.
 POISON_DOT_MULT_CAP = 1.5
 
 
@@ -65,91 +60,55 @@ class CombatEngine(BaseSystem):
         super().__init__(registry, event_bus)
         self._current_tick_func = current_tick_func or (lambda: 0)
         self.pending_actions: list[dict] = []
-        # RNG for per-shot accuracy rolls (ranged 'shoot'/'target'). Injected in
-        # tests for determinism; a real Random() otherwise. Melee/guard/turret/
-        # throw attacks pass no accuracy and are never rolled (always land), so
-        # this only affects the new probabilistic ranged fire.
+        # RNG for per-shot accuracy rolls; injected in tests for determinism.
         self._rng = rng or random.Random()
-        # Optional line-of-sight predicate (location, x1, y1, x2, y2) -> blocked.
-        # Injected at the composition root so turrets don't fire through Walls;
-        # None means "no LOS restriction" (unit tests, minimal setups).
+        # LOS predicate (location, x1, y1, x2, y2) -> blocked. None = no restriction.
         self._sight_blocked: Callable[..., bool] | None = None
-        # Late-bound resolver for the agent XP-awarder. CombatEngine is built
-        # before AgentSystem at the composition root, so a *callable* is
-        # injected (via set_agent_xp_awarder) rather than the instance. Defaults
-        # to the game_systems-global lookup for un-injected/legacy contexts.
+        # Late-bound resolver returning the agent XP-awarder (AgentSystem).
         self._agent_xp_awarder_provider = agent_xp_awarder_provider
-        # Late-bound resolver for the PLAYER XP-awarder (the RankSystem). Routing
-        # player combat/kill/base XP through it recomputes level/rank and fires
-        # LEVEL_CHANGED / RANK_* — a raw ``db.combat_xp`` write does neither, so
-        # kills would grant XP that never levels the player up. Injected via
-        # set_player_xp_awarder; falls back to the game_systems-global lookup.
+        # Late-bound resolver returning the player XP-awarder (RankSystem).
         self._player_xp_awarder_provider = player_xp_awarder_provider
-        # Optional player-respawn handler ``(victim) -> bool``: when the lobby
-        # lifecycle flow is enabled it records the place of death and routes the
-        # player into SPAWNING (they re-pick class + spawn location on next
-        # login/deploy) instead of the default instant in-place HP reset.
-        # Returns True if it handled the respawn (the engine then skips the
-        # in-place reset). None / returns-False → default instant in-place
-        # respawn (agents always use the default; the flow only affects players).
+        # Player-respawn handler (victim) -> bool; True = handled (skips in-place reset).
         self._player_respawn_func: Callable[[Any], bool] | None = None
-        # Optional death-loss handler ``(victim) -> summary``: strips the victim's
-        # carried equipment/supplies/resources and recovers a building-scaled
-        # fraction into their Respawn building (EquipmentSystem.apply_death_loss).
-        # Only invoked for real PLAYER victims (agents keep their loadout). None →
-        # no loss (tests / flow disabled).
+        # Death-loss handler (victim, killer=None) -> summary; strips gear on player death.
         self._death_loss_func: Callable[..., Any] | None = None
 
     def set_death_loss_func(self, func: Callable[..., Any] | None) -> None:
         """Inject the on-death equipment/resource-loss handler.
 
-        *func* is ``(victim, killer=None) -> summary``: it strips the player's
-        carried gear, Supply_Bag, and resources, depositing a building-level-
-        scaled fraction into their Respawn building. When *killer* is the real
-        player who defeated them (PvP), a slain player's destroyed gear may drop
-        as a ground pickup for the killer (underdog bounty). Wired at the
-        composition root to ``EquipmentSystem.apply_death_loss``. Only called for
-        player victims.
+        *func* is ``(victim, killer=None) -> summary``. Only called for player victims.
         """
         self._death_loss_func = func
 
     def set_player_respawn_func(self, func: Callable[[Any], bool] | None) -> None:
-        """Inject the player-respawn handler (lobby lifecycle flow).
+        """Inject the player-respawn handler.
 
-        *func* is ``(victim) -> bool``: it should record the death and relocate/
-        re-route the player, returning True when it fully handled respawn (the
-        engine then skips its default in-place HP reset). Only invoked for real
-        player victims (never agents). When unset — or when it returns False —
-        the engine keeps the existing instant in-place respawn.
+        *func* is ``(victim) -> bool``: returns True if it handled respawn (engine
+        skips its default in-place HP reset). Only invoked for player victims.
         """
         self._player_respawn_func = func
 
     def set_sight_blocked_func(self, func: Callable[..., bool] | None) -> None:
         """Inject the line-of-sight predicate used to gate turret fire.
 
-        *func* is ``(location, x1, y1, x2, y2) -> bool`` (True = blocked by a
-        Wall). Wired at the composition root; when unset, turrets ignore LOS.
+        *func* is ``(location, x1, y1, x2, y2) -> bool`` (True = blocked).
+        When unset, turrets ignore LOS.
         """
         self._sight_blocked = func
 
     def set_agent_xp_awarder(self, provider: Callable[[], Any]) -> None:
         """Inject the late-bound agent XP-awarder resolver.
 
-        *provider* is a zero-arg callable returning the object exposing
-        ``award_agent_xp`` / ``apply_agent_death_loss`` (the AgentSystem), or
-        ``None`` when unavailable. Called at the composition root once both
-        systems exist, replacing the game_systems-global reach.
+        *provider* returns the object exposing ``award_agent_xp`` /
+        ``apply_agent_death_loss``, or None when unavailable.
         """
         self._agent_xp_awarder_provider = provider
 
     def set_player_xp_awarder(self, provider: Callable[[], Any]) -> None:
-        """Inject the late-bound player XP-awarder resolver (the RankSystem).
+        """Inject the late-bound player XP-awarder resolver.
 
-        *provider* is a zero-arg callable returning the object exposing
-        ``award_xp(player, amount, reason)`` (the RankSystem), or ``None`` when
-        unavailable. Wired at the composition root; routing player combat XP
-        through it (rather than a raw ``db.combat_xp`` write) recomputes the
-        player's level/rank and fires ``LEVEL_CHANGED`` / ``RANK_*``.
+        *provider* returns the object exposing ``award_xp(player, amount, reason)``,
+        or None when unavailable.
         """
         self._player_xp_awarder_provider = provider
 
@@ -292,33 +251,16 @@ class CombatEngine(BaseSystem):
         is_melee = weapon_type == "melee"
         is_ranged = weapon_type == "ranged"
 
-        # 2b. Closed-cover gate. A ranged attack cannot hit a closed building
-        # or a player sheltered inside one — only an adjacent melee attack can.
-        # Runs before range/ammo so a blocked shot never consumes ammo or
-        # reports a range error. A breaching directional 'shoot' round bypasses
-        # this for a BUILDING target (it's meant to break the structure down);
-        # it never reaches a sheltered *player* — the building absorbs it.
+        # 2b. Closed-cover gate: ranged attacks can't hit closed buildings or
+        # sheltered players (melee can). Breach shots may target the building itself.
         if self._ranged_blocked(target, is_melee, breach=breach):
             if self._is_building(target):
                 return False, "That building is closed — only melee attacks reach it.", None
             return False, "They're sheltered inside — only a melee attack reaches them.", None
 
-        # 2c. Symmetric cover: a player sheltered inside a closed building can't
-        # fire ranged OUT either (no incoming ranged, no outgoing ranged — they
-        # must leave or use melee). Prevents a one-way "turtle" that snipes from
-        # total ranged immunity. Melee attacks from cover are still allowed.
-        # Exception 1: a breaching directional 'shoot' at a BUILDING — a player
-        # firing at the very structure enclosing them, to shoot their way out —
-        # is allowed (it can't reach an external target, only the building).
-        # Exception 2 (M1 — the Sniper Nest fantasy, R10.1): a shooter inside
-        # their OWN, OPERATIONAL range-aura building may fire ranged OUT —
-        # that's the point of manning the nest (and the tile range bonus then
-        # applies naturally). `_tile_range_bonus > 0` IS exactly that check
-        # (RANGE_AURA + owned-by-attacker's-owning-player + operational), so
-        # the exemption can never drift from the bonus. Inside an ENEMY nest,
-        # or any own non-aura building, the block still applies — and the nest
-        # still shelters its owner from INCOMING ranged fire (gate 2b), which
-        # is the deliberate owner-side perk of a closed aura building.
+        # 2c. Symmetric cover: a sheltered player can't fire ranged OUT either.
+        # Exception: breach shot at the enclosing building, or shooter is inside
+        # their own operational range-aura building (tile_range_bonus > 0).
         target_is_building = self._is_building(target)
         if (not is_melee and self._is_sheltered(attacker)
                 and not (breach and target_is_building)
@@ -331,10 +273,7 @@ class CombatEngine(BaseSystem):
         if is_melee and self._melee_blocked(attacker, target):
             return False, "You must be on the same tile to melee them — close in first.", None
 
-        # 3. Range validation — through the single R8 resolver (weapon
-        # instance range + owner tech + tile bonus, capped; melee is always
-        # 1), so this queue check can never diverge from the resolve-time
-        # re-check or the targeting-system lock re-validation.
+        # 3. Range validation (weapon instance range + tech + tile bonus, capped).
         weapon_range = self._resolve_weapon_range(attacker, weapon_item)
         if not self._validate_range(attacker, target, weapon_range):
             a_coords = self._get_coords(attacker)
@@ -443,32 +382,18 @@ class CombatEngine(BaseSystem):
             target = action["target"]
             weapon_item = action["weapon_item"]
 
-            # Re-check the closed-cover gate at RESOLUTION, not just at
-            # acquisition/queue. Turret actions queue one tick and resolve the
-            # next, so a target that took cover (entered a closed building)
-            # between lock-on and resolution must not be hit by the queued
-            # ranged shot. Melee actions bypass (cover doesn't stop melee).
+            # Re-check closed-cover gate at resolution (target may have taken cover since queue).
             is_melee = self._get_weapon_attr(weapon_item, "weapon_type", None) == "melee"
             if self._ranged_blocked(target, is_melee, breach=action.get("breach", False)):
-                # Shot dropped (target took cover between queue and resolve): it
-                # fired nothing, so refund the ammo consumed at queue time.
+                # Shot dropped (target took cover between queue and resolve): refund ammo.
                 self._refund_ammo(action)
                 continue
-            # Re-check the melee room gate too: a target that stepped into a
-            # building (or an attacker that did) between queue and resolve must
-            # not be meleed across the boundary from an adjacent tile.
+            # Re-check melee room gate at resolution.
             if is_melee and self._melee_blocked(attacker, target):
-                # Melee weapons never consume ammo, but refund defensively in
-                # case a synthetic/ranged action reached this gate.
                 self._refund_ammo(action)
                 continue
 
-            # Re-check RANGE at resolution, not just at queue time. A turret (or
-            # any queued shot) locks on one tick and resolves the next, so a
-            # target that stepped out of range in that gap must not still be hit
-            # by the in-flight shot. Resolved through the SAME R8 helper as the
-            # queue-time check (melee always 1; ranged = weapon instance + tech
-            # + tile, capped). Out of range → drop the shot and refund its ammo.
+            # Re-check range at resolution (target may have moved out of range).
             weapon_range = self._resolve_weapon_range(attacker, weapon_item)
             if not self._validate_range(attacker, target, weapon_range):
                 self._refund_ammo(action)
@@ -574,8 +499,8 @@ class CombatEngine(BaseSystem):
         self._notify_target(target, attacker, weapon_item, damage,
                             notify_attacker_hit=notify_attacker_hit)
 
-        # Typed on-hit effects (Phase 3): fire applies a burn DoT, poison
-        # applies a poison DoT (item-loot-economy R9), blast shreds armor.
+        # Typed on-hit effects: fire applies a burn DoT, poison
+        # applies a poison DoT, blast shreds armor.
         # Applied HERE — the one choke point every hit path
         # (queued, instant resolve_now, direct/AoE) flows through — so typed
         # weapons behave identically regardless of how the shot resolved.
@@ -592,8 +517,8 @@ class CombatEngine(BaseSystem):
             elif damage_type == "blast":
                 self._apply_blast_shred(target)
             # Proc affixes on the weapon instance ride the hit AFTER the
-            # damage-type dispatch (item-loot-economy task 3.4): a proc is
-            # an on-hit rider, not a damage-type conversion.
+            # damage-type dispatch: a proc is an on-hit rider, not a
+            # damage-type conversion.
             self._apply_weapon_procs(target, weapon_item, attacker)
 
         # Defeat / destruction when HP has reached zero.
@@ -831,12 +756,12 @@ class CombatEngine(BaseSystem):
     def _apply_poison_dot(self, target: Any, raw_damage: int, attacker: Any) -> None:
         """Apply a poison DoT effect when a poison-type weapon hits.
 
-        Mirrors :meth:`_apply_fire_dot` (item-loot-economy R9, design §6.2):
+        Mirrors :meth:`_apply_fire_dot`:
         poison deals a LOWER per-tick amount than fire but lasts LONGER
         (``poison_dot_fraction`` < ``fire_burn_fraction``;
-        ``poison_dot_ticks`` > ``fire_burn_ticks`` — design §9). Like the
+        ``poison_dot_ticks`` > ``fire_burn_ticks``). Like the
         burn, the DoT is independent of armor: it's already in the blood.
-        The counter (R9.4) is passive HP regen / medkits out-healing a light
+        The counter is passive HP regen / medkits out-healing a light
         DoT, plus ``poison_resist`` mitigating the typed hit itself.
 
         Effect dict format (stored on ``db.active_effects``)::
@@ -847,7 +772,7 @@ class CombatEngine(BaseSystem):
         ``source`` follows the same liveness contract as the burn's (see
         :meth:`_live_or_none`).
 
-        Toxicology research (item-loot-economy R11.5, task 6.4): the
+        Toxicology research: the
         attacker's OWNING PLAYER's ``poison_dot_mult`` tech scales the
         per-tick amount — owner attribution mirrors the damage/DR tech
         reads, so a turret/agent hit benefits from its owner's research.
@@ -855,7 +780,7 @@ class CombatEngine(BaseSystem):
         (research can never weaken the DoT; stacking can never run away)
         and scales the FRACTION only: ``poison_resist`` still mitigates
         the typed hit and regen/medkits still out-heal a light DoT — both
-        R9 counters are preserved. The viper-affix proc (a flat rolled
+        counters are preserved. The viper-affix proc (a flat rolled
         magnitude, not fraction-based) is deliberately NOT boosted — the
         tech strengthens poison WEAPONS, not every poison rider.
         """
@@ -878,7 +803,7 @@ class CombatEngine(BaseSystem):
 
     def _apply_weapon_procs(self, target: Any, weapon_item: Any,
                             attacker: Any) -> None:
-        """Apply the weapon instance's proc affixes to a landed hit (task 3.4).
+        """Apply the weapon instance's proc affixes to a landed hit.
 
         A ``proc`` affix (e.g. "of the Viper", ``proc: poison``) is an
         ON-HIT RIDER, not a damage-type conversion: the weapon keeps its own
@@ -888,13 +813,13 @@ class CombatEngine(BaseSystem):
         only for damaging hits on non-buildings (same gate as the typed
         DoTs).
 
-        Semantics for ``proc: poison`` (design §3.3/§9, R3.5/R9): every
+        Semantics for ``proc: poison``: every
         landed hit applies a poison DoT whose PER-TICK damage is the affix's
         rolled magnitude (band 1–3 — deliberately below a poison-typed
         weapon's fraction-based DoT) for the standard ``poison_dot_ticks``
         duration. The effect dict is identical to :meth:`_apply_poison_dot`'s,
         so it ticks, kills (through ``_handle_zero_hp``), and is countered
-        (regen/medkit, R9.4) through the exact same model. A poison-TYPED
+        (regen/medkit) through the exact same model. A poison-TYPED
         weapon that also carries a viper affix stacks both DoTs — the affix
         keeps its value on any weapon.
         """
@@ -1958,12 +1883,11 @@ class CombatEngine(BaseSystem):
         )
 
     def _resolve_weapon_range(self, attacker: Any, weapon_item: Any) -> int:
-        """Resolve the effective combat range of *weapon_item* (R8).
+        """Resolve the effective combat range of *weapon_item*.
 
-        The SINGLE range-resolution path shared by queue validation,
+        The single range-resolution path shared by queue validation,
         resolve-time re-validation, and the targeting-system lock
-        re-validation (injected at the composition root), so the three
-        sites can never diverge:
+        re-validation, so the three sites can never diverge:
 
         - melee → always 1 (ignores any ``range`` stat on the item);
         - base = the weapon INSTANCE's ``range`` — via ``get_stat``, so
@@ -1971,13 +1895,13 @@ class CombatEngine(BaseSystem):
         - + owner tech bonus ``get_tech_bonus(owner, "weapon_range")``,
           attributed to the OWNING PLAYER so a turret/agent shot benefits
           from its owner's research (mirrors the damage/DR tech reads);
-        - + tile bonus (:meth:`_tile_range_bonus` — Sniper Nest, Phase 6);
-        - clamped to ``balance.max_weapon_range`` when > 0 (R8.3).
+        - + tile bonus (:meth:`_tile_range_bonus` — Sniper Nest);
+        - clamped to ``balance.max_weapon_range`` when > 0.
 
-        Range never aggregates across other equipped items (R8.1): a
-        ``+range`` value on an accessory has NO effect by design — range
-        is the highest-risk stat, so it gets the narrowest surface
-        (weapon instance + owner tech + tile bonus only).
+        Range never aggregates across other equipped items: a ``+range``
+        value on an accessory has NO effect by design — range is the
+        highest-risk stat, so it gets the narrowest surface (weapon
+        instance + owner tech + tile bonus only).
         """
         if self._get_weapon_attr(weapon_item, "weapon_type", None) == "melee":
             return 1
@@ -1997,13 +1921,10 @@ class CombatEngine(BaseSystem):
         return int(total)
 
     def resolve_weapon_range(self, attacker: Any, weapon_item: Any) -> int:
-        """Public alias of :meth:`_resolve_weapon_range` (R8).
+        """Public alias of :meth:`_resolve_weapon_range`.
 
-        The name external collaborators wire against: the targeting
-        system's ``set_range_resolver`` and the command layer's
-        directional-shoot / attack-reach reads all consume THIS public
-        surface at the composition root instead of reaching for the
-        private helper. Pure delegation — no behavior change.
+        The name external collaborators wire against (targeting system,
+        command layer). Pure delegation — no behavior change.
         """
         return self._resolve_weapon_range(attacker, weapon_item)
 
@@ -2132,7 +2053,7 @@ class CombatEngine(BaseSystem):
         # the OWNING PLAYER so a turret/agent shot benefits from its owner's perk.
         perm_bonus = self._alliance_combat_bonus(attacker, "combat_damage", "damage_bonus")
 
-        # Researched-tech damage bonus (R13.3): read from the OWNING PLAYER's
+        # Researched-tech damage bonus: read from the OWNING PLAYER's
         # db.tech_bonuses so a turret/agent attack benefits from its owner's
         # research, mirroring the alliance perk attribution above.
         from world.utils import get_tech_bonus
@@ -2240,7 +2161,7 @@ class CombatEngine(BaseSystem):
         # directly rather than routed through a powerup that would be ignored).
         perm_dr = self._alliance_combat_bonus(target, "combat_armor", "damage_reduction")
 
-        # Researched-tech damage_reduction (R13.3): attributed to the target's
+        # Researched-tech damage_reduction: attributed to the target's
         # OWNING PLAYER so an agent is protected by its owner's research.
         from world.utils import get_tech_bonus
         owner = self._owning_player(target)

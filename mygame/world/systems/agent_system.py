@@ -32,13 +32,7 @@ from world.constants import (
 # ------------------------------------------------------------------ #
 #  Constants
 # ------------------------------------------------------------------ #
-#
-# Role/ability metadata is defined once in ``typeclasses.agent_scripts``; the
-# derived lookups (VALID_ROLES, BUILDING_ROLE_MAP, ARMY_ROLES,
-# AGENT_XP_SOURCE_FIELDS, ABILITY_SCRIPT_KEYS) plus the shared ``logger`` live
-# in the leaf ``agent_constants`` module (so the mixins can share them without
-# an import cycle). They are re-exported here for the many callers/tests that
-# import them from ``agent_system``.
+# Re-exported from agent_constants for convenience.
 from world.systems.agent_constants import (  # noqa: E402
     logger,
     VALID_ROLES,
@@ -50,8 +44,7 @@ from world.systems.agent_constants import (  # noqa: E402
 )
 
 #: Agent fields the admin ``@agent set`` verb may write through
-#: :meth:`AgentSystem.admin_set_agent_field` (the single-writer path for
-#: admin field writes — unified-admin-crud Requirement 3.5). Bounds and
+#: :meth:`AgentSystem.admin_set_agent_field`. Bounds and
 #: permission tiers for these live in the AgentAdapter's Field_Specs.
 ADMIN_SETTABLE_AGENT_FIELDS: tuple[str, ...] = (
     "hp",
@@ -126,12 +119,8 @@ class AgentSystem(AgentProgressionMixin, AgentBehaviorMixin, BaseSystem):
 
         # --- determine next ID ---
         # The persisted, monotonic ``next_agent_id`` counter is the source of
-        # truth: agent IDs must be strictly increasing, unique, and NEVER reused
-        # (Req 7b.5), so a counter — not the live roster — governs. Deriving from
-        # ``max(roster) + 1`` would reuse an ID after the highest agent is
-        # dismissed, and would collide if the roster query transiently returned
-        # empty. The roster only ever raises the floor (never lowers it), so a
-        # legacy player whose counter lags its roster still can't collide.
+        # truth: agent IDs are strictly increasing, unique, and never reused.
+        # The roster only ever raises the floor (never lowers it).
         counter = getattr(getattr(player, "db", None), "next_agent_id", None)
         try:
             counter = int(counter)
@@ -220,13 +209,13 @@ class AgentSystem(AgentProgressionMixin, AgentBehaviorMixin, BaseSystem):
         # Notify the player
         self.notify(player, "agent_training_complete", agent_id=agent_id)
 
-        # Economy XP award for training completion (R1.4) — via the shared
+        # Economy XP award for training completion — via the shared
         # award_player_xp choke point.
         from world.utils import award_player_xp
         amount = getattr(self.registry.balance, "xp_agent_trained", 0) or 0
         award_player_xp(player, amount, reason="agent_trained")
 
-        # Directive trigger (D8)
+        # Directive trigger
         try:
             from world.event_bus import AGENT_TRAINED
             self.event_bus.publish(AGENT_TRAINED, player=player, agent_id=agent_id)
@@ -252,11 +241,11 @@ class AgentSystem(AgentProgressionMixin, AgentBehaviorMixin, BaseSystem):
         Validates:
         - Agent exists and belongs to player.
         - Agent is not incapacitated or reserved.
-        - Role is valid (hidden roles only when ``allow_hidden`` — R6.3,
+        - Role is valid (hidden roles only when ``allow_hidden`` —
           the admin/test escape hatch for placeholder roles).
         - Building/role match (Extractor→Harvester, etc.).
         - Army roles (guard, scout — and hidden soldier/medic) don't need a
-          building (R4.1).
+          building.
 
         Returns ``(success, message)``.
         """
@@ -367,7 +356,7 @@ class AgentSystem(AgentProgressionMixin, AgentBehaviorMixin, BaseSystem):
             # left from a prior role.
             agent.db.activity_status = resting_activity_status(agent)
 
-        # Directive trigger (D8)
+        # Directive trigger
         try:
             from world.event_bus import AGENT_ASSIGNED
             self.event_bus.publish(
@@ -499,8 +488,8 @@ class AgentSystem(AgentProgressionMixin, AgentBehaviorMixin, BaseSystem):
         agent.db.patrol_route = [[int(wp[0]), int(wp[1])] for wp in waypoints]
         agent.db.patrol_waypoint_index = 0
 
-        # Directive trigger (D8) — role in payload so steps 7 (guard) and 10
-        # (scout) can condition on it.
+        # Directive trigger — role in payload so guard and scout handlers
+        # can condition on it.
         try:
             from world.event_bus import PATROL_SET
             self.event_bus.publish(
@@ -633,9 +622,8 @@ class AgentSystem(AgentProgressionMixin, AgentBehaviorMixin, BaseSystem):
     def get_max_agents(self, player: Any) -> int:
         """Return the max agent slots for the player's current rank.
 
-        Rank derives from the player's LEVEL via the RANK_BANDS lookup — the
-        R14 rule — not from ranks.yaml ``xp_threshold`` values, which are
-        stale display data under the formula-derived curve. agent_cap in YAML
+        Rank derives from the player's LEVEL via the RANK_BANDS lookup —
+        not from ranks.yaml ``xp_threshold`` values. agent_cap in YAML
         includes the commander slot, so the usable agent-only cap is
         ``agent_cap - 1``. When ranks.yaml lacks the exact rank number, the
         highest defined rank at or below it applies.
@@ -657,7 +645,7 @@ class AgentSystem(AgentProgressionMixin, AgentBehaviorMixin, BaseSystem):
     #
     # The AgentAdapter (``world/admin/adapters/agent_adapter.py``) routes
     # every admin write through these methods so AgentSystem stays the
-    # single writer for agent state (Requirement 3.5).
+    # single writer for agent state.
 
     def admin_create_agent(self, player: Any) -> Any | None:
         """Create one agent NPC for *player* instantly (admin spawn path).

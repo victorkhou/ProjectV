@@ -1,34 +1,15 @@
 """
 Bomb System — fused explosives (grenades + mines).
 
-Two bomb families, both a fused AoE explosive placed on a tile:
+Two bomb families, both fused AoE explosives placed on a tile:
 
-* **Grenades** (``throwable`` items) are THROWN in a compass direction with
-  ``throw <grenade> <n/s/e/w>``. The grenade flies until it hits the first
-  obstacle (a building/unit) or reaches the item's max ``range``, LANDS on that
-  tile, and a countdown fuse ticks down before it explodes.
-* **Mines** (``mine`` items) are ARMED in place with ``arm <mine>``; the same
-  fuse then ticks down before the explosion on the arming tile.
+* **Grenades** (``throwable``) are thrown in a compass direction, fly until
+  hitting an obstacle or reaching max range, then land and tick down.
+* **Mines** (``mine``) are armed in place and tick down on the arming tile.
 
-Both require the player to have SET a fuse first with ``set <bomb> <seconds>``
-(or ``set all <seconds>`` for the whole inventory). A bomb thrown/armed without
-a set fuse is rejected. Setting a fuse arms EVERY unit of that type the player
-holds: the fuses are stored as a per-type queue on the player
-(``db.bomb_fuses = {item_key: [seconds, ...]}``), one entry per held unit, and
-each throw/arm consumes one — so a single ``set all 3`` lets a stack of 3
-grenades all be thrown. Re-setting a type resets its queue to the current held
-count.
-
-A live bomb is a :class:`~typeclasses.objects.LiveBomb` resting on its tile.
-Each tick the system decrements every live bomb's fuse and shows the countdown
-to everyone standing on that tile; at zero it detonates as an indiscriminate
-AoE blast (hitting enemies, the placer's own units, AND the placer if they are
-in the radius — kills credit the placer) and the bomb is removed.
-
-Framework-free: all Evennia I/O (creating the LiveBomb, querying a planet's
-tiles, resolving the placing player) is injected as callables at the
-composition root. The system owns fuse math, the throw ray, the countdown, and
-detonation.
+Both require the player to ``set <bomb> <seconds>`` first. A live bomb ticks
+each game tick; at zero it detonates as an indiscriminate AoE blast (hits
+enemies, allies, and the placer). Framework-free: all Evennia I/O is injected.
 """
 
 from __future__ import annotations
@@ -63,19 +44,8 @@ _DIRECTIONS = {
 class BombSystem(BaseSystem):
     """Owns bomb fuse config, throwing/arming, the fuse countdown, and blasts.
 
-    Injected collaborators (all optional so the system is testable in isolation
-    and degrades gracefully before composition-root wiring):
-
-    * ``spawn_bomb_func(location, item_def, x, y, owner, bomb_type, fuse,
-      amount, radius) -> LiveBomb|None`` — create a live bomb on a tile.
-    * ``area_damage_applier() -> combat_engine`` — resolve the AoE blast; the
-      engine's ``apply_direct_hit`` deals the flat blast damage and runs the
-      shared post-damage pipeline (lockout, event, notify, defeat).
-    * ``current_tick_func() -> int`` — the game tick (unused for the pure
-      relative countdown, accepted for parity with other systems).
-    * ``in_bounds_func(x, y, planet_key) -> bool`` — whether a tile is on the
-      map, so a thrown grenade stops at the map edge instead of landing off-map.
-      When absent (test/unwired) all tiles are treated as in-bounds.
+    Injected collaborators are all optional so the system is testable in
+    isolation and degrades gracefully before composition-root wiring.
     """
 
     def __init__(
@@ -100,10 +70,8 @@ class BombSystem(BaseSystem):
         import random as _random
         self._rng_func = rng_func or _random.random
         self._randint_func = randint_func or _random.randint
-        #: Live bombs currently counting down. An in-memory list so the per-tick
-        #: countdown does not DB-scan every second; rebuilt from the world on
-        #: restart via :meth:`rebuild_from_world` (fuse state persists on the
-        #: LiveBomb's db, so a reboot resumes rather than resets).
+        #: Live bombs currently counting down. Rebuilt from the world on restart
+        #: via :meth:`rebuild_from_world` (fuse state persists on the LiveBomb's db).
         self._live_bombs: list = []
 
     # ------------------------------------------------------------------ #
