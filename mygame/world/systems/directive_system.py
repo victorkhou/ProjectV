@@ -188,12 +188,16 @@ class DirectiveSystem(BaseSystem):
                 description=directive.get("description", directive.get("key", "?")),
                 reward=directive.get("reward") or {},
             )
-            # Announce the next objective, if any.
+            # Announce the next objective, if any. The building it needs rides
+            # along so the presenter can annotate any gate the player has not
+            # met — the system passes the abbreviation, never the prose.
             if idx + 1 < len(self._directives):
                 nxt = self._directives[idx + 1]
+                from world.build_requirements import directive_building
                 self.notify(
                     player, "directive_next",
                     description=nxt.get("description", nxt.get("key", "?")),
+                    requires_building=directive_building(nxt),
                 )
             else:
                 self.notify(player, "directives_all_complete")
@@ -285,7 +289,14 @@ class DirectiveSystem(BaseSystem):
     # ------------------------------------------------------------------ #
 
     def get_progress_view(self, player: Any) -> dict:
-        """Return the player's chain state for the ``directives`` command."""
+        """Return the player's chain state for the ``directives`` command.
+
+        Each step carries ``requires_building`` (an abbreviation or ``None``) so
+        the command can annotate the current objective with unmet gates. The
+        view stays data-only — no player-facing prose is composed here.
+        """
+        from world.build_requirements import directive_building
+
         db = getattr(player, "db", None)
         idx = (getattr(db, "directives_progress", 0) or 0) if db else 0
         muted = bool(getattr(db, "directives_muted", False)) if db else False
@@ -294,6 +305,7 @@ class DirectiveSystem(BaseSystem):
             steps.append({
                 "key": d.get("key", f"step_{i + 1}"),
                 "description": d.get("description", "?"),
+                "requires_building": directive_building(d),
                 "done": i < idx,
                 "current": i == idx,
             })

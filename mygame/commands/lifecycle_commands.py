@@ -589,8 +589,10 @@ def _announce_current_directive(caller) -> None:
         description = current.get("description")
         if not description:
             return
+        from world.build_requirements import requirement_note
+        note = requirement_note(caller, current.get("requires_building"))
         caller.msg(
-            f"|c[Objective]|n {description}. "
+            f"|c[Objective]|n {description}{note}. "
             f"Type |wdirectives|n to see your checklist."
         )
     except Exception:  # noqa: BLE001 - a deploy hint never blocks entering play

@@ -140,7 +140,19 @@ def _fmt_directive_complete(d: dict) -> str:
 
 
 def _fmt_directive_next(d: dict) -> str:
-    return f"|y[Next objective]|n {d.get('description', '?')}"
+    """The next objective, annotated with any gate the player has not met.
+
+    A directive naming a building the player cannot yet raise (too low a level,
+    a missing deed, resources short) would otherwise read as a dead end — the
+    chain is strictly sequential, so it just sits there. The annotation names
+    what is missing; a reachable objective gets no suffix.
+    """
+    note = ""
+    abbr = d.get("requires_building")
+    if abbr:
+        from world.build_requirements import requirement_note
+        note = requirement_note(d.get("_player"), abbr)
+    return f"|y[Next objective]|n {d.get('description', '?')}{note}"
 
 
 def _fmt_directives_all_complete(d: dict) -> str:
@@ -1212,8 +1224,15 @@ class NotificationPresenter:
         if formatter is None:
             logger.warning("No formatter for notification kind %r", kind)
             return
+        # A copy carrying the recipient under a private key, so a formatter that
+        # must read player state (e.g. the directive objective, which annotates
+        # the requirements the player has not met) can do so without the
+        # publishing system composing prose on its behalf. Formatters that don't
+        # look for it are unaffected, and the caller's dict is never mutated.
+        payload = dict(data or {})
+        payload.setdefault("_player", player)
         try:
-            message = formatter(data or {})
+            message = formatter(payload)
         except Exception:
             logger.exception("Failed to format notification kind %r: %r", kind, data)
             return

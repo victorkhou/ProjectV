@@ -3604,11 +3604,16 @@ class CmdDirectives(GameCommand):
             return
         lines = [f"|wDirectives|n ({view['progress']}/{view['total']} complete"
                  f"{', muted' if view['muted'] else ''}):"]
+        from world.build_requirements import requirement_note
         for step in view["steps"]:
             if step["done"]:
                 lines.append(f"  |g[done]|n {step['description']}")
             elif step["current"]:
-                lines.append(f"  |y[ -> ]|n {step['description']}")
+                # Annotate only the CURRENT objective: it's the one the player
+                # can act on, and a gate they haven't met is why nothing is
+                # happening. Future steps stay uncluttered.
+                note = requirement_note(caller, step.get("requires_building"))
+                lines.append(f"  |y[ -> ]|n {step['description']}{note}")
             else:
                 lines.append(f"  |x[    ] {step['description']}|n")
         caller.msg("\n".join(lines))
