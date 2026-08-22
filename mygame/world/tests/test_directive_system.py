@@ -224,6 +224,31 @@ class TestBuildingAndSurveyDirectives(unittest.TestCase):
 #  Payload adapter (D7)
 # -------------------------------------------------------------- #
 
+class TestProgressViewExposesRequirements(DirectiveTestBase):
+    """The view must carry each step's building so the `directives` command can
+    annotate unmet gates — the system itself composes no prose."""
+
+    def test_step_carries_the_building_from_its_condition(self):
+        view = self.system.get_progress_view(_Player())
+        by_key = {s["key"]: s for s in view["steps"]}
+        assert by_key["build_hq"]["requires_building"] == "HQ"
+
+    def test_buildingless_step_carries_none(self):
+        view = self.system.get_progress_view(_Player())
+        by_key = {s["key"]: s for s in view["steps"]}
+        assert by_key["guard_patrol"]["requires_building"] is None
+
+    def test_explicit_requires_building_wins_over_the_condition(self):
+        self.registry.directives = [
+            {"key": "survey", "description": "Find a base",
+             "trigger_event": "outpost_surveyed",
+             "requires_building": "SA", "reward": {"xp": 20}},
+        ]
+        system = DirectiveSystem(self.registry, self.bus)
+        step = system.get_progress_view(_Player())["steps"][0]
+        assert step["requires_building"] == "SA"
+
+
 class TestPayloadAdapter(DirectiveTestBase):
     def test_npc_actor_resolves_to_owner(self):
         """An agent/turret actor credits its owning player."""

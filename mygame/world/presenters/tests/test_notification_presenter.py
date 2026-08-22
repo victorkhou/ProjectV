@@ -86,6 +86,57 @@ class TestFormatTable:
                     data={"amount": 5, "reason": "some_internal_reason"})
         assert _plain(n.sent[0][1]) == "+5 XP"
 
+    def test_directive_next_is_bare_when_nothing_blocks_it(self):
+        bus, n, _ = _make()
+        p = _Player()
+        bus.publish(PLAYER_NOTIFICATION, player=p, kind="directive_next",
+                    data={"description": "Build a Wall to protect your base"})
+        assert _plain(n.sent[0][1]) == (
+            "[Next objective] Build a Wall to protect your base"
+        )
+
+    def test_directive_next_annotates_an_unmet_gate(self):
+        """A directive naming a building the player can't yet raise must say
+        why — otherwise the chain silently parks on an impossible objective."""
+        from unittest import mock
+
+        bus, n, _ = _make()
+        p = _Player()
+        with mock.patch(
+            "world.build_requirements.unmet_requirements",
+            return_value=["level 6 (you are 4)"],
+        ):
+            bus.publish(PLAYER_NOTIFICATION, player=p, kind="directive_next",
+                        data={"description": "Locate an enemy base",
+                              "requires_building": "SA"})
+        msg = _plain(n.sent[0][1])
+        assert msg == (
+            "[Next objective] Locate an enemy base — needs level 6 (you are 4)"
+        )
+
+    def test_directive_next_passes_the_recipient_to_the_requirement_check(self):
+        # The formatter must resolve requirements against the RECIPIENT, not
+        # some ambient player — the presenter injects them under _player.
+        from unittest import mock
+
+        bus, n, _ = _make()
+        p = _Player()
+        with mock.patch(
+            "world.build_requirements.unmet_requirements", return_value=[]
+        ) as checked:
+            bus.publish(PLAYER_NOTIFICATION, player=p, kind="directive_next",
+                        data={"description": "Find a base",
+                              "requires_building": "SA"})
+        assert checked.call_args.args[0] is p
+
+    def test_formatter_payload_does_not_mutate_the_published_data(self):
+        bus, n, _ = _make()
+        p = _Player()
+        data = {"description": "Build a Wall"}
+        bus.publish(PLAYER_NOTIFICATION, player=p, kind="directive_next",
+                    data=data)
+        assert data == {"description": "Build a Wall"}  # no _player leaked in
+
 
 
     def test_building_progress_upgrade(self):
