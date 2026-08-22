@@ -616,18 +616,26 @@
 # `upgradable`: the array's LEVEL tightens the opening box
 # (``survey_initial_radius - 2 x (level - 1)``, floored at
 # ``survey_min_radius``), so a maxed array starts a search where an L1 array
-# would need several narrowing sweeps. Level 8 + no deed places it just before
-# the Radar (9) — you find bases before you can watch them.
+# would need several narrowing sweeps.
+#
+# Cost and gate are deliberately TERRA-BUILDABLE (Wood/Stone/Iron only, level 6).
+# The onboarding directive chain asks the player to find a base with this array,
+# so every part of it must be reachable on the starting planet at the level the
+# chain reaches. Circuits are a Forge resource (planet gate 21) and do not occur
+# on Terra at all, so a Circuits component stranded the array — and the directive
+# step needing it — behind either an outpost raid or a level-15 Launch Pad trip
+# to Space. Level 6 matches the Munitions Plant so both land as the guided path
+# arrives there, and still sits well before the Radar (9): you find bases before
+# you can passively watch them.
 - name: Survey Array
   abbreviation: SA
   cost:
     Wood: 15
-    Stone: 15
+    Stone: 25
     Iron: 20
-    Circuits: 10
   build_time_seconds: 28
   max_level: 5
-  rank_requirement: 8
+  rank_requirement: 6
   max_health: 200
   requires_hq: true
   required_terrain: null

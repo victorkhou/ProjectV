@@ -9,17 +9,45 @@
 #   condition:      optional payload filters (all must match)
 #   reward:         xp + resource grants (one-time; forfeited while muted — D2)
 #
-# TARGET: a player who finishes the whole chain should be ~level 6.
+# TARGET: a player who finishes the whole chain should be ~level 6-7.
 #
 # The chain's XP is deliberately a MINOR share of that. Completing a step
 # almost always also fires the action's own economy XP, which dwarfs the
 # directive bonus — building completion grants xp_build_complete (30), an
 # upgrade xp_upgrade_complete (30), training an agent xp_agent_trained (40)
 # (all in balance.yaml). Summing those action rewards for the guided path is
-# ~190 XP (level 4) and the directive bonuses below add ~160, landing a
-# completer in the middle of the level-6 band (298–397 XP at the default
-# curve). The directive rewards are the tuning lever for that target; the
-# action XP is fixed combat/economy balance and must not be retuned here.
+# ~190 XP and the directive bonuses below add 185, landing a completer in the
+# level-6/7 band. The directive rewards are the tuning lever for that target;
+# the action XP is fixed combat/economy balance and must not be retuned here.
+#
+# REACHABILITY RULE: every step must be completable at the XP the player holds
+# when that step becomes current. A step gated above the running total parks the
+# chain forever — DirectiveSystem is strictly sequential and does no
+# achievability check — and every resource a step needs must exist on the
+# STARTING planet (Terra yields only Wood/Stone/Iron/Biomass).
+#
+# Running total as each step becomes current (action XP + directive XP so far),
+# against the level gate of the building that step asks for. Verified by
+# test_directive_reachability.py, which recomputes this from the live data:
+#   1 build_hq              0   HQ L1 = 0     ok
+#   2 build_extractor      45   EX L1 = 0     ok
+#   3 train_agent          90   AC L1 = 0     ok
+#   4 assign_harvester    180   —             ok
+#   5 build_wall          200   WL L2 = 40    ok
+#   6 equip_weapon        245   AR L3 = 88    ok
+#   7 guard_patrol        290   —             ok
+#   8 build_munitions_pl. 300   MP L6 = 298   ok (clears by 2)
+#   9 survey_outpost      345   SA L6 = 298   ok
+#  10 upgrade_hq          395   —             ok
+#  11 scout_patrol        450   —             ok
+# A completer lands at 465 XP = level 7. Step 8 is the tight one: the
+# assign_harvester reward carries 20 (not 10) specifically so the running total
+# clears the level-6 gate before the Munitions Plant step becomes current.
+#
+# The Survey Array was the original break in this rule: level 8 (517 XP) and a
+# Circuits component, when the player arrives at step 9 with 345 XP and no way
+# to obtain Circuits on Terra at any level. It is now level 6 and
+# Wood/Stone/Iron. If a future retune moves a gate, re-derive this table.
 #
 # NOTE: the chain deliberately does NOT include "destroy an outpost". A first
 # outpost kill alone awards xp_hq_destroy (300) — enough to blow past level 6
@@ -32,9 +60,9 @@
 # those are handled by the BASE_ELIMINATED path, independent of this chain.
 #
 # Directive XP by step:
-#   HQ 15 / Extractor 15 / train 20 / assign 10 / Wall 15 / equip 15 /
+#   HQ 15 / Extractor 15 / train 20 / assign 20 / Wall 15 / equip 15 /
 #   guard 10 / Munitions Plant 15 / survey 20 / upgrade HQ 25 / scout 15
-#   = 160 total. With ~190 action XP that is ~350 grand total → mid level 6.
+#   = 185 total. With ~190 action XP that is ~375 grand total.
 
 - key: build_hq
   description: "Build your Headquarters"
@@ -53,20 +81,29 @@
     xp: 15
     Wood: 10
 
+# requires_building names the building a step needs when the condition doesn't
+# already (the build/upgrade steps carry it in condition.building_type). It is
+# display-only: it drives the "(needs level N; 20 Iron …)" annotation on the
+# objective so a player who can't act yet is told why, and never gates
+# advancement.
 - key: train_agent
   description: "Train your first agent at an Academy"
   trigger_event: agent_trained
+  requires_building: AC
   reward:
     xp: 20
     Iron: 10
 
+# 20 XP (not 10) is load-bearing: it is what lifts the running total over the
+# level-6 gate before the Munitions Plant step becomes current. See the
+# reachability table above before retuning it.
 - key: assign_harvester
   description: "Assign a harvester to your Extractor"
   trigger_event: agent_assigned
   condition:
     role: harvester
   reward:
-    xp: 10
+    xp: 20
 
 - key: build_wall
   description: "Build a Wall to protect your base"
@@ -80,6 +117,7 @@
 - key: equip_weapon
   description: "Equip a weapon from the Armory"
   trigger_event: item_equipped
+  requires_building: AR
   reward:
     xp: 15
 
@@ -100,12 +138,17 @@
     xp: 15
     Iron: 10
 
+# Reward is Iron, not Circuits: the array no longer costs Circuits, so a Circuits
+# refund had nothing to refund — and it could not have funded the array anyway
+# (you must already own one to trigger this step). Iron is the resource the
+# guided path runs shortest on.
 - key: survey_outpost
   description: "Locate an enemy base with a Survey Array"
   trigger_event: outpost_surveyed
+  requires_building: SA
   reward:
     xp: 20
-    Circuits: 10
+    Iron: 15
 
 - key: upgrade_hq
   description: "Upgrade your HQ to level 2"

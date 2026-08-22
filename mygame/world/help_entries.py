@@ -396,7 +396,7 @@ HELP_ENTRY_DICTS = [
             |wBS|n |cBlacksmith|n — the gear bench: insert, reroll, salvage. (L11, requires deed: destroy 3 outposts)
             |wRF|n |cRefinery|n — converts surplus resources into Salvage. (L13, requires deed: destroy a fortress)
             |wMP|n |cMunitions Plant|n — the bomb works: crafts every grenade and mine. (L6)
-            |wSA|n |cSurvey Array|n — triangulates enemy outpost locations on this planet. (L8)
+            |wSA|n |cSurvey Array|n — triangulates enemy outpost locations on this planet. (L6)
 
             Higher-tier buildings unlock as you gain levels; a few also require a deed (Barracks needs one destroyed outpost, the four labs each need three). You may own only one lab per planet — the four labs each host a different technology tree (|whelp technology|n). Check |wscore|n for your current level, |wbuild|n to see what's available now, and |whelp level|n for the full progression picture.
 
@@ -1688,12 +1688,11 @@ HELP_ENTRY_DICTS = [
 
             Cost:
               Wood - |c15|n
-              Stone - |c15|n
+              Stone - |c25|n
               Iron - |c20|n
-              Circuits - |c10|n
 
             Requirements:
-              Player - |clevel 8|n
+              Player - |clevel 6|n
               HQ - |crequired|n
 
             # What It Does
