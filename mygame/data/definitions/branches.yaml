@@ -1,0 +1,64 @@
+# Technology Branch catalog: the Counter_Web and the Operation_Kind registry.
+#
+# OPTIONAL file. Absent or empty -> an empty Counter_Web and an empty kind
+# registry, and the Branch vector features go inert (no advantage multiplier is
+# ever applied, no Signature_Vector is bound). PRESENT but mis-shaped -> the
+# load FAILS, so a typo'd binding never survives to the first request.
+
+# Counter_Web (R9.1): branch -> the branches it holds a bounded advantage over.
+# The shipped cycle gives each Branch exactly one advantage and exactly one
+# disadvantage, so no Branch is doubly countered.
+counter_web:
+  weapons:  [defense]
+  defense:  [bio]
+  bio:      [cyber]
+  cyber:    [resource]
+  resource: [research]
+  research: [weapons]
+
+# Per-Operation_Kind registry (R7.2, R8.19, R8.20, R7.10, R12.1). Each entry
+# names the Balance_Config field that holds the tunable, so the value is hot
+# and the *binding* is data. The entry KEY is the Operation_Kind identifier.
+operations:
+  strategic_strike:
+    branch: weapons
+    carrier_role: spotter
+    cost_field: strategic_strike_cost
+    cooldown_field: strategic_strike_cooldown_ticks
+    cap_field: strategic_strike_max_in_flight
+    agent_xp_field: agent_xp_strategic_strike
+  trap:
+    branch: defense
+    carrier_role: sapper
+    cost_field: trap_cost
+    cooldown_field: trap_cooldown_ticks
+    cap_field: trap_max_in_flight
+    agent_xp_field: agent_xp_trap
+  contagion:
+    branch: bio
+    carrier_role: medic
+    cost_field: contagion_cost
+    cooldown_field: contagion_cooldown_ticks
+    cap_field: contagion_max_in_flight
+    agent_xp_field: agent_xp_contagion
+  intrusion:
+    branch: cyber
+    carrier_role: infiltrator
+    cost_field: intrusion_cost
+    cooldown_field: intrusion_cooldown_ticks
+    cap_field: intrusion_max_in_flight
+    agent_xp_field: agent_xp_intrusion
+  convoy:
+    branch: resource
+    carrier_role: courier
+    cost_field: convoy_cost
+    cooldown_field: convoy_cooldown_ticks
+    cap_field: convoy_max_in_flight
+    agent_xp_field: agent_xp_convoy
+  detection_sweep:
+    branch: research
+    carrier_role: scout
+    cost_field: detection_sweep_cost
+    cooldown_field: detection_sweep_cooldown_ticks
+    cap_field: detection_sweep_max_in_flight
+    agent_xp_field: agent_xp_detection_sweep

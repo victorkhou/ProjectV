@@ -36,7 +36,7 @@ class BaseSystem:
         self.registry = registry
         self.event_bus = event_bus
 
-    def notify(self, player: Any, kind: str, **data: Any) -> None:
+    def notify(self, player: Any, kind: str, /, **data: Any) -> None:
         """Emit a player-facing notification for the presenter to render.
 
         The domain never composes or sends the message text: it publishes the
@@ -44,6 +44,11 @@ class BaseSystem:
         event, and the :class:`~world.presenters.notification_presenter.\
 NotificationPresenter` formats it for *kind* and delivers it. A ``None``
         player is dropped here so callers stay guard-free.
+
+        ``player`` and ``kind`` are **positional-only**, so a payload may carry
+        an entry of either name without colliding with them — the Vector_Operation
+        notifications carry a ``kind`` of their own, the Operation_Kind, which is
+        a different thing from the notification kind being published.
         """
         if player is None:
             return

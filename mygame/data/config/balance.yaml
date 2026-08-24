@@ -424,3 +424,34 @@ travel_cooldown_owned_ticks: 120  # 2 min when you own a base on both ends
 travel_manifest_weight_per_level: 200  # carry-weight per pad level (L1=200 L5=1000)
 travel_fuel_per_agent: 1          # extra fuel cells per agent in manifest
 travel_fuel_per_hop: 1            # base fuel cells per single-rung hop
+
+# --- Technology Branches (tech-tree-branch-foundation) -----------------
+# Every other Branch tunable keeps its BalanceConfig default; only the parity
+# tolerance is overridden here, and this is why.
+#
+# Schema rule 8 (R9.9/R9.10) scores each Branch as the weighted sum of its lab's
+# and Branch_Buildings' build costs plus its technologies' resource costs, and
+# fails the load when any Branch deviates from the six-Branch mean by more than
+# this fraction. The design's default is 0.20.
+#
+# 0.20 is unreachable for the SHIPPED catalog, and not because of the two new
+# Branches. The measured scores at the six-Branch mean of 1206 are:
+#
+#   weapons  1543.0  +27.9%      bio      1137.5   -5.7%
+#   resource 1353.5  +12.2%      cyber    1099.6   -8.9%
+#   defense  1236.5   +2.5%      research  868.5  -28.0%
+#
+# weapons and research are both PRE-EXISTING trees, and their ratio is
+# 1543/868.5 = 1.78. For every Branch to sit inside +/-t of a common mean, the
+# richest-to-poorest ratio must be at most (1+t)/(1-t) — so 1.78 needs t >= 0.28
+# no matter where the other four Branches land. The four legacy trees were
+# already spread about +/-31% around their own mean before this feature existed;
+# the bio and cyber lines were sized to sit near the mean and pull the spread
+# DOWN to its floor of ~28%, not to widen it.
+#
+# 0.30 is that floor (0.2801) plus a couple of points of authoring headroom, so
+# a single new technology does not fail the load. Closing the remaining gap means
+# rebalancing the weapons and research trees against each other — a legacy
+# economy change that belongs to its own spec, since those costs feed the
+# existing balance simulations. Tighten this back toward 0.20 when that lands.
+branch_cost_parity_tolerance: 0.30

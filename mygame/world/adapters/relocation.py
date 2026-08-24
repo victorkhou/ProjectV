@@ -5,7 +5,9 @@ Both the admin commands ('goto', 'transfer') and the player travel commands
 
 * :func:`resolve_planet_room` — find the destination planet's one PlanetRoom.
 * :func:`relocate_object` — move an entity into that room at specific coords,
-  with the coordinate-index bookkeeping a cross-planet hop requires.
+  with the coordinate-index bookkeeping a cross-planet hop requires, and the
+  ``PLAYER_MOVED`` announcement a planet change owes its planet-scoped
+  subscribers.
 
 They live here (a neutral adapter module) so command modules don't have to
 import from each other — ``game_commands`` importing ``admin_commands`` just
@@ -56,9 +58,14 @@ def relocate_object(obj, target_room, tx, ty, planet):
     adjacent tile; for a cross-planet move the stored old coords belong to the
     origin planet, so arrival/departure messaging would notify the wrong
     players.
+
+    A move that lands on a DIFFERENT planet is announced on the event bus (see
+    :func:`_announce_planet_change`), so systems whose answer is planet-scoped
+    react without every travel command having to know about them.
     """
     origin_room = obj.location
     old_coords = coords_of(obj)
+    old_planet = old_coords[2] if old_coords is not None else None
 
     obj.db.coord_planet = planet
 
@@ -76,3 +83,32 @@ def relocate_object(obj, target_room, tx, ty, planet):
         obj.move_to(target_room, quiet=True, move_hooks=False)
 
     target_room.move_entity(obj, tx, ty, notify=False)
+
+    _announce_planet_change(obj, old_planet, planet)
+
+
+def _announce_planet_change(obj, old_planet, planet):
+    """Publish PLAYER_MOVED when *obj* has arrived on a different planet.
+
+    This is the one shared cross-planet primitive behind 'launch', 'recall',
+    'goto', and 'transfer', so it is the one place a planet change is always
+    known — which makes it the right place to announce it. Systems whose answer
+    is planet-scoped subscribe rather than each travel command remembering to
+    call them (the Branch system rebuilds the arriving player's technology
+    bonuses, since a Branch_Commitment is per-planet).
+
+    A same-planet relocation publishes nothing: a teleport within a planet
+    changes no planet-scoped answer. Best-effort throughout — a missing bus, a
+    pre-install call, or a failing subscriber never breaks the move.
+    """
+    if old_planet == planet:
+        return
+    bus = get_service("event_bus")
+    if bus is None:
+        return
+    try:
+        from world.event_bus import PLAYER_MOVED
+
+        bus.publish(PLAYER_MOVED, player=obj, planet=planet, old_planet=old_planet)
+    except Exception:  # pragma: no cover - defensive
+        pass

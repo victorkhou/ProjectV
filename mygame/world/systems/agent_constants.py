@@ -39,6 +39,35 @@ ARMY_ROLES: tuple[str, ...] = tuple(
     spec.name for spec in _AGENT_ROLES.values() if spec.army
 )
 
+#: Roles that carry a ``branch`` yet are NOT gated on Branch_Commitment.
+#:
+#: DECIDED ASYMMETRY (see the ``AGENT_ROLES`` table): R7.6's commitment gate
+#: applies to "a role introduced by this feature", and `scout` is not one — it
+#: ships today as a free army role any player may assign, so gating it would
+#: break existing players' patrols. It still carries ``branch="research"`` for
+#: the R7.11 bijection and for Carrier_Agent lookup; the Recon Branch is gated
+#: where it counts, in the Detection_Sweep operation's own commitment check
+#: (R8.3). The same exemption applies to the dormancy release (R7.8): a lapsed
+#: Recon commitment leaves scouts patrolling.
+UNGATED_BRANCH_ROLES: frozenset[str] = frozenset({"scout"})
+
+#: Role → the Branch that role belongs to, for the roles the Branch_Commitment
+#: gate applies to (R7.6, R7.7) and the dormancy release covers (R7.8). Derived
+#: from the role table minus :data:`UNGATED_BRANCH_ROLES`, so it cannot drift
+#: from ``RoleSpec.branch``.
+GATED_BRANCH_ROLES: dict[str, str] = {
+    spec.name: spec.branch
+    for spec in _AGENT_ROLES.values()
+    if spec.branch is not None and spec.name not in UNGATED_BRANCH_ROLES
+}
+
+#: Branch → the one gated role that Branch commands. The inverse of
+#: :data:`GATED_BRANCH_ROLES` (a bijection over the five gated roles), so the
+#: lapse path can go from a Branch to the role it must release in one lookup.
+GATED_ROLE_FOR_BRANCH: dict[str, str] = {
+    branch: role for role, branch in GATED_BRANCH_ROLES.items()
+}
+
 # Maps an XP source key → the BalanceConfig attribute holding its amount.
 # Death loss is handled separately (it uses ``agent_xp_death_loss``).
 # An unknown source key resolves to no field → 0 amount → no-op award.

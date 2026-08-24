@@ -14,11 +14,13 @@ from typing import TYPE_CHECKING
 
 from world.constants import (
     BOMB_CATEGORIES,
+    DEFAULT_RESOURCE_WEIGHT,
     EFFECT_TYPES,
     EQUIPMENT_SLOTS,
     GEAR_CATEGORIES,
     ITEM_CATEGORIES,
     MAX_LEVEL,
+    OPERATION_KINDS,
     RESOURCE_TYPES,
     WEAPON_SLOT_BY_TYPE,
     WEAPON_TYPES,
@@ -109,6 +111,21 @@ AFFIX_PROC_KEYS: frozenset[str] = frozenset({"poison"})
 #: registry by category: weapon / armor / accessory). An item's
 #: ``roll_spec.affix_pool`` names one of these.
 AFFIX_POOL_NAMES = frozenset(GEAR_CATEGORIES)
+
+#: The late-game resources a Branch's Signature_Vector building chain must reach
+#: for (tech-tree-branch-foundation R12.4, R12.5), so Signature_Vector access
+#: depends on economic reach rather than only on rank. A subset of
+#: ``RESOURCE_TYPES``; the cross-file rule requires the UNION of the build costs
+#: over a Branch's tech-gated buildings to name at least one of them.
+LATE_GAME_RESOURCES: frozenset[str] = frozenset({"Circuits", "Energy", "Nexium"})
+
+#: Rule 8's fallback parity tolerance, for a registry whose balance carries no
+#: ``branch_cost_parity_tolerance`` at all (the hand-built SimpleNamespace
+#: fixtures). Read off ``BalanceConfig``'s own field default so the fallback and
+#: the dataclass can never drift apart.
+_DEFAULT_BRANCH_COST_PARITY_TOLERANCE: float = float(
+    BalanceConfig().branch_cost_parity_tolerance
+)
 
 #: Damage types a ``type: damage_type`` insert may convert a weapon to
 #: (item-loot-economy §4.3): the typed damages the combat engine dispatches on
@@ -209,7 +226,7 @@ class SchemaValidator:
             # research_tree pairs with the research_lab capability: a research
             # lab must name exactly one valid tree, and a non-lab must not name
             # one (a stray tree would silently never gate any research).
-            from world.constants import RESEARCH_LAB, RESEARCH_TREES
+            from world.constants import BRANCHES, RESEARCH_LAB, RESEARCH_TREES
             tree = entry.get("research_tree")
             is_lab = RESEARCH_LAB in cap_list
             if is_lab:
@@ -227,6 +244,47 @@ class SchemaValidator:
                 errors.append(
                     f"{prefix}: research_tree '{tree}' set on a building "
                     f"without the '{RESEARCH_LAB}' capability"
+                )
+
+            # --- Branch framework (tech-tree-branch-foundation) --------- #
+            # Every rule below APPENDS rather than short-circuits, so one load
+            # reports every Branch error on every building (R1.7).
+
+            # Branch_Affiliation vocabulary (R2.3): the optional `branch` field
+            # names one of the six Branches. A typo'd Branch would silently make
+            # the building unbuildable — no commitment could ever match it — so
+            # it fails the load instead.
+            branch = entry.get("branch")
+            if branch is not None and branch not in BRANCHES:
+                errors.append(
+                    f"{prefix}: building '{abbr}' declares unknown branch "
+                    f"'{branch}' (known: {sorted(BRANCHES)})"
+                )
+
+            # Lab affiliation agreement (R2.4): a lab HOSTS a Branch via
+            # `research_tree` and may restate it as its Branch_Affiliation, but
+            # the two must not disagree — a lab affiliated with a Branch it does
+            # not host would gate its own construction on a commitment it is
+            # itself the source of.
+            if is_lab and branch is not None and branch != tree:
+                errors.append(
+                    f"{prefix}: building '{abbr}' hosts research_tree "
+                    f"'{tree}' but declares branch '{branch}' — a "
+                    f"'{RESEARCH_LAB}' building's branch must be absent or "
+                    f"equal to its research_tree"
+                )
+
+            # Unlock-technology type (R6.1): when present it must be a
+            # non-empty string. That the key RESOLVES to a loaded technology,
+            # and that the technology's tree matches this building's Branch,
+            # are cross-file checks (see cross_validate).
+            unlock = entry.get("unlock_technology")
+            if unlock is not None and (
+                not isinstance(unlock, str) or not unlock.strip()
+            ):
+                errors.append(
+                    f"{prefix}: building '{abbr}' unlock_technology must be a "
+                    f"non-empty string, got {unlock!r}"
                 )
 
         return errors
@@ -1006,8 +1064,12 @@ class SchemaValidator:
         int_fields = _BALANCE_INT_FIELDS
         float_fields = _BALANCE_FLOAT_FIELDS
         bool_fields = _BALANCE_BOOL_FIELDS
-        # Resource->int maps: keys are resource names, values positive ints
+        # Resource->int maps: keys are resource names, values positive ints.
+        # The per-Operation_Kind `<kind>_cost` maps (R12.1) are derived from
+        # OPERATION_KINDS rather than listed, so a new Operation_Kind cannot
+        # ship an unvalidated cost map.
         resource_map_fields = ["base_training_cost", "reroll_resource_cost"]
+        resource_map_fields += [f"{kind}_cost" for kind in OPERATION_KINDS]
         # Level->float maps: keys are building levels (1-5), values fractions
         level_rate_map_fields = ["demolish_refund_rates"]
 
@@ -1075,6 +1137,42 @@ class SchemaValidator:
                     f"balance.{field}: must be >= 0, got {val!r}"
                 )
 
+        # Branch-framework range checks (tech-tree-branch-foundation R15.6).
+        # These seven are not plain non-negatives: each carries a bound whose
+        # violation would break a stated Branch contract rather than merely
+        # disable a feature — a reinstatement fraction above 1.0 would make a
+        # rebuild cost MORE than the original research, a counter cap below 1.0
+        # would turn an advantage into a penalty, a shield level outside
+        # 1..MAX_LEVEL would shield everyone or no one. Every violation is
+        # collected, so one bad tune does not hide the next.
+        # Non-finite values fail too: NaN/inf pass the isinstance type check
+        # (YAML `.nan` parses as a float) and every NaN comparison is False, so
+        # they are rejected here explicitly rather than flowing into a
+        # multiplier at runtime — matching _is_num's stance elsewhere.
+        branch_range_fields = [
+            ("branch_reinstatement_cost_fraction",
+             lambda v: 0.0 <= v <= 1.0, "must be between 0.0 and 1.0"),
+            ("minimum_response_window_ticks", lambda v: v >= 1, "must be >= 1"),
+            ("counter_advantage_cap", lambda v: v >= 1.0, "must be >= 1.0"),
+            ("branch_cost_parity_tolerance",
+             lambda v: 0.0 < v <= 1.0, "must be > 0.0 and <= 1.0"),
+            ("new_player_vector_shield_level",
+             lambda v: 1 <= v <= MAX_LEVEL,
+             f"must be between 1 and {MAX_LEVEL}"),
+            ("escalation_window_ticks", lambda v: v >= 1, "must be >= 1"),
+            ("escalation_cap", lambda v: v >= 1, "must be >= 1"),
+        ]
+        for field, in_range, expected in branch_range_fields:
+            val = data.get(field)
+            if (
+                val is None
+                or not isinstance(val, (int, float))
+                or isinstance(val, bool)
+            ):
+                continue  # absent, or already reported by the type pass above
+            if not (math.isfinite(val) and in_range(val)):
+                errors.append(f"balance.{field}: {expected}, got {val!r}")
+
         # Resource->positive-int maps (e.g. base_training_cost)
         for field in resource_map_fields:
             val = data.get(field)
@@ -1086,6 +1184,16 @@ class SchemaValidator:
                 )
                 continue
             for res, amount in val.items():
+                # Keys must name a canonical resource (case-sensitive
+                # title-case, as resource_weights already requires). A typo
+                # here is silent at load and permanent at runtime: the charge
+                # asks for a resource no player can ever hold, so every
+                # Vector_Operation of that Operation_Kind refuses forever.
+                if res not in RESOURCE_TYPES:
+                    errors.append(
+                        f"balance.{field}['{res}']: unknown resource; "
+                        f"must be one of {RESOURCE_TYPES}"
+                    )
                 if not isinstance(amount, int) or isinstance(amount, bool) or amount <= 0:
                     errors.append(
                         f"balance.{field}['{res}']: must be a positive integer, "
@@ -1497,6 +1605,252 @@ class SchemaValidator:
                 )
 
     # ------------------------------------------------------------------ #
+    #  Branch framework: the two table-only cross-file rules
+    # ------------------------------------------------------------------ #
+    def _validate_branch_roles(
+        self, branch_role: dict | None = None, role_branch: dict | None = None,
+    ) -> list[str]:
+        """Rule 9: the role ↔ Branch bijection (R7.11).
+
+        Two tables state the same relation from opposite ends, and this rule is
+        what keeps them from disagreeing:
+
+        - ``world.constants.BRANCH_ROLE`` — ``{branch: role}``, the one
+          Carrier_Agent role each Branch owns.
+        - ``typeclasses.agent_scripts.AGENT_ROLES`` — ``{role: RoleSpec}``, whose
+          ``branch`` field names the Branch that role belongs to.
+
+        Every declaration from either table is an edge, and the bijection is then
+        two degree checks over the same edge set — one error shape per failing
+        direction, as R7.11 states it:
+
+        - a Branch role that does not belong to exactly one Branch (names the
+          role), which is what a duplicated role, or a ``RoleSpec.branch``
+          disagreeing with ``BRANCH_ROLE``, looks like from the role's side;
+        - a Branch that does not own exactly one Branch role (names the Branch),
+          which is what a missing or a doubled Branch entry looks like.
+
+        ``RoleSpec.branch`` is read with :func:`getattr` and a ``None`` default,
+        so this rule is correct BEFORE the role table grows the field: with no
+        role declaring a Branch the edge set is exactly ``BRANCH_ROLE`` and the
+        rule checks that constant's own bijection. It tightens into a real
+        cross-check the moment a ``RoleSpec`` names a Branch, with no edit here.
+
+        Args:
+            branch_role: ``{branch: role}``; defaults to ``BRANCH_ROLE``.
+            role_branch: ``{role: branch | None}`` standing in for the role
+                table's declarations; defaults to reading ``RoleSpec.branch``
+                off every ``AGENT_ROLES`` entry. Both are injectable so the rule
+                is testable over a perturbed table without patching a module.
+        """
+        from world.constants import BRANCH_ROLE, BRANCHES
+
+        if branch_role is None:
+            branch_role = BRANCH_ROLE
+        if role_branch is None:
+            try:
+                from typeclasses.agent_scripts import AGENT_ROLES
+            except Exception:  # pragma: no cover - defensive: no role table
+                AGENT_ROLES = {}
+            role_branch = {
+                role: getattr(spec, "branch", None)
+                for role, spec in AGENT_ROLES.items()
+            }
+
+        errors: list[str] = []
+
+        # The edge set, from both tables. A Branch with no role at all still
+        # needs an entry, so the "owns exactly one" check can report it.
+        branches_of_role: dict[str, set[str]] = {}
+        roles_of_branch: dict[str, set[str]] = {branch: set() for branch in BRANCHES}
+
+        def _link(branch: str, role: str) -> None:
+            branches_of_role.setdefault(role, set()).add(branch)
+            roles_of_branch.setdefault(branch, set()).add(role)
+
+        for branch, role in branch_role.items():
+            _link(branch, role)
+        for role, branch in (role_branch or {}).items():
+            if branch:
+                _link(branch, role)
+
+        # Direction 1 — each Branch role belongs to exactly one Branch.
+        for role in sorted(branches_of_role, key=str):
+            branches = branches_of_role[role]
+            if len(branches) != 1:
+                errors.append(
+                    f"Branch role '{role}' belongs to Branches "
+                    f"{sorted(branches, key=str)} — each Branch role must "
+                    f"belong to exactly one Branch"
+                )
+
+        # Direction 2 — each Branch owns exactly one Branch role.
+        for branch in sorted(roles_of_branch, key=str):
+            roles = roles_of_branch[branch]
+            if len(roles) != 1:
+                errors.append(
+                    f"Branch '{branch}' owns Branch role(s) "
+                    f"{sorted(roles, key=str)} — each Branch must own exactly "
+                    f"one Branch role"
+                )
+
+        return errors
+
+    def _validate_counter_web(self, counter_web) -> list[str]:
+        """Rule 10: Counter_Web well-formedness (R9.2, R9.3, R9.12).
+
+        *counter_web* is the loaded ``{branch: (branch, ...)}`` mapping — the
+        DataRegistry keeps the file a faithful round-trip and leaves every
+        content question to this rule.
+
+        An EMPTY web is exempt, and deliberately so: ``branches.yaml`` is
+        optional, and an absent file loads as an empty web that makes every
+        counter multiplier exactly 1.0 — the documented inert state, which every
+        test fixture that predates this feature is in. A web that declares
+        anything at all is claiming to be the balance web, so all four
+        conditions apply to it:
+
+        - every source key and every named target is one of the six (R9.12);
+        - no Branch names itself: an advantage over yourself is not an edge;
+        - out-degree between 1 and 2 — at least one advantage (R9.2) and no more
+          than two (R9.3), counted over DISTINCT in-vocabulary targets, since the
+          web is a set of ordered pairs and a repeated pair is the same pair;
+        - in-degree at least one: every Branch is countered by something (R9.2),
+          which is the half that keeps a Branch from being unbeatable.
+        """
+        from world.constants import BRANCHES
+
+        web = dict(counter_web or {})
+        if not web:
+            return []
+
+        errors: list[str] = []
+        known = f"the six Branches {sorted(BRANCHES)}"
+
+        # R9.12, source side: a typo'd key silently gives its Branch no
+        # advantage and the typo no meaning.
+        for source in sorted(web, key=str):
+            if source not in BRANCHES:
+                errors.append(
+                    f"Counter_Web names source '{source}', which is not one of "
+                    f"{known}"
+                )
+
+        def _targets(source: str) -> list:
+            """Distinct declared targets of *source*, in declaration order.
+
+            Deduplicated by equality rather than by hashing, and a scalar is
+            wrapped, so no value shape can make this rule raise instead of
+            report — ``cross_validate`` returns errors, it never blows up.
+            """
+            raw = web.get(source) or ()
+            if isinstance(raw, str) or not isinstance(
+                raw, (list, tuple, set, frozenset)
+            ):
+                raw = (raw,)
+            distinct: list = []
+            for target in raw:
+                if target not in distinct:
+                    distinct.append(target)
+            return distinct
+
+        for branch in BRANCHES:
+            targets = _targets(branch)
+
+            # R9.12, target side.
+            for target in targets:
+                if target not in BRANCHES:
+                    errors.append(
+                        f"Counter_Web entry '{branch}' names target "
+                        f"'{target}', which is not one of {known}"
+                    )
+
+            if branch in targets:
+                errors.append(
+                    f"Counter_Web entry '{branch}' names itself — a Branch "
+                    f"holds no advantage over itself"
+                )
+
+            advantages = [t for t in targets if t in BRANCHES and t != branch]
+            if not advantages:
+                errors.append(
+                    f"Branch '{branch}' holds a Counter_Web advantage over no "
+                    f"Branch — every Branch must hold an advantage over at "
+                    f"least one other Branch"
+                )
+            elif len(advantages) > 2:
+                errors.append(
+                    f"Branch '{branch}' holds a Counter_Web advantage over "
+                    f"{sorted(advantages)} — no Branch may hold an advantage "
+                    f"over more than two Branches"
+                )
+
+        # R9.2, the in-degree half: a Branch nothing counters is unbeatable.
+        for branch in BRANCHES:
+            if not any(
+                branch in _targets(source)
+                for source in BRANCHES
+                if source != branch
+            ):
+                errors.append(
+                    f"Branch '{branch}' is countered by no Branch — at least "
+                    f"one Branch must hold a Counter_Web advantage over each of "
+                    f"{known}"
+                )
+
+        return errors
+
+    def _branch_investment_score(self, registry, branch: str) -> float:
+        """Rule 8's per-Branch score: total weighted investment (R9.9).
+
+        The sum, over the build costs of the Branch's Branch_Lab and its
+        Branch_Buildings and the resource costs of the Branch's technologies, of
+        each resource amount multiplied by that resource's weight from
+        ``balance.resource_weights``. A resource absent from that map weighs
+        :data:`~world.constants.DEFAULT_RESOURCE_WEIGHT`, which is worth knowing
+        when authoring: an unweighted resource is scored at 1.0 per unit until
+        someone gives it a weight, so a Branch whose signature sink is
+        unweighted reads heavier than the tuning intends.
+
+        A building counts as the Branch's when its ``branch`` names the Branch
+        (a Branch_Building) or its ``research_tree`` does (the Branch_Lab, which
+        rule 2 lets leave ``branch`` absent). The ``or`` counts a lab that
+        declares both exactly once.
+
+        Every read is defensive and every malformed amount contributes 0: this
+        feeds a validator that must REPORT a bad catalog, never raise on one.
+        Costs are per-definition base costs, so the score is a property of the
+        catalog alone — no player, no level, no owner discount.
+        """
+        weights = getattr(getattr(registry, "balance", None), "resource_weights", None)
+        if not hasattr(weights, "get"):
+            weights = {}
+
+        def weigh(cost_map) -> float:
+            if not isinstance(cost_map, dict):
+                return 0.0
+            total = 0.0
+            for resource, amount in cost_map.items():
+                try:
+                    weight = weights.get(resource, DEFAULT_RESOURCE_WEIGHT)
+                    total += float(amount) * float(weight)
+                except (TypeError, ValueError):
+                    continue  # authoring error; validate_* reports the type
+            return total
+
+        score = 0.0
+        for bdef in (getattr(registry, "buildings", None) or {}).values():
+            if (
+                getattr(bdef, "branch", None) == branch
+                or getattr(bdef, "research_tree", None) == branch
+            ):
+                score += weigh(getattr(bdef, "cost", None))
+        for tdef in (getattr(registry, "technologies", None) or {}).values():
+            if getattr(tdef, "tree", None) == branch:
+                score += weigh(getattr(tdef, "resource_cost", None))
+        return score
+
+    # ------------------------------------------------------------------ #
     #  Cross-validation
     # ------------------------------------------------------------------ #
     def cross_validate(self, registry) -> list[str]:
@@ -1686,7 +2040,14 @@ class SchemaValidator:
         # claim the same tree (which tree a player gets would then be ambiguous).
         # A technology's tree must also be a real tree — a typo'd tree would
         # make the tech researchable nowhere.
-        from world.constants import RESEARCH_LAB, RESEARCH_TREES
+        #
+        # Branch and tree are one vocabulary (BRANCHES *is* RESEARCH_TREES), so
+        # the Branch catalog-coverage rules of the tech-tree-branch-foundation
+        # feature share this block's tables: a Branch is its tree plus the
+        # buildings, technologies, and vector affiliated with it. Every rule
+        # below APPENDS, so one load reports every Branch error across every
+        # definition file (R1.7).
+        from world.constants import BRANCHES, RESEARCH_LAB, RESEARCH_TREES
 
         tree_to_labs: dict[str, list[str]] = {t: [] for t in RESEARCH_TREES}
         for abbr, bdef in registry.buildings.items():
@@ -1708,26 +2069,205 @@ class SchemaValidator:
             else:
                 trees_with_techs.add(tdef.tree)
 
-        # The tree↔lab coverage/uniqueness rules only apply once the dataset
-        # actually USES research labs. A dataset with no research_lab building
-        # (the many minimal test fixtures that predate this feature, and ship
-        # default-"research"-tree techs) is not required to host them — the
-        # techs are simply inert there. When labs ARE present, enforce the full
-        # bijection: every tree that has techs needs a hosting lab, and no two
-        # labs may claim the same tree.
+        # The non-lab Branch_Buildings of each Branch, and the subset of those
+        # gated behind an unlocking technology (the Signature_Vector chain —
+        # the design infers "this is the vector building" from `unlock_technology`
+        # being set rather than adding a flag). A building whose `branch` is
+        # absent is a Neutral_Building and belongs to no Branch; one whose
+        # `branch` is outside BRANCHES is already flagged per-file (rule 1), so
+        # it is skipped here rather than reported twice.
+        branch_buildings: dict[str, list[str]] = {b: [] for b in BRANCHES}
+        branch_gated_buildings: dict[str, list[str]] = {b: [] for b in BRANCHES}
+        for abbr, bdef in sorted(registry.buildings.items()):
+            if bdef.has_capability(RESEARCH_LAB):
+                continue
+            affiliation = bdef.branch
+            if affiliation not in branch_buildings:
+                continue
+            branch_buildings[affiliation].append(abbr)
+            if bdef.unlock_technology:
+                branch_gated_buildings[affiliation].append(abbr)
+
+        # The catalog-coverage rules only apply once the dataset actually USES
+        # research labs. A dataset with no research_lab building (the many
+        # minimal test fixtures that predate this feature, and ship
+        # default-"research"-tree techs) is not the shipped Branch catalog — its
+        # techs are simply inert there, and it declares no Branch content to
+        # cover. When labs ARE present the dataset is claiming to be a catalog,
+        # so every Branch must be complete.
         any_lab = any(labs for labs in tree_to_labs.values())
         if any_lab:
-            for tree in trees_with_techs:
-                if not tree_to_labs.get(tree):
+            for branch in BRANCHES:
+                # R1.4 — a Branch hosted by no lab: its research line is
+                # unreachable and no player could ever commit to it.
+                if not tree_to_labs.get(branch):
                     errors.append(
-                        f"research tree '{tree}' has technologies but no lab "
-                        f"hosting it — they would be researchable nowhere"
+                        f"Branch '{branch}' is hosted by no research lab — "
+                        f"exactly one research_lab building must declare "
+                        f"research_tree '{branch}'"
                     )
-        for tree, labs in tree_to_labs.items():
+                # R1.5 — a Branch with no technology: committing to it would
+                # buy a lab with nothing to research.
+                if branch not in trees_with_techs:
+                    errors.append(
+                        f"Branch '{branch}' has no technology — at least one "
+                        f"technology must declare tree '{branch}'"
+                    )
+                # R2.7 — a Branch with no non-lab building: the commitment
+                # would grant a lab and no doctrine buildings.
+                if not branch_buildings[branch]:
+                    errors.append(
+                        f"Branch '{branch}' has no non-lab Branch_Building — "
+                        f"at least one building beyond its lab must declare "
+                        f"branch '{branch}'"
+                    )
+                # R6.7 — a Branch with no tech-gated building: its
+                # Signature_Vector would come free with the lab.
+                if not branch_gated_buildings[branch]:
+                    errors.append(
+                        f"Branch '{branch}' has no Branch_Building gated "
+                        f"behind an unlock_technology — a Branch_Lab alone "
+                        f"must grant no Signature_Vector"
+                    )
+
+        # R1.3 — two labs claiming one Branch is ambiguous in ANY dataset (which
+        # Branch the owner is committed to would depend on which lab was looked
+        # up), so this half of the bijection is unconditional.
+        for branch, labs in tree_to_labs.items():
             if len(labs) > 1:
                 errors.append(
-                    f"research tree '{tree}' is hosted by multiple labs "
-                    f"{sorted(labs)} — exactly one lab must host each tree"
+                    f"Branch '{branch}' is hosted by multiple labs "
+                    f"{sorted(labs)} — exactly one lab must host each Branch"
                 )
+
+        # unlock_technology must resolve to a loaded technology (R6.4), and that
+        # technology must belong to the building's OWN Branch (R6.5) — a
+        # cross-Branch gate would make a building unbuildable, since the
+        # commitment that permits the building excludes the research that
+        # unlocks it. A building's effective affiliation is its `branch`, or its
+        # `research_tree` when a lab declares no `branch` of its own; a
+        # Neutral_Building has neither, so only the FK applies to it.
+        for abbr, bdef in sorted(registry.buildings.items()):
+            unlock = bdef.unlock_technology
+            if not unlock or not isinstance(unlock, str):
+                continue
+            tdef = registry.technologies.get(unlock)
+            if tdef is None:
+                errors.append(
+                    f"building '{abbr}': unlock_technology '{unlock}' "
+                    f"not found in technology definitions"
+                )
+                continue
+            affiliation = bdef.branch or bdef.research_tree
+            if affiliation is not None and tdef.tree != affiliation:
+                errors.append(
+                    f"building '{abbr}': unlock_technology '{unlock}' belongs "
+                    f"to Branch '{tdef.tree}' but the building declares Branch "
+                    f"'{affiliation}' — a building's unlocking technology must "
+                    f"be in its own Branch"
+                )
+
+        # Rule 8 — investment-score parity (R9.9, R9.10): no Branch may cost
+        # dramatically more or less to develop than the others, or the
+        # Branch_Commitment stops being a doctrine choice and becomes a cost
+        # choice — the cheap Branch is the correct opening whatever a player
+        # wants to play. The score is the Branch's whole weighted resource
+        # investment (lab + Branch_Buildings + technologies), so a Branch can
+        # trade a dear lab against a cheap research line and still balance.
+        #
+        # Gated behind `any_lab` on the same terms as rules 5-7 and 12: a
+        # lab-free fixture declares no Branch content, so every score would be 0
+        # and there is nothing to hold in parity. An all-zero catalog is skipped
+        # for the same reason — with a mean of 0 the fractional deviation is
+        # undefined, and every Branch is trivially equal anyway.
+        if any_lab:
+            scores = {
+                branch: self._branch_investment_score(registry, branch)
+                for branch in BRANCHES
+            }
+            mean = sum(scores.values()) / len(BRANCHES)
+            tolerance = getattr(
+                getattr(registry, "balance", None),
+                "branch_cost_parity_tolerance",
+                None,
+            )
+            try:
+                tolerance = float(tolerance)
+            except (TypeError, ValueError):
+                tolerance = _DEFAULT_BRANCH_COST_PARITY_TOLERANCE
+            if mean > 0:
+                for branch in BRANCHES:
+                    score = scores[branch]
+                    if abs(score - mean) / mean > tolerance:
+                        errors.append(
+                            f"Branch '{branch}' investment score {score:.2f} "
+                            f"deviates from the six-Branch mean {mean:.2f} by "
+                            f"more than the branch_cost_parity_tolerance "
+                            f"{tolerance:.2f} — a Branch's lab, buildings, and "
+                            f"technologies must cost about what every other "
+                            f"Branch's do"
+                        )
+
+        # Rule 9 — the role ↔ Branch bijection (R7.11). Reads only the two code
+        # tables, so it holds in EVERY dataset including the lab-free fixtures:
+        # a role that belongs to no Branch, or a Branch commanding two roles, is
+        # wrong regardless of what the definition files say.
+        errors.extend(self._validate_branch_roles())
+
+        # Rule 10 — Counter_Web well-formedness (R9.2, R9.3, R9.12). Read with
+        # `getattr` because a hand-built registry (the many SimpleNamespace test
+        # fixtures) carries no `counter_web` at all, which is the same inert
+        # empty-web case as an absent branches.yaml.
+        errors.extend(
+            self._validate_counter_web(getattr(registry, "counter_web", None))
+        )
+
+        # Rule 11 — Branch content rank floor (R10.5): a Branch_Building must
+        # never be reachable before its Branch's lab, or a player could hold
+        # Branch content while unable to commit to the Branch. Self-gating on
+        # "this Branch has exactly one lab": with none or several, rule 4 already
+        # reports the ambiguity and there is no single floor to compare against.
+        for branch, labs in sorted(tree_to_labs.items()):
+            if len(labs) != 1:
+                continue
+            lab_abbr = labs[0]
+            lab_rank = getattr(registry.buildings.get(lab_abbr), "rank_requirement", None)
+            if not isinstance(lab_rank, int) or isinstance(lab_rank, bool):
+                continue  # a malformed rank is validate_buildings' error
+            for abbr in branch_buildings[branch]:
+                rank = registry.buildings[abbr].rank_requirement
+                if not isinstance(rank, int) or isinstance(rank, bool):
+                    continue
+                if rank < lab_rank:
+                    errors.append(
+                        f"building '{abbr}': rank_requirement {rank} is below "
+                        f"the rank_requirement {lab_rank} of the lab "
+                        f"'{lab_abbr}' hosting its Branch '{branch}' — no "
+                        f"Branch content may precede its lab gate"
+                    )
+
+        # Rule 12 — a late-game resource in the Signature_Vector chain (R12.5):
+        # the UNION of the build costs over a Branch's tech-gated buildings must
+        # name at least one of Circuits / Energy / Nexium, so reaching a
+        # Signature_Vector takes economic reach and not only rank. Gated behind
+        # `any_lab` on the same terms as the coverage rules above — a lab-free
+        # fixture is not the shipped catalog — and skipped for a Branch with an
+        # empty chain, which rule 6 already reports.
+        if any_lab:
+            for branch in BRANCHES:
+                gated = branch_gated_buildings[branch]
+                if not gated:
+                    continue
+                reached: set[str] = set()
+                for abbr in gated:
+                    reached.update(registry.buildings[abbr].cost or {})
+                if not (reached & LATE_GAME_RESOURCES):
+                    errors.append(
+                        f"Branch '{branch}' Signature_Vector chain "
+                        f"{sorted(gated)} names no late-game resource — the "
+                        f"union of the build costs over a Branch's tech-gated "
+                        f"buildings must include at least one of "
+                        f"{sorted(LATE_GAME_RESOURCES)}"
+                    )
 
         return errors

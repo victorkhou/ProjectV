@@ -41,6 +41,9 @@ logger = logging.getLogger("evennia")
 #   - ``powerup_ticks`` runs AFTER ``combat_resolution`` so a powerup lasts
 #     through the tick it would expire on (its buff still applied to this
 #     tick's combat).
+#   - ``vector_operations`` runs after ``combat_resolution`` and before
+#     ``effect_ticks`` so a Branch vector operation that resolves damage this
+#     tick has its damage-over-time seeded by the same tick's effect step.
 #   - ``tick_completed`` is last: it announces the tick is fully processed.
 #
 # A step whose backing system is absent this run is simply not registered by
@@ -61,6 +64,7 @@ TICK_STEP_ORDER = (
     ("turret_attacks", "Turrets fire at the post-resolution world state."),
     ("bomb_fuse", "Tick down live bombs; detonate + AoE those whose fuse hits 0."),
     ("combat_timer_decrement", "Expire combat lockouts."),
+    ("vector_operations", "Advance Branch vector operations post-combat, pre-effects."),
     ("effect_ticks", "Tick active effects (burn/poison DoTs, shred decay) post-combat."),
     ("hp_regen", "Passive HP regen for players/agents (after combat)."),
     ("shield_regen", "Regenerate building shields from Shield Generators (after combat)."),
@@ -567,6 +571,18 @@ class GameTickScript(DefaultScript):
                 if expires > 0 and tick_number >= expires:
                     db.combat_timer_expires = 0
         registered["combat_timer_decrement"] = decrement_combat_timers
+
+        branch_system = systems.get("branch_system")
+        if branch_system:
+            # One step for every Branch vector: BranchSystem.process_tick fans
+            # out to each registered Vector_System's advance_all, each isolated
+            # in its own try/except, so no vector drives its own timer (R15.9).
+            # Like bomb_fuse this needs no tick_data — each vector tracks its own
+            # pending operations — so only the tick number is passed. An empty
+            # vector registry is a no-op, which is this feature's shipped state.
+            registered["vector_operations"] = (
+                lambda: branch_system.process_tick(tick_number)
+            )
 
         regen_system = systems.get("regen_system")
         if regen_system:

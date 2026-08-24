@@ -273,7 +273,10 @@ class TestDataclassContracts:
     def test_building_def_field_count(self):
         # 19 after adding research_tree (research-lab-trees: which tech tree a
         # research_lab building hosts; None for non-labs).
-        assert len(fields(BuildingDef)) == 19
+        # 21 after adding branch + unlock_technology (tech-tree-branch: the
+        # optional Branch_Affiliation and its optional unlocking technology;
+        # both None on every pre-feature building — deliberate bump).
+        assert len(fields(BuildingDef)) == 21
 
     def test_item_def_field_count(self):
         # 16 after adding craft_cost (resource cost for the `craft` command).
@@ -394,8 +397,18 @@ class TestDataclassContracts:
         #    (survey_scan_cost / survey_narrow_cost / survey_probe_cost) and 3
         #    search-precision bounds (survey_initial_radius, survey_min_radius,
         #    survey_reveal_radius) driving the outpost-triangulation minigame.
+        #  + 7 Branch framework cross-cutting knobs (tech-tree-branch-foundation
+        #    R12.1/R15.6): branch_reinstatement_cost_fraction,
+        #    minimum_response_window_ticks, counter_advantage_cap,
+        #    branch_cost_parity_tolerance, new_player_vector_shield_level,
+        #    escalation_window_ticks, escalation_cap.
+        #  + 24 per-Operation_Kind tunables — 4 each (`<kind>_cost`,
+        #    `<kind>_cooldown_ticks`, `<kind>_max_in_flight`,
+        #    `agent_xp_<kind>`) for the six kinds (strategic_strike, trap,
+        #    contagion, intrusion, convoy, detection_sweep); placeholder
+        #    defaults, each vector spec tunes its own four.
         # Bump this when adding a balance tunable.
-        assert len(fields(BalanceConfig)) == 158
+        assert len(fields(BalanceConfig)) == 189
 
     def test_coordinate_space_def_field_count(self):
         # 14 core + 2 graduation-economy scales (yield_scale, npc_scale).

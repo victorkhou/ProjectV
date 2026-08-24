@@ -518,19 +518,133 @@ BUILDING_CAPABILITIES: frozenset[str] = frozenset({
 #:   - ``resource`` — economy: production/build-cost/salvage efficiency.
 #:   - ``research`` — the generalist tree: terrain affinities + utility techs
 #:     (the original Lab's line — kept as ``research`` for continuity).
+#:   - ``bio``      — Biowarfare: transmissible damage-over-time and carriers.
+#:   - ``cyber``    — Signals: temporary suspension of enemy buildings/agents.
 #: The schema validator rejects any tech ``tree`` or lab ``research_tree``
 #: outside this set, so a typo fails at load.
 RESEARCH_TREE_WEAPONS = "weapons"
 RESEARCH_TREE_DEFENSE = "defense"
 RESEARCH_TREE_RESOURCE = "resource"
 RESEARCH_TREE_RESEARCH = "research"
+RESEARCH_TREE_BIO = "bio"
+RESEARCH_TREE_CYBER = "cyber"
 
 RESEARCH_TREES: tuple[str, ...] = (
     RESEARCH_TREE_WEAPONS,
     RESEARCH_TREE_DEFENSE,
     RESEARCH_TREE_RESOURCE,
     RESEARCH_TREE_RESEARCH,
+    RESEARCH_TREE_BIO,
+    RESEARCH_TREE_CYBER,
 )
+
+# ------------------------------------------------------------------ #
+#  Technology Branches
+# ------------------------------------------------------------------ #
+
+#: Branch and tree are the same vocabulary seen from two angles: a tree is the
+#: research line, a Branch is that line plus its buildings, agent roles, and
+#: signature vector. ONE tuple, two names, so neither term needs a translation
+#: table and the validator's existing ``RESEARCH_TREES`` rules keep working
+#: untouched while new Branch code speaks the domain word.
+BRANCHES: tuple[str, ...] = RESEARCH_TREES
+
+#: Branch → doctrine display name. Presentation-only: the doctrine is the
+#: player-facing word for the commitment, the Branch key is the data word.
+BRANCH_DOCTRINE: dict[str, str] = {
+    RESEARCH_TREE_WEAPONS: "Ordnance",
+    RESEARCH_TREE_DEFENSE: "Fortification",
+    RESEARCH_TREE_RESOURCE: "Logistics",
+    RESEARCH_TREE_RESEARCH: "Recon",
+    RESEARCH_TREE_BIO: "Biowarfare",
+    RESEARCH_TREE_CYBER: "Signals",
+}
+
+#: Branch → the ONE Carrier_Agent role that Branch owns. Exactly one role per
+#: Branch and exactly one Branch per role (a bijection the schema validator
+#: cross-checks against the ``AGENT_ROLES`` table so the two cannot drift).
+#: Committing to a Branch is what unlocks assignment to its role.
+BRANCH_ROLE: dict[str, str] = {
+    RESEARCH_TREE_WEAPONS: "spotter",
+    RESEARCH_TREE_DEFENSE: "sapper",
+    RESEARCH_TREE_RESOURCE: "courier",
+    RESEARCH_TREE_RESEARCH: "scout",
+    RESEARCH_TREE_BIO: "medic",
+    RESEARCH_TREE_CYBER: "infiltrator",
+}
+
+#: Branch → the Operation_Kind identifier naming that Branch's Signature_Vector.
+#: Doubles as the lookup key for the Operation_Kind definition and as the stem
+#: of that vector's Balance_Config field names (``<kind>_cost``, etc.).
+BRANCH_OPERATION_KIND: dict[str, str] = {
+    RESEARCH_TREE_WEAPONS: "strategic_strike",
+    RESEARCH_TREE_DEFENSE: "trap",
+    RESEARCH_TREE_RESOURCE: "convoy",
+    RESEARCH_TREE_RESEARCH: "detection_sweep",
+    RESEARCH_TREE_BIO: "contagion",
+    RESEARCH_TREE_CYBER: "intrusion",
+}
+
+#: The controlled vocabulary of Operation_Kinds, derived from
+#: ``BRANCH_OPERATION_KIND`` so the two cannot disagree.
+OPERATION_KINDS: tuple[str, ...] = tuple(BRANCH_OPERATION_KIND.values())
+
+#: New persisted PLAYER attributes the Branch feature introduces. Branch_System
+#: is their single writer, so one component owns each attribute.
+#:   - ``branch_abandoned``     — ``{branch: True}`` for each Branch the player
+#:     abandoned by switching away (as opposed to losing its lab to an attack),
+#:     marking that Branch as requiring Reinstatement research on return.
+#:   - ``branch_reinstatement`` — ``{branch: [tech_key, ...]}``, the recorded
+#:     technologies still awaiting their reduced-cost Reinstatement job.
+#:   - ``vector_consent``       — ``{consent_kind: {other_player_id: True}}``,
+#:     the permissions a player has granted an ally. A consent is the one thing
+#:     about a Vector_Operation that cannot be derived from the world: it is a
+#:     player's decision, so it is stored, and it is revoked when the two stop
+#:     being allies.
+ATTR_BRANCH_ABANDONED = "branch_abandoned"
+ATTR_BRANCH_REINSTATEMENT = "branch_reinstatement"
+ATTR_VECTOR_CONSENT = "vector_consent"
+
+#: The two persisted Vector_Operation LEDGERS. Branch_System is their single
+#: writer too, and each lives on the entity the limit belongs to rather than on
+#: a central register, so the ledger is deleted with that entity:
+#:   - ``vector_cooldowns``  — on the ORIGINATING BUILDING:
+#:     ``{operation_kind: ready_at_tick}``, the tick at which that building may
+#:     run that Operation_Kind again. Per building per kind, so two buildings of
+#:     one Branch cool down independently.
+#:   - ``vector_escalation`` — on the ATTACKING PLAYER:
+#:     ``{target_player_id: [resolution_tick, ...]}``, the hostile
+#:     Vector_Operations that player has resolved against each target inside the
+#:     rolling escalation window. Keyed by target identity and nothing else, so
+#:     an alliance grants no exemption.
+#: The in-flight cap needs no ledger of its own: the non-terminal
+#: Operation_Records a Vector_System already tracks *are* the count.
+ATTR_VECTOR_COOLDOWNS = "vector_cooldowns"
+ATTR_VECTOR_ESCALATION = "vector_escalation"
+
+#: The persisted Vector_Operation RECORDS, and the one attribute of this feature
+#: that does NOT live on a player: ``[record_dict, ...]`` on the DURABLE OWNER
+#: each Vector_System nominates for its operation — the world object the
+#: operation acts through (a placed trap, a convoy) or the entity it is attached
+#: to (an intruded building, an infected agent). The owner is the vector's choice
+#: because only the vector knows whether its operation has a world object at all,
+#: so a record survives a restart on something that outlives the process rather
+#: than in a central register.
+#: Written only through the read-copy-write pair in
+#: ``world.systems.operation_contract`` — the whole list is replaced on every
+#: write, never mutated in place, because an Evennia attribute does not observe
+#: an in-place change to a container it handed out.
+ATTR_VECTOR_OPERATIONS = "vector_operations"
+
+#: The two consent kinds ``vector_consent`` holds, and the controlled vocabulary
+#: :meth:`BranchSystem.grant_consent` accepts.
+#:   - ``support``        — this player accepts an ally's Vector_Operations
+#:     performed in support of them (R11.8).
+#:   - ``target_sharing`` — this player accepts an ally designating targets on
+#:     their behalf.
+CONSENT_SUPPORT = "support"
+CONSENT_TARGET_SHARING = "target_sharing"
+CONSENT_KINDS: tuple[str, ...] = (CONSENT_SUPPORT, CONSENT_TARGET_SHARING)
 
 #: Fraction of carried items/resources a Respawn building recovers, by BUILDING
 #: level (1-5). Per-item probabilistic (each item recovered with this chance) and

@@ -450,6 +450,48 @@ def initialize_game() -> dict:
 
     equipment_system.set_pvp_gear_drop_spawner(_spawn_pvp_gear_drop_for)
 
+    # Branch_System: Branch identity, commitment, dormancy, and the shared
+    # services every Signature_Vector consumes. Constructed AFTER the systems it
+    # collaborates with (building / tech / agent / alliance / combat) so every
+    # framework-dependent collaborator is injected here rather than reached for
+    # from inside the system (R15.1, R15.4) — including the shared tick clock,
+    # without which the cooldown and escalation ledgers freeze at tick 0. It
+    # subscribes its own recompute and consent-revocation triggers in
+    # __init__, so no extra event wiring belongs here.
+    from world.systems.branch_system import BranchSystem
+
+    branch_system = BranchSystem(
+        registry,
+        event_bus,
+        current_tick_func=_get_current_tick,
+        building_system=building_system,
+        tech_system=tech_system,
+        agent_system=agent_system,
+        alliance_system=alliance_system,
+        combat_engine=combat_engine,
+    )
+    # The three construction gates join BuildingSystem's existing ordered
+    # validation chain in one call, so BuildingSystem never imports BranchSystem.
+    building_system.set_branch_validators(branch_system.construction_validators())
+    # The demolish path reports the Branch_Estate it is about to shrink through
+    # the same duck-typed collaborator (branch_of_building + estate_count).
+    building_system.set_branch_estate_provider(branch_system)
+    # The words behind the Branch gates' refusal keys (R3.4, R3.5, R4.2, R6.3)
+    # live in the NotificationPresenter (R13.5); this seam is what turns
+    # "branch_lab_required" into a sentence in the build command's reply.
+    # Unwired, a refusal degrades to its bare key and still refuses.
+    from world.presenters.notification_presenter import render_construction_refusal
+
+    building_system.set_refusal_renderer(render_construction_refusal)
+    # TechLabSystem asks which Branch is live before it rebuilds db.tech_bonuses.
+    tech_system.set_branch_resolver(branch_system)
+    # AgentSystem gates the four newly introduced Branch roles on commitment.
+    agent_system.set_branch_resolver(branch_system)
+    # Each Signature_Vector spec appends its own system here and registers it:
+    #   branch_system.register_vector(ordnance_system)
+    # The registry ships empty until then, which makes the per-tick fan-out
+    # (registered as the "vector_operations" tick step) a no-op.
+
     movement_system = MovementSystem(
         max_paths_per_tick=MAX_PATHS_PER_TICK,
         moving_entity_repository=EvenniaMovingEntityRepository(),
@@ -761,6 +803,7 @@ def initialize_game() -> dict:
         "targeting_system": targeting_system,
         "spawn_resolver": spawn_resolver,
         "bomb_system": bomb_system,
+        "branch_system": branch_system,
         "outpost_spawner": outpost_spawner,
         "outpost_survey": outpost_survey,
         "base_elimination": base_elimination,
@@ -850,6 +893,39 @@ def initialize_game() -> dict:
             logger.info("Re-tracked %d live bomb(s) after restart.", n)
     except Exception:
         logger.exception("Live-bomb rebuild skipped.")
+
+    # Re-track every non-terminal Vector_Operation from the Operation_Records
+    # persisted on their durable owners, so an operation launched before the
+    # restart resumes advancing on the tick loop instead of sitting inert
+    # forever (R8.22, R14.3-14.5) — the same recovery the live-bomb rebuild
+    # above does, for the operation half of the Branch feature.
+    #
+    # Isolated PER VECTOR: one vector whose rebuild fails must leave the others
+    # recovered, which is the outer ring of the discipline each driver already
+    # applies per record inside its own rebuild. The registry is read through
+    # branch_system.registered_vectors(), the public by-value view of the same
+    # mapping register_vector files each vector into — read defensively so a
+    # BranchSystem double without the accessor rebuilds nothing rather than
+    # failing the boot.
+    #
+    # The SHIPPED state is an empty registry — this feature lands with no
+    # Vector_System registered — so this loop iterates nothing until a vector
+    # spec registers one, exactly like branch_system.process_tick.
+    try:
+        _vectors_view = getattr(branch_system, "registered_vectors", None)
+        registered_vectors = _vectors_view() if callable(_vectors_view) else {}
+        for kind, vector in tuple(registered_vectors.items()):
+            try:
+                n = vector.rebuild(planet_rooms)
+            except Exception:
+                logger.exception("Vector_Operation rebuild skipped for %s.", kind)
+                continue
+            if n:
+                logger.info(
+                    "Re-tracked %d %s operation(s) after restart.", n, kind
+                )
+    except Exception:
+        logger.exception("Vector_Operation rebuild skipped.")
 
     # ---------------------------------------------------------- #
     #  8. Start GameTickScript and AutoSaveScript

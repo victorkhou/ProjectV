@@ -635,6 +635,8 @@ class TestRoleScriptMap(unittest.TestCase):
         expected_roles = {
             "harvester", "engineer", "guard",
             "scout", "soldier", "medic",
+            # Branch Carrier_Agent roles (branch R7.4)
+            "spotter", "sapper", "courier", "infiltrator",
         }
         self.assertEqual(set(ROLE_SCRIPT_MAP.keys()), expected_roles)
 

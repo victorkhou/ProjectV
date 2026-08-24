@@ -47,6 +47,22 @@ class BuildingDef:
     #: non-lab building. The schema validator requires a research lab to name a
     #: valid tree and forbids the field on non-labs.
     research_tree: str | None = None
+    #: OPTIONAL Branch_Affiliation: the one Branch (``world.constants.BRANCHES``)
+    #: this building belongs to. ``None`` — the default — makes the building a
+    #: Neutral_Building, buildable under any Branch_Commitment and under none,
+    #: which is what every building definition shipped before the Branch feature
+    #: is, because they all omit the field (R2.1, R2.2, R2.5).
+    #: Independent of ``research_tree``: a lab declares which Branch it *hosts*
+    #: and may additionally declare the same value here (the schema validator
+    #: requires the two to agree, R2.4); a non-lab Branch_Building declares only
+    #: this one.
+    branch: str | None = None
+    #: OPTIONAL unlocking technology key. When set, construction requires that
+    #: the owner has researched that technology AND that its effects are
+    #: currently applied — that is, its Branch is committed and it is not
+    #: awaiting Reinstatement. ``None`` — the default — leaves the building
+    #: ungated by research, which is what every pre-feature building is (R6.1).
+    unlock_technology: str | None = None
 
     def has_capability(self, capability: str) -> bool:
         """Return True if this building declares the given capability flag."""
@@ -332,6 +348,12 @@ class BaseTemplateDef:
     #: ``guard_gear_drop_chance`` default. Distinct from guard_loot_chance
     #: (the resource mini-drop).
     guard_gear_drop_chance: float | None = None
+    #: OPTIONAL Branch this NPC base is committed to (``world.constants.BRANCHES``),
+    #: letting a template field that Branch's Branch_Buildings so players can
+    #: practice against a Signature_Vector before meeting a player using it
+    #: (R11.5). ``None`` — the default — is an unaffiliated base, which is what
+    #: every template shipped before the Branch feature is.
+    branch: str | None = None
 
 
 @dataclass
@@ -343,6 +365,38 @@ class AbilityGateDef:
 
     key: str
     required_level: int  # 1..MAX_LEVEL inclusive
+
+
+@dataclass(frozen=True)
+class OperationKindDef:
+    """One Signature_Vector's framework binding, from ``branches.yaml``.
+
+    An Operation_Kind is a Branch's signature capability seen from the
+    framework's side: which Branch owns it, which Carrier_Agent role delivers
+    it, and where its tunables live. The entry names ``BalanceConfig`` FIELDS
+    rather than holding the numbers, so tuning stays in ``balance.yaml`` behind
+    ``@reload`` while the vector-to-field binding stays reviewable in one data
+    table (R7.2, R8.19, R8.20, R12.1).
+
+    Frozen because it is a load-time binding, not runtime state — nothing may
+    rebind a vector after the load.
+    """
+
+    #: The Operation_Kind identifier and the ``operations`` entry's key; one of
+    #: ``world.constants.OPERATION_KINDS``.
+    kind: str
+    #: The Branch that owns this Operation_Kind (``world.constants.BRANCHES``).
+    branch: str
+    #: The ONE agent role that carries this Operation_Kind (R7.2).
+    carrier_role: str
+    #: ``BalanceConfig`` field holding this kind's per-use resource cost map.
+    cost_field: str
+    #: ``BalanceConfig`` field holding this kind's per-building cooldown ticks.
+    cooldown_field: str
+    #: ``BalanceConfig`` field holding this kind's max-in-flight cap.
+    cap_field: str
+    #: ``BalanceConfig`` field holding the agent XP a completed operation awards.
+    agent_xp_field: str
 
 
 @dataclass
@@ -898,3 +952,68 @@ class BalanceConfig:
     #: Minimum fog-of-war vision radius after terrain adjustment: a circle
     #: never shrinks below this many tiles regardless of penalties.
     min_vision_radius: int = 1
+
+    # --- Branch framework (tech-tree-branch-foundation) ---------------- #
+    # The seven cross-cutting Branch tunables. Each is range-checked in
+    # SchemaValidator.validate_balance (R15.6) and read per request rather
+    # than cached, so an @reload retunes the live game (R15.7).
+    #: Reinstatement discount: a re-researched technology in a previously
+    #: abandoned Branch costs this fraction of its defined resource cost AND
+    #: takes this fraction of its defined duration (R5.6). 1.0 = full price.
+    branch_reinstatement_cost_fraction: float = 0.5
+    #: Floor on the Response_Window of a hostile Vector_Operation, in ticks,
+    #: measured from the target's notification to the effect (R8.8). No
+    #: Counter_Web reduction may take a window below this.
+    minimum_response_window_ticks: int = 5
+    #: Ceiling on a Counter_Web advantage multiplier (R9.4). An advantage
+    #: changes a magnitude or a timing; it never grants immunity.
+    counter_advantage_cap: float = 1.35
+    #: Allowed fractional deviation of a Branch's investment score from the
+    #: six-Branch mean before the load fails (R9.10).
+    branch_cost_parity_tolerance: float = 0.20
+    #: Entity_Level below which a player cannot be the target of a hostile
+    #: Vector_Operation (R10.4).
+    new_player_vector_shield_level: int = 10
+    #: Rolling window (ticks) for the per-attacker-per-target escalation cap.
+    escalation_window_ticks: int = 600
+    #: Max hostile Vector_Operations one player may resolve against one target
+    #: player inside escalation_window_ticks (R10.6).
+    escalation_cap: int = 3
+
+    # --- Per-Operation_Kind tunables (R7.10, R8.19, R8.20, R12.1) ------ #
+    # Four fields per Operation_Kind, named `<kind>_cost`,
+    # `<kind>_cooldown_ticks`, `<kind>_max_in_flight`, and `agent_xp_<kind>`
+    # — the names `OperationKindDef` binds to in ``branches.yaml``. They ship
+    # here with PLACEHOLDER defaults so R12.1's "a per-use cost for every
+    # Operation_Kind" holds and the naming contract is validated from day one;
+    # each vector spec tunes its own four.
+    strategic_strike_cost: dict[str, int] = field(
+        default_factory=lambda: {"Iron": 20, "Circuits": 5})
+    strategic_strike_cooldown_ticks: int = 60
+    strategic_strike_max_in_flight: int = 2
+    agent_xp_strategic_strike: int = 30
+    trap_cost: dict[str, int] = field(
+        default_factory=lambda: {"Iron": 15, "Circuits": 4})
+    trap_cooldown_ticks: int = 45
+    trap_max_in_flight: int = 4
+    agent_xp_trap: int = 25
+    contagion_cost: dict[str, int] = field(
+        default_factory=lambda: {"Biomass": 20, "Energy": 8})
+    contagion_cooldown_ticks: int = 60
+    contagion_max_in_flight: int = 2
+    agent_xp_contagion: int = 30
+    intrusion_cost: dict[str, int] = field(
+        default_factory=lambda: {"Circuits": 18, "Energy": 10})
+    intrusion_cooldown_ticks: int = 75
+    intrusion_max_in_flight: int = 2
+    agent_xp_intrusion: int = 30
+    convoy_cost: dict[str, int] = field(
+        default_factory=lambda: {"Energy": 12, "Iron": 10})
+    convoy_cooldown_ticks: int = 30
+    convoy_max_in_flight: int = 3
+    agent_xp_convoy: int = 20
+    detection_sweep_cost: dict[str, int] = field(
+        default_factory=lambda: {"Energy": 15, "Circuits": 6})
+    detection_sweep_cooldown_ticks: int = 45
+    detection_sweep_max_in_flight: int = 2
+    agent_xp_detection_sweep: int = 20

@@ -1121,6 +1121,253 @@ class TestEconomyTunablesSourcedFromBalance:
 
 
 # ------------------------------------------------------------------ #
+#  Tests: Branch definition fields (tech-tree-branch task 1.2)
+# ------------------------------------------------------------------ #
+
+
+class TestBranchBuildingFields:
+    """``branch`` / ``unlock_technology`` round-trip through the building loader.
+
+    Both fields are optional, so a definition that omits them must load as a
+    Neutral_Building with no research gate — which is every building definition
+    that shipped before the Branch feature (R2.1, R2.2, R2.5, R2.6, R6.1).
+    """
+
+    def test_declared_branch_fields_read_back(self, data_dir):
+        buildings = copy.deepcopy(VALID_BUILDINGS)
+        buildings.append(
+            {
+                "name": "Recon Array",
+                "abbreviation": "RA",
+                "cost": {"Iron": 40},
+                "max_health": 200,
+                "requires_hq": True,
+                "required_terrain": None,
+                "category": "research",
+                "produces": None,
+                "map_symbol": "RA",
+                "build_time_seconds": 120,
+                "max_level": 5,
+                "rank_requirement": 1,
+                "requires_agent": False,
+                "storage_capacity": 0,
+                # `reinforced_walls` is the fixture tech, whose tree defaults to
+                # `research` — the same Branch this building declares.
+                "branch": "research",
+                "unlock_technology": "reinforced_walls",
+            }
+        )
+        _write_yaml(
+            os.path.join(data_dir, "definitions", "buildings.yaml"), buildings
+        )
+        reg = DataRegistry()
+        reg.load_all(data_dir)
+
+        bdef = reg.get_building("RA")
+        assert bdef.branch == "research"
+        assert bdef.unlock_technology == "reinforced_walls"
+
+    def test_omitted_branch_fields_default_to_none(self, data_dir):
+        reg = DataRegistry()
+        reg.load_all(data_dir)
+
+        for abbr in ("HQ", "MM", "AA"):
+            bdef = reg.get_building(abbr)
+            assert bdef.branch is None
+            assert bdef.unlock_technology is None
+
+
+# ------------------------------------------------------------------ #
+#  Tests: Branch catalog (tech-tree-branch task 1.3, optional
+#  branches.yaml — the Counter_Web + the Operation_Kind registry)
+#  Requirements: 7.2, 9.1, 12.1
+# ------------------------------------------------------------------ #
+
+_VALID_BRANCHES = {
+    "counter_web": {
+        "weapons": ["defense"],
+        "defense": ["bio"],
+        "bio": ["cyber"],
+        "cyber": ["resource"],
+        "resource": ["research"],
+        "research": ["weapons"],
+    },
+    "operations": {
+        "strategic_strike": {
+            "branch": "weapons",
+            "carrier_role": "spotter",
+            "cost_field": "strategic_strike_cost",
+            "cooldown_field": "strategic_strike_cooldown_ticks",
+            "cap_field": "strategic_strike_max_in_flight",
+            "agent_xp_field": "agent_xp_strategic_strike",
+        },
+    },
+}
+
+
+def _branches(**overrides) -> dict:
+    """A deep copy of the valid Branch catalog with *overrides* merged in."""
+    data = copy.deepcopy(_VALID_BRANCHES)
+    data.update(overrides)
+    return data
+
+
+def _write_branches(data_dir: str, data) -> None:
+    _write_yaml(os.path.join(data_dir, "definitions", "branches.yaml"), data)
+
+
+class TestBranchCatalog:
+    """The Counter_Web and Operation_Kind registry load from branches.yaml.
+
+    Optional-when-absent (the Branch vector features go inert), strict when
+    present: a mis-shaped catalog fails the LOAD rather than the first
+    operation request.
+    """
+
+    def test_absent_branches_yields_empty(self, data_dir):
+        """No branches.yaml → empty web and registry, and the load succeeds."""
+        reg = DataRegistry()
+        reg.load_all(data_dir)
+
+        assert reg.counter_web == {}
+        assert reg.operation_kinds == {}
+
+    def test_empty_branches_file_yields_empty(self, data_dir):
+        _write_branches(data_dir, None)
+        reg = DataRegistry()
+        reg.load_all(data_dir)
+
+        assert reg.counter_web == {}
+        assert reg.operation_kinds == {}
+
+    def test_counter_web_loads_as_tuples(self, data_dir):
+        _write_branches(data_dir, _VALID_BRANCHES)
+        reg = DataRegistry()
+        reg.load_all(data_dir)
+
+        assert reg.counter_web["weapons"] == ("defense",)
+        assert set(reg.counter_web) == set(_VALID_BRANCHES["counter_web"])
+        assert all(isinstance(v, tuple) for v in reg.counter_web.values())
+
+    def test_operation_kind_fields_read_back(self, data_dir):
+        _write_branches(data_dir, _VALID_BRANCHES)
+        reg = DataRegistry()
+        reg.load_all(data_dir)
+
+        kdef = reg.operation_kinds["strategic_strike"]
+        assert type(kdef).__name__ == "OperationKindDef"
+        # `kind` comes from the entry key, the rest from the spec body.
+        assert kdef.kind == "strategic_strike"
+        assert kdef.branch == "weapons"
+        assert kdef.carrier_role == "spotter"
+        assert kdef.cost_field == "strategic_strike_cost"
+        assert kdef.cooldown_field == "strategic_strike_cooldown_ticks"
+        assert kdef.cap_field == "strategic_strike_max_in_flight"
+        assert kdef.agent_xp_field == "agent_xp_strategic_strike"
+
+    def test_operation_kind_is_frozen(self, data_dir):
+        """A binding is load-time data; nothing may rebind a vector at runtime."""
+        _write_branches(data_dir, _VALID_BRANCHES)
+        reg = DataRegistry()
+        reg.load_all(data_dir)
+
+        with pytest.raises(AttributeError):
+            reg.operation_kinds["strategic_strike"].branch = "bio"
+
+    def test_counter_web_round_trips_unknown_branch_names(self, data_dir):
+        """The loader is type-strict but content-permissive.
+
+        Membership in the six Branches is a SchemaValidator rule (R9.12), so
+        the PARSE round-trips whatever names the file declares instead of
+        reporting the same problem from two places — and the validator is what
+        rejects the typo, once, during cross-validation.
+        """
+        errors: list[str] = []
+        parsed = DataRegistry._parse_counter_web({"wepaons": ["defense"]}, errors)
+
+        assert parsed == {"wepaons": ("defense",)}
+        assert errors == []
+
+        _write_branches(data_dir, _branches(counter_web={"wepaons": ["defense"]}))
+        reg = DataRegistry()
+        with pytest.raises(DataRegistryError, match="wepaons"):
+            reg.load_all(data_dir)
+
+    def test_non_mapping_document_fails_load(self, data_dir):
+        _write_branches(data_dir, ["weapons", "defense"])
+        reg = DataRegistry()
+        with pytest.raises(DataRegistryError, match="branches: expected a mapping"):
+            reg.load_all(data_dir)
+
+    def test_unknown_section_fails_load(self, data_dir):
+        _write_branches(data_dir, _branches(counter_wbe={"weapons": ["defense"]}))
+        reg = DataRegistry()
+        with pytest.raises(DataRegistryError, match="unknown section"):
+            reg.load_all(data_dir)
+
+    def test_counter_web_scalar_value_fails_load(self, data_dir):
+        """``weapons: defense`` is a YAML slip, not a one-element list."""
+        _write_branches(data_dir, _branches(counter_web={"weapons": "defense"}))
+        reg = DataRegistry()
+        with pytest.raises(DataRegistryError, match="expected a list of branch names"):
+            reg.load_all(data_dir)
+
+    def test_operation_missing_field_fails_load(self, data_dir):
+        data = _branches()
+        del data["operations"]["strategic_strike"]["carrier_role"]
+        _write_branches(data_dir, data)
+        reg = DataRegistry()
+        with pytest.raises(DataRegistryError, match="'carrier_role' must be a non-empty"):
+            reg.load_all(data_dir)
+
+    def test_operation_unknown_field_fails_load(self, data_dir):
+        """A typo'd binding field fails the load, not the first request."""
+        data = _branches()
+        data["operations"]["strategic_strike"]["cooldown_ticks_field"] = "x"
+        _write_branches(data_dir, data)
+        reg = DataRegistry()
+        with pytest.raises(DataRegistryError, match="unknown field"):
+            reg.load_all(data_dir)
+
+    def test_operation_kind_disagreeing_with_key_fails_load(self, data_dir):
+        data = _branches()
+        data["operations"]["strategic_strike"]["kind"] = "trap"
+        _write_branches(data_dir, data)
+        reg = DataRegistry()
+        with pytest.raises(DataRegistryError, match="but is keyed"):
+            reg.load_all(data_dir)
+
+    def test_invalid_branches_reports_every_violation(self, data_dir):
+        """One load reports every problem, not just the first."""
+        data = _branches(counter_web={"weapons": 3})
+        del data["operations"]["strategic_strike"]["cost_field"]
+        _write_branches(data_dir, data)
+        reg = DataRegistry()
+        with pytest.raises(DataRegistryError) as exc:
+            reg.load_all(data_dir)
+
+        assert "counter_web['weapons']" in str(exc.value)
+        assert "'cost_field'" in str(exc.value)
+
+    def test_reload_with_invalid_branches_preserves_data(self, data_dir):
+        """A broken branches.yaml fails the reload atomically."""
+        _write_branches(data_dir, _VALID_BRANCHES)
+        reg = DataRegistry()
+        reg.load_all(data_dir)
+
+        data = _branches()
+        del data["operations"]["strategic_strike"]["cap_field"]
+        _write_branches(data_dir, data)
+        success, errors = reg.reload_all()
+
+        assert success is False
+        assert any("cap_field" in e for e in errors)
+        assert reg.operation_kinds["strategic_strike"].cap_field == (
+            "strategic_strike_max_in_flight"
+        )
+
+
+# ------------------------------------------------------------------ #
 #  Tests: NPC-base templates (PvE Phase 5, optional outposts.yaml)
 # ------------------------------------------------------------------ #
 
@@ -1165,6 +1412,20 @@ class TestBaseTemplates:
         assert tpl.guards[0].role == "guard"
         assert tpl.guards[0].count == 2
         assert tpl.loot == {"Iron": 30, "Stone": 20}
+        # No Branch declared → an unaffiliated base (R11.5 default).
+        assert tpl.branch is None
+
+    def test_template_branch_reads_back(self, data_dir):
+        """A template may declare the Branch whose buildings it fields (R11.5)."""
+        templates = copy.deepcopy(_VALID_OUTPOSTS)
+        templates["outpost"]["branch"] = "research"
+        _write_yaml(
+            os.path.join(data_dir, "definitions", "outposts.yaml"), templates
+        )
+        reg = DataRegistry()
+        reg.load_all(data_dir)
+
+        assert reg.get_base_template("outpost").branch == "research"
 
     def test_malformed_template_skipped(self, data_dir):
         _write_yaml(

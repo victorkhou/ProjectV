@@ -736,6 +736,438 @@ def _fmt_pvp_gear_dropped(d: dict) -> str:
     )
 
 
+def _fmt_branch_dormancy_warning(d: dict) -> str:
+    # Fired by the Branch switch gate BEFORE any resource is charged: the player
+    # is about to commit to a Branch while holding research recorded in others,
+    # and that research goes inert under the new commitment. Reports the count
+    # and the keys so the cost of the switch is visible before it is paid.
+    incoming = d.get("incoming_doctrine") or d.get("incoming_branch") or "this doctrine"
+    count = int(d.get("dormant_count") or 0)
+    noun = "technology" if count == 1 else "technologies"
+    lines = [
+        f"|y[Branch] Committing to {incoming} leaves {count} recorded "
+        f"{noun} dormant:|n"
+    ]
+    for branch, keys in (d.get("dormant_technologies") or {}).items():
+        listed = ", ".join(str(key) for key in keys or ())
+        lines.append(f"|y  {branch}: {listed}|n")
+    lines.append(
+        "|yThe record is kept — returning to a Branch needs a reduced-cost "
+        "Reinstatement per technology.|n"
+    )
+    return "\n".join(lines)
+
+
+def _fmt_branch_estate_progress(d: dict) -> str:
+    # Fired after a successful demolish of a Branch_Building: how much of that
+    # Branch's estate is still standing on this planet. Zero is the interesting
+    # number — it is the moment a lab of another Branch becomes buildable here.
+    from world.constants import BRANCH_DOCTRINE
+
+    branch = d.get("branch") or ""
+    doctrine = BRANCH_DOCTRINE.get(branch) or branch or "that doctrine"
+    name = d.get("name") or d.get("btype") or "The building"
+    remaining = int(d.get("remaining") or 0)
+    head = f"|w[Branch] Demolished {name}.|n"
+    if remaining <= 0:
+        return (
+            f"{head} |gYour {doctrine} estate on this planet is empty — "
+            f"you can build another Branch Lab here now.|n"
+        )
+    noun = "building" if remaining == 1 else "buildings"
+    return (
+        f"{head} |y{remaining} {doctrine} {noun} left on this planet before "
+        f"you can switch Branches.|n"
+    )
+
+
+def _fmt_technology_view(d: dict) -> str:
+    # The whole technology view (R13.1, R13.2): the doctrine committed on this
+    # planet and its signature vector, that Branch's researched and available
+    # technologies, and the research recorded in the Branches left dormant, each
+    # priced by the Reinstatement fraction. The system publishes only figures and
+    # keys — every word below is composed here.
+    from world.constants import BRANCH_DOCTRINE
+    from world.utils import format_section
+
+    branch = d.get("branch")
+    doctrine = d.get("doctrine") or BRANCH_DOCTRINE.get(branch) or branch
+    lines = ["|wTechnologies:|n", ""]
+
+    if branch:
+        vector = str(d.get("operation_kind") or "").replace("_", " ").strip()
+        head = f"|wDoctrine:|n |c{doctrine}|n (|c{branch}|n)"
+        if vector:
+            head += f" — signature vector: |c{vector}|n"
+        lines.append(head)
+    else:
+        doctrines = ", ".join(BRANCH_DOCTRINE.values())
+        lines.append(
+            f"|xNo Branch Lab on this planet, so no doctrine is committed here "
+            f"— build one to commit: {doctrines}.|n"
+        )
+    lines.append("")
+
+    researched = [
+        _tech_label(entry) for entry in (d.get("researched") or ())
+    ]
+    lines.extend(format_section("Researched", researched, empty="none"))
+    available = [
+        _tech_label(entry) for entry in (d.get("available") or ())
+    ]
+    lines.extend(format_section("Available", available, empty="none"))
+
+    fraction = _reinstatement_percent(d.get("reinstatement_fraction"))
+    pending = [str(key) for key in (d.get("reinstatement_pending") or ())]
+    if pending:
+        lines.append("")
+        lines.append(
+            f"|yAwaiting reinstatement ({fraction} of the original cost and "
+            f"time):|n {', '.join(pending)}"
+        )
+
+    dormant = d.get("dormant") or ()
+    if dormant:
+        lines.append("")
+        lines.append("|yDormant research — inert until you commit again:|n")
+        for entry in dormant:
+            name = (
+                entry.get("doctrine")
+                or BRANCH_DOCTRINE.get(entry.get("branch"))
+                or entry.get("branch")
+                or "?"
+            )
+            count = int(entry.get("count") or 0)
+            noun = "technology" if count == 1 else "technologies"
+            lines.append(f"|y  {name}: {count} {noun} on record|n")
+        lines.append(
+            f"|yThe record is kept — each one comes back through a "
+            f"reinstatement job costing {fraction} of the original.|n"
+        )
+    return "\n".join(lines)
+
+
+def _tech_label(entry: Any) -> str:
+    """Render one technology row of the technology view: ``Name (key)``.
+
+    The payload carries the key and, when the definition is loaded, the display
+    name. A key whose definition is missing still shows — a record entry the
+    player has is more useful than a silent gap.
+    """
+    if not isinstance(entry, dict):
+        return str(entry)
+    key = entry.get("key")
+    name = entry.get("name")
+    return f"{name} ({key})" if name else str(key)
+
+
+def _reinstatement_percent(fraction: Any) -> str:
+    """Render a Reinstatement cost fraction as a percentage, e.g. ``"50%"``.
+
+    An unreadable fraction renders as ``"a reduced share"`` rather than a broken
+    number, so the sentence still reads.
+    """
+    try:
+        return f"{float(fraction) * 100:g}%"
+    except (TypeError, ValueError):
+        return "a reduced share"
+
+
+# ------------------------------------------------------------------ #
+#  Vector_Operation lifecycle (tech-tree-branch-foundation, design §4.4)
+# ------------------------------------------------------------------ #
+#
+# The nine kinds a Signature_Vector's lifecycle reaches a player through. The
+# driver publishes a kind plus structured values and composes nothing (R13.5);
+# every sentence below lives here, and R13.6 is why all six lifecycle states are
+# covered — a transition with no formatter would be dropped silently, so
+# ``world.systems.operation_contract.VECTOR_NOTIFICATION_KINDS`` is asserted
+# against this table by the presenter's own tests.
+#
+# Colour follows the convention the combat kinds set: bright red for something
+# landing on YOU (vector_incoming, vector_hit), green for your own success,
+# yellow for a setback of yours, grey for a quiet bookkeeping note.
+
+def _vector_label(kind: Any) -> str:
+    """Render an Operation_Kind identifier as words: ``strategic_strike`` -> words.
+
+    The payload carries the internal key, never a display name — an unmapped or
+    absent kind degrades to "operation" so the sentence still reads.
+    """
+    label = str(kind or "").replace("_", " ").strip()
+    return label or "operation"
+
+
+def _vector_where(d: dict) -> str:
+    """Render the affected coordinate as ``" at (x, y)"``, or ``""``.
+
+    An operation attached to an entity rather than a tile carries no coordinate,
+    which reads as a bare sentence rather than as ``at (None, None)``.
+    """
+    x, y = d.get("x"), d.get("y")
+    if x is None or y is None:
+        return ""
+    return f" at |c({x}, {y})|n"
+
+
+#: ``reason`` key -> the clause explaining a suspension. The system publishes the
+#: key (``operation_contract.SUSPEND_*``); the wording is this table's.
+_VECTOR_SUSPEND_REASONS = {
+    "carrier_unavailable": "its agent is down or in reserve",
+    "commitment_lapsed": "you no longer hold the doctrine it needs on this planet",
+}
+
+#: ``reason`` key -> the clause explaining a cancellation
+#: (``operation_contract.CANCEL_*``).
+_VECTOR_CANCEL_REASONS = {
+    "carrier_killed": "its agent was killed",
+    "origin_lost": "the building it launched from is out of action",
+    "base_eliminated": "the base it launched from was eliminated",
+}
+
+
+def _fmt_vector_incoming(d: dict) -> str:
+    # R8.7: the warning a hostile operation's targets get when it enters Pending.
+    # The tick count is the Response_Window (R8.8) — the whole point of the line
+    # is that it is actionable, so the count leads the second sentence.
+    attacker = d.get("attacker_name") or "Someone"
+    ticks = d.get("ticks")
+    window = (
+        f" You have |w{ticks}|n|r tick{'' if ticks == 1 else 's'} to respond."
+        if ticks is not None else ""
+    )
+    return (
+        f"|r[Incoming] {attacker} has launched a "
+        f"|w{_vector_label(d.get('kind'))}|n|r{_vector_where(d)}.{window}|n"
+    )
+
+
+def _fmt_vector_resolved(d: dict) -> str:
+    # R8.12, the originating player's reading: your operation took effect.
+    return (
+        f"|g[Vector] Your {_vector_label(d.get('kind'))} took effect"
+        f"{_vector_where(d)}.|n"
+    )
+
+
+def _fmt_vector_hit(d: dict) -> str:
+    # R8.12, the recipient's reading of the same event: it landed on you. Bright
+    # red, like every other kind that reports damage arriving.
+    attacker = d.get("attacker_name") or "Someone"
+    return (
+        f"|r[Vector] {attacker}'s {_vector_label(d.get('kind'))} struck"
+        f"{_vector_where(d)}.|n"
+    )
+
+
+def _fmt_vector_suspended(d: dict) -> str:
+    # R8.14, R8.18: the clock stopped. Name the cause, because both causes are
+    # things the owner can act on — recover the agent, or rebuild the lab.
+    reason = _VECTOR_SUSPEND_REASONS.get(d.get("reason") or "")
+    because = f" — {reason}" if reason else ""
+    return (
+        f"|y[Vector] Your {_vector_label(d.get('kind'))}{_vector_where(d)} is "
+        f"on hold{because}. It keeps the ticks it had left.|n"
+    )
+
+
+def _fmt_vector_resumed(d: dict) -> str:
+    # R8.15: suspension delays rather than restarts, so the ticks it resumes with
+    # are the ticks it held — quoting them is what makes that visible.
+    ticks = d.get("ticks_remaining")
+    left = (
+        f" |w{ticks}|n|g tick{'' if ticks == 1 else 's'} left."
+        if ticks is not None else ""
+    )
+    return (
+        f"|g[Vector] Your {_vector_label(d.get('kind'))} is running again.{left}|n"
+    )
+
+
+def _fmt_vector_expired(d: dict) -> str:
+    # R8.13: the bounded lifetime ran out before the effect, and anything the
+    # operation had suspended is back to how it was.
+    return (
+        f"|y[Vector] The {_vector_label(d.get('kind'))}{_vector_where(d)} ran out "
+        f"before it took effect. Anything it was holding is back to normal.|n"
+    )
+
+
+def _fmt_vector_cancelled(d: dict) -> str:
+    # R8.16, R8.17, R11.4: a lost collaborator ended it. The reason is the useful
+    # part — it says what to fix before trying again.
+    reason = _VECTOR_CANCEL_REASONS.get(d.get("reason") or "")
+    because = f" — {reason}" if reason else ""
+    return (
+        f"|y[Vector] Your {_vector_label(d.get('kind'))} was called off{because}.|n"
+    )
+
+
+def _fmt_vector_discarded(d: dict) -> str:
+    # R14.4: a restart found the operation referring to something that no longer
+    # exists. Quiet and factual: there is nothing for the player to do about it.
+    return (
+        f"|x[Vector] A {_vector_label(d.get('kind'))} of yours could not be "
+        f"restored after a restart and has been dropped.|n"
+    )
+
+
+def _fmt_vector_consent_required(d: dict) -> str:
+    # R11.8: the refusal a support operation gets when the ally it would help has
+    # not consented. Travels back through the validation chain as a refusal key
+    # rather than as a lifecycle notification, and renders from the same table.
+    ally = d.get("ally_name") or "That ally"
+    return (
+        f"|y[Vector] {ally} has not agreed to receive support, so your "
+        f"{_vector_label(d.get('kind'))} cannot go ahead. Ask them to allow it "
+        f"first.|n"
+    )
+
+
+# ------------------------------------------------------------------ #
+#  Branch construction refusals (R3.4, R3.5, R4.1, R4.2, R6.3)
+# ------------------------------------------------------------------ #
+#
+# These four are REFUSAL KEYS, not notification kinds: they travel back up
+# BuildingSystem's validation chain as a ``BranchRefusal`` (a message key
+# carrying structured data, R13.5) and reach the player through the build
+# command's own reply rather than through the event bus. The gates compose no
+# prose, so the words live here, and :func:`render_construction_refusal` is
+# the entry point the renderer seam (``BuildingSystem.set_refusal_renderer``)
+# calls. An unknown key answers ``None``, so the caller keeps the key itself
+# as its fallback — the same degrade-to-a-key direction an unwired renderer
+# takes.
+
+
+def _doctrine_label(doctrine: Any, branch: Any) -> str:
+    """The player-facing Branch name: the doctrine, else the key, else filler."""
+    return str(doctrine or branch or "that Branch")
+
+
+def _fmt_refusal_branch_lab_required(d: dict) -> str:
+    # R3.4: no commitment on this planet at all — name the lab that creates one.
+    building = d.get("building_name") or d.get("building") or "That building"
+    doctrine = _doctrine_label(d.get("required_doctrine"), d.get("required_branch"))
+    lab = d.get("required_lab_name") or d.get("required_lab")
+    lab_part = (
+        f" Build the |w{lab}|n|y here to commit to it." if lab
+        else " Build that Branch's lab here to commit to it."
+    )
+    return (
+        f"|y{building} belongs to the |w{doctrine}|n|y Branch, and you hold no "
+        f"Branch commitment on this planet.{lab_part}|n"
+    )
+
+
+def _fmt_refusal_branch_mismatch(d: dict) -> str:
+    # R3.5: committed here, but to a different Branch — report both Branches.
+    building = d.get("building_name") or d.get("building") or "That building"
+    required = _doctrine_label(d.get("required_doctrine"), d.get("required_branch"))
+    current = _doctrine_label(d.get("current_doctrine"), d.get("current_branch"))
+    return (
+        f"|y{building} belongs to the |w{required}|n|y Branch, but your "
+        f"commitment on this planet is |w{current}|n|y. One Branch per planet — "
+        f"switching means emptying your {current} estate first.|n"
+    )
+
+
+def _fmt_refusal_branch_switch_blocked(d: dict) -> str:
+    # R4.1 (the count) and R4.2 (each building's abbreviation and coordinates):
+    # everything standing between the player and the switch, one per line.
+    incoming = _doctrine_label(d.get("incoming_doctrine"), d.get("incoming_branch"))
+    count = int(d.get("count") or 0)
+    noun = "building" if count == 1 else "buildings"
+    verb = "stands" if count == 1 else "stand"
+    lines = [
+        f"|yYou can't commit to {incoming} here yet — {count} {noun} of "
+        f"another Branch still {verb} on this planet:|n"
+    ]
+    for entry in d.get("blocking") or ():
+        if not isinstance(entry, dict):
+            continue
+        name = entry.get("building_name") or entry.get("building") or "?"
+        abbr = entry.get("building")
+        label = f"{name} ({abbr})" if abbr and abbr != name else str(name)
+        x, y = entry.get("x"), entry.get("y")
+        where = f" at ({x}, {y})" if x is not None and y is not None else ""
+        branch = _doctrine_label(None, entry.get("branch"))
+        lines.append(f"|y  {label}{where} — {branch}|n")
+    lines.append("|yDemolish them to switch Branches.|n")
+    dormant = int(d.get("dormant_count") or 0)
+    if dormant:
+        tech_noun = "technology" if dormant == 1 else "technologies"
+        lines.append(
+            f"|ySwitching also leaves {dormant} recorded {tech_noun} dormant — "
+            f"the record is kept, and each comes back through a reduced-cost "
+            f"reinstatement job.|n"
+        )
+    return "\n".join(lines)
+
+
+def _fmt_refusal_branch_unlock_required(d: dict) -> str:
+    # R6.3: name the required technology and the Branch that hosts it, and say
+    # WHICH half of "researched and applied" failed (the payload's reason key).
+    building = d.get("building_name") or d.get("building") or "That building"
+    tech = d.get("technology_name") or d.get("technology") or "a technology"
+    doctrine = _doctrine_label(d.get("doctrine"), d.get("branch"))
+    reason = d.get("reason")
+    if reason == "dormant":
+        tail = (
+            f"you've researched it, but the {doctrine} Branch isn't your "
+            f"commitment on this planet, so its effects are dormant."
+        )
+    elif reason == "reinstatement_pending":
+        tail = (
+            "you've researched it, but it's awaiting its reduced-cost "
+            "reinstatement job — run 'research' on it to bring it back."
+        )
+    else:
+        lab = d.get("lab_name") or d.get("lab")
+        at_lab = f" at your {lab}" if lab else ""
+        tail = f"research it{at_lab} first ({doctrine} Branch)."
+    return f"|y{building} requires the |w{tech}|n|y technology — {tail}|n"
+
+
+#: Refusal key -> formatter. Deliberately a table apart from
+#: ``NotificationPresenter._FORMATTERS``: these keys are not notification kinds
+#: and never travel the event bus, so keeping them separate keeps the
+#: presenter-coverage guard's claim ("every kind the new systems emit has a
+#: formatter") exact.
+_CONSTRUCTION_REFUSAL_FORMATTERS: dict[str, Callable[[dict], str]] = {
+    "branch_lab_required": _fmt_refusal_branch_lab_required,
+    "branch_mismatch": _fmt_refusal_branch_mismatch,
+    "branch_switch_blocked": _fmt_refusal_branch_switch_blocked,
+    "branch_unlock_required": _fmt_refusal_branch_unlock_required,
+}
+
+
+def render_construction_refusal(key: Any, data: Any = None) -> str | None:
+    """Render one construction-refusal key + payload into player prose.
+
+    The entry point behind ``BuildingSystem.set_refusal_renderer``: the Branch
+    construction gates answer a message key carrying structured data (R13.5),
+    the validation chain carries it up as a string, and this is where the words
+    come from — R3.4's required lab, R3.5's two Branches, R4.1's count with
+    R4.2's per-building coordinates, and R6.3's technology and hosting Branch.
+
+    Returns ``None`` — "no words here" — for an unknown or non-string key and
+    for a formatter that fails, so the caller keeps its own fallback (the key
+    itself) and a rendering bug can never turn a refusal into a crash or, worse,
+    into a permitted build.
+    """
+    if not isinstance(key, str):
+        return None
+    formatter = _CONSTRUCTION_REFUSAL_FORMATTERS.get(key)
+    if formatter is None:
+        return None
+    try:
+        text = formatter(dict(data) if isinstance(data, dict) else {})
+    except Exception:  # noqa: BLE001 - a broken formatter costs the words only
+        logger.exception("construction refusal %r could not be rendered", key)
+        return None
+    return text if isinstance(text, str) and text.strip() else None
+
+
 def _fmt_base_deactivated(d: dict) -> str:
     # Fired when a player's HQ is destroyed — the base goes inert until rebuilt.
     return (
@@ -1185,6 +1617,29 @@ class NotificationPresenter:
         "pvp_gear_dropped": _fmt_pvp_gear_dropped,
         "base_deactivated": _fmt_base_deactivated,
         "base_reactivated": _fmt_base_reactivated,
+        # Branch feature: the pre-charge dormancy report the switch gate emits.
+        "branch_dormancy_warning": _fmt_branch_dormancy_warning,
+        # Branch feature: progress toward emptying a Branch_Estate, reported on
+        # each successful demolish of a Branch_Building.
+        "branch_estate_progress": _fmt_branch_estate_progress,
+        # Branch feature: the whole technology view — commitment, signature
+        # vector, researched and available techs, and the dormant Branches.
+        "technology_view": _fmt_technology_view,
+        # Branch feature: the Vector_Operation lifecycle (R13.6). One kind per
+        # transition a player can see, covering all six lifecycle states, plus
+        # the recipient's reading of a resolution and the missing-consent
+        # refusal. The driver publishes each with a variable kind, so this table
+        # is what the presenter-coverage guard checks against
+        # ``operation_contract.VECTOR_NOTIFICATION_KINDS``.
+        "vector_incoming": _fmt_vector_incoming,
+        "vector_resolved": _fmt_vector_resolved,
+        "vector_hit": _fmt_vector_hit,
+        "vector_suspended": _fmt_vector_suspended,
+        "vector_resumed": _fmt_vector_resumed,
+        "vector_expired": _fmt_vector_expired,
+        "vector_cancelled": _fmt_vector_cancelled,
+        "vector_discarded": _fmt_vector_discarded,
+        "vector_consent_required": _fmt_vector_consent_required,
     }
 
     #: Notification kinds that change the RECIPIENT's own HP or level. After

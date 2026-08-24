@@ -3674,7 +3674,74 @@ class TestCmdDemolishRefund(unittest.TestCase):
 
 
 class TestCmdTechnology(unittest.TestCase):
-    def test_shows_researched(self):
+    """``technology`` asks the TechLabSystem for the view (R13.1, R13.2, R13.5).
+
+    The view itself is the system's: it publishes the commitment, the signature
+    vector, the researched/available lists, and the dormant-Branch counts as
+    structured data, and the NotificationPresenter composes the text. The command
+    is the trigger, so what is asserted here is the delegation and that the
+    published view reaches the player.
+    """
+
+    class _ReportingTechSystem:
+        """A tech system that records the ask and publishes a view."""
+
+        def __init__(self, bus=None):
+            self.bus = bus
+            self.asked = []
+
+        def report_technology_view(self, player):
+            self.asked.append(player)
+            view = {
+                "branch": "weapons", "doctrine": "Ordnance",
+                "operation_kind": "strategic_strike",
+                "researched": [{"key": "wtech", "name": "Weapon Tech"}],
+                "available": [], "reinstatement_pending": [],
+                "reinstatement_fraction": 0.5,
+                "dormant": [
+                    {"branch": "bio", "doctrine": "Biowarfare", "count": 2},
+                ],
+                "dormant_count": 2,
+            }
+            if self.bus is not None:
+                from world.event_bus import PLAYER_NOTIFICATION
+                self.bus.publish(
+                    PLAYER_NOTIFICATION, player=player,
+                    kind="technology_view", data=view,
+                )
+            return view
+
+    def test_the_view_is_delegated_to_the_tech_system(self):
+        tech = self._ReportingTechSystem()
+        caller = FakeCaller(systems={"tech_system": tech})
+
+        _make_cmd(CmdTechnology, caller).func()
+
+        self.assertEqual(tech.asked, [caller])
+        # The command composes nothing of its own: without a presenter attached
+        # there is no message, which is what proves the text is not built here.
+        self.assertEqual(caller._messages, [])
+
+    def test_the_published_view_reaches_the_player(self):
+        from world.adapters.evennia_player_notifier import EvenniaPlayerNotifier
+        from world.event_bus import EventBus
+        from world.presenters.notification_presenter import NotificationPresenter
+
+        bus = EventBus()
+        NotificationPresenter(bus, player_notifier=EvenniaPlayerNotifier())
+        caller = FakeCaller(
+            systems={"tech_system": self._ReportingTechSystem(bus)}
+        )
+
+        _make_cmd(CmdTechnology, caller).func()
+
+        output = "\n".join(caller._messages)
+        self.assertIn("Ordnance", output)
+        self.assertIn("strategic strike", output)
+        self.assertIn("Biowarfare: 2 technologies", output)
+
+    def test_shows_researched_without_a_tech_system(self):
+        """The fallback path: no system wired, so the command reads the player."""
         caller = FakeCaller()
         cmd = _make_cmd(CmdTechnology, caller)
         cmd.func()

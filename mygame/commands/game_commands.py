@@ -1209,6 +1209,29 @@ class CmdDemolish(GameCommand):
         if hasattr(building, "delete"):
             building.delete()
 
+        # R4.5: the building is gone, so this counts what REMAINS of its
+        # Branch_Estate on this planet — progress toward emptying it and being
+        # allowed to switch Branches. Reported as a structured notification, and
+        # a no-op for a Neutral_Building or an unwired BranchSystem, so it never
+        # touches the refund above.
+        if building_system is not None and hasattr(
+            building_system, "report_demolish_estate"
+        ):
+            building_system.report_demolish_estate(caller, btype)
+
+        # R5.2 / R3.8 / R7.8: demolishing a Branch_Lab ends the Branch_Commitment
+        # it conferred, so that Branch's technology bonuses go dormant and its
+        # agent roles are released. The demolish path publishes no
+        # BUILDING_DESTROYED (it refunds and deletes), so the Branch system is
+        # told here — deliberately AFTER the delete above, so it reads the world
+        # as it now is. A no-op for anything but a Branch_Lab and for an unwired
+        # BranchSystem, and it never raises, so the demolish is unaffected.
+        branch_system = _get_system(caller, "branch_system")
+        if branch_system is not None and hasattr(
+            branch_system, "on_building_demolished"
+        ):
+            branch_system.on_building_demolished(caller, btype)
+
         # Exit building state
         caller.db.inside_building = False
 
@@ -3914,10 +3937,11 @@ class CmdTechnology(GameCommand):
       technology
 
     Notes:
-      Alias: tech. Shows completed research and what's available in the tree
-      your |cresearch lab|n hosts on this planet. Each planet has one lab (one
-      tree): a |cWeapons|n, |cDefense|n, |cResource|n, or |cResearch Lab|n.
-      'Available' is empty until you build one — that choice picks your tree.
+      Alias: tech. Shows the doctrine you're committed to on this planet — the
+      |cBranch Lab|n you own here — its signature vector, what you've researched
+      in it, and what's left to research. Research recorded in a Branch you're
+      not committed to here is |ydormant|n: it's listed with its count and the
+      reduced share a reinstatement job costs to bring it back.
       Start research with 'research <tech>'. See 'help research'.
     """
 
@@ -3927,11 +3951,22 @@ class CmdTechnology(GameCommand):
 
     def func(self):
         caller = self.caller
+        tech_system = _get_system(caller, "tech_system")
+
+        # The view itself belongs to the TechLabSystem: it publishes the
+        # commitment, the signature vector, the researched/available lists, and
+        # the dormant-Branch counts as structured data, and the
+        # NotificationPresenter composes every word of it (R13.1, R13.2, R13.5).
+        report = getattr(tech_system, "report_technology_view", None)
+        if callable(report):
+            report(caller)
+            return
+
+        # Fallback for a caller with no tech system wired (minimal fixtures):
+        # the little the command can read off the player itself.
         researched = set()
         if hasattr(caller, "db"):
             researched = getattr(caller.db, "researched_techs", set()) or set()
-
-        tech_system = _get_system(caller, "tech_system")
 
         lines = ["|wTechnologies:|n", ""]
         lines.extend(format_section(

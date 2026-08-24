@@ -22,6 +22,7 @@ from world.definitions import (
     BuildingDef,
     ClassDef,
     ItemDef,
+    OperationKindDef,
     PlanetDef,
     PowerupDef,
     RankDef,
@@ -78,7 +79,26 @@ _OPTIONAL_FILES = {
     # ever drawn), but a PRESENT file is validated strictly — invalid affix
     # data fails the load, not the runtime (design Error Handling).
     "affixes": "definitions/affixes.yaml",
+    # Technology Branch catalog (tech-tree-branch-foundation R9.1, R7.2):
+    # the Counter_Web plus the per-Operation_Kind registry. Optional-if-absent
+    # (the Branch vector features go inert), strict when present.
+    "branches": "definitions/branches.yaml",
 }
+
+#: The sections a ``branches.yaml`` document may declare.
+_BRANCH_SECTIONS = ("counter_web", "operations")
+
+#: The fields an ``operations`` entry declares. ``kind`` comes from the entry
+#: KEY, so the body names these six; a body may repeat ``kind`` only if it
+#: agrees with its key. Any other key is a typo and fails the load.
+_OPERATION_SPEC_FIELDS = (
+    "branch",
+    "carrier_role",
+    "cost_field",
+    "cooldown_field",
+    "cap_field",
+    "agent_xp_field",
+)
 
 
 class DataRegistryError(Exception):
@@ -153,6 +173,17 @@ class DataRegistry:
         #: Present-but-invalid data FAILS the load (design Error Handling).
         #: Consumed by the affix draw (task 2.3).
         self.affixes: dict[str, list[dict]] = {}
+        #: Counter_Web (tech-tree-branch-foundation R9.1): Branch -> the tuple of
+        #: Branches that Branch holds a bounded advantage over, from the optional
+        #: data/definitions/branches.yaml. Empty when absent, which makes every
+        #: counter multiplier exactly 1.0 (no Branch counters any other).
+        self.counter_web: dict[str, tuple[str, ...]] = {}
+        #: Operation_Kind registry (R7.2, R12.1) keyed by Operation_Kind
+        #: identifier ("strategic_strike", ...), each an :class:`OperationKindDef`
+        #: binding that kind to its Branch, its Carrier_Agent role, and the
+        #: BalanceConfig fields holding its cost/cooldown/cap/XP. Empty when
+        #: branches.yaml is absent, which leaves every Signature_Vector unbound.
+        self.operation_kinds: dict[str, OperationKindDef] = {}
         self.balance: BalanceConfig = BalanceConfig()
         self._base_path: str = "data"
         self._validator = SchemaValidator()
@@ -237,15 +268,33 @@ class DataRegistry:
         self._populate_terrain(raw["terrain"])
         self._populate_ability_gates(raw["ability_gates"])
 
+        # --- Load optional Branch catalog (strict when present) ---
+        # BEFORE cross-validation on purpose: the Counter_Web is a cross-FILE
+        # claim (its Branch names must be the six the building and technology
+        # files declare, and its degree bounds are a catalog rule — R9.2, R9.3,
+        # R9.12), so ``cross_validate`` reads ``self.counter_web``. Loading it
+        # after that call would leave the rule looking at an empty web and
+        # silently passing any web at all.
+        self._load_branches(base_path)
+
+        # --- Load optional balance config ---
+        # ALSO before cross-validation, and for the same reason as the Branch
+        # catalog above: the Branch investment-score parity rule (R9.9, R9.10)
+        # is a cross-FILE claim whose two inputs — ``resource_weights`` and
+        # ``branch_cost_parity_tolerance`` — live here. Loading balance after
+        # ``cross_validate`` would leave that rule scoring the shipped catalog
+        # against BalanceConfig's hardcoded defaults, so a balance.yaml retune of
+        # either input would be silently ignored by the check it is meant to
+        # drive. ``_load_balance`` reads and validates one file and touches no
+        # populated registry state, so it is safe anywhere before this point.
+        self._load_balance(base_path)
+
         # --- Cross-validate references ---
         cross_errors = self._validator.cross_validate(self)
         if cross_errors:
             msg = "Cross-validation failed:\n" + "\n".join(cross_errors)
             logger.error(msg)
             raise DataRegistryError(msg)
-
-        # --- Load optional balance config ---
-        self._load_balance(base_path)
 
         # --- Load optional NPC-base templates ---
         self._load_base_templates(base_path)
@@ -303,6 +352,8 @@ class DataRegistry:
         self.alliance_perks = temp.alliance_perks
         self.directives = temp.directives
         self.affixes = temp.affixes
+        self.counter_web = temp.counter_web
+        self.operation_kinds = temp.operation_kinds
         self.balance = temp.balance
 
         # Rebuild the shared level<->XP threshold curve. The curve is the
@@ -352,6 +403,11 @@ class DataRegistry:
                 unlock_deed=entry.get("unlock_deed"),
                 unlock_deed_count=entry.get("unlock_deed_count", 1),
                 research_tree=entry.get("research_tree"),
+                # Both Branch fields are optional with a None default, so a
+                # definition that omits them loads as a Neutral_Building with no
+                # research gate — every pre-feature building (R2.2, R2.5, R6.1).
+                branch=entry.get("branch"),
+                unlock_technology=entry.get("unlock_technology"),
             )
             self.buildings[bdef.abbreviation] = bdef
 
@@ -689,6 +745,9 @@ class DataRegistry:
                 gear_rolls=int(spec.get("gear_rolls", 1) or 1),
                 rarity_weight=float(spec.get("rarity_weight", 0.0) or 0.0),
                 guard_gear_drop_chance=spec.get("guard_gear_drop_chance"),
+                # Optional Branch commitment for the base (R11.5); absent = an
+                # unaffiliated base, which is every pre-feature template.
+                branch=spec.get("branch"),
             )
         logger.info("Loaded %d NPC-base template(s).", len(self.base_templates))
 
@@ -986,6 +1045,180 @@ class DataRegistry:
     def get_affix_pool(self, pool_name: str) -> list[dict]:
         """Return the affix entries for *pool_name*, or ``[]`` if undefined."""
         return self.affixes.get(pool_name, [])
+
+    def _load_branches(self, base_path: str) -> None:
+        """Load the Branch catalog from the optional branches.yaml.
+
+        Contract (tech-tree-branch-foundation design §Data Models 4), matching
+        the ``_load_affixes`` precedent:
+
+        - ABSENT or empty file → an empty :attr:`counter_web` and an empty
+          :attr:`operation_kinds`; the Branch vector features go inert (every
+          counter multiplier is 1.0 and no Signature_Vector is bound) and the
+          server loads exactly as it did before the feature. This keeps the
+          optional-file precedent, so no test fixture needs a new file.
+        - PRESENT file → validated STRICTLY: a read error, a non-mapping
+          payload, an unknown section, a mis-shaped ``counter_web``, or an
+          ``operations`` entry missing a field or naming an unknown one raises
+          :class:`DataRegistryError`. A typo'd vector binding must fail the
+          LOAD rather than the first operation request.
+
+        Only the SHAPE is checked here. Whether the named Branches are the six
+        (R9.12) and whether the web's out-/in-degrees are legal (R9.2, R9.3) are
+        catalog questions :class:`SchemaValidator` answers across files, so they
+        are deliberately not duplicated — which also keeps the Counter_Web a
+        faithful round-trip of whatever the file declares.
+        """
+        self.counter_web = {}
+        self.operation_kinds = {}
+        path = os.path.join(base_path, _OPTIONAL_FILES["branches"])
+        if not os.path.isfile(path):
+            logger.info("No Branch catalog at '%s' — Branch vectors disabled.", path)
+            return
+        try:
+            with open(path, "r") as f:
+                raw = yaml.safe_load(f)
+        except Exception as exc:
+            raise DataRegistryError(f"Failed to read branches at '{path}': {exc}")
+        if raw is None:
+            logger.info("Branch catalog at '%s' is empty — Branch vectors disabled.", path)
+            return
+        if not isinstance(raw, dict):
+            raise DataRegistryError(
+                f"branches: expected a mapping of {list(_BRANCH_SECTIONS)}, "
+                f"got {type(raw).__name__}"
+            )
+
+        errors: list[str] = []
+        # key=str so a non-string YAML key (``3: [...]``) sorts against the
+        # string ones instead of raising out of the loader.
+        unknown = sorted((k for k in raw if k not in _BRANCH_SECTIONS), key=str)
+        if unknown:
+            errors.append(
+                f"branches: unknown section(s) {unknown} "
+                f"(known: {list(_BRANCH_SECTIONS)})"
+            )
+        counter_web = self._parse_counter_web(raw.get("counter_web"), errors)
+        operation_kinds = self._parse_operation_kinds(raw.get("operations"), errors)
+
+        if errors:
+            msg = "Branch catalog validation failed:\n" + "\n".join(errors)
+            logger.error(msg)
+            raise DataRegistryError(msg)
+
+        self.counter_web = counter_web
+        self.operation_kinds = operation_kinds
+        logger.info(
+            "Loaded Counter_Web (%d source branch(es)) and %d Operation_Kind(s): %s.",
+            len(self.counter_web),
+            len(self.operation_kinds),
+            ", ".join(sorted(self.operation_kinds)) or "none",
+        )
+
+    @staticmethod
+    def _parse_counter_web(raw, errors: list[str]) -> dict[str, tuple[str, ...]]:
+        """Parse the ``counter_web`` section into ``{branch: (branch, ...)}``.
+
+        Type-strict, content-permissive: a non-mapping section, a non-string key,
+        or a value that is not a list of strings is an error, but any string is
+        accepted as a Branch name. Membership in the six and the degree bounds
+        are :class:`SchemaValidator` rules (R9.2, R9.3, R9.12), so enforcing them
+        here would report the same problem twice and would stop the loader from
+        round-tripping the file it is given. A bare string value is rejected
+        rather than treated as a one-element list: ``weapons: defense`` is a
+        YAML slip, and silently iterating its characters would be worse.
+        """
+        web: dict[str, tuple[str, ...]] = {}
+        if raw is None:
+            return web
+        if not isinstance(raw, dict):
+            errors.append(
+                "branches.counter_web: expected a mapping of branch -> list of "
+                f"branches, got {type(raw).__name__}"
+            )
+            return web
+        for branch, targets in raw.items():
+            if not isinstance(branch, str):
+                errors.append(
+                    f"branches.counter_web: key {branch!r} is not a string"
+                )
+                continue
+            if not isinstance(targets, (list, tuple)):
+                errors.append(
+                    f"branches.counter_web['{branch}']: expected a list of "
+                    f"branch names, got {type(targets).__name__}"
+                )
+                continue
+            bad = [t for t in targets if not isinstance(t, str)]
+            if bad:
+                errors.append(
+                    f"branches.counter_web['{branch}']: non-string entr(ies) {bad!r}"
+                )
+                continue
+            web[branch] = tuple(targets)
+        return web
+
+    @staticmethod
+    def _parse_operation_kinds(raw, errors: list[str]) -> dict[str, OperationKindDef]:
+        """Parse the ``operations`` section into ``{kind: OperationKindDef}``.
+
+        Every field is required and must be a non-empty string: the registry is
+        the ONLY guard on a vector's binding (nothing else names the Branch, the
+        carrier role, or the four balance fields), so a missing or blank field
+        has to fail the load rather than surface as a silent no-op at request
+        time. Unknown fields are rejected so a typo (``cooldown_ticks_field``)
+        cannot masquerade as a valid entry.
+        """
+        kinds: dict[str, OperationKindDef] = {}
+        if raw is None:
+            return kinds
+        if not isinstance(raw, dict):
+            errors.append(
+                "branches.operations: expected a mapping of operation kind -> "
+                f"spec, got {type(raw).__name__}"
+            )
+            return kinds
+        for kind, spec in raw.items():
+            if not isinstance(kind, str) or not kind.strip():
+                errors.append(
+                    f"branches.operations: key {kind!r} is not a non-empty string"
+                )
+                continue
+            prefix = f"branches.operations['{kind}']"
+            if not isinstance(spec, dict):
+                errors.append(
+                    f"{prefix}: expected a mapping of "
+                    f"{list(_OPERATION_SPEC_FIELDS)}, got {type(spec).__name__}"
+                )
+                continue
+            unknown = sorted(
+                (k for k in spec if k not in _OPERATION_SPEC_FIELDS and k != "kind"),
+                key=str,
+            )
+            if unknown:
+                errors.append(
+                    f"{prefix}: unknown field(s) {unknown} "
+                    f"(known: {list(_OPERATION_SPEC_FIELDS)})"
+                )
+            declared = spec.get("kind")
+            if declared is not None and declared != kind:
+                errors.append(
+                    f"{prefix}: declares kind '{declared}' but is keyed '{kind}' "
+                    "(drop the field or make the two agree)"
+                )
+            values: dict[str, str] = {}
+            for fname in _OPERATION_SPEC_FIELDS:
+                value = spec.get(fname)
+                if not isinstance(value, str) or not value.strip():
+                    errors.append(
+                        f"{prefix}: '{fname}' must be a non-empty string, got {value!r}"
+                    )
+                    continue
+                values[fname] = value
+            if len(values) != len(_OPERATION_SPEC_FIELDS):
+                continue
+            kinds[kind] = OperationKindDef(kind=kind, **values)
+        return kinds
 
     def get_class(self, key: str) -> "ClassDef | None":
         """Return the player class for *key*, or ``None`` if undefined."""

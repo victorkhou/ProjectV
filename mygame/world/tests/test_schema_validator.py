@@ -1,5 +1,7 @@
 """Unit tests for SchemaValidator."""
 
+from mygame.world.constants import BRANCHES, MAX_LEVEL, OPERATION_KINDS
+from mygame.world.definitions import BalanceConfig
 from mygame.world.schema_validator import SchemaValidator
 
 
@@ -132,6 +134,82 @@ class TestValidateBuildings:
     def test_entry_not_dict(self):
         errs = self.v.validate_buildings(["not_a_dict"])
         assert any("expected dict" in e for e in errs)
+
+    # --- Branch framework (tech-tree-branch-foundation R2.3, R2.4) ----- #
+
+    def test_no_branch_field_is_a_neutral_building(self):
+        """Every pre-feature building omits `branch` and must still pass."""
+        assert self.v.validate_buildings([make_valid_building()]) == []
+
+    def test_each_branch_accepted_on_a_non_lab(self):
+        for branch in BRANCHES:
+            assert self.v.validate_buildings(
+                [make_valid_building(abbreviation="OW", branch=branch)]
+            ) == [], branch
+
+    def test_unknown_branch_names_the_abbreviation_and_the_value(self):
+        errs = self.v.validate_buildings(
+            [make_valid_building(abbreviation="OW", branch="ordnance")]
+        )
+        assert any("'OW'" in e and "'ordnance'" in e and "unknown branch" in e
+                   for e in errs), errs
+
+    def test_non_string_branch_rejected(self):
+        errs = self.v.validate_buildings([make_valid_building(branch=7)])
+        assert any("unknown branch" in e for e in errs)
+
+    def test_lab_branch_may_be_absent(self):
+        errs = self.v.validate_buildings([make_valid_building(
+            abbreviation="BX", capabilities=["research_lab"], research_tree="bio",
+        )])
+        assert errs == []
+
+    def test_lab_branch_equal_to_research_tree_accepted(self):
+        errs = self.v.validate_buildings([make_valid_building(
+            abbreviation="BX", capabilities=["research_lab"],
+            research_tree="bio", branch="bio",
+        )])
+        assert errs == []
+
+    def test_lab_branch_disagreeing_with_research_tree_names_both(self):
+        errs = self.v.validate_buildings([make_valid_building(
+            abbreviation="BX", capabilities=["research_lab"],
+            research_tree="bio", branch="cyber",
+        )])
+        assert any("'BX'" in e and "'bio'" in e and "'cyber'" in e for e in errs), errs
+
+    def test_non_lab_may_declare_a_branch_alone(self):
+        # A Branch_Building carries `branch` with no `research_tree` — the
+        # non-lab research_tree rule must not fire on the affiliation.
+        errs = self.v.validate_buildings(
+            [make_valid_building(abbreviation="CV", branch="bio")]
+        )
+        assert errs == []
+
+    def test_unlock_technology_string_accepted(self):
+        errs = self.v.validate_buildings([make_valid_building(
+            abbreviation="CV", branch="bio", unlock_technology="pathogen_cultures",
+        )])
+        assert errs == []
+
+    def test_unlock_technology_empty_or_non_string_rejected(self):
+        for bad in ("", "   ", 5, [], {}, True):
+            errs = self.v.validate_buildings(
+                [make_valid_building(abbreviation="CV", unlock_technology=bad)]
+            )
+            assert any("unlock_technology must be a non-empty string" in e
+                       for e in errs), bad
+
+    def test_every_branch_violation_is_collected(self):
+        """One call reports all three rules, not just the first (R1.7)."""
+        errs = self.v.validate_buildings([make_valid_building(
+            abbreviation="ZZ", capabilities=["research_lab"],
+            research_tree="bio", branch="nope", unlock_technology="",
+        )])
+        assert any("unknown branch" in e for e in errs), errs
+        assert any("must be absent or" in e for e in errs), errs
+        assert any("unlock_technology must be a non-empty string" in e
+                   for e in errs), errs
 
 
 class TestValidateItems:
@@ -1452,6 +1530,123 @@ class TestValidateBalance:
         errs = self.v.validate_balance({"resource_weights": [0.5, 1.0]})
         assert any("expected dict" in e for e in errs)
 
+    # --- Branch framework fields (tech-tree-branch-foundation R15.6) -- #
+
+    def test_branch_fields_valid_at_defaults(self):
+        """The shipped defaults of all seven cross-cutting knobs validate."""
+        defaults = BalanceConfig()
+        errs = self.v.validate_balance({
+            f: getattr(defaults, f) for f in (
+                "branch_reinstatement_cost_fraction",
+                "minimum_response_window_ticks",
+                "counter_advantage_cap",
+                "branch_cost_parity_tolerance",
+                "new_player_vector_shield_level",
+                "escalation_window_ticks",
+                "escalation_cap",
+            )
+        })
+        assert errs == []
+
+    def test_branch_range_bounds_accepted_at_the_edges(self):
+        """Each bound is inclusive where the design says inclusive."""
+        errs = self.v.validate_balance({
+            "branch_reinstatement_cost_fraction": 0.0,
+            "counter_advantage_cap": 1.0,
+            "branch_cost_parity_tolerance": 1.0,
+            "new_player_vector_shield_level": MAX_LEVEL,
+            "minimum_response_window_ticks": 1,
+            "escalation_window_ticks": 1,
+            "escalation_cap": 1,
+        })
+        assert errs == []
+        assert self.v.validate_balance(
+            {"branch_reinstatement_cost_fraction": 1.0}) == []
+
+    def test_branch_reinstatement_fraction_above_one_rejected(self):
+        errs = self.v.validate_balance(
+            {"branch_reinstatement_cost_fraction": 1.5})
+        assert any("branch_reinstatement_cost_fraction" in e
+                   and "0.0 and 1.0" in e for e in errs)
+
+    def test_counter_advantage_cap_below_one_rejected(self):
+        """Below 1.0 an "advantage" would scale a magnitude DOWN (R9.4)."""
+        errs = self.v.validate_balance({"counter_advantage_cap": 0.9})
+        assert any("counter_advantage_cap" in e and ">= 1.0" in e
+                   for e in errs)
+
+    def test_branch_cost_parity_tolerance_zero_rejected(self):
+        """The tolerance bound is exclusive at 0 — no dataset is exact."""
+        errs = self.v.validate_balance({"branch_cost_parity_tolerance": 0.0})
+        assert any("branch_cost_parity_tolerance" in e for e in errs)
+
+    def test_shield_level_outside_level_range_rejected(self):
+        low = self.v.validate_balance({"new_player_vector_shield_level": 0})
+        high = self.v.validate_balance(
+            {"new_player_vector_shield_level": MAX_LEVEL + 1})
+        assert any("new_player_vector_shield_level" in e for e in low)
+        assert any("new_player_vector_shield_level" in e for e in high)
+
+    def test_tick_and_cap_fields_reject_zero_and_negative(self):
+        for field in ("minimum_response_window_ticks",
+                      "escalation_window_ticks", "escalation_cap"):
+            for bad in (0, -1):
+                errs = self.v.validate_balance({field: bad})
+                assert any(field in e and ">= 1" in e for e in errs), (
+                    f"{field}={bad} should be rejected")
+
+    def test_branch_range_fields_reject_non_finite(self):
+        """NaN/inf parse as floats from YAML; they must not reach a multiplier."""
+        for value in (float("nan"), float("inf")):
+            errs = self.v.validate_balance({"counter_advantage_cap": value})
+            assert any("counter_advantage_cap" in e for e in errs), value
+
+    def test_branch_range_violations_all_collected(self):
+        """One call reports every violation, not just the first (R15.6)."""
+        errs = self.v.validate_balance({
+            "branch_reinstatement_cost_fraction": -0.5,
+            "minimum_response_window_ticks": 0,
+            "counter_advantage_cap": 0.5,
+            "branch_cost_parity_tolerance": 2.0,
+            "new_player_vector_shield_level": 0,
+            "escalation_window_ticks": 0,
+            "escalation_cap": 0,
+        })
+        for field in ("branch_reinstatement_cost_fraction",
+                      "minimum_response_window_ticks",
+                      "counter_advantage_cap",
+                      "branch_cost_parity_tolerance",
+                      "new_player_vector_shield_level",
+                      "escalation_window_ticks", "escalation_cap"):
+            assert any(field in e for e in errs), field
+
+    def test_operation_kind_cost_maps_validated_as_resource_maps(self):
+        """Every `<kind>_cost` map is checked like base_training_cost (R12.1)."""
+        for kind in OPERATION_KINDS:
+            field = f"{kind}_cost"
+            assert self.v.validate_balance({field: {"Iron": 5}}) == []
+            errs = self.v.validate_balance({field: {"Iron": 0}})
+            assert any(field in e and "positive integer" in e for e in errs)
+            errs = self.v.validate_balance({field: [5]})
+            assert any(field in e and "expected dict" in e for e in errs)
+
+    def test_resource_map_rejects_unknown_resource_key(self):
+        """A typo'd resource in a cost map is a load error, not a dead charge."""
+        errs = self.v.validate_balance({"trap_cost": {"Gold": 5}})
+        assert any("trap_cost['Gold']" in e and "unknown resource" in e
+                   for e in errs)
+        errs = self.v.validate_balance({"base_training_cost": {"wood": 5}})
+        assert any("unknown resource" in e for e in errs)
+
+    def test_operation_kind_scalar_fields_type_checked(self):
+        """The per-kind cooldown/cap/XP ints ride the generic type pass."""
+        for kind in OPERATION_KINDS:
+            for field in (f"{kind}_cooldown_ticks", f"{kind}_max_in_flight",
+                          f"agent_xp_{kind}"):
+                errs = self.v.validate_balance({field: "soon"})
+                assert any(field in e and "expected int" in e for e in errs), (
+                    field)
+
 
 class TestCrossValidate:
     """Test cross_validate using a mock registry object."""
@@ -1892,3 +2087,558 @@ class TestCrossValidate:
         reg.item_production_map = {}
         errs = self.v.cross_validate(reg)
         assert not any("melee weapon must not declare" in e for e in errs)
+
+class TestCrossValidateBranchCatalog:
+    """The cross-file Branch rules (tech-tree-branch-foundation).
+
+    Rule 4 (tree↔lab bijection, R1.2/R1.3/R1.4), rule 5 (every Branch has a
+    technology, R1.5), rule 6 (every Branch has a non-lab building, R2.7, and a
+    tech-gated one, R6.7), rule 7 (unlock_technology FK + Branch agreement,
+    R6.4/R6.5), rule 8 (investment-score parity, R9.9/R9.10), rule 9
+    (role↔Branch bijection, R7.11), rule 10 (Counter_Web well-formedness,
+    R9.2/R9.3/R9.12), rule 11 (Branch content rank floor, R10.5), and rule 12
+    (a late-game resource in the Signature_Vector chain, R12.5). Each rule is
+    exercised on a complete six-Branch catalog with one thing taken away, so a
+    failure names the rule that broke.
+
+    The fixture's six Branches are deliberately EQUAL in cost, so rule 8 stays
+    silent for every test that is about some other rule. A test that prices one
+    Branch above the others is a rule 8 test.
+    """
+
+    #: Branch -> (lab abbreviation, Branch_Building abbreviation). Spelled out
+    #: rather than derived: `resource` and `research` share a first letter.
+    ABBRS = {
+        "weapons": ("LW", "BW"),
+        "defense": ("LD", "BD"),
+        "resource": ("LR", "BR"),
+        "research": ("LH", "BH"),
+        "bio": ("LB", "BB"),
+        "cyber": ("LC", "BC"),
+    }
+
+    def setup_method(self):
+        self.v = SchemaValidator()
+
+    # -- fixture ------------------------------------------------------- #
+
+    @classmethod
+    def _lab(cls, branch):
+        from mygame.world.constants import RESEARCH_LAB
+        from mygame.world.definitions import BuildingDef
+        abbr = cls.ABBRS[branch][0]
+        return abbr, BuildingDef(
+            name=f"{branch} Lab", abbreviation=abbr, cost={}, max_health=400,
+            requires_hq=True, required_terrain=None, category="research",
+            produces=None, capabilities=frozenset({RESEARCH_LAB}),
+            research_tree=branch, branch=branch,
+        )
+
+    @classmethod
+    def _branch_building(cls, branch, *, unlock=True, cost=None):
+        """One non-lab Branch_Building.
+
+        ``cost`` carries ``Energy`` by default because a tech-gated building is
+        the Signature_Vector chain, which rule 12 requires to name at least one
+        late-game resource.
+        """
+        from mygame.world.definitions import BuildingDef
+        abbr = cls.ABBRS[branch][1]
+        return abbr, BuildingDef(
+            name=f"{branch} Works", abbreviation=abbr,
+            cost={"Energy": 10} if cost is None else cost,
+            max_health=250,
+            requires_hq=True, required_terrain=None, category="utility",
+            produces=None, branch=branch,
+            unlock_technology=f"{branch}_core" if unlock else None,
+        )
+
+    @staticmethod
+    def _tech(branch, *, resource_cost=None):
+        from mygame.world.definitions import TechnologyDef
+        key = f"{branch}_core"
+        return key, TechnologyDef(
+            name=key, key=key, required_rank="Recruit", tree=branch,
+            resource_cost={} if resource_cost is None else resource_cost,
+        )
+
+    @staticmethod
+    def _balance(*, tolerance=0.20, weights=None):
+        """A minimal stand-in for the balance config rule 8 reads."""
+        from types import SimpleNamespace
+        return SimpleNamespace(
+            branch_cost_parity_tolerance=tolerance,
+            resource_weights={} if weights is None else weights,
+        )
+
+    #: The shipped Counter_Web cycle: one advantage and one disadvantage each.
+    CANONICAL_WEB = {
+        "weapons": ("defense",),
+        "defense": ("bio",),
+        "bio": ("cyber",),
+        "cyber": ("resource",),
+        "resource": ("research",),
+        "research": ("weapons",),
+    }
+
+    def _catalog(self, *, buildings=None, technologies=None, counter_web=None,
+                 balance=None):
+        """A registry holding the complete six-Branch catalog, or an override.
+
+        ``counter_web`` and ``balance`` both default to ABSENT (no attribute at
+        all), which is the inert state every pre-feature fixture is in; pass a
+        mapping to put rule 10 under test, or a balance stand-in to put rule 8's
+        weights and tolerance under test.
+        """
+        from types import SimpleNamespace
+        from mygame.world.definitions import RankDef
+
+        if buildings is None:
+            buildings = dict(
+                [self._lab(b) for b in BRANCHES]
+                + [self._branch_building(b) for b in BRANCHES]
+            )
+        if technologies is None:
+            technologies = dict(self._tech(b) for b in BRANCHES)
+        registry = SimpleNamespace(
+            terrain={},
+            ranks=[RankDef(name="Recruit", level=1, xp_threshold=0)],
+            buildings=buildings,
+            items={},
+            technologies=technologies,
+            powerups={},
+            item_production_map={},
+            planets={},
+        )
+        if counter_web is not None:
+            registry.counter_web = counter_web
+        if balance is not None:
+            registry.balance = balance
+        return registry
+
+    def _without_building(self, abbr):
+        buildings = self._catalog().buildings
+        del buildings[abbr]
+        return self._catalog(buildings=buildings)
+
+    # -- the complete catalog passes ----------------------------------- #
+
+    def test_complete_six_branch_catalog_has_no_errors(self):
+        assert self.v.cross_validate(self._catalog()) == []
+
+    # -- rule 4: tree↔lab bijection (R1.2, R1.3, R1.4) ----------------- #
+
+    def test_branch_hosted_by_no_lab_names_the_branch(self):
+        errs = self.v.cross_validate(self._without_building("LB"))  # bio's lab
+        assert any("'bio'" in e and "hosted by no research lab" in e
+                   for e in errs), errs
+
+    def test_duplicate_lab_names_both_abbreviations_and_the_branch(self):
+        buildings = self._catalog().buildings
+        _, dup = self._lab("cyber")
+        dup.abbreviation = "ZZ"
+        buildings["ZZ"] = dup
+        errs = self.v.cross_validate(self._catalog(buildings=buildings))
+        assert any(
+            "'cyber'" in e and "'LC'" in e and "'ZZ'" in e
+            and "multiple labs" in e
+            for e in errs
+        ), errs
+
+    def test_duplicate_lab_is_flagged_without_any_other_lab(self):
+        """The duplicate half of the bijection is unconditional (R1.3): two labs
+        claiming one Branch is ambiguous even in a dataset that hosts nothing
+        else."""
+        _, first = self._lab("bio")
+        _, second = self._lab("bio")
+        second.abbreviation = "ZZ"
+        errs = self.v.cross_validate(
+            self._catalog(buildings={"LB": first, "ZZ": second}, technologies={})
+        )
+        assert any("'bio'" in e and "multiple labs" in e for e in errs), errs
+
+    def test_lab_free_dataset_is_exempt_from_the_coverage_rules(self):
+        """A dataset that uses no research lab is not the shipped catalog — the
+        pre-feature minimal fixtures must keep passing untouched."""
+        assert self.v.cross_validate(
+            self._catalog(buildings={}, technologies={})
+        ) == []
+
+    # -- rule 5: every Branch has a technology (R1.5) ------------------- #
+
+    def test_branch_with_no_technology_names_the_branch(self):
+        techs = dict(self._tech(b) for b in BRANCHES if b != "cyber")
+        errs = self.v.cross_validate(self._catalog(technologies=techs))
+        assert any("'cyber'" in e and "has no technology" in e for e in errs), errs
+
+    # -- rule 6: Branch building coverage (R2.7, R6.7) ----------------- #
+
+    def test_branch_with_no_non_lab_building_names_the_branch(self):
+        errs = self.v.cross_validate(self._without_building("BW"))  # weapons
+        assert any("'weapons'" in e and "no non-lab Branch_Building" in e
+                   for e in errs), errs
+
+    def test_lab_alone_does_not_satisfy_the_non_lab_rule(self):
+        """A Branch whose only affiliated building IS its lab still fails R2.7."""
+        errs = self.v.cross_validate(self._without_building("BB"))  # bio
+        assert any("'bio'" in e and "no non-lab Branch_Building" in e
+                   for e in errs), errs
+
+    def test_branch_with_no_tech_gated_building_names_the_branch(self):
+        buildings = self._catalog().buildings
+        abbr, ungated = self._branch_building("defense", unlock=False)
+        buildings[abbr] = ungated
+        errs = self.v.cross_validate(self._catalog(buildings=buildings))
+        assert any("'defense'" in e and "unlock_technology" in e
+                   and "Signature_Vector" in e for e in errs), errs
+        # The Branch still HAS a non-lab building, so R2.7 must not fire.
+        assert not any("no non-lab Branch_Building" in e for e in errs), errs
+
+    # -- rule 7: unlock_technology FK + Branch agreement (R6.4, R6.5) --- #
+
+    def test_missing_unlock_technology_names_the_building_and_the_key(self):
+        buildings = self._catalog().buildings
+        buildings["BB"].unlock_technology = "nonexistent_tech"
+        errs = self.v.cross_validate(self._catalog(buildings=buildings))
+        assert any("'BB'" in e and "'nonexistent_tech'" in e
+                   and "not found in technology definitions" in e
+                   for e in errs), errs
+
+    def test_cross_branch_unlock_technology_names_both_branches(self):
+        buildings = self._catalog().buildings
+        buildings["BB"].unlock_technology = "cyber_core"  # BB is the bio building
+        errs = self.v.cross_validate(self._catalog(buildings=buildings))
+        assert any(
+            "'BB'" in e and "'cyber_core'" in e and "'cyber'" in e
+            and "'bio'" in e
+            for e in errs
+        ), errs
+
+    def test_neutral_building_may_be_gated_by_any_branch_technology(self):
+        """A Neutral_Building has no affiliation, so only the FK applies (R6.5
+        compares against a Branch_Affiliation that is absent here)."""
+        from mygame.world.definitions import BuildingDef
+        buildings = self._catalog().buildings
+        buildings["NB"] = BuildingDef(
+            name="Neutral", abbreviation="NB", cost={}, max_health=100,
+            requires_hq=True, required_terrain=None, category="utility",
+            produces=None, unlock_technology="cyber_core",
+        )
+        assert self.v.cross_validate(self._catalog(buildings=buildings)) == []
+
+    # -- rule 8: investment-score parity (R9.9, R9.10) ------------------ #
+
+    def test_investment_score_is_the_weighted_sum(self):
+        """R9.9: the Branch's lab + Branch_Buildings + technologies, weighted."""
+        buildings = self._catalog().buildings
+        buildings["LB"].cost = {"Iron": 20}                  # bio's lab
+        buildings["BB"].cost = {"Circuits": 10, "Energy": 5}  # bio's building
+        techs = dict(self._tech(b) for b in BRANCHES)
+        techs["bio_core"] = self._tech("bio", resource_cost={"Iron": 30})[1]
+        registry = self._catalog(
+            buildings=buildings, technologies=techs,
+            balance=self._balance(weights={"Iron": 1.0, "Circuits": 0.3}),
+        )
+        # 20*1.0 (lab) + 10*0.3 + 5*1.0 (building, Energy unweighted → 1.0)
+        # + 30*1.0 (technology) = 58.0
+        assert self.v._branch_investment_score(registry, "bio") == 58.0
+
+    def test_unweighted_resource_weighs_the_default(self):
+        """A resource absent from resource_weights weighs 1.0, not 0."""
+        from mygame.world.constants import DEFAULT_RESOURCE_WEIGHT
+        buildings = self._catalog().buildings
+        buildings["BB"].cost = {"Magmite": 7}
+        registry = self._catalog(
+            buildings=buildings, balance=self._balance(weights={"Iron": 1.0}),
+        )
+        assert self.v._branch_investment_score(registry, "bio") == (
+            7 * DEFAULT_RESOURCE_WEIGHT
+        )
+
+    def test_equal_branches_are_in_parity(self):
+        assert self.v.cross_validate(
+            self._catalog(balance=self._balance(tolerance=0.20))
+        ) == []
+
+    def test_branch_outside_the_tolerance_names_branch_score_and_mean(self):
+        buildings = self._catalog().buildings
+        buildings["BB"].cost = {"Energy": 100}  # bio: 100 vs 10 elsewhere
+        errs = self.v.cross_validate(self._catalog(
+            buildings=buildings, balance=self._balance(tolerance=0.20),
+        ))
+        # mean = (100 + 10*5) / 6 = 25.0
+        assert any(
+            "'bio'" in e and "100.00" in e and "25.00" in e
+            and "branch_cost_parity_tolerance" in e
+            for e in errs
+        ), errs
+
+    def test_branch_inside_the_tolerance_passes(self):
+        """The comparison is the fraction, not equality — near enough passes."""
+        buildings = self._catalog().buildings
+        buildings["BB"].cost = {"Energy": 11}
+        # scores 11, 10, 10, 10, 10, 10 → mean 10.1667; bio deviates by 8.2%
+        assert self.v.cross_validate(self._catalog(
+            buildings=buildings, balance=self._balance(tolerance=0.20),
+        )) == []
+
+    def test_tolerance_is_read_from_balance(self):
+        """The bound is the tunable, not a constant baked into the rule."""
+        buildings = self._catalog().buildings
+        buildings["BB"].cost = {"Energy": 15}
+        # mean 10.8333; bio deviates by 38.5% — outside 0.20, inside 0.50.
+        assert self.v.cross_validate(self._catalog(
+            buildings=buildings, balance=self._balance(tolerance=0.50),
+        )) == []
+        assert self.v.cross_validate(self._catalog(
+            buildings=buildings, balance=self._balance(tolerance=0.20),
+        )) != []
+
+    def test_lab_free_dataset_is_exempt_from_the_parity_rule(self):
+        """Same escape hatch as the coverage rules: no lab, no catalog claim —
+        so a fixture declaring one Branch's building and nothing else does not
+        fail for the other five scoring zero."""
+        abbr, only = self._branch_building("bio", cost={"Energy": 500})
+        assert self.v.cross_validate(self._catalog(
+            buildings={abbr: only},
+            technologies=dict([self._tech("bio")]),
+            balance=self._balance(tolerance=0.20),
+        )) == []
+
+    def test_costless_catalog_reports_no_parity_error(self):
+        """Every Branch at zero has an undefined deviation, so rule 8 says
+        nothing rather than flagging all six. (Rule 12 still fires on the
+        stripped costs — that is its job, and not what this asserts.)"""
+        buildings = self._catalog().buildings
+        for branch in BRANCHES:
+            buildings[self.ABBRS[branch][1]].cost = {}
+        errs = self.v.cross_validate(self._catalog(
+            buildings=buildings, balance=self._balance(tolerance=0.20),
+        ))
+        assert not any("investment score" in e for e in errs), errs
+
+    # -- rule 9: role ↔ Branch bijection (R7.11) ------------------------ #
+
+    def test_shipped_role_table_is_a_bijection(self):
+        """BRANCH_ROLE and the role table agree as shipped, in any dataset."""
+        assert self.v._validate_branch_roles() == []
+        assert self.v.cross_validate(
+            self._catalog(buildings={}, technologies={})
+        ) == []
+
+    def test_branch_owning_no_role_names_the_branch(self):
+        from mygame.world.constants import BRANCH_ROLE
+        partial = {b: r for b, r in BRANCH_ROLE.items() if b != "cyber"}
+        errs = self.v._validate_branch_roles(branch_role=partial, role_branch={})
+        assert any("'cyber'" in e and "exactly one Branch role" in e
+                   for e in errs), errs
+
+    def test_role_shared_by_two_branches_names_the_role(self):
+        from mygame.world.constants import BRANCH_ROLE
+        doubled = dict(BRANCH_ROLE)
+        doubled["cyber"] = doubled["bio"]  # both Branches claim 'medic'
+        errs = self.v._validate_branch_roles(branch_role=doubled, role_branch={})
+        assert any(
+            "'medic'" in e and "'bio'" in e and "'cyber'" in e
+            and "exactly one Branch" in e
+            for e in errs
+        ), errs
+
+    def test_role_table_disagreeing_with_the_constant_is_reported(self):
+        """A RoleSpec.branch contradicting BRANCH_ROLE breaks both directions."""
+        errs = self.v._validate_branch_roles(role_branch={"spotter": "bio"})
+        assert any("'spotter'" in e and "'bio'" in e and "'weapons'" in e
+                   for e in errs), errs
+        assert any("'bio'" in e and "'medic'" in e and "'spotter'" in e
+                   for e in errs), errs
+
+    def test_role_table_agreeing_with_the_constant_passes(self):
+        """The post-task-7.1 shape: every RoleSpec names its own Branch."""
+        from mygame.world.constants import BRANCH_ROLE
+        agreeing = {role: branch for branch, role in BRANCH_ROLE.items()}
+        agreeing["guard"] = None  # an ungated role declares no Branch
+        assert self.v._validate_branch_roles(role_branch=agreeing) == []
+
+    def test_ungated_role_claiming_a_branch_is_reported(self):
+        errs = self.v._validate_branch_roles(role_branch={"guard": "weapons"})
+        assert any("'weapons'" in e and "'guard'" in e and "'spotter'" in e
+                   for e in errs), errs
+
+    # -- rule 10: Counter_Web well-formedness (R9.2, R9.3, R9.12) ------- #
+
+    def test_absent_counter_web_is_inert(self):
+        """branches.yaml is optional; an empty web means no Branch counters."""
+        assert self.v._validate_counter_web(None) == []
+        assert self.v._validate_counter_web({}) == []
+
+    def test_shipped_counter_web_passes(self):
+        assert self.v._validate_counter_web(self.CANONICAL_WEB) == []
+        assert self.v.cross_validate(
+            self._catalog(counter_web=self.CANONICAL_WEB)
+        ) == []
+
+    def test_two_advantages_are_within_the_cap(self):
+        web = dict(self.CANONICAL_WEB)
+        web["weapons"] = ("defense", "cyber")
+        assert self.v._validate_counter_web(web) == []
+
+    def test_unknown_source_branch_names_the_value(self):
+        web = dict(self.CANONICAL_WEB)
+        web["wepaons"] = ("defense",)
+        errs = self.v._validate_counter_web(web)
+        assert any("'wepaons'" in e and "source" in e for e in errs), errs
+
+    def test_unknown_target_branch_names_the_value(self):
+        web = dict(self.CANONICAL_WEB)
+        web["weapons"] = ("defense", "ordnance")
+        errs = self.v._validate_counter_web(web)
+        assert any("'weapons'" in e and "'ordnance'" in e and "target" in e
+                   for e in errs), errs
+
+    def test_self_edge_rejected(self):
+        web = dict(self.CANONICAL_WEB)
+        web["weapons"] = ("weapons",)
+        errs = self.v._validate_counter_web(web)
+        assert any("'weapons'" in e and "names itself" in e for e in errs), errs
+        # A self-edge is no advantage, so the out-degree floor fails too, and
+        # 'defense' loses its only counter.
+        assert any("'weapons'" in e and "advantage over no Branch" in e
+                   for e in errs), errs
+        assert any("'defense'" in e and "countered by no Branch" in e
+                   for e in errs), errs
+
+    def test_branch_with_no_advantage_names_the_branch(self):
+        web = {b: t for b, t in self.CANONICAL_WEB.items() if b != "cyber"}
+        web["bio"] = ("resource",)  # keep 'resource' countered
+        errs = self.v._validate_counter_web(web)
+        assert any("'cyber'" in e and "advantage over no Branch" in e
+                   for e in errs), errs
+
+    def test_three_advantages_exceed_the_cap(self):
+        web = dict(self.CANONICAL_WEB)
+        web["weapons"] = ("defense", "bio", "cyber")
+        errs = self.v._validate_counter_web(web)
+        assert any("'weapons'" in e and "more than two" in e for e in errs), errs
+
+    def test_repeated_target_is_one_edge(self):
+        """The web is a set of ordered pairs — a repeated pair is the same pair."""
+        web = dict(self.CANONICAL_WEB)
+        web["weapons"] = ("defense", "defense", "defense")
+        assert self.v._validate_counter_web(web) == []
+
+    def test_branch_countered_by_nobody_names_the_branch(self):
+        web = dict(self.CANONICAL_WEB)
+        web["research"] = ("defense",)  # 'weapons' loses its only counter
+        errs = self.v._validate_counter_web(web)
+        assert any("'weapons'" in e and "countered by no Branch" in e
+                   for e in errs), errs
+
+    # -- rule 11: Branch content rank floor (R10.5) --------------------- #
+
+    def test_branch_building_below_its_lab_names_both_ranks(self):
+        buildings = self._catalog().buildings
+        buildings["LB"].rank_requirement = 11  # bio's lab
+        buildings["BB"].rank_requirement = 5   # bio's Branch_Building
+        errs = self.v.cross_validate(self._catalog(buildings=buildings))
+        assert any(
+            "'BB'" in e and "5" in e and "11" in e and "'bio'" in e
+            and "precede its lab gate" in e
+            for e in errs
+        ), errs
+
+    def test_branch_building_at_or_above_its_lab_passes(self):
+        buildings = self._catalog().buildings
+        for branch in BRANCHES:
+            lab_abbr, building_abbr = self.ABBRS[branch]
+            buildings[lab_abbr].rank_requirement = 11
+            buildings[building_abbr].rank_requirement = 11  # equal is allowed
+        buildings["BB"].rank_requirement = 22               # above is allowed
+        assert self.v.cross_validate(self._catalog(buildings=buildings)) == []
+
+    def test_rank_floor_is_measured_against_the_own_branch_lab(self):
+        """A high floor on one Branch's lab does not gate another's content."""
+        buildings = self._catalog().buildings
+        buildings["LB"].rank_requirement = 20  # bio's lab only
+        buildings["BB"].rank_requirement = 20
+        errs = self.v.cross_validate(self._catalog(buildings=buildings))
+        assert errs == [], errs
+
+    # -- rule 12: late-game resource in the vector chain (R12.5) -------- #
+
+    def test_vector_chain_without_a_late_game_resource_names_the_branch(self):
+        buildings = self._catalog().buildings
+        abbr, cheap = self._branch_building("bio", cost={"Wood": 10, "Iron": 5})
+        buildings[abbr] = cheap
+        errs = self.v.cross_validate(self._catalog(buildings=buildings))
+        assert any(
+            "'bio'" in e and "no late-game resource" in e and "'BB'" in e
+            for e in errs
+        ), errs
+
+    def test_any_one_late_game_resource_satisfies_the_rule(self):
+        for resource in ("Circuits", "Energy", "Nexium"):
+            buildings = self._catalog().buildings
+            abbr, gated = self._branch_building(
+                "bio", cost={"Wood": 10, resource: 1},
+            )
+            buildings[abbr] = gated
+            assert self.v.cross_validate(
+                self._catalog(buildings=buildings)
+            ) == [], resource
+
+    def test_late_game_resource_may_come_from_any_building_in_the_chain(self):
+        """The rule reads the UNION of the chain's costs, not each building."""
+        from mygame.world.definitions import BuildingDef
+        buildings = self._catalog().buildings
+        abbr, cheap = self._branch_building("bio", cost={"Wood": 10})
+        buildings[abbr] = cheap
+        buildings["B2"] = BuildingDef(
+            name="bio Annex", abbreviation="B2", cost={"Nexium": 2},
+            max_health=100, requires_hq=True, required_terrain=None,
+            category="utility", produces=None, branch="bio",
+            unlock_technology="bio_core",
+        )
+        assert self.v.cross_validate(self._catalog(buildings=buildings)) == []
+
+    def test_ungated_branch_building_is_outside_the_chain(self):
+        """Only the tech-gated buildings are the Signature_Vector chain (R6.7)."""
+        from mygame.world.definitions import BuildingDef
+        buildings = self._catalog().buildings
+        buildings["B2"] = BuildingDef(
+            # Cost-free, like the fixture's labs: this test is about chain
+            # MEMBERSHIP, and a priced extra building would give bio a real
+            # investment-score edge over the other five and trip rule 8 instead.
+            name="bio Shed", abbreviation="B2", cost={},
+            max_health=100, requires_hq=True, required_terrain=None,
+            category="utility", produces=None, branch="bio",
+        )
+        assert self.v.cross_validate(self._catalog(buildings=buildings)) == []
+
+    def test_lab_free_dataset_is_exempt_from_the_resource_rule(self):
+        """Same escape hatch as the coverage rules: no lab, no catalog claim."""
+        abbr, cheap = self._branch_building("bio", cost={"Wood": 10})
+        assert self.v.cross_validate(
+            self._catalog(buildings={abbr: cheap},
+                          technologies=dict([self._tech("bio")]))
+        ) == []
+
+    # -- R1.7: every Branch error is collected in one load -------------- #
+
+    def test_every_branch_error_is_collected_in_one_pass(self):
+        """One cross_validate call reports the lab gap, the technology gap, the
+        building gap, and the bad FK together (R1.7)."""
+        buildings = dict(
+            [self._lab(b) for b in BRANCHES if b != "cyber"]
+            + [self._branch_building(b) for b in BRANCHES if b != "research"]
+        )
+        buildings["BB"].unlock_technology = "nonexistent_tech"
+        techs = dict(self._tech(b) for b in BRANCHES if b != "defense")
+        errs = self.v.cross_validate(
+            self._catalog(buildings=buildings, technologies=techs)
+        )
+        assert any("'cyber'" in e and "hosted by no research lab" in e
+                   for e in errs), errs
+        assert any("'defense'" in e and "has no technology" in e for e in errs), errs
+        assert any("'research'" in e and "no non-lab Branch_Building" in e
+                   for e in errs), errs
+        assert any("'nonexistent_tech'" in e for e in errs), errs

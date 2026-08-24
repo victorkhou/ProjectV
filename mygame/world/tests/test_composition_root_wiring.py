@@ -75,6 +75,33 @@ class TestCompositionRootWiring(unittest.TestCase):
             "gear is silently destroyed instead of (sometimes) dropping for "
             "the killer."
         ),
+        "set_branch_validators": (
+            "BuildingSystem's chain loses the three Branch construction "
+            "gates: a Branch_Building can be raised with no matching "
+            "Branch_Commitment and a Branch switch costs nothing (R3.3-3.5, "
+            "R4.1-4.2)."
+        ),
+        "set_branch_estate_provider": (
+            "The demolish path stops reporting the Branch_Estate it is about "
+            "to shrink, so the last building of a live Branch goes down with "
+            "no warning (R5.3)."
+        ),
+        "set_branch_resolver": (
+            "TechLabSystem and AgentSystem fall back to deriving/ignoring "
+            "commitment locally: db.tech_bonuses rebuilds from a dormant "
+            "tree and the Branch agent roles are ungated (R6, R7)."
+        ),
+        # Not a setter, but the same bug class: a call whose absence is
+        # invisible to every unit test because the tests call rebuild()
+        # themselves. ``rebuild_from_world`` (bombs, outposts) does not match
+        # this pattern — the paren must follow ``rebuild`` directly.
+        "rebuild": (
+            "Every persisted Vector_Operation stays inert after a restart: "
+            "the Operation_Records survive on their durable owners but no "
+            "vector re-tracks them, so a launched operation never resolves, "
+            "never expires, and keeps counting against its owner's in-flight "
+            "cap forever (R8.22, R14.3-14.5)."
+        ),
     }
 
     @classmethod
@@ -119,6 +146,72 @@ class TestCompositionRootWiring(unittest.TestCase):
             "targeting_system.set_range_resolver must be wired to the "
             "PUBLIC combat_engine.resolve_weapon_range (not the private "
             "_resolve_weapon_range, and not something else).",
+        )
+
+    def test_branch_resolver_wired_into_both_consumers(self):
+        """BOTH TechLabSystem and AgentSystem receive the Branch resolver.
+
+        The presence check above is satisfied by a single
+        ``set_branch_resolver`` call, but these are two independent hooks:
+        wiring one and forgetting the other leaves half the feature running on
+        its pre-feature default with every test still green.
+        """
+        for consumer in ("tech_system", "agent_system"):
+            with self.subTest(consumer=consumer):
+                self.assertRegex(
+                    self.source,
+                    re.compile(
+                        re.escape(consumer)
+                        + r"\s*\.\s*set_branch_resolver\s*\(\s*branch_system\s*\)"
+                    ),
+                    f"{consumer}.set_branch_resolver(branch_system) is "
+                    "missing from the composition root.",
+                )
+
+    def test_branch_system_constructed_with_every_collaborator(self):
+        """BranchSystem takes every collaborator by injection (R15.1, R15.4).
+
+        Each constructor argument defaults to ``None`` so the system stays
+        constructible from a bare registry in tests — which means a forgotten
+        argument here degrades production to a silent refusal instead of an
+        error. This asserts the live construction passes all of them.
+        """
+        match = re.search(
+            r"branch_system\s*=\s*BranchSystem\((.*?)\n    \)",
+            self.source,
+            re.DOTALL,
+        )
+        self.assertIsNotNone(
+            match, "game_init.py no longer constructs BranchSystem(...)."
+        )
+        call = match.group(1)
+        for collaborator in (
+            "current_tick_func",
+            "building_system",
+            "tech_system",
+            "agent_system",
+            "alliance_system",
+            "combat_engine",
+        ):
+            with self.subTest(collaborator=collaborator):
+                self.assertIn(
+                    collaborator + "=", call,
+                    f"BranchSystem is constructed without {collaborator} — "
+                    "it defaults to None and the services needing it refuse.",
+                )
+
+    def test_branch_system_registered_under_its_documented_key(self):
+        """``game_systems["branch_system"]`` is the documented lookup key.
+
+        The ``vector_operations`` tick step is registered only when this key
+        resolves, so a renamed key silently stops every Vector_Operation from
+        advancing.
+        """
+        self.assertRegex(
+            self.source,
+            re.compile(r"[\"']branch_system[\"']\s*:\s*branch_system"),
+            "branch_system is not registered in the game_systems dict under "
+            'the key "branch_system".',
         )
 
 

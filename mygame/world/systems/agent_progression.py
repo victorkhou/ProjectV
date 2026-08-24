@@ -590,6 +590,24 @@ class AgentProgressionMixin:
         abilities were re-evaluated), so callers like ``_process_agent_tick``
         can avoid a redundant second ``evaluate_gated_abilities`` pass.
         """
+        # Look up the data-driven amount for this source (unknown → no-op).
+        field = AGENT_XP_SOURCE_FIELDS.get(source)
+        if field is None:
+            return False
+        return self._award_agent_xp_field(agent, field)
+
+    def _award_agent_xp_field(self, agent: Any, field: str) -> bool:
+        """FREEZE-AWARE Combat-XP award of ``registry.balance.<field>`` to *agent*.
+
+        The single award body shared by every agent-XP path: the source-keyed
+        one (:meth:`award_agent_xp`, whose table maps an earning source to its
+        Balance_Config field) and the Operation_Kind one
+        (``AgentSystem.award_operation_xp``, whose field comes from
+        ``OperationKindDef.agent_xp_field`` — R7.10). Both therefore honour the
+        owner-level freeze identically, which is the point of routing them here.
+
+        Returns ``True`` iff an award actually happened.
+        """
         # FREEZE check first — compute cap ceiling and compare against the
         # agent's raw level. No banking when at/above the ceiling.
         cap_ceiling = self.get_cap_ceiling(agent)
@@ -599,10 +617,6 @@ class AgentProgressionMixin:
         if int(current_level) >= cap_ceiling:
             return False
 
-        # Look up the data-driven amount for this source (unknown → no-op).
-        field = AGENT_XP_SOURCE_FIELDS.get(source)
-        if field is None:
-            return False
         amount = getattr(self.registry.balance, field, 0) or 0
         if amount <= 0:
             # Zero amount → no-op. Nothing changed; skip re-eval.

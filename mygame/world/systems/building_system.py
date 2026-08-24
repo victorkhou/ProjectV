@@ -9,6 +9,8 @@ allowing construction. Publishes events via the EventBus.
 
 from __future__ import annotations
 
+import logging
+
 from typing import Any, Callable, TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -36,6 +38,8 @@ from world.constants import (
     REQUIRES_RESOURCE_TERRAIN,
     UPGRADABLE,
 )
+
+logger = logging.getLogger("evennia.world.systems.building_system")
 
 # Default maximum build range (Manhattan distance)
 DEFAULT_BUILD_RANGE = 10
@@ -90,6 +94,21 @@ class BuildingSystem(BaseSystem):
         # TerrainModifierSystem for placement feedback; injected at the
         # composition root, with a services-lookup fallback when unset.
         self._terrain_modifier_resolver: Any | None = None
+        # Branch construction gates, spliced into the ordered validation chain
+        # by ``set_branch_validators`` at the composition root. Empty until
+        # then, so an unwired deployment validates exactly as it did before the
+        # Branch feature existed.
+        self._branch_validators: tuple[Callable[..., str | None], ...] = ()
+        # Branch_Estate reporter for the demolish path, injected by
+        # ``set_branch_estate_provider`` at the composition root. ``None`` until
+        # then, which is what makes the demolish report additive: an unwired
+        # deployment demolishes exactly as it did before the Branch feature.
+        self._branch_estate_provider: Any | None = None
+        # Renderer for the Branch gates' refusal keys, injected by
+        # ``set_refusal_renderer`` at the composition root. ``None`` until then,
+        # which degrades a refusal to its bare message key — visible and safe,
+        # but not the words a player should read (R3.4, R3.5, R4.2, R6.3).
+        self._refusal_renderer: Any | None = None
         self.build_range = build_range
         self._current_tick_func = current_tick_func or (lambda: 0)
 
@@ -111,6 +130,88 @@ class BuildingSystem(BaseSystem):
         feedback falls back to ``get_service("terrain_modifier_system")``.
         """
         self._terrain_modifier_resolver = resolver
+
+    def set_branch_validators(
+        self, validators: "list[Callable[..., str | None]] | None"
+    ) -> None:
+        """Inject the Branch construction gates after construction.
+
+        The composition root passes ``BranchSystem.construction_validators()``
+        here in one call, which is the whole of the coupling between the two
+        systems: this module never imports ``BranchSystem`` and never learns
+        what a Branch is. Each gate is called with the signature this chain's
+        own validators use — ``(player, building_def, tile, x=, y=)`` — and
+        answers a truthy refusal (a message key) or ``None``, exactly like
+        every other validator.
+
+        Never calling this leaves the chain with no Branch gates, so every
+        pre-feature build path and an unwired deployment behave as before.
+        Calling it again replaces the previous set rather than appending.
+        """
+        self._branch_validators = tuple(validators or ())
+
+    def set_branch_estate_provider(self, provider: Any) -> None:
+        """Inject the Branch_Estate reporter the demolish path uses.
+
+        The second and last coupling point to the Branch feature, alongside
+        :meth:`set_branch_validators`: the composition root passes
+        ``BranchSystem`` here and this module reads exactly two duck-typed
+        methods off it — ``branch_of_building(abbr_or_def)`` and
+        ``estate_count(owner, branch, planet)``. No import, no subclass, and no
+        knowledge of what a Branch *means*; the value is an opaque token that
+        travels from the first call to the second.
+
+        Passing ``None`` clears it. Never calling it leaves
+        :meth:`report_demolish_estate` a no-op, so the pre-feature demolish
+        behavior is unchanged in an unwired deployment (R15.2).
+        """
+        self._branch_estate_provider = provider
+
+    def set_refusal_renderer(self, renderer: Any) -> None:
+        """Inject the renderer that turns a Branch refusal key into prose.
+
+        The Branch construction gates answer a message KEY carrying structured
+        data and compose no prose (R13.5) — but this chain's channel is the
+        string the build command shows the player, so somebody has to own the
+        words. That somebody is the NotificationPresenter: the composition root
+        passes its ``render_construction_refusal`` here, and
+        :meth:`_rendered_refusal` calls it at the one point a Branch gate's
+        answer enters the chain. This module never imports the presenter and
+        never learns what the words are; *renderer* is an opaque
+        ``(key, data) -> str | None`` callable.
+
+        Passing ``None`` clears it. Never calling it — a minimal fixture, a
+        deployment without the Branch feature — leaves a refusal showing its
+        bare key, which is the documented degraded reading of a
+        ``BranchRefusal`` and still refuses the build.
+        """
+        self._refusal_renderer = renderer
+
+    def _rendered_refusal(self, refusal: Any) -> Any:
+        """Return *refusal* as player prose, or as it came when it cannot be.
+
+        Duck-typed on the ``BranchRefusal`` shape — a ``key`` plus a ``data``
+        payload riding on a truthy string — so this module needs no import of
+        the type. Everything that is not that shape (``None`` for a pass, the
+        plain prose the chain's own validators answer) passes through untouched,
+        and a renderer that is unwired, answers nothing, or raises leaves the
+        refusal exactly as the gate answered it: rendering may only ever change
+        the words, never the decision.
+        """
+        if not refusal:
+            return refusal
+        key = getattr(refusal, "key", None)
+        if not isinstance(key, str):
+            return refusal
+        renderer = self._refusal_renderer
+        if not callable(renderer):
+            return refusal
+        try:
+            text = renderer(key, getattr(refusal, "data", None))
+        except Exception:  # noqa: BLE001 - a broken renderer costs words only
+            logger.exception("Branch refusal %r could not be rendered", key)
+            return refusal
+        return text if isinstance(text, str) and text.strip() else refusal
 
     def _terrain_defense_note(
         self, tile: Any, x: int | None = None, y: int | None = None
@@ -154,17 +255,35 @@ class BuildingSystem(BaseSystem):
         placement.  They are forwarded to validators that need them.
 
         Returns (building_def, None) on success, or (None, error_message) on failure.
+
+        The injected Branch gates (:meth:`set_branch_validators`) sit
+        immediately after the one-lab-per-planet gate they extend and before the
+        rank gate, so a wrong-Branch attempt reads as a Branch error rather than
+        a misleading rank error — and, because every gate runs above
+        ``_validate_resources``, whatever a gate reports precedes any charge.
         """
         # Accept either the abbreviation (EX) or the full name (extractor).
         building_def = self.registry.resolve_building(building_abbr)
         if building_def is None:
             return None, f"Unknown building type: {building_abbr}"
 
+        # Each gate's answer passes through the injected refusal renderer on its
+        # way into the chain, so the string the chain refuses with is player
+        # prose when a renderer is wired and the bare message key when not —
+        # either way truthy, so the refusal itself is renderer-independent.
+        branch_gates = [
+            (lambda gate=gate: self._rendered_refusal(
+                gate(player, building_def, tile, x=x, y=y)
+            ))
+            for gate in self._branch_validators
+        ]
+
         for validator in [
             lambda: self._validate_hq_requirement(player, building_def),
             lambda: self._validate_one_hq_per_planet(player, building_def, tile),
             lambda: self._validate_shield_generator_cap(player, building_def, tile, x=x, y=y),
             lambda: self._validate_one_research_lab_per_planet(player, building_def, tile, x=x, y=y),
+            *branch_gates,
             lambda: self._validate_rank_requirement(player, building_def),
             lambda: self._validate_deed_requirement(player, building_def),
             lambda: self._validate_terrain(tile, building_def),
@@ -570,6 +689,67 @@ class BuildingSystem(BaseSystem):
         if hasattr(building, "delete"):
             building.delete()
 
+    def report_demolish_estate(
+        self, owner: Any, building_def: Any, planet: Any = None
+    ) -> int | None:
+        """Report the Branch_Estate remaining after a successful demolish (R4.5).
+
+        Call this **after** the building is gone, which is what makes the number
+        progress rather than a status: the one ``estate_count`` call counts what
+        the owner still has to tear down before that Branch's estate is empty and
+        a switch is permitted. The refund is not this method's business — the
+        ``demolish_refund_rates`` × :meth:`get_building_investment` arithmetic
+        (R4.4) runs on the caller's side, untouched, and a report never alters it.
+
+        Args:
+            owner: The player who owned the demolished building. ``None`` is
+                dropped, as everywhere else a notification is emitted.
+            building_def: The demolished building's :class:`BuildingDef` or its
+                abbreviation — whichever the caller already holds. The injected
+                provider resolves either, so nothing needs converting here (and
+                reading it from the *definition* rather than the object is why
+                this works after the object is deleted).
+            planet: The planet to scope the estate to. ``None`` leaves the scope
+                to the provider, which reads the planet *owner* occupies — the
+                right answer for a demolish, since a player must stand on a
+                building's tile to demolish it.
+
+        Returns:
+            The number of buildings remaining in that Branch's estate on that
+            planet, or ``None`` when nothing was reported: no provider injected,
+            no owner, or a Neutral_Building (which belongs to no estate, so
+            there is no progress to measure). Fails soft — a broken provider
+            costs the report, never the demolish (R15.3).
+        """
+        provider = self._branch_estate_provider
+        if provider is None or owner is None:
+            return None
+        try:
+            branch = provider.branch_of_building(building_def)
+            if not branch:
+                return None
+            remaining = int(provider.estate_count(owner, branch, planet))
+        except Exception:  # noqa: BLE001 - a report never breaks a demolish
+            return None
+        if isinstance(building_def, str):
+            btype = building_def
+            name = self._building_name(btype)
+        else:
+            btype = getattr(building_def, "abbreviation", None)
+            name = getattr(building_def, "name", None) or (
+                self._building_name(btype) if btype else None
+            )
+        self.notify(
+            owner,
+            "branch_estate_progress",
+            branch=branch,
+            remaining=remaining,
+            btype=btype,
+            name=name,
+            planet=planet,
+        )
+        return remaining
+
     # ------------------------------------------------------------------ #
     #  Construction timer & active-presence
     # ------------------------------------------------------------------ #
@@ -942,16 +1122,17 @@ class BuildingSystem(BaseSystem):
         self, player: Any, building_def: BuildingDef, tile: Any,
         x: int | None = None, y: int | None = None,
     ) -> str | None:
-        """Enforce one research lab (one tech tree) per player per planet.
+        """Enforce one Branch Lab (one Branch) per player per planet.
 
-        Every research building (Weapons/Defense/Resource/Research Lab) carries
-        the ``research_lab`` capability and hosts one tree. Owning a lab is how
-        research is gated, so allowing two would let a planet research two trees
-        — the feature's core constraint is that a tree is a committed choice.
-        A player may still build a DIFFERENT lab on another planet. Planet-scope
-        the count the same way the Shield Generator cap does; when the target
-        planet is unknown, count all owned labs (fail safe — never over-cap).
-        Returns an error message or None.
+        Every lab building carries the ``research_lab`` capability and hosts one
+        Branch, so this gate covers all six Branch Labs without naming any of
+        them: the two newest labs are gated the moment they declare the
+        capability. Owning a lab is how research is gated, so allowing two would
+        let one planet run two Branches — the feature's core constraint is that a
+        Branch is a committed choice. A player may still build a DIFFERENT lab on
+        another planet. Planet-scope the count the same way the Shield Generator
+        cap does; when the target planet is unknown, count all owned labs (fail
+        safe — never over-cap). Returns an error message or None.
         """
         from world.constants import RESEARCH_LAB
         if not building_def.has_capability(RESEARCH_LAB):
@@ -966,8 +1147,8 @@ class BuildingSystem(BaseSystem):
                 if b_planet is not None and b_planet != planet:
                     continue
             return (
-                "You can only have one research lab per planet — it sets your "
-                "tech tree. Demolish it to switch trees."
+                "You can only have one Branch Lab per planet — it sets your "
+                "Branch on this planet. Demolish it to switch Branches."
             )
         return None
 

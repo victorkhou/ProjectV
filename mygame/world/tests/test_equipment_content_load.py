@@ -1973,20 +1973,30 @@ class TestBaseTierRarityWeights:
 
 
 # ================================================================== #
-#  research-lab-trees — the four specialized labs + tree wiring
+#  research-lab-trees / tech-tree-branch — the six specialized labs
+#  + tree wiring
 # ================================================================== #
 
-# The four research labs and the technology tree each hosts.
+# The six research labs and the technology tree (Branch) each hosts. BX/SX are
+# the two Branch labs added by tech-tree-branch-foundation; the Signals Lab is
+# ``SX`` because ``SG`` is the Shield Generator's abbreviation.
 _LAB_TREE_BY_ABBR = {
     "LB": "research",
     "WX": "weapons",
     "DF": "defense",
     "RX": "resource",
+    "BX": "bio",
+    "SX": "cyber",
 }
+
+# The labs whose definition also declares a Branch_Affiliation. Every building
+# that shipped before tech-tree-branch-foundation stays a Neutral_Building, so
+# only the two new labs carry ``branch``.
+_BRANCH_LAB_ABBRS = ("BX", "SX")
 
 
 class TestRealResearchLabDefs:
-    """The REAL buildings.yaml ships four research labs, one per tech tree.
+    """The REAL buildings.yaml ships six research labs, one per tech tree.
 
     Follows the TestRealBlacksmithDef pattern: assert against the loaded real
     data, so a misindented/omitted ``capabilities: [research_lab]`` or
@@ -1994,7 +2004,7 @@ class TestRealResearchLabDefs:
     tree) while unit tests stay green.
     """
 
-    def test_all_four_labs_load(self, real_registry):
+    def test_all_labs_load(self, real_registry):
         for abbr in _LAB_TREE_BY_ABBR:
             bdef = real_registry.resolve_building(abbr)
             assert bdef is not None, f"lab {abbr} must exist in the real data"
@@ -2015,15 +2025,25 @@ class TestRealResearchLabDefs:
                 f"lab {abbr} hosts {bdef.research_tree!r}, expected {tree!r}"
             )
 
-    def test_exactly_four_buildings_are_research_labs(self, real_registry):
+    def test_exactly_six_buildings_are_research_labs(self, real_registry):
         from mygame.world.constants import RESEARCH_LAB
         labs = sorted(
             abbr for abbr, bdef in real_registry.buildings.items()
             if bdef.has_capability(RESEARCH_LAB)
         )
         assert labs == sorted(_LAB_TREE_BY_ABBR), (
-            f"expected exactly the four labs, got {labs}"
+            f"expected exactly the six labs, got {labs}"
         )
+
+    def test_branch_labs_declare_a_matching_branch(self, real_registry):
+        """A lab's Branch_Affiliation must name the tree it hosts (R2.4), and
+        the two Branch labs declare it."""
+        for abbr in _BRANCH_LAB_ABBRS:
+            bdef = real_registry.resolve_building(abbr)
+            assert bdef.branch == bdef.research_tree == _LAB_TREE_BY_ABBR[abbr], (
+                f"lab {abbr}: branch {bdef.branch!r} must equal "
+                f"research_tree {bdef.research_tree!r}"
+            )
 
     def test_lab_capability_and_trees_in_vocabulary(self):
         """The capability + tree names are registered constants, so a typo in
@@ -2034,7 +2054,7 @@ class TestRealResearchLabDefs:
         assert RESEARCH_LAB == "research_lab"
         assert RESEARCH_LAB in BUILDING_CAPABILITIES
         assert set(RESEARCH_TREES) == {"weapons", "defense", "resource",
-                                       "research"}
+                                       "research", "bio", "cyber"}
 
     def test_non_lab_buildings_have_no_research_tree(self, real_registry):
         """Only labs may name a tree — every other building leaves it None
@@ -2047,7 +2067,7 @@ class TestRealResearchLabDefs:
                 )
 
     def test_labs_share_the_mid_tier_rank_and_deed_gate(self, real_registry):
-        """All four labs gate at rank 11 with the 3-outpost deed (the LB's
+        """All six labs gate at rank 11 with the 3-outpost deed (the LB's
         original gate, kept across the new labs)."""
         for abbr in _LAB_TREE_BY_ABBR:
             bdef = real_registry.resolve_building(abbr)
@@ -2068,8 +2088,8 @@ class TestRealTechnologyTrees:
             )
 
     def test_every_tree_is_populated(self, real_registry):
-        """No empty tree — each of the four has at least one tech, so no lab
-        is a dead end."""
+        """No empty tree — each of the six Branches has at least one tech, so
+        no lab is a dead end (R1.5)."""
         from mygame.world.constants import RESEARCH_TREES
         trees = {t.tree for t in real_registry.technologies.values()}
         assert trees == set(RESEARCH_TREES)
@@ -2077,7 +2097,7 @@ class TestRealTechnologyTrees:
     def test_get_technologies_for_tree_partitions_the_catalog(
             self, real_registry):
         """get_technologies_for_tree returns exactly that tree's techs, and the
-        four trees partition the full catalog with no overlap or gap."""
+        six trees partition the full catalog with no overlap or gap."""
         from mygame.world.constants import RESEARCH_TREES
         seen = set()
         total = 0

@@ -40,6 +40,9 @@
 #   9 survey_outpost      345   SA L6 = 298   ok
 #  10 upgrade_hq          395   —             ok
 #  11 scout_patrol        450   —             ok
+#  12 commit_branch       465   —             post-onboarding (see the note
+#                                             above the step; it names no
+#                                             building and grants no XP)
 # A completer lands at 465 XP = level 7. Step 8 is the tight one: the
 # assign_harvester reward carries 20 (not 10) specifically so the running total
 # clears the level-6 gate before the Munitions Plant step becomes current.
@@ -166,3 +169,33 @@
     role: scout
   reward:
     xp: 15
+
+# Post-onboarding capstone (tech-tree-branch-foundation R13.7): the one step
+# that introduces the Branch commitment decision — which doctrine the planet
+# runs, chosen by which of the six Branch_Labs you raise.
+#
+# It sits LAST, and that is the requirement: the step must be positioned at or
+# after the Branch_Lab level and deed gate. All six labs are gated at level 11
+# behind outpost_cleared x3, and the guided chain deliberately reaches neither
+# (it ends at level 7 and awards no deed — see the no-outpost-kill note above),
+# so every earlier position would sit BELOW that gate. The tail is where the
+# chain already points the player at their first base to clear, which is exactly
+# what carries them past level 11 and the third deed.
+#
+# It names NO building and grants NO XP, both on purpose:
+#   * no requires_building / condition.building_type — the field is display-only
+#     and naming a lab here would make it the one step gated above the XP the
+#     player holds when it becomes current, i.e. the very thing the reachability
+#     guards exist to catch. The description carries the information instead.
+#   * no reward — the 185 directive XP above is the tuned level-6/7 target and
+#     the payoff for this step is the doctrine itself.
+#
+# The trigger is research completion rather than the lab's construction:
+# research is only possible while OWNING a research lab, and owning the lab IS
+# the Branch_Commitment (it is derived from the owned buildings, never stored),
+# so this step cannot complete without the commitment having been made — and one
+# condition-free trigger covers all six Branches equally, which a
+# condition.building_type naming a single lab could not.
+- key: commit_branch
+  description: "Choose a doctrine: research a technology at your Branch Lab"
+  trigger_event: technology_researched

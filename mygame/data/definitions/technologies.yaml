@@ -343,3 +343,259 @@
   effect_type: production_bonus
   effect_value:
     production_multiplier: 1.25
+
+# ── Bio tree (Biolab, BX) — tech-tree-branch-foundation ──────────────
+# Seeds the `bio` Branch's research line: every Branch must have at least one
+# technology declaring it (R1.5), and each Branch's Signature_Vector building
+# must sit behind an unlocking technology OF THAT BRANCH (R6.5, R6.7) — Pathogen
+# Cultures below is the Culture Vat's (CV) unlock and the line's entry tech. The
+# Contagion vector's own technologies ship with tech-tree-vector-biowarfare;
+# nothing in this line is the vector.
+#
+# `poison_dot_mult` is the Biowarfare-shaped key with a LIVE consumer
+# (combat_engine._apply_poison_dot, clamped to [1.0, POISON_DOT_MULT_CAP=1.5]),
+# so this is a real bonus and not a dead key. Biowarfare is deliberately the
+# poison doctrine, so its entry tech reaches further than the weapons tree's
+# Toxicology (1.25) — the two never stack in practice, since Branch dormancy
+# only applies the committed Branch's technologies.
+# Corporal-gated to match the Biolab's own level-11 gate.
+- name: Pathogen Cultures
+  key: pathogen_cultures
+  tree: bio
+  required_rank: Corporal
+  resource_cost:
+    Biomass: 150
+    Iron: 80
+    Energy: 40
+  research_ticks: 60
+  effect_type: stat_bonus
+  effect_value:
+    poison_dot_mult: 1.35
+
+# The rest of the bio line (task 2.6). Six technologies spanning Corporal to
+# Colonel, matching the depth of the four legacy trees: a Branch with one
+# technology is a lab with nothing to research past its first hour, and its
+# investment score falls so far below the six-Branch mean that the R9.10 parity
+# rule fails the load. Every effect key below has a LIVE consumer (the
+# no-dead-tech-keys rule) — named per tech.
+#
+# Biomass is the doctrine's signature sink throughout, with Iron/Energy for the
+# hardware and Circuits only at the top of the line.
+
+# Adaptive Immunity — inoculation and field prophylaxis.
+# `damage_reduction` → CombatEngine armor path, clamped in aggregate to
+# balance.perm_bonus_cap_dr (6). This is the bio line's only DR step, so the
+# doctrine reaches half the cap and leaves the rest to gear and terrain.
+- name: Adaptive Immunity
+  key: adaptive_immunity
+  tree: bio
+  required_rank: Sergeant
+  resource_cost:
+    Biomass: 70
+    Iron: 50
+    Energy: 25
+  research_ticks: 45
+  effect_type: stat_bonus
+  effect_value:
+    damage_reduction: 3
+
+# Spore Adaptation — engineered symbionts that make poisoned ground passable.
+# `terrain_affinity:{terrain}:movement` → TerrainModifierResolver, summed with
+# class affinities and clamped to balance.terrain_movement_bound (3.0). Both
+# terrain types exist in terrain.yaml (Forge's Toxic_Waste, Inferno's
+# Sulfur_Pit) — the cross-file rule checks that.
+- name: Spore Adaptation
+  key: spore_adaptation
+  tree: bio
+  required_rank: Staff_Sergeant
+  resource_cost:
+    Biomass: 95
+    Iron: 40
+    Energy: 35
+  research_ticks: 55
+  effect_type: terrain_affinity
+  effect_value:
+    "terrain_affinity:Toxic_Waste:movement": 1
+    "terrain_affinity:Sulfur_Pit:movement": 1
+
+# Biofilm Sheathing — a cultured skin grown over the structure itself.
+# `building_hp` → BuildingSystem's hp_max path (flat addition at creation and
+# upgrade completion), stacking with the defense tree's wall techs — though
+# never at the same time, since Branch dormancy only applies the committed
+# Branch's technologies.
+- name: Biofilm Sheathing
+  key: biofilm_sheathing
+  tree: bio
+  required_rank: Lieutenant
+  resource_cost:
+    Biomass: 110
+    Stone: 40
+    Iron: 30
+  research_ticks: 65
+  effect_type: stat_bonus
+  effect_value:
+    building_hp: 60
+
+# Virulence Engineering — toxin-laced munitions.
+# `damage` → CombatEngine attacker bonus, attributed to the owning player and
+# clamped in aggregate to balance.perm_bonus_cap_damage (6). Kept at 4 so the
+# bio line stays under the cap on its own; Biowarfare's real offense is the
+# poison DoT above, not the flat hit.
+- name: Virulence Engineering
+  key: virulence_engineering
+  tree: bio
+  required_rank: Captain
+  resource_cost:
+    Biomass: 120
+    Iron: 70
+    Circuits: 35
+    Energy: 45
+  research_ticks: 80
+  effect_type: stat_bonus
+  effect_value:
+    damage: 4
+
+# Mycelial Entrenchment — fungal mats that fortify a toxic position.
+# `terrain_affinity:{terrain}:defense` → TerrainModifierResolver, clamped to
+# balance.terrain_defense_bound (6.0). Pairs with Spore Adaptation: the same two
+# terrain types the doctrine learns to cross, it now learns to hold.
+- name: Mycelial Entrenchment
+  key: mycelial_entrenchment
+  tree: bio
+  required_rank: Colonel
+  resource_cost:
+    Biomass: 150
+    Iron: 75
+    Circuits: 45
+    Energy: 55
+  research_ticks: 95
+  effect_type: terrain_affinity
+  effect_value:
+    "terrain_affinity:Toxic_Waste:defense": 2
+    "terrain_affinity:Sulfur_Pit:defense": 2
+
+# ── Cyber tree (Signals Lab, SX) — tech-tree-branch-foundation ───────
+# Signal Interception below is the `cyber` Branch's entry tech, filling the same
+# two roles as the bio entry above (R1.5, R6.5/R6.7 — the Cipher Node's (CN)
+# unlock). The Intrusion vector's own technologies ship with
+# tech-tree-vector-signals.
+#
+# `sight_range` is the Signals-shaped key with a LIVE consumer (fog_of_war
+# player vision radius): intercepted enemy signal traffic widens what you see.
+# Kept at +1 — the large vision numbers stay on the positional Watchtower and
+# on the Recon Branch's Detection_Sweep, so Signals borrows a little vision
+# rather than out-scouting Recon.
+- name: Signal Interception
+  key: signal_interception
+  tree: cyber
+  required_rank: Corporal
+  resource_cost:
+    Circuits: 140
+    Iron: 90
+    Energy: 60
+  research_ticks: 60
+  effect_type: stat_bonus
+  effect_value:
+    sight_range: 1
+
+# The rest of the cyber line (task 2.6), on the same terms as the bio line
+# above: six technologies Corporal to Colonel, every effect key with a live
+# consumer, and the whole line's weighted cost sized to hold the Branch inside
+# the R9.10 parity band.
+#
+# Circuits is the doctrine's signature sink, with Nexium appearing only in the
+# top two technologies — Signals is the electronics-hungry Branch, and Circuits
+# carries a low resource weight (0.3), so the numbers run large by design.
+
+# Encrypted Uplink — rolling ciphers and emission control; hostile fire
+# solutions arrive stale.
+# `damage_reduction` → CombatEngine armor path, clamped in aggregate to
+# balance.perm_bonus_cap_dr (6). Deliberately smaller than the bio line's step:
+# Signals mitigates by not being targeted cleanly, not by armor.
+- name: Encrypted Uplink
+  key: encrypted_uplink
+  tree: cyber
+  required_rank: Sergeant
+  resource_cost:
+    Circuits: 160
+    Iron: 55
+    Energy: 45
+  research_ticks: 45
+  effect_type: stat_bonus
+  effect_value:
+    damage_reduction: 2
+
+# Grid Mapping — tapping industrial power and data infrastructure for sight.
+# `terrain_affinity:{terrain}:vision` → TerrainModifierResolver, clamped to
+# balance.terrain_vision_bound (5). Both terrain types are Forge's (Circuit_Field
+# and Power_Grid), which is where a signals doctrine has something to tap.
+- name: Grid Mapping
+  key: grid_mapping
+  tree: cyber
+  required_rank: Staff_Sergeant
+  resource_cost:
+    Circuits: 195
+    Iron: 65
+    Energy: 50
+  research_ticks: 55
+  effect_type: terrain_affinity
+  effect_value:
+    "terrain_affinity:Circuit_Field:vision": 2
+    "terrain_affinity:Power_Grid:vision": 2
+
+# Fire Control Uplink — networked targeting telemetry.
+# `weapon_range` → CombatEngine._resolve_weapon_range, attributed to the owning
+# player (so a turret or agent shot benefits) and clamped by
+# balance.max_weapon_range. Kept at +1, the same small step the weapons tree's
+# range techs take — range is the highest-risk stat in the game.
+- name: Fire Control Uplink
+  key: fire_control_uplink
+  tree: cyber
+  required_rank: Lieutenant
+  resource_cost:
+    Circuits: 220
+    Iron: 85
+    Energy: 60
+  research_ticks: 65
+  effect_type: stat_bonus
+  effect_value:
+    weapon_range: 1
+
+# Numerical Fabrication — machine-controlled benches hold tolerance.
+# `craft_iqs_floor` → EquipmentSystem._craft_iqs_floor, clamped to
+# [0.0, CRAFT_IQS_FLOOR_CAP (0.5)]. A U-clamp INSIDE the craft band, so crafted
+# rolls land high in the band and still never exceed it; loot rolls are
+# untouched. Smaller than the weapons tree's Colonel-gated Master Gunsmithing
+# (0.25) — Signals is precise, not a gunsmith.
+- name: Numerical Fabrication
+  key: numerical_fabrication
+  tree: cyber
+  required_rank: Captain
+  resource_cost:
+    Circuits: 245
+    Iron: 105
+    Energy: 70
+    Nexium: 7
+  research_ticks: 80
+  effect_type: stat_bonus
+  effect_value:
+    craft_iqs_floor: 0.20
+
+# Deep Packet Analysis — full-spectrum traffic analysis of everything intercepted.
+# `sight_range` → FogOfWar player vision radius, summed with equipped gear.
+# Stacks additively with Signal Interception for +2 total, which is where the
+# Signals line tops out; the big vision numbers stay on the positional Watchtower
+# and on the research Branch's Detection_Sweep, so Signals never out-scouts Recon.
+- name: Deep Packet Analysis
+  key: deep_packet_analysis
+  tree: cyber
+  required_rank: Colonel
+  resource_cost:
+    Circuits: 280
+    Iron: 120
+    Energy: 80
+    Nexium: 5
+  research_ticks: 95
+  effect_type: stat_bonus
+  effect_value:
+    sight_range: 1

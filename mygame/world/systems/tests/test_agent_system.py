@@ -54,6 +54,8 @@ from mygame.world.systems.agent_system import (  # noqa: E402
     AgentSystem,
     BUILDING_ROLE_MAP,
     VALID_ROLES,
+    GATED_BRANCH_ROLES,
+    GATED_ROLE_FOR_BRANCH,
 )
 from mygame.world.data_registry import DataRegistry  # noqa: E402
 from mygame.world.definitions import RankDef  # noqa: E402
@@ -367,17 +369,25 @@ class TestAssignAgent(AgentSystemTestBase):
         ok, _ = self.system.assign_agent(player, npc.db.agent_id, "engineer", building)
         self.assertTrue(ok)
 
-    def test_assign_medic_hidden_requires_allow_hidden(self):
-        """Medic is a hidden placeholder role (R6): refused for players,
+    def test_assign_soldier_hidden_requires_allow_hidden(self):
+        """Soldier is a hidden placeholder role (R6): refused for players,
         assignable via the admin escape hatch (allow_hidden=True, R6.3)."""
         player = FakePlayer(combat_xp=1038, next_agent_id=1)
         npc = self._train_and_complete(player)
-        ok, msg = self.system.assign_agent(player, npc.db.agent_id, "medic")
+        ok, msg = self.system.assign_agent(player, npc.db.agent_id, "soldier")
         self.assertFalse(ok)
         self.assertIn("Invalid role", msg)
         ok, _ = self.system.assign_agent(
-            player, npc.db.agent_id, "medic", allow_hidden=True)
+            player, npc.db.agent_id, "soldier", allow_hidden=True)
         self.assertTrue(ok)
+
+    def test_assign_medic_is_a_visible_role(self):
+        """Medic stopped being a hidden placeholder when it became the
+        Biowarfare Carrier_Agent (branch R7.4): no allow_hidden needed."""
+        player = FakePlayer(combat_xp=1038, next_agent_id=1)
+        npc = self._train_and_complete(player)
+        ok, msg = self.system.assign_agent(player, npc.db.agent_id, "medic")
+        self.assertTrue(ok, msg)
 
     def test_walk_to_building_sets_transient_moving_status(self):
         """When the agent WALKS to its assignment (a path exists), _move_agent_to
@@ -908,11 +918,15 @@ class TestHiddenRoles(AgentSystemTestBase):
 
     def test_valid_roles_excludes_hidden(self):
         self.assertNotIn("soldier", VALID_ROLES)
-        self.assertNotIn("medic", VALID_ROLES)
         self.assertIn("guard", VALID_ROLES)
         self.assertIn("scout", VALID_ROLES)
         self.assertIn("harvester", VALID_ROLES)
         self.assertIn("engineer", VALID_ROLES)
+
+    def test_medic_is_no_longer_hidden(self):
+        """Medic became the Biowarfare Carrier_Agent, so it is player-facing
+        (branch R7.4) — soldier is the only remaining hidden placeholder."""
+        self.assertIn("medic", VALID_ROLES)
 
     def test_guard_scout_are_army_roles(self):
         """Guard/scout assign without a building (R4.1)."""
@@ -2283,6 +2297,474 @@ class TestGetAgentProgressionView(AgentSystemTestBase):
         view = self.system.get_agent_progression_view(agent)
 
         self.assertEqual(view["rank_name"], "Rank 5")
+
+
+# -------------------------------------------------------------- #
+#  Branch role gate (Task 7.2 — Req 7.6, 7.7, 7.9)
+# -------------------------------------------------------------- #
+
+HOME = "terra"
+AWAY = "mars"
+
+
+class _FixedResolver:
+    """Branch resolver answering a fixed commitment, optionally per planet.
+
+    Stands in for ``BranchSystem`` with exactly the surface AgentSystem uses:
+    ``commitment(player, planet)``. Records every call so a test can assert
+    *which planet* was asked about.
+    """
+
+    def __init__(self, commitment=None, by_planet=None):
+        self._commitment = commitment
+        self._by_planet = dict(by_planet or {})
+        self.calls: list = []
+
+    def commitment(self, player, planet=None):
+        self.calls.append((player, planet))
+        if planet in self._by_planet:
+            return self._by_planet[planet]
+        return self._commitment
+
+
+class _RaisingResolver:
+    """A resolver that cannot answer — the gate must not lock the player out."""
+
+    def __init__(self):
+        self.calls = 0
+
+    def commitment(self, player, planet=None):
+        self.calls += 1
+        raise RuntimeError("boom")
+
+
+class BranchRoleTestBase(AgentSystemTestBase):
+    """Shared roster helpers for the Branch role gate / release tests."""
+
+    def _player(self, planet=HOME):
+        player = FakePlayer(combat_xp=1038)  # L11 → cap 4, well above 1 agent
+        player.db.coord_planet = planet
+        return player
+
+    def _agent(self, player, agent_id=1, planet=HOME, role="",
+               scripted=False, script_keys=None):
+        cls = ScriptedAgent if (scripted or script_keys) else FakeAgent
+        kwargs = {"script_keys": script_keys} if cls is ScriptedAgent else {}
+        agent = cls(agent_id=agent_id, owner=player, **kwargs)
+        agent.db.coord_planet = planet
+        agent.db.role = role
+        self.created_agents.append(agent)
+        return agent
+
+
+class TestBranchRoleGate(BranchRoleTestBase):
+    """``assign_agent`` under the Branch_Commitment gate (R7.6, R7.7)."""
+
+    def test_unwired_resolver_leaves_every_gated_role_assignable(self):
+        """With no resolver the pre-feature behaviour holds exactly: no gate."""
+        player = self._player()
+        for i, role in enumerate(sorted(GATED_BRANCH_ROLES), start=1):
+            with self.subTest(role=role):
+                agent = self._agent(player, agent_id=i)
+                ok, msg = self.system.assign_agent(player, i, role)
+                self.assertTrue(ok, msg)
+                self.assertEqual(agent.db.role, role)
+
+    def test_matching_commitment_permits_the_role(self):
+        """R7.6: the commitment on the agent's planet equals the role's Branch."""
+        self.system.set_branch_resolver(_FixedResolver("weapons"))
+        player = self._player()
+        agent = self._agent(player)
+
+        ok, msg = self.system.assign_agent(player, 1, "spotter")
+
+        self.assertTrue(ok, msg)
+        self.assertEqual(agent.db.role, "spotter")
+
+    def test_every_gated_role_is_permitted_under_its_own_branch(self):
+        """The bijection read from the assignment side: one Branch per role."""
+        player = self._player()
+        for i, (role, branch) in enumerate(sorted(GATED_BRANCH_ROLES.items()),
+                                           start=1):
+            with self.subTest(role=role, branch=branch):
+                self.system.set_branch_resolver(_FixedResolver(branch))
+                agent = self._agent(player, agent_id=i)
+                ok, msg = self.system.assign_agent(player, i, role)
+                self.assertTrue(ok, msg)
+                self.assertEqual(agent.db.role, role)
+
+    def test_mismatched_commitment_refuses_and_names_the_required_branch(self):
+        """R7.7: the refusal reports the Branch the role requires."""
+        self.system.set_branch_resolver(_FixedResolver("bio"))
+        player = self._player()
+        agent = self._agent(player)
+
+        ok, msg = self.system.assign_agent(player, 1, "spotter")
+
+        self.assertFalse(ok)
+        self.assertIn("weapons", msg)
+        self.assertIn("spotter", msg)
+        # Refused means nothing moved: the agent keeps its (empty) role.
+        self.assertEqual(agent.db.role, "")
+        self.assertIsNone(agent.db.role_target)
+
+    def test_every_gated_role_is_refused_under_a_foreign_branch(self):
+        """Each gated role names its own Branch when another one is live."""
+        player = self._player()
+        for i, (role, branch) in enumerate(sorted(GATED_BRANCH_ROLES.items()),
+                                           start=1):
+            other = next(b for b in GATED_ROLE_FOR_BRANCH if b != branch)
+            with self.subTest(role=role, committed=other):
+                self.system.set_branch_resolver(_FixedResolver(other))
+                agent = self._agent(player, agent_id=i)
+                ok, msg = self.system.assign_agent(player, i, role)
+                self.assertFalse(ok)
+                self.assertIn(branch, msg)
+                self.assertEqual(agent.db.role, "")
+
+    def test_absent_commitment_refuses_every_gated_role(self):
+        """A player committed to nothing commands none of the new roles."""
+        self.system.set_branch_resolver(_FixedResolver(None))
+        player = self._player()
+        for i, (role, branch) in enumerate(sorted(GATED_BRANCH_ROLES.items()),
+                                           start=1):
+            with self.subTest(role=role):
+                self._agent(player, agent_id=i)
+                ok, msg = self.system.assign_agent(player, i, role)
+                self.assertFalse(ok)
+                self.assertIn(branch, msg)
+
+    def test_scout_is_never_gated(self):
+        """DECIDED ASYMMETRY: gating `scout` would break existing patrols, so
+        it stays assignable under any commitment — including none at all."""
+        player = self._player()
+        for i, committed in enumerate(("weapons", None), start=1):
+            with self.subTest(committed=committed):
+                self.system.set_branch_resolver(_FixedResolver(committed))
+                agent = self._agent(player, agent_id=i)
+                ok, msg = self.system.assign_agent(player, i, "scout")
+                self.assertTrue(ok, msg)
+                self.assertEqual(agent.db.role, "scout")
+
+    def test_the_gate_reads_the_agents_planet_not_the_owners(self):
+        """R7.6 is per-planet, and the planet that counts is the agent's."""
+        resolver = _FixedResolver(by_planet={HOME: "weapons", AWAY: "bio"})
+        self.system.set_branch_resolver(resolver)
+        player = self._player(planet=HOME)          # owner stands on terra
+        self._agent(player, agent_id=1, planet=AWAY)  # agent stands on mars
+
+        refused, msg = self.system.assign_agent(player, 1, "spotter")
+        permitted, _ = self.system.assign_agent(player, 1, "medic")
+
+        self.assertFalse(refused)
+        self.assertIn("weapons", msg)
+        self.assertTrue(permitted)
+        # Both reads asked about the AGENT's planet.
+        self.assertEqual([planet for _p, planet in resolver.calls],
+                         [AWAY, AWAY])
+
+    def test_pre_feature_roles_never_consult_the_resolver(self):
+        """Harvester/guard/engineer are Branch-free: the gate never runs."""
+        resolver = _FixedResolver("bio")
+        self.system.set_branch_resolver(resolver)
+        player = self._player()
+        self._agent(player, agent_id=1)
+        self._agent(player, agent_id=2)
+
+        ok_guard, msg = self.system.assign_agent(player, 1, "guard")
+        ok_harvester, _ = self.system.assign_agent(
+            player, 2, "harvester", FakeBuilding(building_type="EX")
+        )
+
+        self.assertTrue(ok_guard, msg)
+        self.assertTrue(ok_harvester)
+        self.assertEqual(resolver.calls, [])
+
+    def test_unwiring_restores_the_pre_feature_behaviour(self):
+        """``set_branch_resolver(None)`` puts the gate back to no gate at all."""
+        player = self._player()
+        agent = self._agent(player)
+        self.system.set_branch_resolver(_FixedResolver("bio"))
+        self.assertFalse(self.system.assign_agent(player, 1, "spotter")[0])
+
+        self.system.set_branch_resolver(None)
+
+        ok, msg = self.system.assign_agent(player, 1, "spotter")
+        self.assertTrue(ok, msg)
+        self.assertEqual(agent.db.role, "spotter")
+
+    def test_a_failing_resolver_leaves_the_gate_open(self):
+        """A collaborator's failure must not lock a player out of their roster."""
+        resolver = _RaisingResolver()
+        self.system.set_branch_resolver(resolver)
+        player = self._player()
+        agent = self._agent(player)
+
+        ok, msg = self.system.assign_agent(player, 1, "spotter")
+
+        self.assertTrue(ok, msg)
+        self.assertEqual(agent.db.role, "spotter")
+        self.assertEqual(resolver.calls, 1)
+
+    def test_a_resolver_without_commitment_is_ignored(self):
+        """An injected object that answers no commitment is not a gate."""
+        self.system.set_branch_resolver(object())
+        player = self._player()
+        self._agent(player)
+
+        ok, msg = self.system.assign_agent(player, 1, "spotter")
+
+        self.assertTrue(ok, msg)
+
+    def test_committing_grants_no_extra_agent_slots(self):
+        """R7.9: the rank-derived cap is untouched — new roles, not new slots."""
+        player = self._player()
+        before = self.system.get_max_agents(player)
+
+        self.system.set_branch_resolver(_FixedResolver("weapons"))
+
+        self.assertEqual(self.system.get_max_agents(player), before)
+
+
+# -------------------------------------------------------------- #
+#  Dormancy release (Task 7.2 — Req 7.8)
+# -------------------------------------------------------------- #
+
+class TestUnassignBranchRoles(BranchRoleTestBase):
+    """``unassign_branch_roles`` — a dormant Branch commands no agents (R7.8)."""
+
+    def test_releases_the_branchs_role_on_that_planet_only(self):
+        player = self._player()
+        here = self._agent(player, agent_id=1, planet=HOME, role="spotter")
+        there = self._agent(player, agent_id=2, planet=AWAY, role="spotter")
+
+        released = self.system.unassign_branch_roles(player, HOME, "weapons")
+
+        self.assertEqual(released, 1)
+        self.assertEqual(here.db.role, "")
+        self.assertIsNone(here.db.role_target)
+        # The same player's commitment elsewhere still commands its agent.
+        self.assertEqual(there.db.role, "spotter")
+
+    def test_release_reuses_the_existing_unassign_teardown(self):
+        """The behaviour script is detached and the building slot released —
+        the same path ``unassign_agent`` runs, not a second implementation."""
+        player = self._player()
+        agent = self._agent(player, agent_id=1, role="spotter",
+                            script_keys=["spotter_script"])
+        building = FakeBuilding(building_type="EX")
+        building.db.assigned_agent = agent
+        agent.db.role_target = building
+
+        released = self.system.unassign_branch_roles(player, HOME, "weapons")
+
+        self.assertEqual(released, 1)
+        self.assertEqual([s.key for s in agent.scripts.all()], [])
+        self.assertIsNone(building.db.assigned_agent)
+        self.assertEqual(agent.db.role, "")
+
+    def test_releases_every_matching_agent(self):
+        player = self._player()
+        agents = [
+            self._agent(player, agent_id=i, role="courier") for i in (1, 2, 3)
+        ]
+
+        released = self.system.unassign_branch_roles(player, HOME, "resource")
+
+        self.assertEqual(released, 3)
+        self.assertEqual([a.db.role for a in agents], ["", "", ""])
+
+    def test_other_roles_are_untouched(self):
+        player = self._player()
+        harvester = self._agent(player, agent_id=1, role="harvester")
+        guard = self._agent(player, agent_id=2, role="guard")
+        sapper = self._agent(player, agent_id=3, role="sapper")
+
+        released = self.system.unassign_branch_roles(player, HOME, "weapons")
+
+        self.assertEqual(released, 0)
+        self.assertEqual(harvester.db.role, "harvester")
+        self.assertEqual(guard.db.role, "guard")
+        self.assertEqual(sapper.db.role, "sapper")
+
+    def test_another_players_agents_are_untouched(self):
+        player = self._player()
+        other = self._player()
+        other.id = 2
+        mine = self._agent(player, agent_id=1, role="spotter")
+        theirs = self._agent(other, agent_id=1, role="spotter")
+
+        released = self.system.unassign_branch_roles(player, HOME, "weapons")
+
+        self.assertEqual(released, 1)
+        self.assertEqual(mine.db.role, "")
+        self.assertEqual(theirs.db.role, "spotter")
+
+    def test_a_recon_lapse_leaves_scouts_patrolling(self):
+        """The release covers the same five roles the gate does — `scout` is
+        exempt, so a lapsed Recon commitment does not stop existing patrols."""
+        player = self._player()
+        scout = self._agent(player, agent_id=1, role="scout")
+
+        released = self.system.unassign_branch_roles(player, HOME, "research")
+
+        self.assertEqual(released, 0)
+        self.assertEqual(scout.db.role, "scout")
+
+    def test_an_unreadable_branch_is_a_noop(self):
+        player = self._player()
+        agent = self._agent(player, agent_id=1, role="spotter")
+
+        for branch in ("", "  ", "not_a_branch", None, 7):
+            with self.subTest(branch=branch):
+                self.assertEqual(
+                    self.system.unassign_branch_roles(player, HOME, branch), 0
+                )
+                self.assertEqual(agent.db.role, "spotter")
+
+    def test_the_branch_name_is_read_case_insensitively(self):
+        player = self._player()
+        agent = self._agent(player, agent_id=1, role="spotter")
+
+        released = self.system.unassign_branch_roles(player, HOME, " Weapons ")
+
+        self.assertEqual(released, 1)
+        self.assertEqual(agent.db.role, "")
+
+    def test_an_unspecified_planet_falls_back_to_the_players(self):
+        player = self._player(planet=HOME)
+        here = self._agent(player, agent_id=1, planet=HOME, role="infiltrator")
+        there = self._agent(player, agent_id=2, planet=AWAY, role="infiltrator")
+
+        released = self.system.unassign_branch_roles(player, None, "cyber")
+
+        self.assertEqual(released, 1)
+        self.assertEqual(here.db.role, "")
+        self.assertEqual(there.db.role, "infiltrator")
+
+    def test_one_unreleasable_agent_does_not_strand_the_rest(self):
+        player = self._player()
+        first = self._agent(player, agent_id=1, role="medic")
+        second = self._agent(player, agent_id=2, role="medic")
+        original = self.system.unassign_agent
+
+        def _boom(owner, agent_id):
+            if agent_id == 1:
+                raise RuntimeError("boom")
+            return original(owner, agent_id)
+
+        self.system.unassign_agent = _boom
+
+        released = self.system.unassign_branch_roles(player, HOME, "bio")
+
+        self.assertEqual(released, 1)
+        self.assertEqual(first.db.role, "medic")   # the failure changed nothing
+        self.assertEqual(second.db.role, "")
+
+    def test_an_empty_roster_is_a_noop(self):
+        player = self._player()
+        self.assertEqual(
+            self.system.unassign_branch_roles(player, HOME, "weapons"), 0
+        )
+
+    def test_no_owner_is_a_noop(self):
+        self.assertEqual(
+            self.system.unassign_branch_roles(None, HOME, "weapons"), 0
+        )
+
+
+# -------------------------------------------------------------- #
+#  Carrier_Agent operation XP (Task 7.2 — Req 7.10)
+# -------------------------------------------------------------- #
+
+class TestAwardOperationXp(AgentSystemTestBase):
+    """``award_operation_xp`` reads ``OperationKindDef.agent_xp_field``."""
+
+    def setUp(self):
+        super().setUp()
+        from mygame.world.definitions import OperationKindDef
+
+        progression.build_thresholds(self.registry.ranks)
+        self.registry.operation_kinds = {
+            "strategic_strike": OperationKindDef(
+                kind="strategic_strike",
+                branch="weapons",
+                carrier_role="spotter",
+                cost_field="strategic_strike_cost",
+                cooldown_field="strategic_strike_cooldown_ticks",
+                cap_field="strategic_strike_max_in_flight",
+                agent_xp_field="agent_xp_strategic_strike",
+            ),
+        }
+
+    def _agent(self, owner_level=20):
+        owner = FakePlayer()
+        owner.db.level = owner_level
+        return RealAgent(owner=owner)
+
+    def test_award_reads_the_field_the_definition_names(self):
+        agent = self._agent()
+        self.registry.balance.agent_xp_strategic_strike = 12
+
+        self.assertIs(
+            self.system.award_operation_xp(agent, "strategic_strike"), True
+        )
+        self.assertEqual(agent.db.combat_xp, 12)
+
+    def test_the_amount_is_not_captured_at_load(self):
+        """Retuning the balance field changes the next award — the indirection
+        through the field name is what keeps tuning in balance.yaml."""
+        agent = self._agent()
+        self.registry.balance.agent_xp_strategic_strike = 5
+        self.system.award_operation_xp(agent, "strategic_strike")
+
+        self.registry.balance.agent_xp_strategic_strike = 50
+        self.system.award_operation_xp(agent, "strategic_strike")
+
+        self.assertEqual(agent.db.combat_xp, 55)
+
+    def test_an_unknown_kind_is_a_noop(self):
+        agent = self._agent()
+
+        self.assertIs(self.system.award_operation_xp(agent, "trap"), False)
+        self.assertEqual(agent.db.combat_xp, 0)
+
+    def test_a_definition_naming_an_unloaded_field_is_a_noop(self):
+        from mygame.world.definitions import OperationKindDef
+
+        agent = self._agent()
+        self.registry.operation_kinds["strategic_strike"] = OperationKindDef(
+            kind="strategic_strike", branch="weapons", carrier_role="spotter",
+            cost_field="strategic_strike_cost",
+            cooldown_field="strategic_strike_cooldown_ticks",
+            cap_field="strategic_strike_max_in_flight",
+            agent_xp_field="agent_xp_not_a_real_field",
+        )
+
+        self.assertIs(
+            self.system.award_operation_xp(agent, "strategic_strike"), False
+        )
+        self.assertEqual(agent.db.combat_xp, 0)
+
+    def test_a_zero_amount_is_a_noop(self):
+        agent = self._agent()
+        self.registry.balance.agent_xp_strategic_strike = 0
+
+        self.assertIs(
+            self.system.award_operation_xp(agent, "strategic_strike"), False
+        )
+        self.assertEqual(agent.db.combat_xp, 0)
+
+    def test_a_frozen_carrier_banks_nothing(self):
+        """Carrying a vector is an earning event, not an exception to the
+        owner-level freeze."""
+        agent = self._agent(owner_level=1)  # ceiling 1, agent level 1
+        self.registry.balance.agent_xp_strategic_strike = 30
+
+        self.assertIs(
+            self.system.award_operation_xp(agent, "strategic_strike"), False
+        )
+        self.assertEqual(agent.db.combat_xp, 0)
 
 
 if __name__ == "__main__":

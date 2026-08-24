@@ -434,7 +434,7 @@ class TestOneResearchLabPerPlanet(unittest.TestCase):
         system, created, _ = _make_building_system()
         ok, msg = system.construct(player, tile, "LB")
         self.assertFalse(ok)
-        self.assertIn("one research lab per planet", msg.lower())
+        self.assertIn("one branch lab per planet", msg.lower())
         self.assertEqual(len(created), 0)
 
     def test_second_lab_different_type_rejected(self):
@@ -445,7 +445,7 @@ class TestOneResearchLabPerPlanet(unittest.TestCase):
         system, created, _ = _make_building_system()
         ok, msg = system.construct(player, tile, "WX")
         self.assertFalse(ok)
-        self.assertIn("one research lab per planet", msg.lower())
+        self.assertIn("one branch lab per planet", msg.lower())
         self.assertEqual(len(created), 0)
 
     def test_lab_on_other_planet_does_not_block(self):
@@ -2176,6 +2176,419 @@ class TestBuildCostTechConsumer(unittest.TestCase):
         self.assertTrue(ok, msg)
         self.assertEqual(player.get_resource("Straw"), 100)
         self.assertEqual(player.get_resource("Wood"), 100)
+
+# -------------------------------------------------------------- #
+#  Branch construction gates spliced into the ordered chain
+#  (tech-tree-branch-foundation task 5.2 — R3.6, R4.8, R6.6, R13.4)
+# -------------------------------------------------------------- #
+
+#: The chain members the splice is pinned between, in chain order. The Branch
+#: gates land immediately after the lab gate they extend and before the rank
+#: gate, and therefore above the resource check — which is what makes "whatever
+#: a gate reports precedes any charge" structural rather than a convention.
+_CHAIN_METHODS = (
+    "_validate_hq_requirement",
+    "_validate_one_hq_per_planet",
+    "_validate_shield_generator_cap",
+    "_validate_one_research_lab_per_planet",
+    "_validate_rank_requirement",
+    "_validate_deed_requirement",
+    "_validate_resources",
+)
+
+
+class _RefusalKey(str):
+    """A message KEY carrying structured data, as a Branch gate returns.
+
+    Stands in for ``BranchSystem``'s refusal type without importing it — the
+    point of the splice is that BuildingSystem needs no knowledge of the type:
+    a ``str`` subclass is truthy, so it refuses like any other validator's
+    message, and it still concatenates with the terrain note.
+    """
+
+    def __new__(cls, key, data=None):
+        obj = super().__new__(cls, key)
+        obj.data = data or {}
+        return obj
+
+
+def _record_chain(system) -> list:
+    """Instrument *system*'s validators; return the list recording call order."""
+    calls: list = []
+    for name in _CHAIN_METHODS:
+        original = getattr(system, name)
+
+        def wrapper(*args, _name=name, _original=original, **kwargs):
+            calls.append(_name)
+            return _original(*args, **kwargs)
+
+        setattr(system, name, wrapper)
+    return calls
+
+
+def _branch_gate(name, calls, refusal=None):
+    """A Branch gate with the chain's signature that records its own call."""
+
+    def gate(player, building_def, tile=None, x=None, y=None):
+        calls.append(name)
+        return refusal
+
+    return gate
+
+
+class TestBranchValidatorSplice(unittest.TestCase):
+    """The three injected Branch gates and where they sit in the chain.
+
+    HQ is the subject because it needs no prerequisite building, so every gate
+    up to the resource check runs on a clean player.
+    """
+
+    def _player(self, resources=None):
+        return FakePlayer(
+            resources=resources or {"Straw": 100, "Wood": 100, "Stone": 100},
+        )
+
+    def _wire(self, system, calls, refusals=(None, None, None)):
+        system.set_branch_validators([
+            _branch_gate("branch_affiliation", calls, refusals[0]),
+            _branch_gate("branch_switch", calls, refusals[1]),
+            _branch_gate("unlock_technology", calls, refusals[2]),
+        ])
+
+    def test_gates_land_after_the_lab_gate_and_before_the_rank_gate(self):
+        system, created, _ = _make_building_system()
+        calls = _record_chain(system)
+        self._wire(system, calls)
+        ok, msg = system.construct(self._player(), FakeTile(), "HQ")
+        self.assertTrue(ok, msg)
+        self.assertEqual(
+            calls,
+            [
+                "_validate_hq_requirement",
+                "_validate_one_hq_per_planet",
+                "_validate_shield_generator_cap",
+                "_validate_one_research_lab_per_planet",
+                "branch_affiliation",
+                "branch_switch",
+                "unlock_technology",
+                "_validate_rank_requirement",
+                "_validate_deed_requirement",
+                "_validate_resources",
+            ],
+        )
+        self.assertEqual(len(created), 1)
+
+    def test_no_branch_gates_until_wired(self):
+        """An unwired system validates exactly as it did before the feature."""
+        system, created, _ = _make_building_system()
+        calls = _record_chain(system)
+        ok, msg = system.construct(self._player(), FakeTile(), "HQ")
+        self.assertTrue(ok, msg)
+        self.assertEqual(calls, list(_CHAIN_METHODS))
+        self.assertEqual(len(created), 1)
+
+    def test_gates_receive_the_resolved_def_and_the_target_coordinates(self):
+        seen: dict = {}
+
+        def gate(player, building_def, tile=None, x=None, y=None):
+            seen.update(player=player, building_def=building_def, tile=tile,
+                        x=x, y=y)
+            return None
+
+        system, _, _ = _make_building_system()
+        system.set_branch_validators([gate])
+        player, tile = self._player(), FakeTile()
+        # Full-name lookup too: a gate reads the DEF, never the abbreviation.
+        building_def, err = system._validate_construction(
+            player, tile, "headquarters", x=3, y=4,
+        )
+        self.assertIsNone(err)
+        self.assertIs(seen["player"], player)
+        self.assertIs(seen["building_def"], building_def)
+        self.assertIs(seen["tile"], tile)
+        self.assertEqual((seen["x"], seen["y"]), (3, 4))
+
+    def test_chain_short_circuits_at_the_first_failing_gate(self):
+        system, created, _ = _make_building_system()
+        calls = _record_chain(system)
+        self._wire(system, calls, refusals=(
+            _RefusalKey("branch_mismatch", {"required_branch": "bio"}),
+            None, None,
+        ))
+        player = self._player()
+        ok, msg = system.construct(player, FakeTile(), "HQ")
+        self.assertFalse(ok)
+        self.assertIn("branch_mismatch", msg)
+        # Nothing after the refusing gate ran, and nothing was charged.
+        self.assertEqual(calls, [
+            "_validate_hq_requirement",
+            "_validate_one_hq_per_planet",
+            "_validate_shield_generator_cap",
+            "_validate_one_research_lab_per_planet",
+            "branch_affiliation",
+        ])
+        self.assertEqual(created, [])
+        self.assertEqual(player.get_resource("Straw"), 100)
+
+    def test_a_later_gate_still_precedes_the_resource_check(self):
+        """The third gate refusing leaves the resource check unrun (R4.8).
+
+        The player cannot afford the build, so if the resource check ran first
+        the message would be the have/need breakdown instead of the gate's key.
+        """
+        system, created, _ = _make_building_system()
+        calls = _record_chain(system)
+        self._wire(system, calls, refusals=(
+            None, None, _RefusalKey("unlock_technology_required"),
+        ))
+        player = self._player(resources={"Straw": 0, "Wood": 0, "Stone": 0})
+        ok, msg = system.construct(player, FakeTile(), "HQ")
+        self.assertFalse(ok)
+        self.assertEqual(msg, "unlock_technology_required")
+        self.assertNotIn("_validate_resources", calls)
+        self.assertEqual(created, [])
+
+    def test_a_refusal_key_carries_its_data_and_takes_the_terrain_note(self):
+        """A str-subclass refusal flows through the chain like any message."""
+        system, _, _ = _make_building_system()
+        system.set_terrain_modifier_resolver(_FakeDefenseResolver(defense=3.0))
+        refusal = _RefusalKey("branch_lab_required", {"required_lab": "BX"})
+        system.set_branch_validators([
+            _branch_gate("branch_affiliation", [], refusal),
+        ])
+        tile = FakeTile(xyz=(3, 4, "earth"))
+        tile.db.planet = "earth"
+        ok, msg = system.construct(self._player(), tile, "HQ")
+        self.assertFalse(ok)
+        self.assertEqual(msg, "branch_lab_required [terrain defense +3]")
+        self.assertEqual(refusal.data, {"required_lab": "BX"})
+
+    def test_start_construction_runs_the_same_gates(self):
+        system, created, _ = _make_building_system()
+        calls = _record_chain(system)
+        self._wire(system, calls, refusals=(
+            None, _RefusalKey("branch_switch_blocked"), None,
+        ))
+        player = self._player()
+        ok, msg = system.start_construction(player, FakeTile(), "HQ")
+        self.assertFalse(ok)
+        self.assertIn("branch_switch_blocked", msg)
+        self.assertNotIn("unlock_technology", calls)
+        self.assertEqual(created, [])
+
+    def test_wiring_is_a_snapshot_and_replaces_a_previous_set(self):
+        system, _, _ = _make_building_system()
+        calls: list = []
+        wired = [_branch_gate("first", calls)]
+        system.set_branch_validators(wired)
+        wired.append(_branch_gate("appended_late", calls))   # ignored
+        system._validate_construction(self._player(), FakeTile(), "HQ")
+        self.assertEqual(calls, ["first"])
+        # A second call replaces rather than appends.
+        calls.clear()
+        system.set_branch_validators([_branch_gate("second", calls)])
+        system._validate_construction(self._player(), FakeTile(), "HQ")
+        self.assertEqual(calls, ["second"])
+        # And clearing them restores the pre-feature chain.
+        calls.clear()
+        system.set_branch_validators(None)
+        system._validate_construction(self._player(), FakeTile(), "HQ")
+        self.assertEqual(calls, [])
+
+
+# -------------------------------------------------------------- #
+#  Branch_Estate progress on demolish
+#  (tech-tree-branch-foundation task 5.3 — R4.4, R4.5)
+# -------------------------------------------------------------- #
+
+class _FakeEstateProvider:
+    """Stands in for the two duck-typed methods BuildingSystem reads.
+
+    ``BranchSystem`` supplies these at the composition root; the point of the
+    injection is that BuildingSystem needs neither the import nor the type, so
+    this fake is the whole contract: resolve a Branch, then count an estate.
+    """
+
+    def __init__(self, branches=None, counts=None, raises=None):
+        self._branches = branches or {}      # abbr -> branch (absent = Neutral)
+        self._counts = counts or {}          # branch -> buildings remaining
+        self._raises = raises                # "branch" | "count" | None
+        self.branch_calls = []
+        self.count_calls = []
+
+    def branch_of_building(self, abbr_or_def):
+        self.branch_calls.append(abbr_or_def)
+        if self._raises == "branch":
+            raise RuntimeError("provider exploded")
+        key = getattr(abbr_or_def, "abbreviation", abbr_or_def)
+        return self._branches.get(key)
+
+    def estate_count(self, owner, branch, planet=None):
+        self.count_calls.append((owner, branch, planet))
+        if self._raises == "count":
+            raise RuntimeError("provider exploded")
+        return self._counts.get(branch, 0)
+
+
+def _notification_sink(event_bus) -> list:
+    """Subscribe to PLAYER_NOTIFICATION; return the captured (player, kind, data)."""
+    from mygame.world.event_bus import PLAYER_NOTIFICATION
+
+    seen: list = []
+    event_bus.subscribe(
+        PLAYER_NOTIFICATION,
+        lambda event_name="", player=None, kind="", data=None, **_kw: seen.append(
+            (player, kind, dict(data or {}))
+        ),
+    )
+    return seen
+
+
+class TestDemolishEstateProgress(unittest.TestCase):
+    """``report_demolish_estate``: the one estate count a demolish reports (R4.5).
+
+    Called AFTER the building is gone, so the number is what still stands —
+    progress toward emptying the estate and being allowed to switch Branches.
+    """
+
+    def _wired(self, provider):
+        system, _, bus = _make_building_system()
+        system.set_branch_estate_provider(provider)
+        return system, bus, _notification_sink(bus)
+
+    def test_no_report_until_the_provider_is_wired(self):
+        """An unwired deployment demolishes exactly as it did before the feature."""
+        system, _, bus = _make_building_system()
+        seen = _notification_sink(bus)
+        player = FakePlayer()
+        self.assertIsNone(system.report_demolish_estate(player, "WX"))
+        self.assertEqual(seen, [])
+
+    def test_reports_the_buildings_remaining_in_that_branchs_estate(self):
+        provider = _FakeEstateProvider(
+            branches={"WX": "weapons"}, counts={"weapons": 3},
+        )
+        system, _, seen = self._wired(provider)
+        player = FakePlayer()
+
+        remaining = system.report_demolish_estate(player, "WX")
+
+        self.assertEqual(remaining, 3)
+        self.assertEqual(len(seen), 1)
+        target, kind, data = seen[0]
+        self.assertIs(target, player)
+        self.assertEqual(kind, "branch_estate_progress")
+        self.assertEqual(data["branch"], "weapons")
+        self.assertEqual(data["remaining"], 3)
+        self.assertEqual(data["btype"], "WX")
+        # Structured data only — the system composes no sentence (R13.5).
+        self.assertEqual(data["name"], "Weapons Lab")
+
+    def test_exactly_one_estate_count_call(self):
+        provider = _FakeEstateProvider(
+            branches={"WX": "weapons"}, counts={"weapons": 2},
+        )
+        system, _, _ = self._wired(provider)
+        system.report_demolish_estate(FakePlayer(), "WX")
+        self.assertEqual(len(provider.count_calls), 1)
+
+    def test_an_emptied_estate_reports_zero_rather_than_going_quiet(self):
+        """Zero is the number that matters: the switch is now permitted."""
+        provider = _FakeEstateProvider(branches={"WX": "weapons"}, counts={})
+        system, _, seen = self._wired(provider)
+        self.assertEqual(system.report_demolish_estate(FakePlayer(), "WX"), 0)
+        self.assertEqual(len(seen), 1)
+        self.assertEqual(seen[0][2]["remaining"], 0)
+
+    def test_a_neutral_building_belongs_to_no_estate_and_reports_nothing(self):
+        provider = _FakeEstateProvider(branches={}, counts={"weapons": 9})
+        system, _, seen = self._wired(provider)
+        self.assertIsNone(system.report_demolish_estate(FakePlayer(), "MM"))
+        self.assertEqual(seen, [])
+        # No Branch, no estate to count.
+        self.assertEqual(provider.count_calls, [])
+
+    def test_the_planet_scope_is_passed_straight_through(self):
+        provider = _FakeEstateProvider(
+            branches={"WX": "weapons"}, counts={"weapons": 1},
+        )
+        system, _, seen = self._wired(provider)
+        player = FakePlayer()
+        system.report_demolish_estate(player, "WX", planet="mars")
+        self.assertEqual(provider.count_calls, [(player, "weapons", "mars")])
+        self.assertEqual(seen[0][2]["planet"], "mars")
+
+    def test_an_omitted_planet_leaves_the_scope_to_the_provider(self):
+        provider = _FakeEstateProvider(
+            branches={"WX": "weapons"}, counts={"weapons": 1},
+        )
+        system, _, _ = self._wired(provider)
+        player = FakePlayer()
+        system.report_demolish_estate(player, "WX")
+        self.assertEqual(provider.count_calls, [(player, "weapons", None)])
+
+    def test_a_building_def_is_accepted_as_well_as_an_abbreviation(self):
+        system, _, bus = _make_building_system()
+        bdef = system.registry.get_building("WX")
+        provider = _FakeEstateProvider(
+            branches={"WX": "weapons"}, counts={"weapons": 4},
+        )
+        system.set_branch_estate_provider(provider)
+        seen = _notification_sink(bus)
+
+        self.assertEqual(system.report_demolish_estate(FakePlayer(), bdef), 4)
+        self.assertIs(provider.branch_calls[0], bdef)
+        self.assertEqual(seen[0][2]["btype"], "WX")
+        self.assertEqual(seen[0][2]["name"], "Weapons Lab")
+
+    def test_a_none_owner_is_dropped(self):
+        provider = _FakeEstateProvider(branches={"WX": "weapons"})
+        system, _, seen = self._wired(provider)
+        self.assertIsNone(system.report_demolish_estate(None, "WX"))
+        self.assertEqual(seen, [])
+        self.assertEqual(provider.branch_calls, [])
+
+    def test_a_broken_provider_costs_the_report_not_the_demolish(self):
+        for stage in ("branch", "count"):
+            with self.subTest(stage=stage):
+                provider = _FakeEstateProvider(
+                    branches={"WX": "weapons"}, counts={"weapons": 2},
+                    raises=stage,
+                )
+                system, _, seen = self._wired(provider)
+                self.assertIsNone(system.report_demolish_estate(FakePlayer(), "WX"))
+                self.assertEqual(seen, [])
+
+    def test_clearing_the_provider_restores_the_pre_feature_silence(self):
+        provider = _FakeEstateProvider(
+            branches={"WX": "weapons"}, counts={"weapons": 2},
+        )
+        system, _, seen = self._wired(provider)
+        system.report_demolish_estate(FakePlayer(), "WX")
+        self.assertEqual(len(seen), 1)
+        system.set_branch_estate_provider(None)
+        self.assertIsNone(system.report_demolish_estate(FakePlayer(), "WX"))
+        self.assertEqual(len(seen), 1)
+
+    def test_the_report_leaves_the_refund_basis_untouched(self):
+        """R4.4: the refund arithmetic is the pre-feature investment path.
+
+        The report reads the estate and publishes a count; it charges nothing,
+        refunds nothing, and cannot move the ``get_building_investment`` basis
+        the demolish refund is priced on.
+        """
+        system, _, _ = _make_building_system()
+        bdef = system.registry.get_building("WX")
+        player = FakePlayer(resources={"Iron": 100})
+        before = system.get_building_investment(bdef, 3, owner=player)
+
+        system.set_branch_estate_provider(_FakeEstateProvider(
+            branches={"WX": "weapons"}, counts={"weapons": 5},
+        ))
+        system.report_demolish_estate(player, bdef)
+
+        self.assertEqual(system.get_building_investment(bdef, 3, owner=player), before)
+        self.assertEqual(player.get_resource("Iron"), 100)
 
 
 if __name__ == "__main__":

@@ -977,3 +977,295 @@ class TestLiveStatusPush:
                     data={"building_name": "HQ", "attacker_name": "Guard",
                           "weapon_name": "rifle", "damage": 8})
         assert player.prompt_status == []
+
+
+# =========================================================================== #
+#  tech-tree-branch-foundation task 5.3 — the demolish estate-progress report
+#  (R4.5). The system publishes a count; the sentence lives here.
+# =========================================================================== #
+
+
+class TestBranchEstateProgressFormatter:
+    """``branch_estate_progress``: how much of a Branch_Estate is still standing."""
+
+    def _render(self, **data):
+        bus = EventBus()
+        player = _MsgPlayer()
+        NotificationPresenter(bus, player_notifier=EvenniaPlayerNotifier())
+        bus.publish(
+            PLAYER_NOTIFICATION, player=player,
+            kind="branch_estate_progress", data=data,
+        )
+        assert len(player.messages) == 1
+        return _plain(player.messages[0])
+
+    def test_the_kind_has_a_formatter(self):
+        assert "branch_estate_progress" in NotificationPresenter._FORMATTERS
+
+    def test_remaining_count_and_doctrine_reach_the_player(self):
+        msg = self._render(branch="bio", remaining=3, btype="BX", name="Biolab")
+        assert "Biolab" in msg
+        # The doctrine name, not the raw Branch key, is what the player reads.
+        assert "Biowarfare" in msg
+        assert "3" in msg
+
+    def test_an_emptied_estate_reads_as_the_switch_being_unblocked(self):
+        msg = self._render(branch="weapons", remaining=0, btype="WX",
+                           name="Weapons Lab")
+        assert "empty" in msg.lower()
+        assert "Branch Lab" in msg
+
+    def test_a_single_remaining_building_is_singular(self):
+        msg = self._render(branch="cyber", remaining=1, btype="SG",
+                           name="Signals Lab")
+        assert "1 Signals building" in msg
+
+    def test_an_unknown_branch_and_a_missing_name_still_render(self):
+        msg = self._render(branch="nonesuch", remaining=2)
+        assert msg.strip()
+        assert "nonesuch" in msg
+
+
+# =========================================================================== #
+#  tech-tree-branch-foundation task 6.6 — the technology view (R13.1, R13.2).
+#  The TechLabSystem publishes figures and keys; every word lives here.
+# =========================================================================== #
+
+
+class TestTechnologyViewFormatter:
+    """``technology_view``: the commitment, its vector, and what is dormant."""
+
+    def _render(self, **data):
+        bus = EventBus()
+        player = _MsgPlayer()
+        NotificationPresenter(bus, player_notifier=EvenniaPlayerNotifier())
+        bus.publish(
+            PLAYER_NOTIFICATION, player=player,
+            kind="technology_view", data=data,
+        )
+        assert len(player.messages) == 1
+        return _plain(player.messages[0])
+
+    def _committed(self, **overrides):
+        data = {
+            "branch": "weapons",
+            "doctrine": "Ordnance",
+            "operation_kind": "strategic_strike",
+            "researched": [{"key": "wtech", "name": "Weapon Tech"}],
+            "available": [{"key": "wtech2", "name": "Better Guns"}],
+            "reinstatement_pending": [],
+            "reinstatement_fraction": 0.5,
+            "dormant": [],
+            "dormant_count": 0,
+        }
+        data.update(overrides)
+        return self._render(**data)
+
+    def test_the_kind_has_a_formatter(self):
+        assert "technology_view" in NotificationPresenter._FORMATTERS
+
+    def test_the_doctrine_and_its_signature_vector_reach_the_player(self):
+        msg = self._committed()
+        assert "Ordnance" in msg
+        # The vector identifier is rendered as words, not as its raw key.
+        assert "strategic strike" in msg
+        assert "strategic_strike" not in msg
+
+    def test_the_researched_and_available_technologies_are_listed(self):
+        msg = self._committed()
+        assert "Weapon Tech (wtech)" in msg
+        assert "Better Guns (wtech2)" in msg
+
+    def test_no_commitment_reads_as_an_invitation_to_build_a_lab(self):
+        msg = self._committed(
+            branch=None, doctrine=None, operation_kind=None,
+            researched=[], available=[],
+        )
+        assert "Branch Lab" in msg
+        # The six doctrines are named so the choice is visible before committing.
+        assert "Biowarfare" in msg and "Recon" in msg
+        assert "none" in msg          # both lists render their empty row
+
+    def test_dormant_branches_report_their_count_and_the_fraction(self):
+        msg = self._committed(
+            dormant=[
+                {"branch": "defense", "doctrine": "Fortification", "count": 3},
+                {"branch": "bio", "doctrine": "Biowarfare", "count": 1},
+            ],
+            dormant_count=4,
+        )
+        assert "Fortification: 3 technologies" in msg
+        assert "Biowarfare: 1 technology" in msg      # singular
+        assert "50%" in msg
+
+    def test_pending_reinstatements_are_named_with_their_price(self):
+        msg = self._committed(
+            reinstatement_pending=["wtech"], reinstatement_fraction=0.25,
+        )
+        assert "wtech" in msg
+        assert "25%" in msg
+
+    def test_a_missing_payload_still_renders(self):
+        msg = self._render()
+        assert msg.strip()
+        assert "Technologies" in msg
+
+# =========================================================================== #
+#  tech-tree-branch-foundation task 11.4 — the Vector_Operation lifecycle kinds
+#  (design §4.4). The driver publishes a kind plus structured values (R13.5);
+#  every word is composed here, and all six lifecycle states are covered (R13.6).
+# =========================================================================== #
+
+
+class TestVectorLifecycleFormatters:
+    """The nine ``vector_*`` kinds: coverage first, then what each one says."""
+
+    def _render(self, notification, /, **data):
+        # Positional-only, because every one of these payloads carries a ``kind``
+        # entry of its own — the Operation_Kind — distinct from the notification
+        # kind being rendered.
+        bus = EventBus()
+        player = _MsgPlayer()
+        NotificationPresenter(bus, player_notifier=EvenniaPlayerNotifier())
+        bus.publish(
+            PLAYER_NOTIFICATION, player=player, kind=notification, data=data
+        )
+        assert len(player.messages) == 1
+        return _plain(player.messages[0])
+
+    def test_every_kind_the_driver_declares_has_a_formatter(self):
+        """R13.8: an unrendered kind must be a test failure, not a blank line.
+
+        The driver publishes every lifecycle notification through one guarded
+        helper with a *variable* kind, so the AST scan that reads string-literal
+        kinds out of ``self.notify(...)`` calls cannot see them. This reads the
+        driver's own declared tuple instead, which is why a kind renamed on
+        either side fails here.
+        """
+        from mygame.world.systems.operation_contract import VECTOR_NOTIFICATION_KINDS
+
+        table = NotificationPresenter._FORMATTERS
+        missing = [k for k in VECTOR_NOTIFICATION_KINDS if k not in table]
+        assert not missing, f"Vector kinds with no formatter: {missing}"
+
+    def test_all_six_lifecycle_states_have_a_rendered_kind(self):
+        """R13.6: Pending, Suspended, Resolved, Expired, Cancelled, Discarded."""
+        from mygame.world.systems.operation_contract import (
+            STATE_NOTIFICATIONS,
+            OperationState,
+        )
+
+        table = NotificationPresenter._FORMATTERS
+        for state in OperationState:
+            kind = STATE_NOTIFICATIONS.get(str(state))
+            assert kind is not None, f"state {state} reports through no kind"
+            assert kind in table, f"state {state} reports through {kind!r}, unformatted"
+
+    def test_every_kind_renders_a_non_empty_line_from_an_empty_payload(self):
+        """A partial payload still reads: no formatter may raise or blank out."""
+        from mygame.world.systems.operation_contract import VECTOR_NOTIFICATION_KINDS
+
+        for kind in VECTOR_NOTIFICATION_KINDS:
+            assert self._render(kind).strip(), f"{kind!r} rendered nothing"
+
+    def test_incoming_names_the_attacker_the_tile_and_the_response_window(self):
+        """R8.7: the four values the warning has to carry to be actionable."""
+        msg = self._render(
+            "vector_incoming", kind="strategic_strike",
+            attacker_name="Vex", x=12, y=-3, ticks=7,
+        )
+        assert "Vex" in msg
+        assert "strategic strike" in msg      # rendered as words, not the key
+        assert "strategic_strike" not in msg
+        assert "(12, -3)" in msg
+        assert "7 ticks" in msg
+
+    def test_a_one_tick_window_is_singular(self):
+        msg = self._render("vector_incoming", kind="detection_sweep", ticks=1)
+        assert "1 tick to respond" in msg
+
+    def test_resolution_reads_as_the_owners_own_operation(self):
+        msg = self._render("vector_resolved", kind="strategic_strike", x=4, y=5)
+        assert "Your strategic strike" in msg
+        assert "(4, 5)" in msg
+
+    def test_a_hit_names_whose_operation_struck(self):
+        msg = self._render(
+            "vector_hit", kind="strategic_strike", attacker_name="Vex", x=4, y=5,
+        )
+        assert "Vex" in msg
+        assert "(4, 5)" in msg
+
+    def test_a_missing_attacker_name_still_reads(self):
+        for kind in ("vector_incoming", "vector_hit"):
+            msg = self._render(kind, kind="strategic_strike", x=1, y=1)
+            assert "Someone" in msg
+
+    def test_an_absent_coordinate_is_omitted_rather_than_rendered_as_none(self):
+        """An operation attached to an entity carries no tile."""
+        msg = self._render("vector_resolved", kind="strategic_strike")
+        assert "None" not in msg
+        assert "(" not in msg
+
+    def test_suspension_names_its_cause_from_the_published_key(self):
+        from mygame.world.systems import operation_contract as contract
+
+        agent = self._render(
+            "vector_suspended", kind="strategic_strike",
+            reason=contract.SUSPEND_CARRIER_UNAVAILABLE, x=2, y=2,
+        )
+        assert "agent" in agent
+        lapsed = self._render(
+            "vector_suspended", kind="strategic_strike",
+            reason=contract.SUSPEND_COMMITMENT_LAPSED,
+        )
+        assert "doctrine" in lapsed
+        # The raw key never reaches the player.
+        assert contract.SUSPEND_COMMITMENT_LAPSED not in lapsed
+
+    def test_an_unmapped_suspension_reason_degrades_to_the_bare_sentence(self):
+        msg = self._render(
+            "vector_suspended", kind="strategic_strike", reason="some_new_cause",
+        )
+        assert "on hold" in msg
+        assert "some_new_cause" not in msg
+
+    def test_resuming_quotes_the_ticks_it_held(self):
+        """R8.15: suspension delays rather than restarts, so the count matters."""
+        msg = self._render(
+            "vector_resumed", kind="strategic_strike", ticks_remaining=9,
+        )
+        assert "9 ticks left" in msg
+        singular = self._render("vector_resumed", kind="x", ticks_remaining=1)
+        assert "1 tick left" in singular
+
+    def test_expiry_says_what_was_restored(self):
+        msg = self._render("vector_expired", kind="signals_intrusion", x=0, y=0)
+        assert "signals intrusion" in msg
+        assert "back to normal" in msg
+
+    def test_cancellation_names_which_collaborator_was_lost(self):
+        from mygame.world.systems import operation_contract as contract
+
+        for reason, fragment in (
+            (contract.CANCEL_CARRIER_KILLED, "agent was killed"),
+            (contract.CANCEL_ORIGIN_LOST, "building it launched from"),
+            (contract.CANCEL_BASE_ELIMINATED, "base it launched from"),
+        ):
+            msg = self._render(
+                "vector_cancelled", kind="strategic_strike", reason=reason,
+            )
+            assert fragment in msg
+            assert reason not in msg
+
+    def test_a_discard_reads_as_a_restart_casualty(self):
+        msg = self._render("vector_discarded", kind="strategic_strike")
+        assert "restart" in msg
+
+    def test_the_consent_refusal_names_the_ally_and_what_to_ask_for(self):
+        """R11.8: the missing consent is reported, with who has to grant it."""
+        msg = self._render(
+            "vector_consent_required", kind="field_reinforcement", ally_name="Mira",
+        )
+        assert "Mira" in msg
+        assert "support" in msg

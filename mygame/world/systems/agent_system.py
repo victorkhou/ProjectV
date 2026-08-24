@@ -41,6 +41,9 @@ from world.systems.agent_constants import (  # noqa: E402
     ARMY_ROLES,
     AGENT_XP_SOURCE_FIELDS,
     ABILITY_SCRIPT_KEYS,
+    GATED_BRANCH_ROLES,
+    GATED_ROLE_FOR_BRANCH,
+    UNGATED_BRANCH_ROLES,
 )
 
 #: Agent fields the admin ``@agent set`` verb may write through
@@ -94,6 +97,82 @@ class AgentSystem(AgentProgressionMixin, AgentBehaviorMixin, BaseSystem):
         # In-memory cache of buildings currently training agents.
         # Avoids a DB query every tick. Updated by train_agent/complete_training.
         self._training_buildings: list[Any] = []
+        # The Branch_System, injected at the composition root via
+        # set_branch_resolver. None until then, and None in every fixture that
+        # predates the Branch feature — which is why the role gate keeps its
+        # pre-feature behavior (no gate) rather than assuming a resolver.
+        self._branch: Any = None
+
+    # ------------------------------------------------------------------ #
+    #  Branch resolver injection
+    # ------------------------------------------------------------------ #
+
+    def set_branch_resolver(self, resolver: Any) -> None:
+        """Inject the Branch_System that owns Branch_Commitment.
+
+        Called once at the composition root. The agent system asks the resolver
+        which Branch is live for a player on a planet rather than deriving it
+        itself, so commitment has exactly one implementation.
+
+        Pass ``None`` to unwire it, which restores the pre-feature behavior
+        exactly: the Branch role gate does not apply and every role in
+        ``VALID_ROLES`` is assignable on the pre-feature terms alone.
+        """
+        self._branch = resolver
+
+    def _refuse_branch_role(
+        self, player: Any, agent: Any, role: str
+    ) -> str | None:
+        """Return a refusal message when *role* is gated shut for *player*.
+
+        The Branch_Commitment gate (R7.6, R7.7): a role this feature introduced
+        is assignable only while the player's commitment **on the agent's
+        planet** is the Branch that role belongs to, and a refusal names the
+        Branch the role requires.
+
+        Returns ``None`` — assignment permitted — in every other case:
+
+        * a role outside :data:`GATED_BRANCH_ROLES`, which is every pre-feature
+          role plus `scout` (see :data:`UNGATED_BRANCH_ROLES` for that decided
+          asymmetry);
+        * no Branch resolver wired, or one exposing no ``commitment``, so an
+          unwired deployment behaves exactly as it did before the feature;
+        * a resolver that raises — the gate fails **open** and logs, because a
+          collaborator's failure must not lock a player out of their own roster
+          (R15.3).
+        """
+        required = GATED_BRANCH_ROLES.get(role)
+        if required is None:
+            return None
+        resolver = self._branch
+        if resolver is None:
+            return None
+        derive = getattr(resolver, "commitment", None)
+        if not callable(derive):
+            return None
+
+        # The commitment is per-planet, and the planet that matters is the one
+        # the AGENT stands on — not its owner's, who may be somewhere else. A
+        # None planet is passed through: the resolver reads it as "the planet
+        # the player occupies", the same fallback every other caller gets.
+        planet = getattr(getattr(agent, "db", None), "coord_planet", None)
+        try:
+            current = derive(player, planet)
+        except Exception:  # noqa: BLE001 - a resolver never breaks assignment
+            logger.exception(
+                "Branch resolver failed to derive a commitment; leaving the "
+                "role gate open for this assignment."
+            )
+            return None
+
+        if current == required:
+            return None
+
+        return (
+            f"Role '{role}' belongs to the {required} Branch — it can only be "
+            f"assigned while {required} is your Branch commitment on that "
+            f"agent's planet."
+        )
 
     # ------------------------------------------------------------------ #
     #  Training
@@ -243,9 +322,11 @@ class AgentSystem(AgentProgressionMixin, AgentBehaviorMixin, BaseSystem):
         - Agent is not incapacitated or reserved.
         - Role is valid (hidden roles only when ``allow_hidden`` —
           the admin/test escape hatch for placeholder roles).
+        - Branch_Commitment, for the five roles this feature introduced
+          (R7.6, R7.7) — see :meth:`_refuse_branch_role`.
         - Building/role match (Extractor→Harvester, etc.).
-        - Army roles (guard, scout — and hidden soldier/medic) don't need a
-          building.
+        - Army roles (guard, scout, medic and the four Branch roles — and the
+          hidden soldier) don't need a building.
 
         Returns ``(success, message)``.
         """
@@ -265,6 +346,11 @@ class AgentSystem(AgentProgressionMixin, AgentBehaviorMixin, BaseSystem):
         # Cannot assign reserved agents
         if getattr(agent.db, "reserve", False):
             return False, f"Agent #{agent_id} is in reserve and cannot be reassigned."
+
+        # --- Branch_Commitment gate (R7.6, R7.7) ---
+        refusal = self._refuse_branch_role(player, agent, role)
+        if refusal is not None:
+            return False, refusal
 
         # --- building / role validation ---
         if role in ARMY_ROLES:
@@ -349,8 +435,8 @@ class AgentSystem(AgentProgressionMixin, AgentBehaviorMixin, BaseSystem):
                 loc = getattr(target_building, "location", target_building)
                 agent.move_to(loc, quiet=True)
         else:
-            # Army role (guard/scout, hidden soldier/medic) — no target
-            # building, so the movement block above (which derives the arrival
+            # Army role (guard/scout/medic, the Branch roles, hidden soldier) —
+            # no target building, so the movement block above (which derives the arrival
             # status) never runs. Derive the resting status here so the agent
             # reads "Ready" on assignment instead of a stale "Working"/"Idle"
             # left from a prior role.
@@ -431,6 +517,131 @@ class AgentSystem(AgentProgressionMixin, AgentBehaviorMixin, BaseSystem):
             agent.db.activity_status = resting_activity_status(agent)
 
         return True, f"Agent #{agent_id} unassigned and returned to HQ."
+
+    def unassign_branch_roles(
+        self, player: Any, planet: Any, branch: str
+    ) -> int:
+        """Release every agent of *player* holding *branch*'s role on *planet*.
+
+        The dormancy release (R7.8): a Branch that is no longer *player*'s
+        commitment on that planet commands no agents, so each agent standing
+        there in that Branch's role goes back to the unassigned state. The
+        Branch_System calls this the moment a commitment lapses — it owns the
+        trigger, this owns the roster.
+
+        Every agent is released through :meth:`unassign_agent`, so the teardown
+        is the existing one (``_detach_behavior_script``, the ``role_target``
+        clear, the building's ``assigned_agent`` release, the walk back to HQ)
+        rather than a second implementation that could drift from it. Each
+        release is isolated, so one unreleasable agent never strands the rest.
+
+        Only the five gated roles are released: `scout` is exempt for the same
+        reason it is exempt from the assignment gate (see
+        :data:`UNGATED_BRANCH_ROLES`) — a lapsed Recon commitment leaves
+        existing patrols running. A Branch outside the six, a blank one, or one
+        owning no gated role is a no-op rather than an error (R15.3).
+
+        Args:
+            player: The owner whose roster to release from.
+            planet: The planet the lapse happened on. ``None`` falls back to the
+                planet *player* occupies, matching how every other commitment
+                read resolves an unspecified planet.
+            branch: The Branch that lapsed.
+
+        Returns:
+            The number of agents released, so callers and tests can read the
+            effect instead of inferring it.
+        """
+        wanted = branch.strip().lower() if isinstance(branch, str) else None
+        role = GATED_ROLE_FOR_BRANCH.get(wanted)
+        if role is None or player is None:
+            return 0
+
+        if planet is None:
+            planet = getattr(getattr(player, "db", None), "coord_planet", None)
+
+        released = 0
+        for agent in self.get_agents(player):
+            db = getattr(agent, "db", None)
+            if db is None:
+                continue
+            if (getattr(db, "role", "") or "").lower() != role:
+                continue
+            # Scoped per-planet because a commitment is: the same player may
+            # hold this or another Branch elsewhere, and those agents keep
+            # serving. Strict equality is deliberate on BOTH unreadable sides,
+            # and deliberately NARROWER than eligible_carrier's "counts on
+            # every planet" wildcard: a release is a destructive write, so an
+            # agent whose planet cannot be read is skipped (it may belong to a
+            # planet where this same Branch is still committed), and an
+            # unresolvable lapse planet releases only such placeless agents
+            # rather than sweeping every planet. The hole this leaves is
+            # harmless — a role kept past its commitment commands nothing,
+            # because the operation chain's own commitment check (R8.3)
+            # refuses its requests regardless of the roster.
+            if getattr(db, "coord_planet", None) != planet:
+                continue
+            agent_id = getattr(db, "agent_id", None)
+            if agent_id is None:
+                continue
+            try:
+                ok, _msg = self.unassign_agent(player, agent_id)
+            except Exception:  # noqa: BLE001 - one agent never strands the rest
+                logger.exception(
+                    "unassign_branch_roles: failed to release agent %s from "
+                    "role %s", agent_id, role,
+                )
+                continue
+            if ok:
+                released += 1
+
+        if released:
+            logger.debug(
+                "Released %d %s agent(s) on %r: %r is no longer committed.",
+                released, role, planet, branch,
+            )
+        return released
+
+    # ------------------------------------------------------------------ #
+    #  Operation XP
+    # ------------------------------------------------------------------ #
+
+    def award_operation_xp(self, agent: Any, kind: str) -> bool:
+        """Award *agent* the Combat-XP a completed *kind* operation is worth.
+
+        The Carrier_Agent XP award (R7.10). The amount is **not** stored here:
+        the Operation_Kind definition names a ``BalanceConfig`` field
+        (``OperationKindDef.agent_xp_field``) and this reads that field, so
+        tuning stays in ``balance.yaml`` behind ``@reload`` and the
+        vector-to-field binding stays in one reviewable data table.
+
+        Routes through the same freeze-aware body as every other agent-XP
+        source, so an agent sitting at its owner-level ceiling banks nothing
+        from an operation either — carrying a vector is an earning event like
+        harvesting, not an exception to the cap.
+
+        Args:
+            agent: The Carrier_Agent that completed the operation.
+            kind: The Operation_Kind identifier.
+
+        Returns:
+            ``True`` iff an award actually happened. An unknown *kind*, a
+            definition naming no field, an unloaded field, or a zero amount is
+            a no-op returning ``False`` — never an error, because a missing
+            tunable must not undo a resolved operation.
+        """
+        kinds = getattr(self.registry, "operation_kinds", None) or {}
+        kdef = kinds.get(kind)
+        if kdef is None:
+            logger.debug(
+                "award_operation_xp: no Operation_Kind definition for %r; "
+                "no XP awarded.", kind,
+            )
+            return False
+        field = getattr(kdef, "agent_xp_field", None)
+        if not field:
+            return False
+        return self._award_agent_xp_field(agent, field)
 
     # ------------------------------------------------------------------ #
     #  Patrol routes

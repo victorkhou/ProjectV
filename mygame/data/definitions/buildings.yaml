@@ -183,7 +183,7 @@
 # Research Lab — the GENERALIST research building (research-lab-trees feature).
 # Hosts the `research` technology tree: vision, terrain affinities, and utility
 # techs (the original Lab's line, kept intact for continuity). It is one of the
-# four specialized labs; a player may own only ONE research lab per planet
+# six specialized labs; a player may own only ONE research lab per planet
 # (BuildingSystem._validate_one_research_lab_per_planet), so building this
 # commits the planet to the research tree. The `research_lab` capability lets
 # the tech system find the lab and read its `research_tree`; research is gated
@@ -286,6 +286,71 @@
     - research_lab
   research_tree: resource
   map_symbol: RX
+
+# Biolab — hosts the `bio` technology tree / Branch (Biowarfare: contagion
+# damage-over-time delivered by medic carriers; tech-tree-branch-foundation).
+# One of the SIX specialized labs, same level/deed gate as the other five; a
+# player may own only one research lab per planet, so building this commits the
+# planet to the bio Branch. `branch` is the Branch_Affiliation and on a lab must
+# equal `research_tree` (R2.4). Biomass in the cost is the bio Branch's
+# signature resource sink and keeps the six labs' investment scores in parity.
+- name: Biolab
+  abbreviation: BX
+  cost:
+    Wood: 15
+    Stone: 15
+    Iron: 20
+    Biomass: 15
+  build_time_seconds: 38
+  max_level: 5
+  rank_requirement: 11
+  unlock_deed: outpost_cleared
+  unlock_deed_count: 3
+  max_health: 250
+  requires_hq: true
+  required_terrain: null
+  category: research
+  produces: null
+  requires_agent: true
+  storage_capacity: 0
+  capabilities:
+    - research_lab
+  research_tree: bio
+  branch: bio
+  map_symbol: BX
+
+# Signals Lab — hosts the `cyber` technology tree / Branch (Signals: intrusion,
+# infiltrator carriers; tech-tree-branch-foundation). Same shape and level/deed
+# gate as the other five labs; one lab tree per planet.
+# NOTE ON THE ABBREVIATION: the design names this lab `SG`, but `SG` is already
+# the Shield Generator's abbreviation, and the registry keys buildings BY
+# abbreviation — a second `SG` entry would silently replace the Shield
+# Generator. `SX` is used instead, matching the WX / RX / BX suffix convention
+# for the specialized labs.
+- name: Signals Lab
+  abbreviation: SX
+  cost:
+    Wood: 15
+    Stone: 15
+    Iron: 20
+    Circuits: 12
+  build_time_seconds: 38
+  max_level: 5
+  rank_requirement: 11
+  unlock_deed: outpost_cleared
+  unlock_deed_count: 3
+  max_health: 250
+  requires_hq: true
+  required_terrain: null
+  category: research
+  produces: null
+  requires_agent: true
+  storage_capacity: 0
+  capabilities:
+    - research_lab
+  research_tree: cyber
+  branch: cyber
+  map_symbol: SX
 
 - name: Relay
   abbreviation: RL
@@ -651,3 +716,180 @@
     - outpost_survey
     - upgradable
   map_symbol: SA
+
+# =====================================================================
+#  Branch_Buildings — tech-tree-branch-foundation
+# =====================================================================
+# One non-lab building per Branch, so no Branch is a lab with no doctrine
+# buildings (R2.7) and every Branch has a building gated behind an unlocking
+# technology of that same Branch (R6.5, R6.7). The six Signature_Vectors
+# themselves ship in the six vector specs; those specs EXTEND this chain —
+# they add more buildings with the same `branch` value, they do not restate or
+# replace the affiliation established here.
+#
+# The shape every entry below holds to:
+#   branch             the Branch_Affiliation (R2.1). Buildable only while the
+#                      owner's Branch_Commitment on that planet — i.e. which of
+#                      the six labs they own there — equals this value (R3.3).
+#                      NOTE: only the buildings in THIS block and the two new
+#                      labs carry `branch`; every building that shipped before
+#                      this feature deliberately omits it and stays a
+#                      Neutral_Building, buildable under any commitment and
+#                      under none (R2.5, R10.8).
+#   unlock_technology  a technology of the SAME Branch (R6.5); construction
+#                      additionally requires it researched with its effects
+#                      applied (R6.2), which is what keeps a lab alone from
+#                      granting a Signature_Vector (R6.7).
+#   rank_requirement   at or above the hosting lab's 11, so no Branch content
+#                      precedes the existing lab gate (R10.5). Each is set to
+#                      the first level of its unlock technology's rank band, so
+#                      the level gate and the research gate open together.
+#   cost               includes at least one of Circuits / Energy / Nexium, so
+#                      Signature_Vector access depends on economic reach
+#                      (R12.4) — those are off-Terra resources, unlike the
+#                      Wood/Stone/Iron every starter building costs.
+#   requires_agent     false. The field has no consumer (see the Blacksmith /
+#                      Refinery note above); the Carrier_Agent requirement of
+#                      R7.1 is a per-operation check in the Vector_Systems, not
+#                      this flag. Flip only when a real consumer exists.
+# No capabilities and no `produces`: these are affiliation seeds, and a
+# capability nothing reads would be dead data. No deed gate either — the
+# hosting lab already carries the 3-outpost deed.
+
+# Ordnance Works — the `weapons` Branch (Ordnance: Strategic_Strike, spotters).
+- name: Ordnance Works
+  abbreviation: OW
+  cost:
+    Stone: 20
+    Iron: 45
+    Circuits: 20
+    Energy: 15
+  build_time_seconds: 35
+  max_level: 5
+  rank_requirement: 12
+  max_health: 250
+  requires_hq: true
+  required_terrain: null
+  category: military
+  produces: null
+  requires_agent: false
+  storage_capacity: 0
+  branch: weapons
+  unlock_technology: field_marksmanship
+  map_symbol: OW
+
+# Bastion Works — the `defense` Branch (Fortification: Traps, sappers).
+- name: Bastion Works
+  abbreviation: BW
+  cost:
+    Stone: 45
+    Iron: 25
+    Circuits: 15
+    Energy: 20
+  build_time_seconds: 35
+  max_level: 5
+  rank_requirement: 12
+  max_health: 300
+  requires_hq: true
+  required_terrain: null
+  category: defense
+  produces: null
+  requires_agent: false
+  storage_capacity: 0
+  branch: defense
+  unlock_technology: reinforced_walls
+  map_symbol: BW
+
+# Culture Vat — the `bio` Branch (Biowarfare: Contagion, medic carriers).
+# Biomass alongside the Energy keeps the Biolab's signature sink in the chain.
+- name: Culture Vat
+  abbreviation: CV
+  cost:
+    Stone: 20
+    Iron: 30
+    Biomass: 30
+    Energy: 20
+  build_time_seconds: 35
+  max_level: 5
+  rank_requirement: 12
+  max_health: 250
+  requires_hq: true
+  required_terrain: null
+  category: military
+  produces: null
+  requires_agent: false
+  storage_capacity: 0
+  branch: bio
+  unlock_technology: pathogen_cultures
+  map_symbol: CV
+
+# Cipher Node — the `cyber` Branch (Signals: Intrusion, infiltrators).
+- name: Cipher Node
+  abbreviation: CN
+  cost:
+    Stone: 20
+    Iron: 30
+    Circuits: 35
+    Energy: 20
+  build_time_seconds: 35
+  max_level: 5
+  rank_requirement: 12
+  max_health: 220
+  requires_hq: true
+  required_terrain: null
+  category: intelligence
+  produces: null
+  requires_agent: false
+  storage_capacity: 0
+  branch: cyber
+  unlock_technology: signal_interception
+  map_symbol: CN
+
+# Logistics Depot — the `resource` Branch (Logistics: Convoy, couriers). The
+# depots a Convoy runs between. Sergeant-tier: Prefab Logistics is the
+# resource tree's earliest technology, hence rank 16 rather than 12.
+- name: Logistics Depot
+  abbreviation: DP
+  cost:
+    Wood: 30
+    Stone: 25
+    Iron: 25
+    Energy: 25
+  build_time_seconds: 35
+  max_level: 5
+  rank_requirement: 16
+  max_health: 250
+  requires_hq: true
+  required_terrain: null
+  category: economy
+  produces: null
+  requires_agent: false
+  storage_capacity: 0
+  branch: resource
+  unlock_technology: prefab_logistics
+  map_symbol: DP
+
+# Recon Post — the `research` Branch (Recon: Detection_Sweep, scouts). Gated on
+# Extended Range, the research tree's sight technology, which is the closest
+# in-Branch match for a Detection_Sweep prerequisite; that tech is
+# Staff_Sergeant-tier, hence rank 22.
+- name: Recon Post
+  abbreviation: RP
+  cost:
+    Wood: 25
+    Iron: 30
+    Circuits: 25
+    Energy: 10
+  build_time_seconds: 35
+  max_level: 5
+  rank_requirement: 22
+  max_health: 220
+  requires_hq: true
+  required_terrain: null
+  category: intelligence
+  produces: null
+  requires_agent: false
+  storage_capacity: 0
+  branch: research
+  unlock_technology: extended_range
+  map_symbol: RP

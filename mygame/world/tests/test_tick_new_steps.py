@@ -663,6 +663,81 @@ class TestEffectTicksStep(unittest.TestCase):
         self.assertNotIn("effect_ticks", [n for n, _ in steps])
 
 
+class TestVectorOperationsStep(unittest.TestCase):
+    """The vector_operations step drives ``BranchSystem.process_tick`` (R15.9).
+
+    A Vector_System registers its per-tick advancement through the existing tick
+    dispatch rather than its own timer, and it does so through the one
+    Branch_System fan-out — so this step is the whole tick surface of the Branch
+    feature. Same wiring gap the effect_ticks guard above covers: a step
+    registered in ``_build_tick_steps`` but missing from ``TICK_STEP_ORDER`` is
+    silently dropped, and every pending vector operation would stop advancing on
+    a live server while its unit tests kept passing.
+    """
+
+    class _FakeBranchSystem:
+        def __init__(self):
+            self.ticks = []
+
+        def process_tick(self, tick_number):
+            self.ticks.append(tick_number)
+
+    class _FakeCombatEngine:
+        def resolve_tick(self, buildings):
+            pass
+
+        def process_turrets(self, buildings, active_owner_ids=None):
+            pass
+
+        def tick_effects_on_entity(self, entity):
+            pass
+
+    def _script(self):
+        script = GameTickScript()
+        script._get_online_players = lambda: []
+        script._get_all_buildings = lambda: []
+        script._get_all_agents = lambda agent_system: []
+        script._get_all_enemies = lambda agent_system: []
+        return script
+
+    def test_step_emitted_and_drives_process_tick(self):
+        script = self._script()
+        branch = self._FakeBranchSystem()
+        systems = {"branch_system": branch, "event_bus": FakeEventBus()}
+        steps = dict(script._build_tick_steps(systems, tick_number=42))
+        # Must actually be EMITTED (present in TICK_STEP_ORDER), not merely
+        # registered — that is the wiring gap being guarded.
+        self.assertIn("vector_operations", steps)
+        steps["vector_operations"]()
+        self.assertEqual(branch.ticks, [42])
+
+    def test_step_ordered_after_combat_resolution_before_effect_ticks(self):
+        # A vector operation that resolves damage this tick must have its
+        # damage-over-time seeded by the same tick's effect step.
+        script = self._script()
+        systems = {
+            "branch_system": self._FakeBranchSystem(),
+            "combat_engine": self._FakeCombatEngine(),
+            "event_bus": FakeEventBus(),
+        }
+        names = [n for n, _ in script._build_tick_steps(systems, tick_number=1)]
+        self.assertLess(
+            names.index("combat_resolution"), names.index("vector_operations")
+        )
+        self.assertLess(
+            names.index("vector_operations"), names.index("effect_ticks")
+        )
+
+    def test_step_absent_without_branch_system(self):
+        script = self._script()
+        systems = {
+            "combat_engine": self._FakeCombatEngine(),
+            "event_bus": FakeEventBus(),
+        }
+        steps = script._build_tick_steps(systems, tick_number=1)
+        self.assertNotIn("vector_operations", [n for n, _ in steps])
+
+
 class TestBuildingCacheInvalidation(unittest.TestCase):
     """_get_all_buildings caches the tag search and re-runs it only when a
     building is created/destroyed (the building-index generation advances)."""

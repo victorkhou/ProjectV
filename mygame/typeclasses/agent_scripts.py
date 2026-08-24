@@ -975,6 +975,93 @@ class MedicScript(DefaultScript):
 
 
 # ------------------------------------------------------------------ #
+#  Carrier_Agent behavior scripts  (Branch framework)
+# ------------------------------------------------------------------ #
+#
+# One Script class per Branch Carrier_Agent role, because the role table binds
+# every role to a script class and a script key. These four are deliberately
+# per-tick SHELLS: the Carrier_Agent's job is to exist, be alive, be assigned,
+# and be out of reserve so its Branch's Vector_Operation may resolve (R7.1,
+# R7.5) — the operation logic itself lives in the per-Branch Vector_System each
+# vector spec introduces, not in the agent's own tick.
+#
+# `scout` (Recon) and `medic` (Biowarfare) are not here: both already have a
+# script (PatrolBehavior and MedicScript respectively) and keep it.
+
+
+class SpotterScript(DefaultScript):
+    """Ordnance (``weapons``) Carrier_Agent — Strategic_Strike designation.
+
+    Shell: designation and the flight-window behavior belong to the
+    Ordnance_System (``tech-tree-vector-ordnance``).
+    """
+
+    def at_script_creation(self) -> None:
+        self.key = "spotter_script"
+        self.desc = "Spotter agent designation loop"
+        self.interval = 0
+        self.persistent = True
+
+    def at_repeat(self) -> None:
+        # Placeholder: maintain Strategic_Strike designation.
+        pass
+
+
+class SapperScript(DefaultScript):
+    """Fortification (``defense``) Carrier_Agent — Trap placement.
+
+    Shell: placement, concealment, and arming belong to the
+    Fortification_System (``tech-tree-vector-fortification``).
+    """
+
+    def at_script_creation(self) -> None:
+        self.key = "sapper_script"
+        self.desc = "Sapper agent emplacement loop"
+        self.interval = 0
+        self.persistent = True
+
+    def at_repeat(self) -> None:
+        # Placeholder: tend placed Traps.
+        pass
+
+
+class CourierScript(DefaultScript):
+    """Logistics (``resource``) Carrier_Agent — Convoy escort.
+
+    Shell: convoy movement, cargo, and interception belong to the
+    Logistics_System (``tech-tree-vector-logistics``).
+    """
+
+    def at_script_creation(self) -> None:
+        self.key = "courier_script"
+        self.desc = "Courier agent convoy loop"
+        self.interval = 0
+        self.persistent = True
+
+    def at_repeat(self) -> None:
+        # Placeholder: run the Convoy leg.
+        pass
+
+
+class InfiltratorScript(DefaultScript):
+    """Signals (``cyber``) Carrier_Agent — Intrusion delivery.
+
+    Shell: intrusion, suspension, and purge belong to the Intrusion_System
+    (``tech-tree-vector-signals``).
+    """
+
+    def at_script_creation(self) -> None:
+        self.key = "infiltrator_script"
+        self.desc = "Infiltrator agent intrusion loop"
+        self.interval = 0
+        self.persistent = True
+
+    def at_repeat(self) -> None:
+        # Placeholder: hold the Intrusion on the target.
+        pass
+
+
+# ------------------------------------------------------------------ #
 #  Agent role & ability registry  (single source of truth)
 # ------------------------------------------------------------------ #
 #
@@ -1003,6 +1090,12 @@ class RoleSpec:
         hidden: True for roles whose behavior scripts are placeholder stubs —
             excluded from the player-facing VALID_ROLES until implemented
             (early-game rebalance R6). Admin paths may still assign them.
+        branch: The Branch this role belongs to, or None for a Branch-free role.
+            A role with a branch is assignable only under that
+            Branch_Commitment (R7.6), and is that Branch's Carrier_Agent for
+            Vector_Operation lookup (R7.2). The schema validator cross-checks
+            this field against ``world.constants.BRANCH_ROLE`` so the two
+            tables cannot drift (R7.11).
     """
 
     name: str
@@ -1011,6 +1104,9 @@ class RoleSpec:
     buildings: tuple[str, ...] = ()
     army: bool = False
     hidden: bool = False
+    #: The Branch this role belongs to, or None for a Branch-free role.
+    #: A role with a branch is assignable only under that Branch_Commitment.
+    branch: str | None = None
 
 
 @dataclass(frozen=True)
@@ -1029,15 +1125,41 @@ class AbilitySpec:
 
 #: Canonical role table. Order defines the user-facing ``VALID_ROLES`` order.
 #: Guard/scout are ARMY roles (no building requirement — R4.1): a new player
-#: can assign + patrol them immediately, without a Turret/Radar. Soldier and
-#: medic are hidden placeholders (pass-stub scripts) until implemented (R6).
+#: can assign + patrol them immediately, without a Turret/Radar. Soldier is a
+#: hidden placeholder (pass-stub script) until implemented (R6).
+#:
+#: Six roles carry a ``branch`` — one per Branch, the bijection R7.11 states and
+#: the schema validator enforces against ``world.constants.BRANCH_ROLE``.
+#:
+#: `medic` LOSES ``hidden=True`` here: it is the Biowarfare Carrier_Agent, so it
+#: is a real player-facing role now rather than a placeholder (R7.4).
+#:
+#: DECIDED ASYMMETRY — `scout` carries ``branch="research"`` for the R7.11
+#: bijection and for Carrier_Agent lookup, but ``AgentSystem.assign_role`` does
+#: NOT gate it. R7.6's commitment gate applies to "a role introduced by this
+#: feature"; `scout` is not one — it ships today as a free army role any player
+#: may assign, and gating it would break existing players' patrols. The five
+#: gated roles are `spotter`, `sapper`, `courier`, `infiltrator`, `medic`. The
+#: Recon Branch is still gated where it counts: a Detection_Sweep request fails
+#: the Branch_Commitment check in the operation validation chain (R8.3)
+#: regardless of who owns a scout.
 AGENT_ROLES: dict[str, RoleSpec] = {
     "harvester": RoleSpec("harvester", HarvesterScript, "harvester_script", buildings=("EX",)),
     "engineer": RoleSpec("engineer", EngineerScript, "engineer_script", buildings=("AR", "LB")),
     "soldier": RoleSpec("soldier", SoldierScript, "soldier_script", army=True, hidden=True),
     "guard": RoleSpec("guard", PatrolBehavior, "patrol_behavior", army=True),
-    "scout": RoleSpec("scout", PatrolBehavior, "patrol_behavior", army=True),
-    "medic": RoleSpec("medic", MedicScript, "medic_script", army=True, hidden=True),
+    "scout": RoleSpec("scout", PatrolBehavior, "patrol_behavior",
+                      army=True, branch="research"),
+    "medic": RoleSpec("medic", MedicScript, "medic_script",
+                      army=True, branch="bio"),
+    "spotter": RoleSpec("spotter", SpotterScript, "spotter_script",
+                        army=True, branch="weapons"),
+    "sapper": RoleSpec("sapper", SapperScript, "sapper_script",
+                       army=True, branch="defense"),
+    "courier": RoleSpec("courier", CourierScript, "courier_script",
+                        army=True, branch="resource"),
+    "infiltrator": RoleSpec("infiltrator", InfiltratorScript,
+                            "infiltrator_script", army=True, branch="cyber"),
 }
 
 #: Canonical gated-ability table.

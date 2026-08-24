@@ -1256,5 +1256,858 @@ class TestResearchLabTreeGate(unittest.TestCase):
         self.assertTrue(ok, msg)
 
 
+# -------------------------------------------------------------- #
+#  Branch dormancy filter on the bonus recompute
+#  (tech-tree-branch-foundation R5.1, R5.2, R5.3, R5.7, R5.10)
+# -------------------------------------------------------------- #
+
+class _NoLabPlayer(FakePlayer):
+    """A player who owns no research lab at all — no Branch_Commitment."""
+
+    def get_buildings(self):
+        return []
+
+
+class _SuspendedLabPlayer(FakePlayer):
+    """A player whose lab is offline AND mid-upgrade, but still standing.
+
+    R5.10's case: a non-Operational lab still confers its owner's commitment,
+    because commitment follows OWNERSHIP of a completed lab, not the lab's
+    Operational state.
+    """
+
+    def get_buildings(self):
+        labs = super().get_buildings()
+        for lab in labs:
+            lab.db.offline = True
+            lab.db.upgrading = True
+        return labs
+
+
+class _BrokenResolver:
+    """A Branch resolver whose filter blows up on every call."""
+
+    def __init__(self):
+        self.calls = 0
+
+    def applied_technologies(self, player, planet=None):
+        self.calls += 1
+        raise RuntimeError("resolver exploded")
+
+
+class TestBranchDormancyBonusFilter(unittest.TestCase):
+    """``recompute_tech_bonuses`` applies only the committed Branch's techs.
+
+    The dormancy filter (R5.1): the rebuild runs over the researched record but
+    accumulates only the technologies of the Branch the player is committed to
+    on the occupied planet, minus any still awaiting Reinstatement (R5.7). The
+    record itself is never touched (R5.3), and the filter comes from the real
+    ``BranchSystem`` so the bonus dict and the unlock gate share one definition
+    of an applied technology.
+
+    ``_TREE_TECHS`` spans three trees: ``wtech`` (weapons, ``damage`` 10),
+    ``dtech`` (defense, ``building_hp`` 50), ``rtech`` (research,
+    ``sight_range`` 2).
+    """
+
+    ALL_TECHS = ("wtech", "dtech", "rtech")
+
+    def setUp(self):
+        from mygame.world.systems.branch_system import BranchSystem
+
+        self.registry = _tree_registry()
+        self.tech = TechLabSystem(self.registry, EventBus())
+        self.branch = BranchSystem(
+            self.registry, EventBus(), tech_system=self.tech,
+        )
+
+    def _researcher(self, tree="weapons", researched=ALL_TECHS, cls=FakePlayer):
+        player = cls(research_tree=tree)
+        player.db.researched_techs = set(researched)
+        player.db.tech_bonuses = {}
+        return player
+
+    # -------------------------------------------------------------- #
+    #  Unwired: the pre-feature rebuild, unchanged
+    # -------------------------------------------------------------- #
+
+    def test_unwired_resolver_accumulates_every_researched_tech(self):
+        """No resolver injected → no dormancy, exactly as before this feature."""
+        player = self._researcher()
+        self.assertIsNone(self.tech._branch)
+
+        self.tech.recompute_tech_bonuses(player)
+
+        self.assertEqual(
+            player.db.tech_bonuses,
+            {"damage": 10.0, "building_hp": 50.0, "sight_range": 2.0},
+        )
+
+    def test_a_broken_resolver_rebuilds_unfiltered_instead_of_zeroing(self):
+        """A resolver that cannot answer must not silently erase every bonus."""
+        resolver = _BrokenResolver()
+        self.tech.set_branch_resolver(resolver)
+        player = self._researcher()
+
+        self.tech.recompute_tech_bonuses(player)
+
+        self.assertEqual(resolver.calls, 1)
+        self.assertEqual(
+            player.db.tech_bonuses,
+            {"damage": 10.0, "building_hp": 50.0, "sight_range": 2.0},
+        )
+
+    # -------------------------------------------------------------- #
+    #  Wired: the commitment filter (R5.1, R5.2)
+    # -------------------------------------------------------------- #
+
+    def test_only_the_committed_branchs_techs_apply(self):
+        self.tech.set_branch_resolver(self.branch)
+        expected = {
+            "weapons": {"damage": 10.0},
+            "defense": {"building_hp": 50.0},
+            "research": {"sight_range": 2.0},
+            # A committed Branch the player has researched nothing in applies
+            # nothing — and withholds the other Branches all the same.
+            "resource": {},
+        }
+        for tree, bonuses in expected.items():
+            with self.subTest(commitment=tree):
+                player = self._researcher(tree=tree)
+                self.tech.recompute_tech_bonuses(player)
+                self.assertEqual(player.db.tech_bonuses, bonuses)
+
+    def test_no_commitment_applies_nothing(self):
+        """R5.1 at its limit: committed to nothing → every tech is dormant."""
+        self.tech.set_branch_resolver(self.branch)
+        player = self._researcher(cls=_NoLabPlayer)
+
+        self.tech.recompute_tech_bonuses(player)
+
+        self.assertEqual(player.db.tech_bonuses, {})
+
+    def test_switching_the_committed_branch_swaps_the_applied_bonuses(self):
+        """R5.2: the next recompute is the whole mechanism — the dict is derived."""
+        self.tech.set_branch_resolver(self.branch)
+        player = self._researcher(tree="weapons")
+
+        self.tech.recompute_tech_bonuses(player)
+        self.assertEqual(player.db.tech_bonuses, {"damage": 10.0})
+
+        player._research_tree = "defense"        # the lab that stands changed
+        self.tech.recompute_tech_bonuses(player)
+        self.assertEqual(player.db.tech_bonuses, {"building_hp": 50.0})
+
+        # …and coming back restores the weapons bonus with no research (R5.9's
+        # premise: the record was never touched).
+        player._research_tree = "weapons"
+        self.tech.recompute_tech_bonuses(player)
+        self.assertEqual(player.db.tech_bonuses, {"damage": 10.0})
+
+    def test_the_filtered_rebuild_is_idempotent(self):
+        self.tech.set_branch_resolver(self.branch)
+        player = self._researcher(tree="weapons")
+
+        self.tech.recompute_tech_bonuses(player)
+        first = dict(player.db.tech_bonuses)
+        self.tech.recompute_tech_bonuses(player)
+
+        self.assertEqual(dict(player.db.tech_bonuses), first)
+
+    def test_an_explicit_planet_scopes_the_commitment(self):
+        """The optional planet argument is what the arrival trigger will pass."""
+        self.tech.set_branch_resolver(self.branch)
+        player = self._researcher(tree="weapons")   # lab stands on "terra"
+
+        self.tech.recompute_tech_bonuses(player, planet="terra")
+        self.assertEqual(player.db.tech_bonuses, {"damage": 10.0})
+
+        # On another planet the player owns no lab, so nothing is committed
+        # there and every recorded technology is dormant.
+        self.tech.recompute_tech_bonuses(player, planet="mars")
+        self.assertEqual(player.db.tech_bonuses, {})
+
+    # -------------------------------------------------------------- #
+    #  The record is untouched (R5.3)
+    # -------------------------------------------------------------- #
+
+    def test_the_researched_record_survives_dormancy(self):
+        self.tech.set_branch_resolver(self.branch)
+        for tree in ("weapons", "defense", "research", "resource"):
+            with self.subTest(commitment=tree):
+                player = self._researcher(tree=tree)
+                self.tech.recompute_tech_bonuses(player)
+                self.assertEqual(
+                    player.db.researched_techs, set(self.ALL_TECHS)
+                )
+
+    def test_no_commitment_still_keeps_the_record(self):
+        self.tech.set_branch_resolver(self.branch)
+        player = self._researcher(cls=_NoLabPlayer)
+
+        self.tech.recompute_tech_bonuses(player)
+
+        self.assertEqual(player.db.researched_techs, set(self.ALL_TECHS))
+
+    # -------------------------------------------------------------- #
+    #  Reinstatement pending (R5.7)
+    # -------------------------------------------------------------- #
+
+    def test_a_tech_awaiting_reinstatement_is_excluded(self):
+        from mygame.world.constants import ATTR_BRANCH_REINSTATEMENT
+
+        self.tech.set_branch_resolver(self.branch)
+        player = self._researcher(tree="weapons")
+        setattr(player.db, ATTR_BRANCH_REINSTATEMENT, {"weapons": ["wtech"]})
+
+        self.tech.recompute_tech_bonuses(player)
+        self.assertEqual(player.db.tech_bonuses, {})
+        self.assertIn("wtech", player.db.researched_techs)   # R5.3
+
+        # The job completes: the key leaves the pending set and the effect lands
+        # at the same moment a first-time research effect would.
+        setattr(player.db, ATTR_BRANCH_REINSTATEMENT, {"weapons": []})
+        self.tech.recompute_tech_bonuses(player)
+        self.assertEqual(player.db.tech_bonuses, {"damage": 10.0})
+
+    def test_an_absent_pending_set_withholds_nothing(self):
+        """Nothing writes the attribute until the Reinstatement bookkeeping
+        lands, so its documented default must apply everything committed."""
+        from mygame.world.constants import ATTR_BRANCH_REINSTATEMENT
+
+        self.tech.set_branch_resolver(self.branch)
+        player = self._researcher(tree="weapons")
+        self.assertIsNone(getattr(player.db, ATTR_BRANCH_REINSTATEMENT, None))
+
+        self.tech.recompute_tech_bonuses(player)
+
+        self.assertEqual(player.db.tech_bonuses, {"damage": 10.0})
+
+    # -------------------------------------------------------------- #
+    #  A suspended lab keeps its Branch applied (R5.10)
+    # -------------------------------------------------------------- #
+
+    def test_an_offline_mid_upgrade_lab_keeps_its_bonuses_applied(self):
+        self.tech.set_branch_resolver(self.branch)
+        player = self._researcher(tree="weapons", cls=_SuspendedLabPlayer)
+
+        self.tech.recompute_tech_bonuses(player)
+
+        # The lab withholds its FUNCTION, not the Branch's researched bonuses.
+        self.assertEqual(player.db.tech_bonuses, {"damage": 10.0})
+
+    # -------------------------------------------------------------- #
+    #  One definition of "applied"
+    # -------------------------------------------------------------- #
+
+    def test_the_filter_agrees_with_the_unlock_gates_verdict(self):
+        """The bonus filter and the building-unlock gate read the same rule.
+
+        Both ask ``BranchSystem`` whether a technology's effects are applied, so
+        a technology that unlocks a building is exactly a technology whose bonus
+        is in the dict — the two can never disagree about a dormant or
+        reinstatement-pending key.
+        """
+        from mygame.world.constants import ATTR_BRANCH_REINSTATEMENT
+
+        for tree in ("weapons", "defense", "research", "resource"):
+            for pending in ({}, {tree: ["wtech", "dtech", "rtech"]}):
+                with self.subTest(commitment=tree, pending=bool(pending)):
+                    player = self._researcher(tree=tree)
+                    setattr(player.db, ATTR_BRANCH_REINSTATEMENT, pending)
+                    applied = self.branch.applied_technologies(player)
+                    for key in self.ALL_TECHS:
+                        self.assertEqual(
+                            key in applied,
+                            self.branch._unapplied_reason(player, key) is None,
+                        )
+
+    def test_an_unrecorded_tech_is_never_applied(self):
+        self.tech.set_branch_resolver(self.branch)
+        player = self._researcher(tree="weapons", researched=())
+
+        self.tech.recompute_tech_bonuses(player)
+
+        self.assertEqual(player.db.tech_bonuses, {})
+        self.assertEqual(self.branch.applied_technologies(player), frozenset())
+
+    def test_a_stale_tech_key_is_skipped_under_the_filter(self):
+        """An unknown key in the record cannot raise and cannot apply."""
+        self.tech.set_branch_resolver(self.branch)
+        player = self._researcher(tree="weapons",
+                                  researched=("wtech", "deleted_tech"))
+
+        self.tech.recompute_tech_bonuses(player)   # must not raise
+
+        self.assertEqual(player.db.tech_bonuses, {"damage": 10.0})
+
+
+# -------------------------------------------------------------- #
+#  The Reinstatement research job
+#  (tech-tree-branch-foundation R5.6, R5.7, R5.8)
+# -------------------------------------------------------------- #
+
+#: Priced weapons techs for the Reinstatement job, chosen so the scaled values
+#: exercise the rounding and the floor at the default fraction of 0.5:
+#: ``Iron 100 -> 50`` and ``Wood 51 -> 26`` (round-half-to-even on 25.5),
+#: ``7 ticks -> 4``; and on the cheap one ``Iron 1 -> 1`` and ``1 tick -> 1``,
+#: which are the floor rather than the arithmetic.
+_JOB_TECHS = {
+    "wpriced": TechnologyDef(
+        name="Priced Weapon Tech", key="wpriced", tree="weapons",
+        required_rank="Recruit", resource_cost={"Iron": 100, "Wood": 51},
+        research_ticks=7, effect_type="stat_bonus",
+        effect_value={"damage": 10},
+    ),
+    "wcheap": TechnologyDef(
+        name="Cheap Weapon Tech", key="wcheap", tree="weapons",
+        required_rank="Recruit", resource_cost={"Iron": 1, "Wood": 3},
+        research_ticks=1, effect_type="stat_bonus",
+        effect_value={"building_hp": 5},
+    ),
+    "wranked": TechnologyDef(
+        name="Ranked Weapon Tech", key="wranked", tree="weapons",
+        required_rank="Captain", resource_cost={"Iron": 10},
+        research_ticks=4, effect_type="stat_bonus",
+        effect_value={"damage": 1},
+    ),
+    "dpriced": TechnologyDef(
+        name="Priced Defense Tech", key="dpriced", tree="defense",
+        required_rank="Recruit", resource_cost={"Iron": 10},
+        research_ticks=4, effect_type="stat_bonus",
+        effect_value={"building_hp": 50},
+    ),
+}
+
+
+class TestReinstatementResearchJob(unittest.TestCase):
+    """A Reinstatement job is an ordinary research job at a reduced price.
+
+    It rides the same ``_active_research`` queue, the same tick countdown, the
+    same completion publish, and the same gates — the rank gate included,
+    unchanged (R5.8). Two things differ: the resource cost per line and the
+    duration are scaled by ``balance.branch_reinstatement_cost_fraction``
+    (R5.6), and completing it clears the key from the Branch's pending set and
+    rebuilds the bonus dict rather than adding to a record that already holds
+    the key (R5.7).
+    """
+
+    def setUp(self):
+        from mygame.world.constants import ATTR_BRANCH_REINSTATEMENT
+        from mygame.world.systems.branch_system import BranchSystem
+
+        self.attr = ATTR_BRANCH_REINSTATEMENT
+        self.registry = _make_registry()
+        self.registry.technologies = dict(_JOB_TECHS)
+        self.bus = EventBus()
+        self.tech = TechLabSystem(self.registry, self.bus)
+        self.branch = BranchSystem(
+            self.registry, self.bus, tech_system=self.tech,
+        )
+        self.tech.set_branch_resolver(self.branch)
+
+    def _reinstater(self, pending=("wpriced",), recorded=("wpriced",),
+                    rank_level=5, tree="weapons"):
+        """A committed player whose record holds *recorded*, *pending* owed."""
+        player = FakePlayer(
+            rank_level=rank_level, research_tree=tree,
+            resources={"Iron": 500, "Wood": 500},
+        )
+        player.db.researched_techs = set(recorded)
+        player.db.tech_bonuses = {}
+        setattr(player.db, self.attr, {tree: list(pending)})
+        return player
+
+    def _pending(self, player):
+        return getattr(player.db, self.attr)
+
+    def _tick(self, times):
+        for _ in range(times):
+            self.tech.process_tick()
+
+    # -------------------------------------------------------------- #
+    #  start_research treats a pending key as reinstatable (R5.7)
+    # -------------------------------------------------------------- #
+
+    def test_a_pending_key_starts_a_job_instead_of_being_refused(self):
+        player = self._reinstater()
+
+        ok, msg = self.tech.start_research(player, "wpriced")
+
+        self.assertTrue(ok, msg)
+        self.assertIn("reinstat", msg.lower())
+
+    def test_a_recorded_key_with_nothing_pending_is_still_refused(self):
+        player = self._reinstater(pending=())
+
+        ok, msg = self.tech.start_research(player, "wpriced")
+
+        self.assertFalse(ok)
+        self.assertIn("already researched", msg)
+        self.assertEqual(player.get_resource("Iron"), 500)
+        self.assertEqual(self.tech._active_research, [])
+
+    def test_an_unwired_resolver_keeps_the_pre_feature_refusal(self):
+        """No resolver → no Reinstatement, so a recorded key is simply done."""
+        self.tech.set_branch_resolver(None)
+        player = self._reinstater()
+
+        ok, msg = self.tech.start_research(player, "wpriced")
+
+        self.assertFalse(ok)
+        self.assertIn("already researched", msg)
+
+    def test_a_broken_resolver_refuses_rather_than_discounting(self):
+        class _Exploding:
+            def reinstatement_pending(self, player, tech_key):
+                raise RuntimeError("resolver exploded")
+
+        self.tech.set_branch_resolver(_Exploding())
+        player = self._reinstater()
+
+        ok, msg = self.tech.start_research(player, "wpriced")
+
+        self.assertFalse(ok)
+        self.assertIn("already researched", msg)
+
+    def test_the_job_cannot_be_started_twice(self):
+        player = self._reinstater()
+        self.assertTrue(self.tech.start_research(player, "wpriced")[0])
+
+        ok, msg = self.tech.start_research(player, "wpriced")
+
+        self.assertFalse(ok)
+        self.assertIn("already being researched", msg)
+        self.assertEqual(len(self.tech._active_research), 1)
+
+    def test_the_tree_gate_still_applies_to_a_reinstatement_job(self):
+        """The Branch's lab must be owned — reinstating is researching."""
+        player = self._reinstater(pending=("dpriced",), recorded=("dpriced",))
+        setattr(player.db, self.attr, {"defense": ["dpriced"]})
+
+        ok, msg = self.tech.start_research(player, "dpriced")
+
+        self.assertFalse(ok)
+        self.assertIn("defense", msg)
+        self.assertIn("weapons", msg)
+
+    # -------------------------------------------------------------- #
+    #  The existing rank gate, unchanged (R5.8)
+    # -------------------------------------------------------------- #
+
+    def test_the_rank_gate_refuses_a_reinstatement_job_too(self):
+        player = self._reinstater(pending=("wranked",), recorded=("wranked",),
+                                  rank_level=1)
+
+        ok, msg = self.tech.start_research(player, "wranked")
+
+        self.assertFalse(ok)
+        self.assertIn("Requires rank", msg)
+        self.assertEqual(player.get_resource("Iron"), 500)
+        self.assertEqual(self.tech._active_research, [])
+
+    def test_the_rank_gate_passes_a_reinstatement_job_at_rank(self):
+        player = self._reinstater(pending=("wranked",), recorded=("wranked",),
+                                  rank_level=5)
+
+        ok, msg = self.tech.start_research(player, "wranked")
+
+        self.assertTrue(ok, msg)
+
+    # -------------------------------------------------------------- #
+    #  The marker, and the shared queue (R5.6)
+    # -------------------------------------------------------------- #
+
+    def test_the_entry_carries_the_reinstatement_marker(self):
+        player = self._reinstater()
+
+        self.tech.start_research(player, "wpriced")
+
+        entry = self.tech._active_research[0]
+        self.assertIs(entry["reinstatement"], True)
+        self.assertEqual(entry["tech_key"], "wpriced")
+        self.assertIs(entry["player"], player)
+
+    def test_a_first_time_job_carries_no_marker(self):
+        player = self._reinstater(pending=(), recorded=())
+
+        self.tech.start_research(player, "wpriced")
+
+        self.assertIs(self.tech._active_research[0]["reinstatement"], False)
+
+    # -------------------------------------------------------------- #
+    #  Scaled cost and duration (R5.6)
+    # -------------------------------------------------------------- #
+
+    def test_the_cost_is_scaled_per_resource_line(self):
+        player = self._reinstater()
+
+        self.tech.start_research(player, "wpriced")
+
+        # Iron 100 * 0.5 = 50; Wood 51 * 0.5 = 25.5 -> 26.
+        self.assertEqual(player.get_resource("Iron"), 450)
+        self.assertEqual(player.get_resource("Wood"), 474)
+
+    def test_the_duration_is_scaled(self):
+        player = self._reinstater()
+
+        self.tech.start_research(player, "wpriced")
+
+        # 7 ticks * 0.5 = 3.5 -> 4, and the countdown is the shared one.
+        self.assertEqual(self.tech._active_research[0]["ticks_remaining"], 4)
+        self._tick(3)
+        self.assertEqual(len(self.tech._active_research), 1)
+        self._tick(1)
+        self.assertEqual(self.tech._active_research, [])
+
+    def test_a_cheap_technology_keeps_a_floor_of_one_per_line_and_tick(self):
+        player = self._reinstater(pending=("wcheap",), recorded=("wcheap",))
+
+        ok, msg = self.tech.start_research(player, "wcheap")
+
+        self.assertTrue(ok, msg)
+        # Iron 1 * 0.5 = 0.5 -> 0, floored to 1; Wood 3 * 0.5 -> 2.
+        self.assertEqual(player.get_resource("Iron"), 499)
+        self.assertEqual(player.get_resource("Wood"), 498)
+        self.assertEqual(self.tech._active_research[0]["ticks_remaining"], 1)
+
+    def test_a_fraction_of_one_charges_the_defined_values(self):
+        self.registry.balance.branch_reinstatement_cost_fraction = 1.0
+        player = self._reinstater()
+
+        self.tech.start_research(player, "wpriced")
+
+        self.assertEqual(player.get_resource("Iron"), 400)
+        self.assertEqual(player.get_resource("Wood"), 449)
+        self.assertEqual(self.tech._active_research[0]["ticks_remaining"], 7)
+
+    def test_a_fraction_of_zero_still_costs_one_per_line_and_one_tick(self):
+        self.registry.balance.branch_reinstatement_cost_fraction = 0.0
+        player = self._reinstater()
+
+        self.tech.start_research(player, "wpriced")
+
+        self.assertEqual(player.get_resource("Iron"), 499)
+        self.assertEqual(player.get_resource("Wood"), 499)
+        self.assertEqual(self.tech._active_research[0]["ticks_remaining"], 1)
+
+    def test_a_first_time_job_is_never_scaled(self):
+        player = self._reinstater(pending=(), recorded=())
+
+        self.tech.start_research(player, "wpriced")
+
+        self.assertEqual(player.get_resource("Iron"), 400)
+        self.assertEqual(player.get_resource("Wood"), 449)
+        self.assertEqual(self.tech._active_research[0]["ticks_remaining"], 7)
+
+    def test_an_insufficient_purse_is_measured_against_the_scaled_cost(self):
+        player = self._reinstater()
+        player._resources.update({"Iron": 40, "Wood": 500})
+
+        ok, msg = self.tech.start_research(player, "wpriced")
+
+        self.assertFalse(ok)
+        self.assertIn("Iron: 40/50", msg)          # the scaled need, not 100
+        self.assertEqual(player.get_resource("Iron"), 40)
+
+    # -------------------------------------------------------------- #
+    #  Completion clears the key and the effect lands (R5.7)
+    # -------------------------------------------------------------- #
+
+    def test_completion_clears_the_key_and_applies_the_effect(self):
+        player = self._reinstater()
+        self.tech.recompute_tech_bonuses(player)
+        self.assertEqual(player.db.tech_bonuses, {})    # withheld while pending
+
+        self.tech.start_research(player, "wpriced")
+        self._tick(4)
+
+        self.assertEqual(self._pending(player), {})
+        self.assertEqual(player.db.tech_bonuses, {"damage": 10.0})
+        self.assertEqual(player.db.researched_techs, {"wpriced"})   # R5.3
+
+    def test_only_the_completed_key_leaves_the_pending_set(self):
+        player = self._reinstater(pending=("wpriced", "wcheap"),
+                                  recorded=("wpriced", "wcheap"))
+
+        self.tech.start_research(player, "wcheap")
+        self._tick(1)
+
+        self.assertEqual(self._pending(player), {"weapons": ["wpriced"]})
+        # The finished one applies; the one still owed stays withheld.
+        self.assertEqual(player.db.tech_bonuses, {"building_hp": 5.0})
+
+    def test_the_effect_is_withheld_until_the_countdown_ends(self):
+        player = self._reinstater()
+
+        self.tech.start_research(player, "wpriced")
+        self._tick(3)
+
+        self.assertEqual(self._pending(player), {"weapons": ["wpriced"]})
+        self.assertEqual(player.db.tech_bonuses, {})
+
+    def test_completion_publishes_the_same_research_event(self):
+        events = []
+        self.bus.subscribe(TECHNOLOGY_RESEARCHED, lambda **kw: events.append(kw))
+        player = self._reinstater()
+
+        self.tech.start_research(player, "wpriced")
+        self._tick(4)
+
+        self.assertEqual(len(events), 1)
+        self.assertIs(events[0]["player"], player)
+        self.assertEqual(events[0]["technology"].key, "wpriced")
+
+    def test_a_reinstated_key_can_be_reinstated_again_after_a_reseed(self):
+        """A second abandonment owes the key again; the job runs again."""
+        player = self._reinstater()
+        self.tech.start_research(player, "wpriced")
+        self._tick(4)
+
+        setattr(player.db, self.attr, {"weapons": ["wpriced"]})   # reseeded
+        ok, msg = self.tech.start_research(player, "wpriced")
+
+        self.assertTrue(ok, msg)
+        self._tick(4)
+        self.assertEqual(self._pending(player), {})
+        self.assertEqual(player.db.tech_bonuses, {"damage": 10.0})
+
+    def test_a_completion_never_raises_when_the_resolver_cannot_clear(self):
+        """A tick must survive a resolver that cannot take the write."""
+        class _Exploding:
+            def reinstatement_pending(self, player, tech_key):
+                return True
+
+            def on_reinstatement_completed(self, player, tech_key):
+                raise RuntimeError("resolver exploded")
+
+        self.tech.set_branch_resolver(_Exploding())
+        player = self._reinstater()
+
+        self.tech.start_research(player, "wpriced")
+        self._tick(4)                                  # must not raise
+
+        self.assertEqual(self.tech._active_research, [])
+        self.assertEqual(self._pending(player), {"weapons": ["wpriced"]})
+
+    def test_a_first_time_job_completes_exactly_as_before(self):
+        """The shared path is untouched for a technology never researched."""
+        player = self._reinstater(pending=(), recorded=())
+
+        self.tech.start_research(player, "wpriced")
+        self._tick(7)
+
+        self.assertEqual(player.db.researched_techs, {"wpriced"})
+        self.assertEqual(player.db.tech_bonuses, {"damage": 10.0})
+
+
+# -------------------------------------------------------------- #
+#  The technology view (R13.1, R13.2, R13.5)
+# -------------------------------------------------------------- #
+
+class TestTechnologyView(unittest.TestCase):
+    """``report_technology_view`` publishes the whole view as structured data.
+
+    R13.1: the commitment on the occupied planet, that Branch's
+    Signature_Vector, and that Branch's researched and available technologies.
+    R13.2: every dormant Branch with the count of technologies recorded in it,
+    plus the Reinstatement cost fraction. R13.5: figures and keys only — the
+    ``technology_view`` formatter in the NotificationPresenter owns every word.
+    """
+
+    def setUp(self):
+        from mygame.world.systems.branch_system import BranchSystem
+
+        self.registry = _tree_registry()
+        self.bus = EventBus()
+        self.tech = TechLabSystem(self.registry, self.bus)
+        self.branch = BranchSystem(
+            self.registry, self.bus, tech_system=self.tech,
+        )
+        self.tech.set_branch_resolver(self.branch)
+
+    def _viewer(self, tree="weapons", researched=("wtech", "dtech", "rtech"),
+                cls=FakePlayer):
+        player = cls(research_tree=tree)
+        player.db.researched_techs = set(researched)
+        return player
+
+    def _published(self, player):
+        """The (kind, data) pairs the view publishes for *player*."""
+        from mygame.world.event_bus import PLAYER_NOTIFICATION
+
+        seen = []
+        self.bus.subscribe(
+            PLAYER_NOTIFICATION,
+            lambda player=None, kind=None, data=None, **kw: seen.append(
+                (player, kind, data)
+            ),
+        )
+        view = self.tech.report_technology_view(player)
+        return view, seen
+
+    # -------------------------------------------------------------- #
+    #  R13.1 — commitment, signature vector, researched, available
+    # -------------------------------------------------------------- #
+
+    def test_the_view_reports_the_commitment_and_its_signature_vector(self):
+        from mygame.world.constants import (
+            BRANCH_DOCTRINE, BRANCH_OPERATION_KIND,
+        )
+
+        for tree in ("weapons", "defense", "resource", "research"):
+            with self.subTest(commitment=tree):
+                view = self.tech.report_technology_view(self._viewer(tree=tree))
+                self.assertEqual(view["branch"], tree)
+                self.assertEqual(view["doctrine"], BRANCH_DOCTRINE[tree])
+                self.assertEqual(
+                    view["operation_kind"], BRANCH_OPERATION_KIND[tree]
+                )
+                self.assertEqual(view["planet"], "terra")
+
+    def test_the_view_reports_the_committed_branchs_researched_technologies(self):
+        view = self.tech.report_technology_view(self._viewer(tree="defense"))
+
+        self.assertEqual(
+            view["researched"], [{"key": "dtech", "name": "Defense Tech"}]
+        )
+
+    def test_the_view_reports_the_technologies_available_to_research(self):
+        view = self.tech.report_technology_view(
+            self._viewer(tree="weapons", researched=())
+        )
+
+        self.assertEqual(
+            [entry["key"] for entry in view["available"]], ["wtech"]
+        )
+        self.assertEqual(view["researched"], [])
+
+    def test_no_commitment_reports_no_branch_and_nothing_researchable(self):
+        """R13.1 at its limit: no lab here, so no doctrine is committed."""
+        view = self.tech.report_technology_view(self._viewer(cls=_NoLabPlayer))
+
+        self.assertIsNone(view["branch"])
+        self.assertIsNone(view["doctrine"])
+        self.assertIsNone(view["operation_kind"])
+        self.assertEqual(view["researched"], [])
+        self.assertEqual(view["available"], [])
+
+    def test_a_suspended_lab_still_reports_its_commitment(self):
+        """R3.9/R5.10: commitment follows ownership, not Operational state."""
+        view = self.tech.report_technology_view(
+            self._viewer(tree="weapons", cls=_SuspendedLabPlayer)
+        )
+
+        self.assertEqual(view["branch"], "weapons")
+
+    # -------------------------------------------------------------- #
+    #  R13.2 — dormant Branches and the Reinstatement fraction
+    # -------------------------------------------------------------- #
+
+    def test_the_view_counts_the_record_in_each_dormant_branch(self):
+        view = self.tech.report_technology_view(self._viewer(tree="weapons"))
+
+        self.assertEqual(view["dormant"], [
+            {"branch": "defense", "doctrine": "Fortification", "count": 1},
+            {"branch": "research", "doctrine": "Recon", "count": 1},
+        ])
+        self.assertEqual(view["dormant_count"], 2)
+
+    def test_no_commitment_leaves_the_whole_record_dormant(self):
+        view = self.tech.report_technology_view(self._viewer(cls=_NoLabPlayer))
+
+        self.assertEqual(
+            [entry["branch"] for entry in view["dormant"]],
+            ["weapons", "defense", "research"],
+        )
+        self.assertEqual(view["dormant_count"], 3)
+
+    def test_a_record_wholly_inside_the_commitment_reports_no_dormancy(self):
+        view = self.tech.report_technology_view(
+            self._viewer(tree="weapons", researched=("wtech",))
+        )
+
+        self.assertEqual(view["dormant"], [])
+        self.assertEqual(view["dormant_count"], 0)
+
+    def test_the_view_quotes_the_configured_reinstatement_fraction(self):
+        self.registry.balance.branch_reinstatement_cost_fraction = 0.25
+
+        view = self.tech.report_technology_view(self._viewer())
+
+        self.assertEqual(view["reinstatement_fraction"], 0.25)
+
+    def test_the_view_names_the_keys_still_awaiting_reinstatement(self):
+        from mygame.world.constants import ATTR_BRANCH_REINSTATEMENT
+
+        player = self._viewer(tree="weapons")
+        setattr(player.db, ATTR_BRANCH_REINSTATEMENT, {"weapons": ["wtech"]})
+
+        view = self.tech.report_technology_view(player)
+
+        self.assertEqual(view["reinstatement_pending"], ["wtech"])
+        # The key is still on record, so it is still reported as researched.
+        self.assertEqual([e["key"] for e in view["researched"]], ["wtech"])
+
+    def test_an_unwired_resolver_still_reports_the_record_it_can_read(self):
+        """No Branch system wired: the view groups the record locally."""
+        self.tech.set_branch_resolver(None)
+
+        view = self.tech.report_technology_view(self._viewer(tree="weapons"))
+
+        self.assertEqual(view["branch"], "weapons")
+        self.assertEqual(view["dormant_count"], 2)
+        self.assertEqual(view["reinstatement_pending"], [])
+
+    def test_a_broken_resolver_falls_back_instead_of_raising(self):
+        class _Exploding:
+            def commitment(self, player, planet=None):
+                return "weapons"
+
+            def dormant_branches(self, player, planet=None):
+                raise RuntimeError("resolver exploded")
+
+        self.tech.set_branch_resolver(_Exploding())
+
+        view = self.tech.report_technology_view(self._viewer(tree="weapons"))
+
+        self.assertEqual(view["branch"], "weapons")
+        self.assertEqual(view["dormant_count"], 2)
+
+    # -------------------------------------------------------------- #
+    #  R13.5 — one structured notification, no composed text
+    # -------------------------------------------------------------- #
+
+    def test_the_view_publishes_one_structured_notification(self):
+        player = self._viewer()
+
+        view, seen = self._published(player)
+
+        self.assertEqual(len(seen), 1)
+        target, kind, data = seen[0]
+        self.assertIs(target, player)
+        self.assertEqual(kind, "technology_view")
+        self.assertEqual(data, view)
+
+    def test_the_published_kind_has_a_formatter(self):
+        from mygame.world.presenters.notification_presenter import (
+            NotificationPresenter,
+        )
+
+        self.assertIn("technology_view", NotificationPresenter._FORMATTERS)
+
+    def test_the_view_writes_nothing(self):
+        """Asking for the view changes no record and no bonus dict."""
+        player = self._viewer(tree="weapons")
+        player.db.tech_bonuses = {"damage": 10.0}
+
+        self.tech.report_technology_view(player)
+
+        self.assertEqual(
+            player.db.researched_techs, {"wtech", "dtech", "rtech"}
+        )
+        self.assertEqual(player.db.tech_bonuses, {"damage": 10.0})
+
+
 if __name__ == "__main__":
     unittest.main()
