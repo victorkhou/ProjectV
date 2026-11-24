@@ -47,60 +47,6 @@ class ResourceSystem(BaseSystem):
     # Uses BaseSystem.__init__(registry, event_bus) unchanged.
 
     # ------------------------------------------------------------------ #
-    #  Manual harvest
-    # ------------------------------------------------------------------ #
-
-    def harvest(self, player: Any, tile: Any) -> tuple[bool, str]:
-        """Harvest a resource from the tile's resource node.
-
-        Flow:
-            1. Check tile has a resource_node
-            2. Check node is not depleted
-            3. Determine resource_type from the node
-            4. Add gather_amount to player
-            5. Mark node depleted, set respawn_counter
-            6. Publish resource_gathered event
-
-        Returns:
-            (success, message) tuple.
-        """
-        # Read resource node data from tile
-        node = self._get_resource_node(tile)
-        if node is None:
-            return False, "No resource node on this tile."
-
-        if node.get("depleted", False):
-            return False, "This resource node is depleted."
-
-        resource_type = node.get("resource_type")
-        if not resource_type:
-            return False, "This resource node has no resource type."
-
-        # Determine yield amount from balance config, scaled by planet tier.
-        gather_amount = self.registry.balance.gather_amount
-        planet_key = getattr(getattr(player, "db", None), "coord_planet", None)
-        gather_amount = self._scale_yield_by_planet(gather_amount, planet_key)
-
-        # Add resources to player
-        player.add_resource(resource_type, gather_amount)
-
-        # Mark node as depleted and set respawn counter
-        node["depleted"] = True
-        node["respawn_counter"] = self.registry.balance.resource_respawn_ticks
-        self._set_resource_node(tile, node)
-
-        # Publish event
-        self.event_bus.publish(
-            RESOURCE_GATHERED,
-            player=player,
-            resource_type=resource_type,
-            amount=gather_amount,
-            tile=tile,
-        )
-
-        return True, f"Harvested {gather_amount} {resource_type}."
-
-    # ------------------------------------------------------------------ #
     #  Active-presence harvesting
     # ------------------------------------------------------------------ #
 
@@ -113,9 +59,7 @@ class ResourceSystem(BaseSystem):
         ``activity_target`` to the tile.  The player must remain on the
         tile for :meth:`process_harvest_tick` to yield resources.
 
-        Supports both legacy OverworldRoom tiles (with resource_node_data)
-        and PlanetRoom-based harvesting (where the tile IS a PlanetRoom
-        and coordinates come from the player).
+        The tile is a PlanetRoom; coordinates come from the player.
 
         Returns:
             (success, message) tuple.
@@ -127,32 +71,16 @@ class ResourceSystem(BaseSystem):
             if under_construction:
                 return False, "This building is still under construction."
 
-        # Determine resource info — PlanetRoom path or legacy path
         resource_type = None
-        is_depleted = False
 
         if hasattr(tile, "is_node_depleted") and hasattr(player, "db"):
             # PlanetRoom path: use player coordinates + TerrainGenerator
             p_coords = coords_of(player)
             if p_coords is not None:
                 px, py, _planet = p_coords
-                is_depleted = tile.is_node_depleted(px, py)
-                if not is_depleted:
+                if not tile.is_node_depleted(px, py):
                     # Get resource type from TerrainGenerator
                     resource_type = self._get_terrain_resource(player, px, py)
-
-        if resource_type is None:
-            # Legacy OverworldRoom path
-            node = self._get_resource_node(tile)
-            if node is None:
-                return False, "No resource node on this tile."
-            resource_type = node.get("resource_type")
-            if not resource_type:
-                return False, "This tile has no harvestable resource."
-            is_depleted = node.get("depleted", False)
-
-        if is_depleted:
-            return False, "This resource node is depleted."
 
         if not resource_type:
             return False, "No resource node on this tile."
@@ -198,8 +126,7 @@ class ResourceSystem(BaseSystem):
 
         If the node becomes depleted, the player returns to ``"idle"``.
 
-        Supports both legacy OverworldRoom tiles and PlanetRoom-based
-        harvesting where coordinates come from the player.
+        The target tile is a PlanetRoom; coordinates come from the player.
 
         Returns:
             ``True`` if resources were yielded this tick.
@@ -219,9 +146,7 @@ class ResourceSystem(BaseSystem):
         if not self._player_on_tile(player, tile):
             return False  # paused — don't reset, just skip
 
-        # Determine resource info — PlanetRoom path or legacy path
         resource_type = None
-        is_depleted = False
         p_coords = coords_of(player)
         if p_coords is None:
             px = py = None
@@ -229,19 +154,10 @@ class ResourceSystem(BaseSystem):
             px, py, _planet = p_coords
 
         if hasattr(tile, "is_node_depleted") and px is not None and py is not None:
-            # PlanetRoom path
-            is_depleted = tile.is_node_depleted(px, py)
-            if not is_depleted:
+            if not tile.is_node_depleted(px, py):
                 resource_type = self._get_terrain_resource(player, px, py)
-        else:
-            # Legacy OverworldRoom path
-            node = self._get_resource_node(tile)
-            if node is None or node.get("depleted", False):
-                is_depleted = True
-            else:
-                resource_type = node.get("resource_type")
 
-        if is_depleted or not resource_type:
+        if not resource_type:
             player.db.activity_state = "idle"
             player.db.activity_target = None
             player.db.activity_progress = 0
@@ -269,20 +185,10 @@ class ResourceSystem(BaseSystem):
                 # (no change) for a non-member or an alliance without the perk.
                 amount = int(amount * self._alliance_harvest_multiplier(player))
 
-            # Determine drop location and coordinates
-            if hasattr(tile, "is_node_depleted") and px is not None and py is not None:
-                # PlanetRoom path: spawn drop at player coordinates
-                drop = self._spawn_resource_drop(
-                    tile, resource_type, amount, x=px, y=py
-                )
-            else:
-                # Legacy path: drop in OverworldRoom
-                building = getattr(tile, "building", None)
-                if building is not None and self._get_building_type(building) is not None:
-                    drop_location = getattr(building, "location", None) or tile
-                else:
-                    drop_location = tile
-                drop = self._spawn_resource_drop(drop_location, resource_type, amount)
+            # Spawn the drop at the player's coordinates
+            drop = self._spawn_resource_drop(
+                tile, resource_type, amount, x=px, y=py
+            )
 
             # A full tile refuses a NEW drop (returns None). Tell the player the
             # ground is full instead of the misleading "you harvested N" line,
@@ -503,20 +409,12 @@ class ResourceSystem(BaseSystem):
     def process_respawns(self, tiles: list) -> None:
         """Process respawn counters for depleted resource nodes.
 
-        Supports both PlanetRoom objects (with get_depleted_nodes/
-        clear_node_depletion) and legacy OverworldRoom tiles (with
-        resource_node_data attribute).
-
-        For PlanetRoom:
+        For each PlanetRoom (with get_depleted_nodes/clear_node_depletion):
             - Iterate get_depleted_nodes(), decrement counters
             - Call clear_node_depletion when counter reaches 0
 
-        For legacy OverworldRoom tiles:
-            - Decrement respawn_counter on resource_node_data
-            - Set depleted=False when counter reaches 0
-
         Args:
-            tiles: List of PlanetRoom or OverworldRoom tiles to process.
+            tiles: List of PlanetRoom objects to process.
         """
         for tile in tiles:
             # PlanetRoom path: iterate depletion dict
@@ -545,64 +443,10 @@ class ResourceSystem(BaseSystem):
                             tile.clear_node_depletion(int(parts[0]), int(parts[1]))
                         except (ValueError, TypeError):
                             pass
-                continue
-
-            # Legacy OverworldRoom path
-            node = self._get_resource_node(tile)
-            if node is None:
-                continue
-
-            if not node.get("depleted", False):
-                continue
-
-            counter = node.get("respawn_counter", 0)
-            counter -= 1
-
-            if counter <= 0:
-                node["depleted"] = False
-                node["respawn_counter"] = 0
-            else:
-                node["respawn_counter"] = counter
-
-            self._set_resource_node(tile, node)
 
     # ------------------------------------------------------------------ #
     #  Internal helpers
     # ------------------------------------------------------------------ #
-
-    def _scale_yield_by_planet(self, base_amount: int, planet_key: str | None) -> int:
-        """Scale a harvest yield by the planet's tier multiplier (Phase 4).
-
-        The multiplier is the planet's ``yield_scale`` field in planets.yaml
-        (data-driven — adding a planet needs no code change), read via the
-        shared ``world.utils.planet_scale`` lookup. Unknown planets scale 1.0.
-        """
-        if not planet_key:
-            return base_amount
-        from world.utils import planet_scale
-        scale = planet_scale(planet_key, "yield_scale")
-        return max(1, int(round(base_amount * scale)))
-
-    @staticmethod
-    def _get_resource_node(tile: Any) -> dict | None:
-        """Read the resource node dict from a tile."""
-        # Try Evennia Attribute handler first
-        if hasattr(tile, "attributes") and hasattr(tile.attributes, "get"):
-            data = tile.attributes.get("resource_node_data", default=None)
-            if data is not None:
-                return data
-
-        # Fallback: try .resource_node property
-        node = getattr(tile, "resource_node", None)
-        return dict(node) if node else None
-
-    @staticmethod
-    def _set_resource_node(tile: Any, node: dict) -> None:
-        """Write the resource node dict back to a tile."""
-        if hasattr(tile, "attributes") and hasattr(tile.attributes, "add"):
-            tile.attributes.add("resource_node_data", node)
-        elif hasattr(tile, "db"):
-            tile.db.resource_node_data = node
 
     @staticmethod
     def _get_building_type(building: Any) -> str | None:
@@ -791,7 +635,7 @@ class ResourceSystem(BaseSystem):
         """Determine the resource type for an Extractor.
 
         Checks the building's stored ``resource_type`` attribute first,
-        then falls back to reading the terrain tile's resource node.
+        then falls back to the terrain tile's ``resource_type``.
         Used by both ``process_extractor_production`` and
         ``HarvesterScript``.
         """
@@ -810,14 +654,6 @@ class ResourceSystem(BaseSystem):
         if tile is None:
             return None
 
-        # Try resource_node_data dict
-        node = None
-        if hasattr(tile, "attributes") and hasattr(tile.attributes, "get"):
-            node = tile.attributes.get("resource_node_data", default=None)
-        if isinstance(node, dict):
-            return node.get("resource_type")
-
-        # Try direct terrain attribute
         return getattr(tile, "resource_type", None)
 
     @staticmethod

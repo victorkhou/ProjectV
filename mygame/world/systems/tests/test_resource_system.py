@@ -1,7 +1,7 @@
 """
 Unit tests for ResourceSystem.
 
-Tests harvest validation, production processing, and respawn cycles.
+Tests active-presence harvesting, production processing, and respawn cycles.
 
 Requirements: 2.1, 2.2, 2.3, 2.5, 2.6, 2.7, 5.2, 5.8, 15.1, 15.2,
               15.3, 15.4
@@ -56,6 +56,7 @@ from mygame.world.systems.equipment_handler import EquipmentHandler  # noqa: E40
 from mygame.world.data_registry import DataRegistry  # noqa: E402
 from mygame.world.definitions import BalanceConfig, BuildingDef, TerrainDef  # noqa: E402
 from mygame.world.event_bus import EventBus  # noqa: E402
+from world import services  # noqa: E402
 
 # -------------------------------------------------------------- #
 #  Helpers / Fakes
@@ -106,21 +107,15 @@ class FakePlayer:
         return True
 
 class FakeTile:
-    """Lightweight stand-in for an OverworldRoom tile."""
+    """Lightweight stand-in for a tile."""
 
-    def __init__(self, terrain_type="Plains", resource_node=None):
+    def __init__(self, terrain_type="Plains"):
         self._terrain_type = terrain_type
         self.attributes = FakeAttributes()
-        if resource_node is not None:
-            self.attributes.add("resource_node_data", resource_node)
 
     @property
     def terrain_type(self):
         return self._terrain_type
-
-    @property
-    def resource_node(self):
-        return self.attributes.get("resource_node_data", default=None)
 
 class FakeBuilding:
     """Lightweight stand-in for a Building object."""
@@ -193,74 +188,6 @@ def _make_system(registry=None, event_bus=None):
     return ResourceSystem(registry, event_bus), event_bus
 
 # -------------------------------------------------------------- #
-#  Harvest Tests
-# -------------------------------------------------------------- #
-
-class TestHarvestSuccess(unittest.TestCase):
-    """Test successful resource harvesting."""
-
-    def test_harvest_yields_correct_resource(self):
-        player = FakePlayer()
-        tile = FakeTile(
-            terrain_type="Plains",
-            resource_node={"resource_type": "Straw", "depleted": False, "respawn_counter": 0},
-        )
-        system, _ = _make_system()
-        ok, msg = system.harvest(player, tile)
-        self.assertTrue(ok)
-        self.assertEqual(player.get_resource("Straw"), 1)
-
-    def test_harvest_marks_node_depleted(self):
-        player = FakePlayer()
-        tile = FakeTile(
-            terrain_type="Plains",
-            resource_node={"resource_type": "Straw", "depleted": False, "respawn_counter": 0},
-        )
-        system, _ = _make_system()
-        system.harvest(player, tile)
-        node = tile.attributes.get("resource_node_data")
-        self.assertTrue(node["depleted"])
-        self.assertEqual(node["respawn_counter"], 30)
-
-    def test_harvest_publishes_event(self):
-        player = FakePlayer()
-        tile = FakeTile(
-            terrain_type="Plains",
-            resource_node={"resource_type": "Straw", "depleted": False, "respawn_counter": 0},
-        )
-        events = []
-        event_bus = EventBus()
-        event_bus.subscribe("resource_gathered", lambda **kw: events.append(kw))
-        system = ResourceSystem(_make_registry(), event_bus)
-        system.harvest(player, tile)
-        self.assertEqual(len(events), 1)
-        self.assertEqual(events[0]["resource_type"], "Straw")
-        self.assertEqual(events[0]["amount"], 1)
-        self.assertEqual(events[0]["player"], player)
-
-class TestHarvestFailures(unittest.TestCase):
-    """Test harvest rejection cases."""
-
-    def test_no_resource_node(self):
-        player = FakePlayer()
-        tile = FakeTile(terrain_type="Plains")
-        system, _ = _make_system()
-        ok, msg = system.harvest(player, tile)
-        self.assertFalse(ok)
-        self.assertIn("No resource node", msg)
-
-    def test_depleted_node(self):
-        player = FakePlayer()
-        tile = FakeTile(
-            terrain_type="Plains",
-            resource_node={"resource_type": "Straw", "depleted": True, "respawn_counter": 15},
-        )
-        system, _ = _make_system()
-        ok, msg = system.harvest(player, tile)
-        self.assertFalse(ok)
-        self.assertIn("depleted", msg)
-
-# -------------------------------------------------------------- #
 #  Production Tests
 # -------------------------------------------------------------- #
 
@@ -269,71 +196,44 @@ class TestHarvestFailures(unittest.TestCase):
 # -------------------------------------------------------------- #
 
 class TestProcessRespawns(unittest.TestCase):
-    """Test resource node respawn cycle."""
+    """Test resource node respawn cycle on a PlanetRoom."""
 
     def test_respawn_decrements_counter(self):
-        tile = FakeTile(
-            terrain_type="Plains",
-            resource_node={"resource_type": "Straw", "depleted": True, "respawn_counter": 10},
-        )
+        room = FakePlanetRoom(depleted={"0,0": {"resource_type": "Straw", "respawn_counter": 10}})
         system, _ = _make_system()
-        system.process_respawns([tile])
-        node = tile.attributes.get("resource_node_data")
-        self.assertEqual(node["respawn_counter"], 9)
-        self.assertTrue(node["depleted"])
+        system.process_respawns([room])
+        self.assertEqual(room.get_depleted_nodes()["0,0"]["respawn_counter"], 9)
+        self.assertTrue(room.is_node_depleted(0, 0))
 
     def test_respawn_restores_at_zero(self):
-        tile = FakeTile(
-            terrain_type="Plains",
-            resource_node={"resource_type": "Straw", "depleted": True, "respawn_counter": 1},
-        )
+        room = FakePlanetRoom(depleted={"0,0": {"resource_type": "Straw", "respawn_counter": 1}})
         system, _ = _make_system()
-        system.process_respawns([tile])
-        node = tile.attributes.get("resource_node_data")
-        self.assertFalse(node["depleted"])
-        self.assertEqual(node["respawn_counter"], 0)
+        system.process_respawns([room])
+        self.assertFalse(room.is_node_depleted(0, 0))
 
-    def test_respawn_skips_non_depleted(self):
-        tile = FakeTile(
-            terrain_type="Plains",
-            resource_node={"resource_type": "Straw", "depleted": False, "respawn_counter": 0},
-        )
-        system, _ = _make_system()
-        system.process_respawns([tile])
-        node = tile.attributes.get("resource_node_data")
-        self.assertFalse(node["depleted"])
-
-    def test_respawn_skips_tiles_without_nodes(self):
-        tile = FakeTile(terrain_type="Plains")
+    def test_respawn_skips_rooms_without_depleted_nodes(self):
+        room = FakePlanetRoom()
         system, _ = _make_system()
         # Should not raise
-        system.process_respawns([tile])
+        system.process_respawns([room])
+        self.assertEqual(room.get_depleted_nodes(), {})
 
     def test_full_respawn_cycle(self):
         """A node depleted with counter=3 respawns after exactly 3 ticks."""
-        tile = FakeTile(
-            terrain_type="Plains",
-            resource_node={"resource_type": "Straw", "depleted": True, "respawn_counter": 3},
-        )
+        room = FakePlanetRoom(depleted={"0,0": {"resource_type": "Straw", "respawn_counter": 3}})
         system, _ = _make_system()
 
         # Tick 1: counter 3 -> 2
-        system.process_respawns([tile])
-        node = tile.attributes.get("resource_node_data")
-        self.assertTrue(node["depleted"])
-        self.assertEqual(node["respawn_counter"], 2)
+        system.process_respawns([room])
+        self.assertEqual(room.get_depleted_nodes()["0,0"]["respawn_counter"], 2)
 
         # Tick 2: counter 2 -> 1
-        system.process_respawns([tile])
-        node = tile.attributes.get("resource_node_data")
-        self.assertTrue(node["depleted"])
-        self.assertEqual(node["respawn_counter"], 1)
+        system.process_respawns([room])
+        self.assertEqual(room.get_depleted_nodes()["0,0"]["respawn_counter"], 1)
 
         # Tick 3: counter 1 -> 0, restored
-        system.process_respawns([tile])
-        node = tile.attributes.get("resource_node_data")
-        self.assertFalse(node["depleted"])
-        self.assertEqual(node["respawn_counter"], 0)
+        system.process_respawns([room])
+        self.assertFalse(room.is_node_depleted(0, 0))
 
 if __name__ == "__main__":
     unittest.main()
@@ -362,8 +262,42 @@ class FakePlayerWithDB(FakePlayer):
             activity_progress=0,
             coord_x=0,
             coord_y=0,
+            coord_planet=TEST_PLANET,
         )
         self.location = location
+
+
+TEST_PLANET = "terra"
+
+
+class FakePlanetRoom:
+    """Lightweight stand-in for a PlanetRoom.
+
+    Doubles as the planet's terrain generator: ``resources`` maps (x, y) to
+    the resource type found there.
+    """
+
+    def __init__(self, resources=None, depleted=None):
+        self.attributes = FakeAttributes()
+        self._resources = resources or {}
+        self.db = FakeDB(depleted_nodes=depleted or {}, coord_x=None, coord_y=None)
+
+    def get_terrain_and_resource(self, x, y):
+        return "Forest", self._resources.get((x, y))
+
+    def get_depleted_nodes(self):
+        return self.db.depleted_nodes or {}
+
+    def clear_node_depletion(self, x, y):
+        (self.db.depleted_nodes or {}).pop(f"{x},{y}", None)
+
+    def is_node_depleted(self, x, y):
+        return f"{x},{y}" in (self.db.depleted_nodes or {})
+
+
+def _use_terrain(test, room):
+    """Install *room* as TEST_PLANET's terrain generator for *test*."""
+    test.enterContext(services.override({"_terrain_generators": {TEST_PLANET: room}}))
 
 
 class FakeExtractor:
@@ -426,10 +360,8 @@ class TestStartHarvest(unittest.TestCase):
     """Test start_harvest sets player into harvesting state."""
 
     def test_start_harvest_success(self):
-        tile = FakeTile(
-            terrain_type="Forest",
-            resource_node={"resource_type": "Wood", "depleted": False},
-        )
+        tile = FakePlanetRoom(resources={(0, 0): "Wood"})
+        _use_terrain(self, tile)
         player = FakePlayerWithDB(location=tile)
         system, _ = _make_system()
         ok, msg = system.start_harvest(player, tile)
@@ -439,7 +371,8 @@ class TestStartHarvest(unittest.TestCase):
         self.assertEqual(player.db.activity_progress, 0)
 
     def test_start_harvest_no_node(self):
-        tile = FakeTile(terrain_type="Plains")
+        tile = FakePlanetRoom()
+        _use_terrain(self, tile)
         player = FakePlayerWithDB(location=tile)
         system, _ = _make_system()
         ok, msg = system.start_harvest(player, tile)
@@ -447,25 +380,16 @@ class TestStartHarvest(unittest.TestCase):
         self.assertIn("No resource node", msg)
 
     def test_start_harvest_depleted(self):
-        tile = FakeTile(
-            terrain_type="Forest",
-            resource_node={"resource_type": "Wood", "depleted": True},
+        tile = FakePlanetRoom(
+            resources={(0, 0): "Wood"},
+            depleted={"0,0": {"resource_type": "Wood", "respawn_counter": 5}},
         )
+        _use_terrain(self, tile)
         player = FakePlayerWithDB(location=tile)
         system, _ = _make_system()
         ok, msg = system.start_harvest(player, tile)
         self.assertFalse(ok)
-        self.assertIn("depleted", msg)
-
-    def test_start_harvest_no_resource_type(self):
-        tile = FakeTile(
-            terrain_type="Plains",
-            resource_node={"resource_type": None, "depleted": False},
-        )
-        player = FakePlayerWithDB(location=tile)
-        system, _ = _make_system()
-        ok, msg = system.start_harvest(player, tile)
-        self.assertFalse(ok)
+        self.assertEqual(player.db.activity_state, "idle")
 
 
 # -------------------------------------------------------------- #
@@ -476,10 +400,8 @@ class TestProcessHarvestTick(unittest.TestCase):
     """Test active-presence harvest tick processing."""
 
     def _setup_harvesting_player(self):
-        tile = FakeTile(
-            terrain_type="Forest",
-            resource_node={"resource_type": "Wood", "depleted": False},
-        )
+        tile = FakePlanetRoom(resources={(0, 0): "Wood"})
+        _use_terrain(self, tile)
         player = FakePlayerWithDB(location=tile)
         player.db.activity_state = "harvesting"
         player.db.activity_target = tile
@@ -528,10 +450,11 @@ class TestProcessHarvestTick(unittest.TestCase):
         self.assertEqual(player.db.activity_state, "harvesting")
 
     def test_depleted_node_resets_state(self):
-        tile = FakeTile(
-            terrain_type="Forest",
-            resource_node={"resource_type": "Wood", "depleted": True},
+        tile = FakePlanetRoom(
+            resources={(0, 0): "Wood"},
+            depleted={"0,0": {"resource_type": "Wood", "respawn_counter": 5}},
         )
+        _use_terrain(self, tile)
         player = FakePlayerWithDB(location=tile)
         player.db.activity_state = "harvesting"
         player.db.activity_target = tile

@@ -75,6 +75,7 @@ from mygame.world.systems.agent_system import (  # noqa: E402
 from mygame.world.systems.branch_system import BranchSystem  # noqa: E402
 from mygame.world.systems.rank_system import rank_from_level  # noqa: E402
 from mygame.world.systems.resource_system import ResourceSystem  # noqa: E402
+from world import services  # noqa: E402
 
 # ------------------------------------------------------------------ #
 #  The real data directory (mygame/data)
@@ -522,38 +523,23 @@ NON_RESOURCE_BRANCHES: tuple[str, ...] = tuple(
 
 
 class _Tile:
-    """A legacy harvest tile: terrain, coords, a resource node, and a ground pile.
+    """A PlanetRoom harvest tile that doubles as its planet's terrain generator.
 
-    Carries no ``is_node_depleted`` and no ``get_buildings_at``, so the resource
-    system takes its legacy OverworldRoom path — the one that reads
-    ``resource_node_data`` and drops yields into the tile's inventory.
+    Every coordinate is Forest with Wood and no node is depleted. It carries no
+    ``get_buildings_at`` or ``get_objects_at``, so yields land in the tile's
+    ground inventory.
     """
 
-    def __init__(self, x=5, y=5, planet=HOME, terrain_type="Forest",
-                 resource_type="Wood", building=None):
-        self.x = x
-        self.y = y
-        self._terrain_type = terrain_type
-        self._building = building
-        self.attributes = FakeAttributes({
-            "coord_x": x,
-            "coord_y": y,
-            "coord_planet": planet,
-            "resource_node_data": {
-                "resource_type": resource_type,
-                "depleted": False,
-                "respawn_counter": 0,
-            },
-        })
+    def __init__(self, resource_type="Wood"):
+        self._resource_type = resource_type
+        self.attributes = FakeAttributes({})
         self.db = FakeDB(self.attributes)
 
-    @property
-    def terrain_type(self):
-        return self._terrain_type
+    def get_terrain_and_resource(self, x, y):
+        return "Forest", self._resource_type
 
-    @property
-    def building(self):
-        return self._building
+    def is_node_depleted(self, x, y):
+        return False
 
 
 class TestEconomyIsUnchangedUnderANonResourceCommitment(
@@ -577,50 +563,14 @@ class TestEconomyIsUnchangedUnderANonResourceCommitment(
 
     # -- harvest yields ------------------------------------------------ #
 
-    def _manual_harvest(self, player):
-        """One manual harvest; return the credit, the node, and the answer.
-
-        The credit is a *delta*, not a balance, so the comparison is about the
-        yield rather than about the starting resources the fixture happens to
-        hand out.
-        """
-        tile = _Tile()
-        before = player.get_resource("Wood")
-        system = self._resource_system()
-        ok, msg = system.harvest(player, tile)
-        node = tile.attributes.get("resource_node_data")
-        return (
-            ok,
-            msg,
-            player.get_resource("Wood") - before,
-            node["depleted"],
-            node["respawn_counter"],
-        )
-
-    def test_manual_harvest_yields_the_same_under_every_commitment(self):
-        bare = _owner()
-        self._assert_commitment(bare, None)
-        baseline = self._manual_harvest(bare)
-
-        for branch in NON_RESOURCE_BRANCHES:
-            with self.subTest(commitment=branch):
-                player = self._committed(branch)
-                self._assert_commitment(player, branch)
-                self.assertEqual(self._manual_harvest(player), baseline)
-
-        # Non-vacuous: the harvest really credited something and really
-        # depleted the node.
-        self.assertTrue(baseline[0], baseline[1])
-        self.assertGreater(baseline[2], 0)
-        self.assertTrue(baseline[3])
-
     def _harvest_ticks(self, player, ticks):
         """Harvest actively for *ticks* ticks; return what landed on the ground."""
         tile = _Tile()
         player.location = tile
         system = self._resource_system()
-        ok, msg = system.start_harvest(player, tile)
-        yields = [system.process_harvest_tick(player) for _ in range(ticks)]
+        with services.override({"_terrain_generators": {HOME: tile}}):
+            ok, msg = system.start_harvest(player, tile)
+            yields = [system.process_harvest_tick(player) for _ in range(ticks)]
         return ok, msg, tuple(yields), ResourceSystem.get_tile_inventory(tile)
 
     def test_active_presence_harvest_yields_the_same_under_every_commitment(self):
